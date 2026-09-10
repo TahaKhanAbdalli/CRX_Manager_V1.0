@@ -141,6 +141,15 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 | `live-testdata-guard.mjs` (+ `live-testdata-lib.mjs`) | PreToolUse(`mcp__.*`; narrowed 2026-08-18, still `*` in `.codex/hooks.json`) | Blocks `execute_sql` that INSERTs into a live business table without `[E2E]`, or DELETE/void of a financial table. Also (2026-07-13) blocks ANY OTHER UPDATE against a live business table without `[E2E]` — the same standard already applied to INSERT (previously only money-column UPDATEs and cancel/void status UPDATEs were caught; a plain `UPDATE customers SET phone = ...` with no marker used to sail through). Override: create `.claude/session-state/REAL-DATA-OK`. | "use only fake fields/customers… delete them after"; cancel/void of real financial records is Mason's job. |
 | `active-area-guard.mjs` | PreToolUse(Bash) | Blocks destructive ops (`rm -rf`, `git worktree remove`, `git branch -D`, `git clean -f`, force-push) against a folder/branch listed in `.claude/active-areas.json`. Inert when that file is absent. | "we're working in beyond-parity now, don't mess with it" — sweeping a folder marked active. |
 
+**Quote-aware deny scanning (2026-09-10).** Before the armed autopilot evaluates its
+command deny-set, it turns complete Bash/PowerShell quoted spans and escaped characters
+into inert scan tokens. Thus shell punctuation inside an argument cannot terminate an
+option scan before a real later flag, while a quoted `-n` or `--no-verify` commit message
+remains message text. A quoted flag in option position still remains visible to the deny-set.
+Unbalanced quotes, dangling escapes, heredocs, and runtime shell
+expansions (variables, substitutions, globs, and PowerShell splatting) are denied rather than
+auto-approved: the armed hook emits a real permission denial, not an ordinary prompt.
+
 ### Conditionally-wired guards
 
 These two are not always "on" for a given session — one is only *registered* in specific worktrees, the other is registered everywhere but only *active* when armed.

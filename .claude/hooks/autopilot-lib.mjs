@@ -32,6 +32,137 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 const WS = String.raw`[^\S\r\n]+`;
 const OPT_SCAN = String.raw`(?:${WS}[^\s;&|)]+)*?${WS}`;
 
+// The regexes below deliberately use shell punctuation as command boundaries.
+// That is safe only after quoted and escaped text is made opaque: a `;` in
+// `git commit -m 'docs; update' -n` is data, not the end of the option scan.
+//
+// This is a scanner, not a shell evaluator. It emits a view where each resolved
+// quoted span is one inert word and escaped characters cannot become syntax. A
+// malformed quote/escape or heredoc cannot be classified safely, so callers
+// deny rather than auto-approve. The one extra executable marker preserves the
+// existing deny behavior for a quoted executable path (for example
+// `"C:/Program Files/Git/bin/git.exe" push`): the quote itself is still opaque,
+// while its known executable basename is represented as a separate safe word.
+const QUOTE_PLACEHOLDER = "autopilotquoted";
+const QUOTED_EXECUTABLES = new Set([
+  "git", "gh", "rm", "remove-item", "ri", "rd", "rmdir", "del", "erase",
+  "supabase", "npx", "vercel", "dropdb", "createdb",
+]);
+const QUOTED_VALUE_OPTIONS = new Set(["-m", "--message", "-e", "--exclude", "-path", "-literalpath"]);
+
+function quotedExecutableMarker(value) {
+  const basename = String(value || "").split(/[\\/]/).pop() || "";
+  const name = basename.replace(/\.[^.]+$/, "").toLowerCase();
+  return QUOTED_EXECUTABLES.has(name) ? ` ${name}` : "";
+}
+
+function quotedOptionMarker(value, view, ansiC) {
+  // ANSI-C escapes transform after this hook runs (`$'\055n'` becomes `-n`),
+  // so their exact argv cannot be known without evaluating shell syntax.
+  if (ansiC && value.includes("\\")) return null;
+  if (!/^-{1,2}[A-Za-z][A-Za-z-]*$/.test(value)) return "";
+  const previous = /(?:^|[\s;&|)])([^\s;&|)]+)$/.exec(view)?.[1].toLowerCase();
+  return QUOTED_VALUE_OPTIONS.has(previous) ? "" : ` ${value}`;
+}
+
+function windowsPathBackslash(text, index) {
+  const wordStart = Math.max(
+    text.lastIndexOf(" ", index - 1),
+    text.lastIndexOf("\t", index - 1),
+    text.lastIndexOf("\n", index - 1),
+    text.lastIndexOf("\r", index - 1),
+  ) + 1;
+  return /^[A-Za-z]:\\/.test(text.slice(wordStart, index + 1));
+}
+
+function scanCommandView(command, toolName) {
+  const text = String(command || "");
+  const powerShell = /powershell/i.test(String(toolName || ""));
+  let view = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    // A heredoc body needs its delimiter and shell-specific expansion rules to
+    // identify its command safely. This hook has no reason to auto-approve one.
+    if (char === "<" && text[index + 1] === "<") return { certain: false, view };
+
+    const ansiC = !powerShell && char === "$" && text[index + 1] === "'";
+    const opensQuote = char === "'" || char === '"' || ansiC;
+    if (opensQuote) {
+      const start = ansiC ? index + 1 : index;
+      const quoteChar = ansiC ? "'" : char;
+      let value = "";
+      let closed = false;
+      index = start + 1;
+      for (; index < text.length; index += 1) {
+        const current = text[index];
+        const escape = (!powerShell && quoteChar === '"' && current === "\\")
+          || (powerShell && quoteChar === '"' && current === "`");
+        if (escape) {
+          if (index + 1 >= text.length) return { certain: false, view };
+          value += text[index + 1];
+          index += 1;
+          continue;
+        }
+        if (current === "$" || (!powerShell && quoteChar === '"' && current === "`")) {
+          return { certain: false, view };
+        }
+        if (powerShell && quoteChar === "'" && current === "'" && text[index + 1] === "'") {
+          value += "'";
+          index += 1;
+          continue;
+        }
+        if (current === quoteChar) {
+          closed = true;
+          break;
+        }
+        value += current;
+      }
+      if (!closed) return { certain: false, view };
+      const optionMarker = quotedOptionMarker(value, view, ansiC);
+      if (optionMarker === null) return { certain: false, view };
+      view += QUOTE_PLACEHOLDER + quotedExecutableMarker(value) + optionMarker;
+      continue;
+    }
+
+    // Variables and command substitutions resolve after this hook sees the
+    // command text, so they can manufacture an option we cannot classify.
+    if (char === "$" || (!powerShell && char === "`")) return { certain: false, view };
+    if (powerShell && char === "@" && (text[index + 1] === "'" || text[index + 1] === '"')) {
+      return { certain: false, view };
+    }
+    // Globs, brace/history expansion, and PowerShell splatting can also create
+    // an option after this hook has inspected the literal command text.
+    if (!powerShell && "*?[]{}!".includes(char)) return { certain: false, view };
+    if (powerShell && ("*?[]".includes(char) || (char === "@" && /\w/.test(text[index + 1] || "")))) {
+      return { certain: false, view };
+    }
+
+    const escape = (!powerShell && char === "\\" && !windowsPathBackslash(text, index))
+      || (powerShell && char === "`");
+    if (escape) {
+      if (index + 1 >= text.length) return { certain: false, view };
+      // Shell line continuations join the next physical line to this command.
+      if (text[index + 1] === "\n") {
+        index += 1;
+        continue;
+      }
+      if (text[index + 1] === "\r" && text[index + 2] === "\n") {
+        index += 2;
+        continue;
+      }
+      view += QUOTE_PLACEHOLDER;
+      index += 1;
+      continue;
+    }
+
+    view += char;
+  }
+
+  return { certain: true, view };
+}
+
 // A short-option cluster carrying any of `letters` anywhere in it.
 const cluster = (letters) => String.raw`-[A-Za-z]*[${letters}][A-Za-z]*(?=$|\s)`;
 
@@ -311,8 +442,13 @@ export function autopilotDecision(toolName, toolInput) {
   // Bash
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
+    const scan = scanCommandView(cmd, name);
+    // Returning deny here matters: unattended-autopilot.mjs maps it to a real
+    // permission denial. Returning allow, or throwing into that hook, would
+    // auto-approve or fall through to normal prompting respectively.
+    if (!scan.certain) return "deny";
     for (const re of DENY_BASH_RES) {
-      if (re.test(cmd)) return "deny";
+      if (re.test(scan.view)) return "deny";
     }
   }
 

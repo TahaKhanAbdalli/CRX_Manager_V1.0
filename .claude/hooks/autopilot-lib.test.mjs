@@ -285,27 +285,60 @@ eq(autopilotDecision("Bash", { command: "git -C /x log --grep push" }), "allow",
 eq(autopilotDecision("Bash", { command: "git --no-pager log --grep push" }), "deny", "ACCEPTED over-denial: a valueless global swallows `log`, so `push` matches");
 eq(autopilotDecision("Bash", { command: "git -C/x stash push -m wip" }), "deny", "ACCEPTED over-denial: an ATTACHED value leaves `stash` to be swallowed");
 
-// ── the ONE place the new region is NARROWER than the enumerated one ─────
-// A differential sweep of 1,728 generated commands over the option grammar found
-// 231 newly denied and 36 newly ALLOWED. All 36 are the same thing: an UNBALANCED
-// quote inside the option region (`git -C "a push`, `git -c a'b push`). The old
-// `\S+` swallowed the stray quote as an ordinary character; the new word model
-// treats a quote as opening a run, so the token stops there and the region ends.
-//
-// This is not a hole, because those strings are not commands. Measured, not
-// assumed: `bash -c` exits 2 with "unexpected EOF while looking for matching",
-// and PowerShell exits 1 with "The string is missing the terminator" — the shell
-// refuses to run them, so nothing is pushed. The balanced control runs in both.
-//
-// The rule underneath is that the guard models the SHELL'S word splitting: if
-// `push` sits inside a quoted run, the shell does not see it as the subcommand
-// either. Closing this last sliver would mean letting a lone quote also count as
-// an ordinary character, which reintroduces the ambiguity it was added to remove
-// and starts denying `git -C "a push" status`. Asserted here so it stays a
-// deliberate, re-checkable property rather than a surprise in the next review.
-eq(autopilotDecision("Bash", { command: 'git -c a"b push' }), "allow", "an unbalanced quote is not a runnable command (bash exits 2 before git runs)");
-eq(autopilotDecision("Bash", { command: "git -C 'a push origin main" }), "allow", "same, single-quoted");
+// ── quote-aware option scanning (PR #631, 2026-09-10) ─────────────────────
+// A malformed shell expression does not run, but an unattended permission hook
+// must not turn uncertainty into an auto-approval. It therefore denies instead
+// of relying on a later shell parse error.
+eq(autopilotDecision("Bash", { command: 'git -c a"b push' }), "deny", "an unbalanced Bash double quote fails closed");
+eq(autopilotDecision("Bash", { command: "git -C 'a push origin main" }), "deny", "an unbalanced Bash single quote fails closed");
 eq(autopilotDecision("Bash", { command: "git -C 'a b' push origin main" }), "deny", "the BALANCED counterpart — which shells DO run — is denied");
+
+const quoteAwareDeny = [
+  ["Bash", "git commit -m 'docs; update' -n", "semicolon inside a Bash single quote"],
+  ["Bash", 'git commit -m "a & b" -n', "ampersand inside a Bash double quote"],
+  ["Bash", "git commit -m 'x | y' -n", "pipe inside a Bash single quote"],
+  ["Bash", "git commit -m 'plain message' -n", "plain quoted commit message"],
+  ["Bash", "git commit '-n'", "quoted short option in option position"],
+  ["Bash", "git commit '--no-verify'", "quoted long option in option position"],
+  ["Bash", "rm '-r' C:/data", "quoted recursive rm option in option position"],
+  ["Bash", "git commit $'\\055n'", "ANSI-C escaped short option"],
+  ["PowerShell", "Remove-Item -Path 'C:/Program Files (x86)/CRX' -Recurse -Force", "PowerShell path containing parentheses"],
+  ["PowerShell", "Remove-Item -Path 'C:/plain/CRX' -Recurse -Force", "PowerShell plain path control"],
+  ["Bash", "git clean -e 'keep;this' -f -d", "quoted clean exclude value"],
+  ["Bash", "git clean -f -d", "plain clean control"],
+  ["Bash", "git branch -m 'old;name' -d -f feature", "quoted branch rename value"],
+  ["Bash", "rm 'C:/data;archive' -r", "quoted rm target"],
+  ["Bash", "git commit -m 'line one \\\n' -n", "Bash continuation inside a quoted message"],
+  ["Bash", "git commit -m $'docs; update' -n", "Bash ANSI-C quote"],
+  ["PowerShell", 'git commit -m "a `& b" -n', "PowerShell double-quote escape"],
+  ["PowerShell", "git commit -m 'a ''&'' b' -n", "PowerShell doubled single quote"],
+  ["Bash", "git commit -m fix\\;tidy -n", "Bash bare escaped separator"],
+  ["PowerShell", "git commit -m fix`&tidy -n", "PowerShell bare escaped separator"],
+  ["Bash", "git commit \\\n-n", "Bash line continuation"],
+  ["PowerShell", "git commit `\n-n", "PowerShell line continuation"],
+  ["Bash", "git commit $AUTOPILOT_OPTION", "Bash variable expansion"],
+  ["Bash", "git commit `printf -- -n`", "Bash command substitution"],
+  ["Bash", "git commit *", "Bash glob expansion"],
+  ["PowerShell", "git commit $autopilotOption", "PowerShell variable expansion"],
+  ["PowerShell", "git commit @'\n-n\n'@", "PowerShell here-string"],
+  ["PowerShell", "git commit @autopilotOptions", "PowerShell splatting"],
+  ["Bash", "git commit <<'EOF'\n-n\nEOF", "heredoc fails closed"],
+];
+for (const [tool, command, why] of quoteAwareDeny) {
+  eq(autopilotDecision(tool, { command }), "deny", `quote-aware deny: ${why}`);
+}
+
+const quoteAwareAllow = [
+  ["Bash", "git commit -m 'fix; tidy'", "quoted semicolon without a dangerous option"],
+  ["Bash", "git log --format='%h|%s'", "quoted git format value"],
+  ["Bash", "echo 'a;b' ; git status", "quoted separator before a harmless chained command"],
+  ["PowerShell", "Remove-Item -Path 'C:/tmp (x86)/one.txt'", "non-recursive PowerShell remove"],
+  ["Bash", "git commit -m '-n is just text'", "quoted short option is only message text"],
+  ["Bash", "git commit -m '--no-verify is just text'", "quoted long option is only message text"],
+];
+for (const [tool, command, why] of quoteAwareAllow) {
+  eq(autopilotDecision(tool, { command }), "allow", `quote-aware allow: ${why}`);
+}
 
 // ── the BINARY was the third axis, and the widest (2026-09-07, round two) ────
 // `\bgit\b` / `\bgh\b` is followed by a required `\s`, so ANY spelling the shell
@@ -658,9 +691,9 @@ function safeTempDir(testDir) {
   return resolvedTestDir;
 }
 
-function runHook(projectDir, command = "rm -rf /") {
+function runHook(projectDir, command = "rm -rf /", toolName = "Bash") {
   return spawnSync(process.execPath, [hookPath], {
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+    input: JSON.stringify({ tool_name: toolName, tool_input: { command } }),
     encoding: "utf8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
@@ -699,6 +732,19 @@ try {
     const rb = runHook(armedDir, bypass);
     eq(rb.status, 0, `hook exits 0 for ${bypass}`);
     ok(/"permissionDecision":\s*"deny"/.test(rb.stdout), `LIVE HOOK denies the proven bypass: ${bypass}`);
+  }
+  // Every quote/escape bypass is also tested through the actual PreToolUse JSON
+  // boundary. Library-only coverage would not prove that armed autopilot emits a
+  // real deny rather than silently returning to the normal permission prompt.
+  for (const [tool, command, why] of quoteAwareDeny) {
+    const rb = runHook(armedDir, command, tool);
+    eq(rb.status, 0, `hook exits 0 for quote-aware deny: ${why}`);
+    ok(/"permissionDecision":\s*"deny"/.test(rb.stdout), `LIVE HOOK denies quote-aware case: ${why}`);
+  }
+  for (const [tool, command, why] of quoteAwareAllow) {
+    const ra = runHook(armedDir, command, tool);
+    eq(ra.status, 0, `hook exits 0 for quote-aware allow: ${why}`);
+    ok(/"permissionDecision":\s*"allow"/.test(ra.stdout), `LIVE HOOK allows quote-aware control: ${why}`);
   }
   // …and the live hook must still auto-approve ordinary work while armed.
   const rAllow = runHook(armedDir, "npm run build");
