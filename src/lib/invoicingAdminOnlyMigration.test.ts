@@ -40,6 +40,8 @@ const WRAPPED: Array<{ name: string; ident: string; ret: string; md5: string; sh
   { name: 'reverse_credit_memo_application', ident: 'uuid,text,uuid,text', ret: 'jsonb', md5: '38cea043fc7dae4e65bc8593c95bddfb', shape: 'guard' },
   { name: 'apply_prepay_to_invoice', ident: 'uuid,uuid,bigint,uuid,text', ret: 'uuid', md5: 'c9377dab8f2534a03af2c27a6e1d510c', shape: 'guard' },
   { name: 'batch_apply_all_prepayments', ident: 'uuid,text', ret: 'jsonb', md5: '1d76228210c474da37c9a3cd91b97b7d', shape: 'guard' },
+  // Review round 1: its own role test lets a caller with no active profile through.
+  { name: 'reverse_write_off', ident: 'uuid,text,uuid,text', ret: 'jsonb', md5: '70ef11ccad193eb6ef5ee88dcba6f8cd', shape: 'guard' },
   { name: 'create_quick_delivery', ident: 'uuid,jsonb,uuid,date,text,uuid,text,boolean', ret: 'jsonb', md5: '69c1d569fb2e9eb913502d59e41a76fe', shape: 'coerce' },
 ];
 const GUARD = 'PERFORM public._require_invoicing_admin();';
@@ -120,7 +122,8 @@ describe('invoicing admin-only migration (20261009120000)', () => {
       expect(stmt).toContain('SET search_path = public, pg_temp');
       expect(stmt).toContain(`RETURNS ${w.ret}\n`);
       if (w.shape === 'guard') {
-        expect(code).toMatch(/^\s*(DECLARE\s[^$]*?)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);/);
+        // A DECLARE section may only declare (no initializer, no call): nothing runs before the guard.
+        expect(code).toMatch(/^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\b)\w+\s+[\w[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);/);
       } else if (w.shape === 'key_then_guard') {
         expect(code).toMatch(/^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ '\[\^\[:space:\]\]' THEN\s+RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'\s+USING ERRCODE = '22023';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);/);
       } else {
@@ -178,11 +181,27 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     expect(undone).toBe(prior);
   });
 
-  it('re-emits complete_job with only the admin-only auto-draft gate and its skip text', () => {
+  it('re-emits complete_job with only the admin-only auto-draft gate, its skip text and the admin notification', () => {
     const prior = priorBody('supabase/migrations/20260722012359_auto_draft_skipped_activity_row.sql', 'FUNCTION public.complete_job(');
     expect(md5(prior)).toBe('4e4c38e3e8be66e2d24c434bb54c0521');
     const next = body(statement(sql, 'CREATE OR REPLACE FUNCTION public.complete_job('));
+    // Q4/Q5 (admins are notified): one notification per active admin when a non-admin's
+    // completion skips the draft, exactly as the delivery path does.
+    const notify = `        INSERT INTO notifications (
+          user_id, title, message, notification_type,
+          related_entity_type, related_entity_id
+        )
+        SELECT p.id,
+               'Job needs an invoice',
+               'Job ' || v_job.job_number || ' was completed by a non-admin. Invoicing is admin-only, so no draft invoice was created — open the job and bill it.',
+               'job_needs_invoice', 'job', p_job_id
+          FROM profiles p
+         WHERE p.role = 'admin' AND p.is_active = true;
+`;
+    expect(next.split(notify).length - 1).toBe(1);
+    expect(next.indexOf(notify)).toBeGreaterThan(next.indexOf("invoice skipped (invoicing is admin-only). '"));
     const undone = next
+      .replace(notify, '')
       .replace('      IF is_admin() THEN\n        SELECT i.id INTO v_existing_invoice', '      IF (is_admin() OR is_sales_rep()) THEN\n        SELECT i.id INTO v_existing_invoice')
       .replace("completed by a non-admin — automatic draft '\n            || 'invoice skipped (invoicing is admin-only). '",
         "completed by an applicator — automatic draft '\n            || 'invoice skipped (auto-draft only runs for office completions). '");
@@ -192,17 +211,25 @@ describe('invoicing admin-only migration (20261009120000)', () => {
 
   it('checks the posting version under the implementation\'s locks, and only for a call that will really post', () => {
     const single = body(statement(sql, 'CREATE FUNCTION public.post_invoice('));
-    const order = ["v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice');",
-      "PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice:' || p_idempotency_key, 0));",
+    // Review round 1: the key lock (the one check_idempotency holds to the end of the
+    // transaction) comes BEFORE the receipt lookup, so a same-key duplicate waits and replays;
+    // a supplied version without a key is refused, never silently ignored.
+    const order = ["RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice'",
+      "PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));",
+      "v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice');",
+      'IF v_cached IS NULL THEN',
       'PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;',
       'IF public._invoice_review_fingerprint(ARRAY[p_invoice_id]) IS DISTINCT FROM p_expected_version THEN',
       'public._post_invoice_pre_admin_only_20261009('].map((s) => single.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(single).not.toContain("'post_invoice:'");
     const group = body(statement(sql, 'CREATE FUNCTION public.post_invoice_group('));
     expect(group.indexOf('hashtextextended(p_invoice_group_id::text, 0)')).toBeLessThan(group.indexOf('FOR UPDATE'));
     expect(group.indexOf('FOR UPDATE')).toBeLessThan(group.indexOf('_invoice_review_fingerprint(v_member_ids)'));
     const batch = body(statement(sql, 'CREATE FUNCTION public.batch_post_invoices('));
+    expect(batch.indexOf("RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices'")).toBeGreaterThan(-1);
+    expect(batch.indexOf("RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices'")).toBeLessThan(batch.indexOf("'crx:idempotency:batch_post_invoices:'"));
     expect(batch.indexOf("'crx:idempotency:batch_post_invoices:'")).toBeLessThan(batch.indexOf("'crx:idempotency:' || p_idempotency_key"));
     expect(batch.indexOf('FOR UPDATE')).toBeLessThan(batch.indexOf('_invoice_review_fingerprint(p_invoice_ids)'));
     for (const b of [single, group, batch]) expect(b).toContain("RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: ");
@@ -215,18 +242,41 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     for (const [table, policy] of [['invoices', 'invoices_insert'], ['invoice_items', 'invoice_items_insert'], ['invoice_shares', 'invoice_shares_insert'], ['invoice_line_allocations', 'invoice_line_alloc_insert']]) {
       expect(sql).toMatch(new RegExp(`CREATE POLICY ${policy} ON public\\.${table}\\n  FOR INSERT TO \\w+\\n  WITH CHECK \\(public\\.is_admin\\(\\)\\);`));
     }
+    // Review round 1: field_app_locations / field_app_location_shares write policies were
+    // is_admin() OR is_sales_rep() on ANY invoice; now admin-only (and their grants are revoked).
+    for (const table of ['field_app_locations', 'field_app_location_shares']) {
+      expect(sql).toContain(`CREATE POLICY ${table}_insert ON public.${table}\n  FOR INSERT TO public\n  WITH CHECK (public.is_admin());`);
+      expect(sql).toContain(`CREATE POLICY ${table}_update ON public.${table}\n  FOR UPDATE TO public\n  USING (public.is_admin())\n  WITH CHECK (public.is_admin());`);
+      expect(sql).toContain(`CREATE POLICY ${table}_delete ON public.${table}\n  FOR DELETE TO public\n  USING (public.is_admin());`);
+    }
     const created = [...sql.matchAll(/CREATE POLICY (\w+) ON public\.(\w+)\n {2}FOR (\w+)/g)].map((m) => `${m[2]}.${m[1]}.${m[3]}`);
     expect(created.sort()).toEqual([
-      'field_app_billing_sets.field_app_billing_sets_select.SELECT', 'invoice_items.invoice_items_insert.INSERT', 'invoice_items.invoice_items_select.SELECT',
+      'field_app_billing_sets.field_app_billing_sets_select.SELECT',
+      'field_app_location_shares.field_app_location_shares_delete.DELETE', 'field_app_location_shares.field_app_location_shares_insert.INSERT',
+      'field_app_location_shares.field_app_location_shares_update.UPDATE',
+      'field_app_locations.field_app_locations_delete.DELETE', 'field_app_locations.field_app_locations_insert.INSERT',
+      'field_app_locations.field_app_locations_update.UPDATE',
+      'invoice_items.invoice_items_insert.INSERT', 'invoice_items.invoice_items_select.SELECT',
       'invoice_line_allocations.invoice_line_alloc_insert.INSERT', 'invoice_line_share_snapshots.invoice_line_share_snapshots_select.SELECT',
       'invoice_line_shares.invoice_line_shares_select.SELECT', 'invoice_shares.invoice_shares_insert.INSERT', 'invoice_shares.invoice_shares_select.SELECT',
       'invoices.invoices_insert.INSERT', 'invoices.invoices_select.SELECT', 'write_offs.write_offs_select_sales_rep.SELECT',
     ]);
+    // Every created write policy is admin-only; no created policy mentions is_sales_rep() outside a USING read.
+    for (const m of sql.matchAll(/CREATE POLICY \w+ ON public\.\w+\n {2}FOR (INSERT|UPDATE|DELETE) TO \w+\n([\s\S]*?);\n/g)) {
+      expect(m[2]).not.toContain('is_sales_rep');
+    }
     for (const m of sql.matchAll(/CREATE POLICY \w+_select(?:_sales_rep)? ON public\.\w+\n {2}FOR SELECT TO \w+\n {2}USING \(([\s\S]*?)\);\n/g)) {
       expect(m[1]).toContain('public.is_sales_rep()');
     }
     expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.invoice_shares, public.invoice_line_allocations FROM authenticated, anon, PUBLIC;');
     expect(sql).toContain('REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated;');
+    expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.field_app_locations, public.field_app_location_shares, public.write_offs FROM authenticated, anon, PUBLIC;');
+    expect(sql).toContain('REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated;');
+    const postflight = sql.slice(sql.indexOf('DO $postflight$'), sql.indexOf('$postflight$;'));
+    for (const t of ['field_app_locations', 'field_app_location_shares', 'write_offs']) {
+      expect(postflight).toContain(`OR has_table_privilege('authenticated', 'public.${t}', 'INSERT, UPDATE, DELETE, TRUNCATE')`);
+      expect(postflight).toContain(`OR NOT has_table_privilege('authenticated', 'public.${t}', 'SELECT')`);
+    }
   });
 
   it('refuses the apply from its postflight when anything authenticated can run reaches an invoice write unguarded', () => {
@@ -237,6 +287,21 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     // cancel_delivery stays on the upkeep allowlist (Mason 2026-10-09) - not wrapped.
     expect(postflight).toContain("('cancel_delivery(uuid,text,uuid,text)', '8528b344f86c7e1aa735e386ea39f2eb')");
     expect(sql).not.toMatch(/RENAME TO _cancel_delivery/);
+    // reverse_write_off is wrapped now, so it is no longer on the pinned already-admin-only list.
+    expect(postflight).not.toContain("('reverse_write_off(uuid,text,uuid,text)'");
+    // The writer rule covers every invoice table and every write spelling, functions and procedures.
+    for (const t of ['invoices', 'invoice_items', 'invoice_shares', 'invoice_line_shares', 'invoice_line_share_snapshots', 'invoice_line_allocations',
+      'field_app_locations', 'field_app_location_shares', 'field_app_billing_sets', 'field_app_billing_lines', 'write_offs']) {
+      expect(postflight).toMatch(new RegExp(`[(|]${t}[|)]`));
+    }
+    expect(postflight).toContain('merge\\s+into|truncate(\\s+table)?)\\s+(only\\s+)?("?public"?\\s*\\.\\s*)?"?(');
+    expect(postflight).toContain("p.prokind IN ('f', 'p')");
+    // The key-then-guard form is accepted for the split wrapper only.
+    expect(postflight).toContain("AND NOT (f.proname = 'create_split_invoices_from_order'");
+    // The smoke chain's step 8 is the same query, byte for byte.
+    const query = sql.slice(sql.indexOf('  WITH RECURSIVE fn AS ('), sql.indexOf('  IF v_unclassified IS NOT NULL THEN'));
+    expect(query.length).toBeGreaterThan(1000);
+    expect(read('scripts/smoke/smoke-invoicing-admin-only.sql')).toContain(query);
   });
 
   it('registers its container-only smoke chain and real-schema prover', () => {

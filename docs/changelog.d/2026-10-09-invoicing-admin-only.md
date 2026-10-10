@@ -52,17 +52,18 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   the 11 replaced policies and the invoice-table grants. The container replay matches all of them.
 - `node scripts/smoke/prove-invoicing-admin-only-real-schema.mjs` → `INVOICING_ADMIN_ONLY_PROOF_PASS`
   (fresh container, baseline + 103 replayed migrations + PR #889's two schema migrations):
-  - BEFORE: a sales rep really wrote through 19 of the 21 guarded RPCs (the other two already refused
-    reps: batch void, and bulk prepay which is disabled for everyone); rep, driver and offline
+  - BEFORE: a sales rep really wrote through 19 of the 22 guarded RPCs (the other three already refused
+    reps: batch void, bulk prepay which is disabled for everyone, and `reverse_write_off`, which a
+    deactivated admin could still run - reproduced); rep, driver and offline
     completions, a rep's split completion and a rep's job completion auto-invoiced; reps' and drivers'
     quick deliveries invoiced; a rep inserted `invoice_shares` / `invoice_line_allocations` rows; a rep
     read none of an admin's invoices; a post went through an invoice changed by a concurrent save.
-  - AUTOCOMMIT refused; 14 preflight drifts each refused with their own code; 4 postflight mutants
+  - AUTOCOMMIT refused; 16 preflight drifts each refused with their own code; 4 postflight mutants
     rolled the apply back; APPLY printed `POSTFLIGHT_OK`.
-  - AFTER: all 21 RPCs refuse a sales rep, driver, applicator, entity_recipient, deactivated admin and a
+  - AFTER: all 22 RPCs refuse a sales rep, driver, applicator, entity_recipient, deactivated admin and a
     caller with no profile with 42501 `INVOICING_ADMIN_ONLY`, no number drawn and nothing left, also
     with their locks held by a second session; anon cannot execute; admin results and database state
-    identical to BEFORE including exact replay; the 15 already-admin-only functions refuse a rep.
+    identical to BEFORE including exact replay; the 14 already-admin-only functions refuse a rep.
   - Reads: a rep reads every invoice table the pages read; drivers and applicators unchanged.
   - Completions: no invoice and no number for reps and drivers (online, offline, split), one activity
     row and one notification per active admin, listed under "Delivered, not invoiced"; the admin's
@@ -73,15 +74,48 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   - Sweep clean; a new unguarded writer, a late guard and a changed upkeep body are caught.
   - 20 related registered chains: 9 pass before and after, 9 fail identically before and after
     (container fixtures), 2 stale rep chains now stop at `INVOICING_ADMIN_ONLY` (intended).
-  - 46 mutations (one per gate) each turned the prover red; restored, green.
-- `npm run typecheck`, `npm run lint`, `npm run test` (383 files, 5475 tests passed, 123 skipped),
+  - 65 mutations (one per gate, round 1 included) each turned the prover red; restored, green.
+- `npm run typecheck`, `npm run lint`, `npm run test` (384 files, 5483 tests passed, 123 skipped; re-run after review round 1),
   `node scripts/check-doc-drift.mjs` all pass.
+
+### Review round 1 fixes (same day, same candidate file, still NOT APPLIED)
+
+- Direct REST writes: a sales rep could insert, update and delete `field_app_locations` and
+  `field_app_location_shares` rows on any field invoice, draft or posted (live grants and policies
+  read). Their writes, and `write_offs`' writes, are revoked from `authenticated`/`anon`/`PUBLIC` and
+  their write policies are admin-only; TRUNCATE is revoked on `field_app_billing_sets` / `_lines`.
+- `reverse_write_off` is wrapped too: its own role test let a deactivated admin through.
+- Posting version check: `post_invoice` takes the implementation's key lock before it looks for a
+  stored receipt (a same-key duplicate waits and replays; proven in two sessions); a version without a
+  key is `IDEMPOTENCY_KEY_REQUIRED` on `post_invoice` and `batch_post_invoices`; the batch's key-only
+  receipt lookup is documented.
+- `complete_job`: a non-admin's completion notifies every active admin (`job_needs_invoice`).
+- The hard-guard sweep covers every invoice table (`invoice_line_share_snapshots`,
+  `invoice_line_allocations`, `field_app_locations`, `field_app_location_shares`,
+  `field_app_billing_sets`/`_lines`, `write_offs`), MERGE/TRUNCATE, ONLY and quoted names, procedures,
+  comments stripped left to right; "guard first" no longer accepts a DECLARE initializer or a nested
+  block; the key-first form only for the split wrapper. The registered chain runs the same query text.
+- New CI-blocking static test `src/lib/invoiceWriterGuard.test.ts` applies the rule to every
+  migration from `20261009120000` on.
+- `INVOICE_EXPECTED_VERSION_INVALID` is mapped in `db.ts` / `errorSanitizer.ts`.
+- Prover: the reverse-write-off bug and the direct field-app writes reproduced before; another rep's
+  customer in the read check (plus a rep-scoped-read mutant); group and batch two-session races; a
+  same-key duplicate; every fingerprint leg (line shares, customer shares, a member added or
+  soft-deleted); the new sweep cases; mutants for each new gate.
 
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations.
 - Phase 2 (screens) after PR #892: hide every mutating invoice control for non-admins, send the
-  reviewed version when posting, the rep's customer-name gap on invoice lists.
+  reviewed version when posting, the rep's customer-name gap on invoice lists, and the
+  `src/types/supabase.ts` entries for `p_expected_version` and the two version readers (regenerate
+  from live after the apply; the renamed `_*_pre_admin_only_20261009` names may then need
+  classifying in `rpcContracts.test.ts` / `rpcFixtureLiveDiff.test.ts`).
 - `package.json` proof script line (ask-listed file): `"proof:invoicing-admin-only": "node scripts/smoke/prove-invoicing-admin-only-real-schema.mjs"`.
-- CI does not run the container prover or the chain; the sweep blocks at apply time, not on the PR.
+- CI does not run the container prover or the chain; `src/lib/invoiceWriterGuard.test.ts` is the
+  PR-time guard.
+- At apply: re-pin `scripts/db-invariant-sweeps/allowlist.json` (`complete_job`'s contract digest
+  changes; the new wrappers pass `p_performed_by` to their frozen bodies) from live digests.
+- Mason decisions (KNOWN_ISSUES): reps re-pricing an admin's draft/unposted invoice through order
+  upkeep; reps reading cost/margin on every invoice.
 - Regenerate `.claude/schema-registry.json` after the apply.

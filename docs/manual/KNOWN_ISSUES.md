@@ -60,6 +60,17 @@ it must follow PR #889's four migrations (its preflight refuses otherwise). The 
   (`update_field_app_invoice_billing`, field-app access-scope low (3)). Moot: reps cannot invoice at all.
 - Reps inserting `invoice_shares` (and `invoice_line_allocations`) rows directly through the API: the
   table grants are revoked and the insert policies are admin-only.
+- Reps rewriting a field invoice's `field_app_locations` / `field_app_location_shares` rows (acres,
+  crop, field, customer, split, amount) directly through the API, on any field invoice, draft or
+  posted (review round 1, live grants and policies read 2026-10-09): INSERT/UPDATE/DELETE/TRUNCATE
+  revoked from `authenticated` and the write policies are admin-only. `write_offs` writes are revoked
+  the same way (only the admin RPCs write them), and TRUNCATE on `field_app_billing_sets` /
+  `field_app_billing_lines`.
+- `reverse_write_off` let a caller with no active profile through (a deactivated admin): its role
+  test `(SELECT role ... AND is_active) != 'admin'` is NULL, not true. It is wrapped behind
+  `_require_invoicing_admin()` like the other invoicing RPCs (the prover reproduces the bug before).
+- A non-admin's job completion now also notifies every active admin (`job_needs_invoice`), as a
+  delivery completion does.
 - Reps unposting invoices, and a field invoice saved for a customer the rep was not checked against:
   every field-invoice and unpost RPC is admin-only.
 - The split wrapper accepted a NULL or blank idempotency key (carried over from closed PR #891): it
@@ -87,17 +98,32 @@ the file is applied and verified live.
   (`ORDER_INVOICE_TERMINAL`), for an admin and a rep alike, in the container replay of the live
   schema (seen 2026-10-09 by the admin-only prover, identical before and after the candidate). Not
   re-checked on live.
-- **`reverse_write_off` lets a NULL role through.** Its role test is
-  `IF (SELECT role FROM profiles WHERE id = v_actor AND is_active = true) != 'admin'` (live body md5
-  `70ef11ccad193eb6ef5ee88dcba6f8cd`, read 2026-10-09), which is NULL — not true — for an
-  authenticated caller with no active profile (a deactivated admin, or a user whose profile is gone),
-  so that caller is not refused. Sales reps are refused. It sits on `20261009120000`'s pinned
-  already-admin-only list unchanged (the brief kept it out of scope); fix it with the EXISTS form
-  `_require_invoicing_admin()` uses.
 - **`finance_charges` still grants table writes to `authenticated`** (its policy is admin-only, so
-  RLS refuses them; the grant is defence-in-depth debt). Same shape on `write_offs` (INSERT, UPDATE,
-  DELETE, TRUNCATE granted; only an admin INSERT policy) and TRUNCATE on `field_app_billing_sets`.
-  TRUNCATE is not reachable through PostgREST.
+  RLS refuses them; the grant is defence-in-depth debt). TRUNCATE is not reachable through PostgREST.
+  (`write_offs` and the `field_app_billing_*` TRUNCATE grants are revoked by `20261009120000`.)
+- **A delivery completion can still change an admin's draft while a versioned post runs**
+  (pre-existing; review round 1). `_complete_delivery_authorized_impl`'s upkeep of an admin's draft
+  (the tote stamp, the partial-delivery resize) writes `invoice_items` before it locks the `invoices`
+  row, and the tote stamp also touches posted invoices. The posting version check binds against
+  writers that lock the invoice row first, so a completion committing between the version check and
+  the post can still slip a line change past the admin's review. `20261009120000` re-emits that body
+  verbatim apart from its admin-only hunk; fixing the lock order needs its own change and a
+  two-session prover case.
+- **Needs Mason: reps can still re-price and re-date an admin's draft or unposted invoice through
+  order upkeep** (`price_order`, `update_order_items`, `create_rush_order` update `invoice_items` and
+  the header of every `draft` / `unposted` invoice on the order; their role gate allows sales reps).
+  The design brief called this upkeep "the default in Mason's Q4"; his answers do not mention it.
+  If reps must not change an admin's invoice amounts at all, these need a non-admin refusal when an
+  active invoice exists.
+- **Needs Mason: reps now read cost and margin on every invoice** (`invoices.total_cost_cents`,
+  `invoice_items.cost_cents`), including customers whose names they cannot see. Mason approved "all
+  invoices, read-only"; whether that includes cost/margin was not asked. If not, rep reads must go
+  through a read RPC or view without the cost columns instead of the widened table policies.
+- **At apply: the actor-forgery invariant sweep must be re-pinned.** Its `complete_job` exception
+  pins the live contract digest (`46ca21c7...`), which this file changes, and the new wrappers that
+  pass `p_performed_by` to their frozen bodies will show up as suspects. The digests are read from
+  live after the apply, so `scripts/db-invariant-sweeps/allowlist.json` is updated in the apply step
+  (each wrapper's frozen body keeps its strict actor refusal).
 - **Reps see every invoice but not every customer's name.** The read widening covers the invoice
   tables only; `customers` stays scoped (a rep reads only assigned customers), so the invoice list and
   detail show a blank farm name for another rep's customer. Phase 2 (screens) must handle it or Mason
@@ -112,10 +138,15 @@ the file is applied and verified live.
   `smoke-order-invoice-type-gate.sql` and `smoke-prepay-payment-inactive-actor-gate.sql` branch on
   whether `_require_invoicing_admin()` exists (drop that branch once the migration is live), and
   `smoke-field-app-split-penny-exact.sql` follows the renamed lock/recheck bodies.
-- **The hard-guard catalog sweep is not CI-blocking.** It runs in the migration's postflight (apply
-  time), in `smoke-invoicing-admin-only.sql` and in the container prover; CI runs none of these, so a
-  future migration that adds an unguarded invoice writer is caught at its own apply or prover run,
-  not on the PR. Making it CI-blocking needs a CI workflow change (ask-listed).
+- **The catalog sweep itself runs only at apply time and in the container** (the migration's
+  postflight, `smoke-invoicing-admin-only.sql`, the prover). Since review round 1 the same rule runs on
+  every PR as a static test, `src/lib/invoiceWriterGuard.test.ts`: it scans every migration from
+  `20261009120000` on and fails on a function that reaches an invoice write without the guard first
+  (or a re-emitted allowlisted body). Like the sweep it is a text regex, not a parser: dynamic SQL and
+  other schemas are outside it.
+- **Nine registered chains around the invoicing RPCs fail on main's schema in the container** (the
+  prover prints each one's first error; identical before and after this change, so they give no
+  evidence either way). Classifying and repairing them is separate work.
 
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 

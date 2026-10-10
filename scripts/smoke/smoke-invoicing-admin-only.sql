@@ -19,8 +19,9 @@
 --   7   a post with the version the admin reviewed is refused once the invoice changed
 --       (INVOICE_CHANGED_SINCE_REVIEW) and goes through with the current version;
 --   8   the catalog sweep finds no function authenticated can run that reaches an invoice write
---       without the guard first, other than the reviewed already-admin-only and upkeep names
---       (the migration's postflight and the prover additionally pin those bodies by md5).
+--       without the guard first, other than the reviewed already-admin-only and upkeep functions,
+--       each pinned by signature and body md5. The query is the migration postflight's text,
+--       byte for byte (the prover checks that the two stay identical).
 -- Every SMOKE_FAIL names its step. One DO block, terminal exception -> nothing commits.
 DO $smoke$
 DECLARE
@@ -69,7 +70,8 @@ DECLARE
     $c$SELECT public.apply_credit_memo_to_invoice(gen_random_uuid(), gen_random_uuid(), 100, auth.uid(), 'e2e-ao-18')$c$,
     $c$SELECT public.reverse_credit_memo_application(gen_random_uuid(), 'reason', auth.uid(), 'e2e-ao-19')$c$,
     $c$SELECT public.apply_prepay_to_invoice(gen_random_uuid(), gen_random_uuid(), 100, auth.uid(), 'e2e-ao-20')$c$,
-    $c$SELECT public.batch_apply_all_prepayments(auth.uid(), 'e2e-ao-21')$c$
+    $c$SELECT public.batch_apply_all_prepayments(auth.uid(), 'e2e-ao-21')$c$,
+    $c$SELECT public.reverse_write_off(gen_random_uuid(), 'reason', auth.uid(), 'e2e-ao-22')$c$
   ];
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
@@ -230,34 +232,60 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: step 7: the post with the current version did not post';
   END IF;
 
-  -- Step 8: the catalog sweep (names; the migration's postflight also pins these bodies by md5).
+  -- Step 8: the catalog sweep (the migration postflight's query, byte for byte: functions pinned by
+  -- signature and body md5, so a changed upkeep body or a new overload is flagged too).
   WITH RECURSIVE fn AS (
     SELECT p.oid, p.proname, p.prosrc,
-           regexp_replace(regexp_replace(replace(p.prosrc, chr(13), ''), '/[*].*?[*]/', '', 'g'), '--[^\n]*', '', 'g') AS body
+           regexp_replace(replace(p.prosrc, chr(13), ''), '/\*([^*]|\*+[^*/])*\*+/|--[^\n]*', '', 'g') AS body
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-     WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.prolang <> 13
+     WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p') AND p.prolang <> 13
   ), writer AS (
     SELECT oid FROM fn
-     WHERE body ~* '(insert\s+into|update|delete\s+from)\s+(public\.)?(invoices|invoice_items|invoice_shares|invoice_line_shares)\M'
+     WHERE body ~* '\m(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?)\s+(only\s+)?("?public"?\s*\.\s*)?"?(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)("|\M)'
   ), edge AS (
-    SELECT a.oid AS caller, b.oid AS callee FROM fn a JOIN fn b ON a.oid <> b.oid AND a.body ~ ('\m' || b.proname || '\s*\(')
+    SELECT a.oid AS caller, b.oid AS callee
+      FROM fn a JOIN fn b ON a.oid <> b.oid AND a.body ~ ('\m' || b.proname || '\s*\(')
   ), reach AS (
-    SELECT oid FROM writer UNION SELECT e.caller FROM edge e JOIN reach x ON x.oid = e.callee
+    SELECT oid FROM writer
+    UNION
+    SELECT e.caller FROM edge e JOIN reach x ON x.oid = e.callee
+  ), pinned AS (
+    SELECT * FROM (VALUES
+      ('void_invoice(uuid,text,text)', '2b1be1b706614f9a909581b0493d679f'),
+      ('void_invoice_group(uuid,text,text)', 'fa19808b6ab6b0663663cd28c89a3326'),
+      ('delete_invoices(uuid[],uuid,text)', '24c271164caa2369c57c3bdc5d88c50a'),
+      ('create_invoice_for_unbilled_delivery(uuid,uuid,text)', 'a7f2531bd09ea6c650063f9661871caa'),
+      ('generate_finance_charges(date,uuid,uuid[],text)', '56a397500167abf1b2801d22a31075dd'),
+      ('issue_return_credit(uuid,uuid,text)', 'f3fcab7980d1640501fc038b0c8ac902'),
+      ('unapply_credit_memo(uuid,text,uuid,text)', 'ba69e04e86dec86723d3ac9487f51272'),
+      ('apply_write_off(uuid,bigint,text,uuid,text)', '00e8d020f9faf6276de8ddaf4f1411fc'),
+      ('void_payment(uuid,text,uuid,text)', '70fd746c15f4a6629680a724f3588967'),
+      ('apply_remaining_prepayments(uuid,uuid,text)', 'c0d7a2aef843ace0f557af2d096b090e'),
+      ('batch_apply_prepayments(jsonb,uuid,text)', '15624992c9375e08a0ec1914437e6e40'),
+      ('void_order(uuid,uuid,text,text)', 'bb220157f3cd56d28e9efe88dafba896'),
+      ('cancel_order(uuid,uuid,text)', '501473a43b505df72bc803a7354b0e60'),
+      ('void_delivery(uuid,text,uuid,text)', '3ef685c8f5bf778e3ae38aa2f89304da'),
+      ('complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)', 'a1e9a043f27d3566f8ecf6d5e3a809ab'),
+      ('process_offline_action(uuid,text)', '0461eebf65f23ccc8fe3852375eb9c78'),
+      ('cancel_delivery(uuid,text,uuid,text)', '8528b344f86c7e1aa735e386ea39f2eb'),
+      ('batch_cancel_deliveries(uuid[],text,uuid,text)', '25d34db60f098a22a62db53780742eee'),
+      ('price_order(uuid,jsonb,uuid,text)', 'ab2bcf3ac499cf78eef1f706d4e9501f'),
+      ('update_order_items(uuid,jsonb,uuid,text)', 'e35fce6708edee32fb1876fa60d7da4b'),
+      ('create_rush_order(uuid,jsonb,text,text,uuid,text)', '9027a97ab42a109f5e81188736f52f9c'),
+      ('allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text)', '6a945a2510d8e788d4e6f03c0c6d7563'),
+      ('complete_job(uuid,jsonb,uuid,text)', '9196da7ce6337bd0176a67b37be950f2'),
+      ('create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', '1bf67e10cae538b5090b067aa3f665f5')
+    ) AS t(sig, md5)
   )
-  SELECT string_agg(f.oid::regprocedure::text, ', ') INTO v_unclassified
+  SELECT string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text) INTO v_unclassified
     FROM fn f JOIN reach x ON x.oid = f.oid
    WHERE has_function_privilege('authenticated', f.oid, 'EXECUTE')
-     AND f.prosrc !~ '^\s*(DECLARE\s[^$]*?)?BEGIN\s+(IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''[^'']*''\s+USING ERRCODE = ''22023'';\s+END IF;\s+)?PERFORM public\._require_invoicing_admin\(\);'
-     AND f.proname NOT IN (
-       -- already admin-only
-       'void_invoice', 'void_invoice_group', 'delete_invoices', 'create_invoice_for_unbilled_delivery',
-       'generate_finance_charges', 'issue_return_credit', 'unapply_credit_memo', 'apply_write_off',
-       'reverse_write_off', 'void_payment', 'apply_remaining_prepayments', 'batch_apply_prepayments',
-       'void_order', 'cancel_order', 'void_delivery',
-       -- upkeep (non-admins complete with no invoice; reps may cancel; order upkeep; payments)
-       'complete_delivery', 'process_offline_action', 'complete_job', 'create_quick_delivery',
-       'cancel_delivery', 'batch_cancel_deliveries', 'price_order', 'update_order_items',
-       'create_rush_order', 'allocate_payment');
+     AND f.prosrc !~ '^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\M)\w+\s+[\w\[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
+     AND NOT (f.proname = 'create_split_invoices_from_order'
+              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')
+     AND NOT EXISTS (SELECT 1 FROM pinned pn
+                      WHERE to_regprocedure('public.' || pn.sig) = f.oid
+                        AND md5(replace(f.prosrc, chr(13), '')) = pn.md5);
   IF v_unclassified IS NOT NULL THEN
     RAISE EXCEPTION 'SMOKE_FAIL: step 8: unguarded invoice writers reachable by authenticated: %', v_unclassified;
   END IF;

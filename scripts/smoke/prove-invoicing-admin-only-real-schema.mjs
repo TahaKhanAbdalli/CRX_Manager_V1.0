@@ -15,8 +15,10 @@
  *      creates, edits, posts, unposts, transfers, consolidates, splits, applies credits and
  *      prepayments), a rep's and a driver's delivery completion and a rep's job completion
  *      auto-invoice, a rep's quick delivery creates an invoice, a rep inserts invoice_shares and
- *      invoice_line_allocations rows directly; a rep reads none of an admin's invoices; a stale
- *      post (the invoice changed after review) goes through, also in a real two-session race;
+ *      invoice_line_allocations rows directly and rewrites a field invoice's field_app_locations
+ *      and field_app_location_shares rows directly; a DEACTIVATED admin reverses a write-off; a
+ *      rep reads none of an admin's invoices; a stale post (the invoice changed after review)
+ *      goes through, also in a real two-session race;
  *   2. AUTOCOMMIT / PREFLIGHT / POSTFLIGHT: outside one transaction the file stops first; every pin
  *      group refuses its own drift; a wrong body pin, a guard that is not first, a late split key
  *      check and an unguarded invoice writer each make the postflight roll the apply back;
@@ -27,20 +29,27 @@
  *      holds the locks the call would need (so the guard runs before any lock or claim); the split
  *      wrapper refuses a NULL/empty/whitespace key for every role; anon cannot execute; admins get
  *      the same result and database state as BEFORE, and an exact replay returns the stored result;
- *   5. READ SIDE: a rep reads every invoice table the invoice pages read; a driver's reads are
- *      unchanged; direct table writes are refused;
+ *   5. READ SIDE: a rep reads every invoice table the invoice pages read, also on another rep's
+ *      customer; a driver's reads are unchanged; direct table writes (invoice_shares,
+ *      invoice_line_allocations, field_app_locations, field_app_location_shares, write_offs) are
+ *      refused;
  *   6. DELIVERIES AND JOBS: reps' and drivers' completions (online, offline replay, split order,
  *      partial delivery against an admin's quick-delivery draft) complete with no invoice, the
  *      office notified and the delivery listed under "Delivered, not invoiced"; an admin then bills
  *      it with the same lines the old auto-invoice had; admin completions still auto-draft; a rep's
  *      job completion skips the draft; quick deliveries by reps and drivers make no invoice;
  *      cancel_delivery is unchanged;
- *   7. POSTING VERSION CHECK: a concurrent save between review and post is refused (two sessions,
- *      under the row lock), an unchanged invoice/group/batch posts, old callers without a version
- *      still work, a replay is not re-checked, a new group member counts;
+ *   7. POSTING VERSION CHECK: a concurrent change between review and post is refused for a single
+ *      post, a group post and a batch post (two sessions, under the row locks); a same-key
+ *      duplicate waits and replays; an unchanged invoice/group/batch posts, old callers without a
+ *      version still work, a replay is not re-checked, every fingerprint leg counts (lines, line
+ *      shares, customer shares, a group member added or soft-deleted); a version without a key is
+ *      refused;
  *   8. HARD-GUARD SWEEP: no function authenticated can run reaches an invoice write without the
- *      guard unless pinned; a new unguarded writer is caught;
- *   9. CHAINS: the registered chains around these RPCs end exactly as they did before;
+ *      guard unless pinned; a new unguarded writer, a late guard, a DECLARE-initializer writer,
+ *      the newly covered tables and spellings, and a procedure are caught;
+ *   9. CHAINS: the registered chains around these RPCs end exactly as they did before (the ones
+ *      that already fail on main are listed with their first error: they give no signal);
  *  10. RE-APPLY: refused, nothing changed;
  *  11. MUTATIONS: one per gate - each turns this prover red; restored, green again.
  */
@@ -107,6 +116,7 @@ const WRAPPED = {
   'reverse_credit_memo_application(uuid,text,uuid,text)': '38cea043fc7dae4e65bc8593c95bddfb',
   'apply_prepay_to_invoice(uuid,uuid,bigint,uuid,text)': 'c9377dab8f2534a03af2c27a6e1d510c',
   'batch_apply_all_prepayments(uuid,text)': '1d76228210c474da37c9a3cd91b97b7d',
+  'reverse_write_off(uuid,text,uuid,text)': '70ef11ccad193eb6ef5ee88dcba6f8cd',
   'create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)': '69c1d569fb2e9eb913502d59e41a76fe',
 };
 const CDAI = 'public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)';
@@ -148,6 +158,13 @@ const LIVE_POLICY_MD5 = {
   'invoice_shares.invoice_shares_insert': 'e5ca188a3e2901d57253b2c007f5a3bf',
   'invoice_line_allocations.invoice_line_alloc_insert': '52722e61e9bef7b2ff1a9a2f33cef7be',
   'write_offs.write_offs_select_admin': '3a62ac9ae6afb0b8195d72a0b07a24da',
+  // The field-application invoice child-row write policies (review round 1), read live 2026-10-09.
+  'field_app_locations.field_app_locations_insert': '52722e61e9bef7b2ff1a9a2f33cef7be',
+  'field_app_locations.field_app_locations_update': '7680ae67028c233ada58f74c302d87bd',
+  'field_app_locations.field_app_locations_delete': '0b3f94a02ac505d82e218752005f2c32',
+  'field_app_location_shares.field_app_location_shares_insert': '52722e61e9bef7b2ff1a9a2f33cef7be',
+  'field_app_location_shares.field_app_location_shares_update': '7680ae67028c233ada58f74c302d87bd',
+  'field_app_location_shares.field_app_location_shares_delete': '0b3f94a02ac505d82e218752005f2c32',
 };
 
 const id = (n) => `6f200000-0000-4000-8000-${n.padStart(12, '0')}`;
@@ -294,10 +311,11 @@ const STATE_SQL = `md5(COALESCE((SELECT string_agg(i.invoice_type || ':' || i.st
  * the call, and the normalized database state after it.
  */
 function attempt(uid, fixture, call, { replay = false, role = 'authenticated', lockTimeout = null, after = '', statement = false } = {}) {
+  // A statement reports the number of rows it touched (ROW_COUNT), so "ok|0" is a no-op write.
   const once = (tag) => `DO $${tag}$
-DECLARE v text;
+DECLARE v text; n bigint;
 BEGIN
-  ${statement ? `${call}; v := '1';` : `v := (${call})::text;`}
+  ${statement ? `${call}; GET DIAGNOSTICS n = ROW_COUNT; v := n::text;` : `v := (${call})::text;`}
   RAISE NOTICE '${tag.toUpperCase()}|ok|%', COALESCE(v, '<null>');
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE '${tag.toUpperCase()}|%|%', SQLSTATE, SQLERRM;
@@ -334,6 +352,12 @@ ROLLBACK;
     stderr: r.stderr,
   };
 }
+/**
+ * The refusal and its sequence check. The count check cannot fail for a call that raises (its
+ * subtransaction rolls back every row it wrote, whatever the order), so it is NOT evidence that
+ * the guard ran first: the no-number-drawn check (sequences are non-transactional) and the
+ * held-lock cases are.
+ */
 function expectRefused(a, expected, label) {
   assert.match(a.result, expected, `${label}: wrong outcome ${a.result}`);
   assert.equal(a.seq[1], a.seq[0], `${label}: the refused call drew an invoice number`);
@@ -386,9 +410,9 @@ function fieldInvoiceSql(jobId, label) {
   return `${completedJobSql(jobId, label)}
   SELECT set_config('prover.fa', (public.transfer_job_to_invoice('${jobId}', '${U.ADMIN}', 'prover-ao-tji-${label}')->>'invoice_id'), true);`;
 }
-function miscDraftSql(guc, label, cents = 1500) {
+function miscDraftSql(guc, label, cents = 1500, customer = C1) {
   return `${claims(U.ADMIN)}
-  SELECT set_config('${guc}', public.save_invoice(jsonb_build_object('customer_id', '${C1}', 'invoice_type', 'misc_charge', 'status', 'draft',
+  SELECT set_config('${guc}', public.save_invoice(jsonb_build_object('customer_id', '${customer}', 'invoice_type', 'misc_charge', 'status', 'draft',
     'invoice_date', (now() AT TIME ZONE 'America/Chicago')::date, 'header_notes', '[PROVER] ${label}'),
     jsonb_build_array(jsonb_build_object('description', '[PROVER] fee ${label}', 'quantity', 1, 'unit_price_cents', ${cents}, 'extended_cents', ${cents})),
     'prover-ao-misc-${label}')::text, true);`;
@@ -396,6 +420,12 @@ function miscDraftSql(guc, label, cents = 1500) {
 function postedMiscSql(guc, label) {
   return `${miscDraftSql(guc, label)}
   SELECT public.post_invoice(current_setting('${guc}')::uuid, 'prover-ao-post-${label}') IS NULL;`;
+}
+/** A posted invoice with one write-off (prover.wo). */
+function writeOffSql(label) {
+  return `${postedMiscSql('prover.inv', `wo-${label}`)}
+    ${claims(U.ADMIN)} SELECT set_config('prover.wo', (public.apply_write_off(current_setting('prover.inv')::uuid, 100, '[PROVER] wo', '${U.ADMIN}', 'prover-ao-wo-${label}'))::text, true);
+    SELECT set_config('prover.wo', COALESCE((SELECT id::text FROM public.write_offs WHERE invoice_id = current_setting('prover.inv')::uuid LIMIT 1), current_setting('prover.wo')), true);`;
 }
 const SPLIT_JOB = id('4003');
 function faSplitGroupSql(label, job = SPLIT_JOB) {
@@ -481,6 +511,9 @@ const CASES = [
   { n: 'apply_prepay_to_invoice', fx: () => prepaySql(), call: (uid, key) => `public.apply_prepay_to_invoice(current_setting('prover.prepay')::uuid, '${TARGET}', 500, '${uid}', ${sqlKey(key)})` },
   // Hard-disabled for EVERY role since 20260620200000 (prepay double-spend guard).
   { n: 'batch_apply_all_prepayments', fx: () => '', call: (uid, key) => `public.batch_apply_all_prepayments('${uid}', ${sqlKey(key)})`, repBefore: /^P0001\|PREPAY_BULK_APPLY_DISABLED$/, adminBefore: /^P0001\|PREPAY_BULK_APPLY_DISABLED$/ },
+  // Reps were already refused, but its role test is NULL (not true) for a caller with no active
+  // profile, so a DEACTIVATED admin could reverse a write-off (review round 1): the BEFORE bug.
+  { n: 'reverse_write_off', fx: () => writeOffSql('case'), call: (uid, key) => `public.reverse_write_off(current_setting('prover.wo')::uuid, '[PROVER] reverse', '${uid}', ${sqlKey(key)})`, repBefore: /^P0001\|Admin access required to reverse write-offs$/, bugBefore: U.ADMIN_OFF },
 ];
 const QUICK_CALL = (uid, key, skip = false, driver = null) => `public.create_quick_delivery('${C1}', jsonb_build_array(jsonb_build_object('product_id', '${PROD}', 'quantity', 2)), ${driver ? `'${driver}'` : 'NULL'}, (now() AT TIME ZONE 'America/Chicago')::date, NULL, '${uid}', ${sqlKey(key)}, ${skip})`;
 
@@ -597,6 +630,11 @@ function invoicingMatrix(phase) {
     const fixture = c.fx();
     if (phase === 'before') {
       const rep = attempt(U.REP, fixture, c.call(U.REP, `prover-ao-${c.n}-rep`));
+      if (c.bugBefore) {
+        const bug = attempt(c.bugBefore, fixture, c.call(c.bugBefore, `prover-ao-${c.n}-bug`));
+        assert.match(bug.result, /^ok\|/, `BEFORE ${c.n}: the non-admin it should have let through was refused, so the bug did not reproduce: ${bug.result}`);
+        assert.notEqual(bug.counts[1], bug.counts[0], `BEFORE ${c.n}: the non-admin's call wrote nothing`);
+      }
       if (c.repBefore) assert.match(rep.result, c.repBefore, `BEFORE ${c.n}: unexpected rep outcome ${rep.result}`);
       else {
         assert.match(rep.result, /^ok\|/, `BEFORE ${c.n}: a sales rep could not invoice through it, so the bug did not reproduce: ${rep.result}`);
@@ -629,7 +667,10 @@ function splitKeyChecks() {
 
 /** Direct table writes and reads as authenticated (PostgREST's path). */
 function tableAccess(phase) {
+  // C3 belongs to REP_B, not to U.REP: "reps read ALL invoices" must include another rep's customer
+  // (a rep-scoped read policy - the scoping Mason rejected - would hide it).
   const fixture = `${miscDraftSql('prover.inv', `read-${phase}`)}
+  ${miscDraftSql('prover.inv_c3', `read-c3-${phase}`, 1700, C3)}
   ${faGroupSql(`read-${phase}`, { posted: true })}
   ${claims(U.ADMIN)}
   INSERT INTO public.write_offs (invoice_id, customer_id, amount_cents, reason, created_by)
@@ -670,7 +711,42 @@ function tableAccess(phase) {
     assert.equal(alloc.result, '42501|permission denied for table invoice_line_allocations', `AFTER: rep direct invoice_line_allocations insert: ${alloc.result}`);
   }
   assert.equal(inv.result, '42501|permission denied for table invoices', `${phase}: a rep inserted into invoices directly: ${inv.result}`);
-  return { owner: ownerView.result, rep: repView.result };
+
+  // Field-application invoice child rows and write-offs (review round 1): before, a rep could
+  // rewrite any field invoice's locations and location shares through the REST API.
+  const fieldFixture = `${allocFixture}
+  ${fieldInvoiceSql(id('4008'), `fal-${phase}`)}
+  RESET ROLE;
+  INSERT INTO public.field_app_locations (invoice_id, field_id, applied_acres, sort_order)
+    SELECT current_setting('prover.fa')::uuid, '${F1}', 120, 0
+     WHERE NOT EXISTS (SELECT 1 FROM public.field_app_locations WHERE invoice_id = current_setting('prover.fa')::uuid);
+  INSERT INTO public.field_app_location_shares (location_id, customer_id, split_pct, acres, amount_cents)
+    SELECT id, '${C1}', 100, applied_acres, 0 FROM public.field_app_locations WHERE invoice_id = current_setting('prover.fa')::uuid;`;
+  const ofField = "(SELECT id FROM public.field_app_locations WHERE invoice_id = current_setting('prover.fa')::uuid)";
+  const directWrites = {
+    field_app_locations_update: ["UPDATE public.field_app_locations SET applied_acres = applied_acres WHERE invoice_id = current_setting('prover.fa')::uuid", 'field_app_locations'],
+    field_app_locations_insert: [`INSERT INTO public.field_app_locations (invoice_id, field_id, applied_acres, sort_order) VALUES (current_setting('prover.fa')::uuid, '${F1}', 1, 99)`, 'field_app_locations'],
+    field_app_locations_delete: ["DELETE FROM public.field_app_locations WHERE invoice_id = current_setting('prover.fa')::uuid", 'field_app_locations'],
+    field_app_location_shares_update: [`UPDATE public.field_app_location_shares SET split_pct = split_pct WHERE location_id IN ${ofField}`, 'field_app_location_shares'],
+    field_app_location_shares_delete: [`DELETE FROM public.field_app_location_shares WHERE location_id IN ${ofField}`, 'field_app_location_shares'],
+    write_offs_insert: [`INSERT INTO public.write_offs (invoice_id, customer_id, amount_cents, reason, created_by) VALUES (current_setting('prover.inv')::uuid, '${C1}', 1, '[PROVER] direct', '${U.REP}')`, 'write_offs'],
+    invoice_shares_update: ["UPDATE public.invoice_shares SET amount_cents = amount_cents WHERE invoice_id = current_setting('prover.inv')::uuid", 'invoice_shares'],
+    invoice_shares_delete: ["DELETE FROM public.invoice_shares WHERE invoice_id = current_setting('prover.inv')::uuid", 'invoice_shares'],
+    invoice_line_allocations_update: ["UPDATE public.invoice_line_allocations SET amount_cents = amount_cents WHERE invoice_id = current_setting('prover.inv')::uuid", 'invoice_line_allocations'],
+    invoice_line_allocations_delete: ["DELETE FROM public.invoice_line_allocations WHERE invoice_id = current_setting('prover.inv')::uuid", 'invoice_line_allocations'],
+  };
+  const direct = {};
+  for (const [label, [statementSql, table]] of Object.entries(directWrites)) {
+    const a = attempt(U.REP, fieldFixture, statementSql, { statement: true });
+    direct[label] = a.result;
+    if (phase === 'after') assert.equal(a.result, `42501|permission denied for table ${table}`, `AFTER: rep direct ${label}: ${a.result}`);
+  }
+  if (phase === 'before') {
+    for (const label of ['field_app_locations_update', 'field_app_location_shares_update']) {
+      assert.match(direct[label], /^ok\|[1-9]\d*$/, `BEFORE: a rep could not rewrite ${label.replace(/_update$/, '')} rows of a field invoice directly, so the bug did not reproduce: ${direct[label]}`);
+    }
+  }
+  return { owner: ownerView.result, rep: repView.result, direct };
 }
 
 /** Delivery and job completions. Returns facts for the before/after comparison. */
@@ -774,21 +850,28 @@ function jobsAndQuick(phase) {
   const fixed = phase === 'after';
   const job = id('4101');
   const jobFacts = `SELECT 'JOB|' || (SELECT status FROM public.jobs WHERE id = '${job}') || '|' || (SELECT count(*) FROM public.invoices WHERE job_id = '${job}')
-    || '|' || COALESCE((SELECT string_agg(event_type || ':' || description, ' ; ' ORDER BY created_at) FROM public.activity_feed WHERE related_entity_id = '${job}' AND event_type LIKE 'auto_draft%'), '');`;
+    || '|' || COALESCE((SELECT string_agg(event_type || ':' || description, ' ; ' ORDER BY created_at) FROM public.activity_feed WHERE related_entity_id = '${job}' AND event_type LIKE 'auto_draft%'), '')
+    || '|' || (SELECT count(*) FROM public.notifications WHERE related_entity_id = '${job}' AND notification_type = 'job_needs_invoice');`;
+  const admins = activeAdmins();
   const out = {};
   for (const [who, uid] of [['rep', U.REP], ['admin', U.ADMIN], ['applicator', U.APPLICATOR]]) {
     const fixture = `${jobSql(job, `JOB-${who}`)} UPDATE public.jobs SET applicator_id = '${U.APPLICATOR}' WHERE id = '${job}';
     ${claims(uid)} SELECT public.start_job('${job}', '${uid}', 'prover-ao-sj-${who}') IS NOT NULL;`;
     const a = attempt(uid, fixture, `public.complete_job('${job}', '{"notes":"[PROVER]"}'::jsonb, '${uid}', 'prover-ao-cj-${who}')->>'success'`, { after: jobFacts });
     assert.equal(a.result, 'ok|true', `${phase} complete_job (${who}) failed: ${a.result}`);
-    const [, status, invoices, activity] = a.lines.find((l) => l.startsWith('JOB|')).split('|');
+    const [, status, invoices, activity, notes] = a.lines.find((l) => l.startsWith('JOB|')).split('|');
     if (who === 'admin' || (who === 'rep' && !fixed)) {
       assert.equal(invoices, '1', `${phase} complete_job (${who}): expected the automatic draft: ${status} ${invoices} ${activity}`);
+      assert.equal(notes, '0', `${phase} complete_job (${who}): unexpected job_needs_invoice notifications`);
     } else {
       assert.equal(invoices, '0', `${phase} complete_job (${who}): a draft was created`);
       assert.equal(a.seq[1], a.seq[0], `${phase} complete_job (${who}): a number was drawn`);
       assert.match(activity, /^auto_draft_skipped:/, `${phase} complete_job (${who}): expected an auto_draft_skipped row: ${activity}`);
-      if (fixed) assert.match(activity, /completed by a non-admin — automatic draft invoice skipped \(invoicing is admin-only\)/, `AFTER complete_job (${who}): wrong skip text: ${activity}`);
+      if (fixed) {
+        assert.match(activity, /completed by a non-admin — automatic draft invoice skipped \(invoicing is admin-only\)/, `AFTER complete_job (${who}): wrong skip text: ${activity}`);
+        // Q4/Q5: the office is told, one notification per active admin, as for deliveries.
+        assert.equal(notes, String(admins), `AFTER complete_job (${who}): expected one job_needs_invoice notification per active admin (${admins})`);
+      }
     }
     out[who] = `${invoices}|${activity.replace(/Job PROVER-AO-JOB-[\w-]+/, 'Job <n>')}`;
   }
@@ -874,6 +957,56 @@ COMMIT;\n`);
   return { result: /RACE\|([^\n]*)/.exec(poster.err)?.[1]?.trimEnd() ?? `(no result) ${poster.err}`, status: invoiceStatus(invoiceId) };
 }
 
+let groupJob = 0x4c00;
+/** A committed, unposted field-app split group (its own job); returns the group id. */
+function newGroup(label) {
+  groupJob += 1;
+  const group = scalar(`BEGIN; ${faGroupSql(label, { job: id(groupJob.toString(16)) })}
+    SELECT set_config('prover.keep_group', current_setting('prover.group'), false); COMMIT; SELECT current_setting('prover.keep_group');`);
+  assert.match(group, /^[0-9a-f-]{36}$/, `the committed group ${label} was not created: ${group}`);
+  return group;
+}
+function groupVersionOf(group) { return scalar(`BEGIN; ${claims(U.ADMIN)} SELECT public.get_invoice_group_post_version('${group}'); ROLLBACK;`); }
+/**
+ * Two posts of one invoice with the SAME key and the same reviewed version: the first has posted
+ * but not committed when the second arrives; the second must wait (observed) and then replay the
+ * first's success, not fail the version check against the now-posted invoice.
+ */
+async function dupKeyPost(label) {
+  const inv = newMisc(`dup-${label}`);
+  const version = versionOf([inv]);
+  const key = `prover-ao-dup-${label}`;
+  const first = session(`crx_ao_dup_first_${label}`);
+  first.child.stdin.write(`BEGIN;\n${claims(U.ADMIN)}\nSELECT 'FIRST_PID=' || pg_backend_pid();\nSELECT public.post_invoice('${inv}', '${key}', '${version}') IS NULL;\n\\echo FIRST_POSTED\n`);
+  let second;
+  try {
+    await until(() => first.out.includes('FIRST_POSTED') || first.err.includes('ERROR'), `${label}: the first post`);
+    assert.doesNotMatch(first.err, /ERROR/, `${label}: the first post failed:\n${first.err}`);
+    const firstPid = /FIRST_PID=(\d+)/.exec(first.out)?.[1];
+    second = session(`crx_ao_dup_second_${label}`);
+    second.child.stdin.end(`BEGIN;\n${asUser(U.ADMIN)}\nDO $dup$
+BEGIN
+  PERFORM public.post_invoice('${inv}', '${key}', '${version}');
+  RAISE NOTICE 'DUP|ok';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'DUP|%|%', SQLSTATE, SQLERRM;
+END
+$dup$;
+COMMIT;\n`);
+    await until(() => scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'crx_ao_dup_second_${label}' AND wait_event_type = 'Lock' AND ${firstPid} = ANY (pg_blocking_pids(pid));`) === '1' || second.err.includes('DUP|'),
+      `${label}: the duplicate post blocked behind the first`);
+    assert.doesNotMatch(second.err, /DUP\|/, `${label}: the duplicate finished before the first committed:\n${second.err}`);
+    first.child.stdin.end('COMMIT;\n');
+    assert.equal(await first.done, 0, `${label}: the first post did not commit:\n${first.err}`);
+    await second.done;
+  } finally {
+    if (!first.child.stdin.writableEnded) first.child.stdin.end('ROLLBACK;\n');
+    await first.done;
+    if (second) await second.done;
+  }
+  return { result: /DUP\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`, status: invoiceStatus(inv) };
+}
+
 let versionRun = 0;
 async function versionChecks(phase) {
   const fixed = phase === 'after';
@@ -934,9 +1067,73 @@ async function versionChecks(phase) {
     SELECT set_config('prover.bv', public.get_invoice_post_version(ARRAY[current_setting('prover.b1')::uuid, current_setting('prover.b2')::uuid]), true);`,
   `public.batch_post_invoices(ARRAY[current_setting('prover.b1')::uuid, current_setting('prover.b2')::uuid], 'prover-ao-ver-b-ok', current_setting('prover.bv'))->>'count'`);
   assert.equal(bOk.result, 'ok|2', `AFTER: an unchanged batch did not post: ${bOk.result}`);
+  // Review round 1. A version without a key is refused, never silently ignored.
+  const noKey = attempt(U.ADMIN, '', `public.post_invoice('${inv2}', NULL, '${v2}')`);
+  assert.equal(noKey.result, '22023|IDEMPOTENCY_KEY_REQUIRED: post_invoice', `AFTER: a versioned post without a key: ${noKey.result}`);
+  const blankBatch = attempt(U.ADMIN, '', `public.batch_post_invoices(ARRAY['${inv2}'::uuid], E' \\t', '${v2}')`);
+  assert.equal(blankBatch.result, '22023|IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices', `AFTER: a versioned batch with a blank key: ${blankBatch.result}`);
+  // The same key reused for a different invoice is refused by the frozen body (the version is
+  // not re-checked on a stored receipt, but the receipt's request must match).
+  const inv3 = newMisc(`conflict-${run}`);
+  const conflict = attempt(U.ADMIN, `${claims(U.ADMIN)} SELECT public.post_invoice('${inv2}', 'prover-ao-post-conflict-${run}') IS NULL;`,
+    `public.post_invoice('${inv3}', 'prover-ao-post-conflict-${run}', '${versionOf([inv3])}')`);
+  assert.match(conflict.result, /^P0001\|IDEMPOTENCY_ARGUMENT_MISMATCH: /, `AFTER: a key reused for another invoice with a version: ${conflict.result}`);
+  // Every leg of the fingerprint counts: a customer share added after review.
+  const shareStale = attempt(U.ADMIN, `INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents)
+      VALUES ('${inv2}', '${C1}', '[PROVER] share added after review', 100, 1500);`, `public.post_invoice('${inv2}', 'prover-ao-ver-share', '${v2}')`);
+  assert.match(shareStale.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: an invoice_shares change did not change the version: ${shareStale.result}`);
+  // Same-key duplicate posts (two sessions): the second waits and replays.
+  const dup = await dupKeyPost(`${phase}_${process.pid}_${versionRun}`);
+  assert.equal(dup.result, 'ok', `AFTER: a same-key duplicate of a versioned post did not replay the first's success: ${dup.result}`);
+  assert.equal(dup.status, 'posted');
+  // Group: a line share edited, a member added, a member soft-deleted after review are refused;
+  // an unchanged group that already has a soft-deleted member posts.
+  const gv = "SELECT set_config('prover.gv', public.get_invoice_group_post_version(current_setting('prover.group')::uuid), true);";
+  const ofGroup = "(SELECT ii.id FROM public.invoice_items ii JOIN public.invoices i ON i.id = ii.invoice_id WHERE i.invoice_group_id = current_setting('prover.group')::uuid)";
+  const gLineShare = attempt(U.ADMIN, `${groupFx}\n${gv}\nUPDATE public.invoice_line_shares SET split_override_reason = '[PROVER] line share edited after review' WHERE invoice_item_id IN ${ofGroup};`,
+    `public.post_invoice_group(current_setting('prover.group')::uuid, '${U.ADMIN}', 'prover-ao-ver-gls', current_setting('prover.gv'))`,
+    { after: `SELECT 'LINESHARES|' || (SELECT count(*) FROM public.invoice_line_shares WHERE invoice_item_id IN ${ofGroup});` });
+  assert.ok(gLineShare.lines.some((l) => /^LINESHARES\|[1-9]/.test(l)), `AFTER: the group fixture has no invoice_line_shares rows to edit: ${gLineShare.lines.find((l) => l.startsWith('LINESHARES|'))}`);
+  assert.match(gLineShare.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: an invoice_line_shares change did not change the group version: ${gLineShare.result}`);
+  const gAdded = attempt(U.ADMIN, `${groupFx}\n${gv}
+    INSERT INTO public.invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
+      SELECT 'PROVER-AO-NEW-MEMBER', customer_id, invoice_type, 'draft', invoice_date, 0, '${U.ADMIN}', invoice_group_id
+        FROM public.invoices WHERE invoice_group_id = current_setting('prover.group')::uuid ORDER BY id LIMIT 1;`,
+  `public.post_invoice_group(current_setting('prover.group')::uuid, '${U.ADMIN}', 'prover-ao-ver-gadd', current_setting('prover.gv'))`);
+  assert.match(gAdded.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a member added after review did not change the group version: ${gAdded.result}`);
+  const softDelete = "UPDATE public.invoices SET deleted_at = now() WHERE id = (SELECT id FROM public.invoices WHERE invoice_group_id = current_setting('prover.group')::uuid ORDER BY id DESC LIMIT 1);";
+  const gDropped = attempt(U.ADMIN, `${groupFx}\n${gv}\n${softDelete}`,
+    `public.post_invoice_group(current_setting('prover.group')::uuid, '${U.ADMIN}', 'prover-ao-ver-gdrop', current_setting('prover.gv'))`);
+  assert.match(gDropped.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a member soft-deleted after review did not change the group version: ${gDropped.result}`);
+  const gDeletedBefore = attempt(U.ADMIN, `${groupFx}\n${softDelete}\n${gv}`,
+    `public.post_invoice_group(current_setting('prover.group')::uuid, '${U.ADMIN}', 'prover-ao-ver-gdel', current_setting('prover.gv'))->>'member_count'`);
+  assert.equal(gDeletedBefore.result, 'ok|1', `AFTER: an unchanged group with a soft-deleted member did not post (reader and post must skip the same members): ${gDeletedBefore.result}`);
+  // Two-session races for the group and the batch: the post blocks on the row a second admin is
+  // changing and refuses once that change commits.
+  const g1 = newGroup(`race-g-${run}`);
+  const g1Version = groupVersionOf(g1);
+  const g1Member = scalar(`SELECT id FROM public.invoices WHERE invoice_group_id = '${g1}' ORDER BY id LIMIT 1;`);
+  const gRace = await racePost(`group_${run.replaceAll('-', '_')}`, {
+    invoiceId: g1Member,
+    holdSql: `UPDATE public.invoices SET header_notes = '[PROVER] member changed under the post' WHERE id = '${g1Member}';`,
+    postSql: `PERFORM public.post_invoice_group('${g1}', '${U.ADMIN}', 'prover-ao-race-gpost-${run}', '${g1Version}')`,
+  });
+  assert.match(gRace.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a group post with the reviewed version went through after a concurrent member change: ${gRace.result}`);
+  assert.equal(gRace.status, 'draft', 'AFTER: the refused group post left a member posted');
+  const b1 = newMisc(`race-b1-${run}`);
+  const b2 = newMisc(`race-b2-${run}`);
+  const bVersion = versionOf([b1, b2]);
+  const bRace = await racePost(`batch_${run.replaceAll('-', '_')}`, {
+    invoiceId: b2,
+    holdSql: saveHeaderSql(b2, '[PROVER] changed under the batch', `prover-ao-race-bsave-${run}`),
+    postSql: `PERFORM public.batch_post_invoices(ARRAY['${b1}', '${b2}']::uuid[], 'prover-ao-race-bpost-${run}', '${bVersion}')`,
+  });
+  assert.match(bRace.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a batch post with the reviewed version went through after a concurrent save: ${bRace.result}`);
+  assert.deepEqual([invoiceStatus(b1), bRace.status], ['draft', 'draft'], 'AFTER: the refused batch posted something');
   // Readers are admin-only too.
   for (const [who, uid] of NON_ADMINS) {
     expectRefused(attempt(uid, '', `public.get_invoice_post_version(ARRAY['${inv2}'::uuid])`), ADMIN_ONLY, `AFTER get_invoice_post_version as ${who}`);
+    expectRefused(attempt(uid, '', 'public.get_invoice_group_post_version(gen_random_uuid())'), ADMIN_ONLY, `AFTER get_invoice_group_post_version as ${who}`);
   }
   // PostgREST overloads: exactly one callable function per name.
   assert.equal(scalar(`SELECT string_agg(proname || '=' || n, ',' ORDER BY proname) FROM (SELECT proname, count(*) n FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace
@@ -948,16 +1145,20 @@ async function versionChecks(phase) {
 // ------------------------------------------------------------------------------------------------
 // HARD-GUARD sweep (the same rule the migration's postflight enforces).
 // The guard-first rule as the candidate spells it (the sweep's only acceptance test for a body).
-const SWEEP_GUARD_FIRST = "     AND f.prosrc !~ '^\\s*(DECLARE\\s[^$]*?)?BEGIN\\s+(IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\\[\\^\\[:space:\\]\\]'' THEN\\s+RAISE EXCEPTION ''[^'']*''\\s+USING ERRCODE = ''22023'';\\s+END IF;\\s+)?PERFORM public\\._require_invoicing_admin\\(\\);'\n";
-function sweepSql({ weak = false } = {}) {
+const SWEEP_GUARD_FIRST = "     AND f.prosrc !~ '^\\s*(DECLARE(\\s+(?![Bb][Ee][Gg][Ii][Nn]\\M)\\w+\\s+[\\w\\[\\]. %]+;)*\\s+)?BEGIN\\s+PERFORM public\\._require_invoicing_admin\\(\\);'\n";
+function sweepSql({ weak = false, looseDeclare = false } = {}) {
   const source = lf(CANDIDATE);
   const start = source.indexOf('  WITH RECURSIVE fn AS (');
   const end = source.indexOf('  IF v_unclassified IS NOT NULL THEN');
   assert.ok(start > 0 && end > start, 'the candidate has no catalog sweep');
   let query = source.slice(start, end);
   assert.equal(query.split(SWEEP_GUARD_FIRST).length - 1, 1, 'the sweep\'s guard-first rule is not the reviewed text');
+  // The registered chain runs this exact query text.
+  assert.ok(lf(CHAIN).includes(query), 'smoke-invoicing-admin-only.sql step 8 is not the postflight sweep query');
   // MUTATION (weak): accept any body that merely mentions the guard.
   if (weak) query = query.replace(SWEEP_GUARD_FIRST, "     AND f.prosrc !~ '_require_invoicing_admin'\n");
+  // MUTATION (looseDeclare): the round-0 rule, which accepted any DECLARE section before the guard.
+  if (looseDeclare) query = query.replace(SWEEP_GUARD_FIRST, "     AND f.prosrc !~ '^\\s*(DECLARE\\s[^$]*?)?BEGIN\\s+PERFORM public\\._require_invoicing_admin\\(\\);'\n");
   return `DO $sweep$
 DECLARE v_unclassified text;
 BEGIN
@@ -968,10 +1169,58 @@ $sweep$;`;
 }
 const LATE_GUARD_WRITER = `CREATE FUNCTION public.prover_late_guard(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN DELETE FROM public.invoice_items WHERE invoice_id = p; PERFORM public._require_invoicing_admin(); END $f$;
 GRANT EXECUTE ON FUNCTION public.prover_late_guard(uuid) TO authenticated;`;
+// PL/pgSQL runs DECLARE initializers before BEGIN: this "guard-first" body writes before its guard.
+const DECLARE_WRITER = `CREATE FUNCTION public.prover_declare_writer(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE
+  v uuid := public._save_invoice_pre_admin_only_20261009('{}'::jsonb, '[]'::jsonb, 'prover-ao-declare');
+BEGIN
+  PERFORM public._require_invoicing_admin();
+END $f$;
+GRANT EXECUTE ON FUNCTION public.prover_declare_writer(uuid) TO authenticated;`;
 function sweep(extraSql = '', options = {}) {
   const r = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\n${extraSql}\n${sweepSql(options)}\nROLLBACK;\n`, allowFailure: true });
   assert.equal(r.status, 0, `the sweep failed to run:\n${r.stderr}`);
   return /SWEEP\|([^\n]*)/.exec(r.stderr)?.[1];
+}
+
+/** Section 8: the catalog sweep is clean and catches every kind of unguarded writer. */
+function sweepChecks() {
+  assert.equal(sweep(), 'none', 'AFTER: the catalog sweep found an unclassified invoice writer');
+  assert.equal(sweep(`CREATE FUNCTION public.prover_new_writer(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN DELETE FROM public.invoice_items WHERE invoice_id = p; END $f$;
+    GRANT EXECUTE ON FUNCTION public.prover_new_writer(uuid) TO authenticated;`), 'prover_new_writer(uuid)', 'the sweep did not catch a new unguarded invoice writer');
+  assert.equal(sweep(commentDriftSql('public.price_order(uuid,jsonb,uuid,text)')), 'price_order(uuid,jsonb,uuid,text)', 'the sweep did not catch a changed upkeep function');
+  assert.equal(sweep(LATE_GUARD_WRITER), 'prover_late_guard(uuid)', 'the sweep accepted a guard that runs after the write');
+  assert.equal(sweep(DECLARE_WRITER), 'prover_declare_writer(uuid)', 'the sweep accepted a writer in a DECLARE initializer before the guard');
+  // Review round 1: every invoice table and write spelling, procedures, comment tricks.
+  const sweepCases = [
+    ['field_app_locations, UPDATE ONLY and quoted names', `CREATE FUNCTION public.prover_fal_writer(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN UPDATE ONLY "public"."field_app_locations" SET applied_acres = 1 WHERE invoice_id = p; END $f$;
+      GRANT EXECUTE ON FUNCTION public.prover_fal_writer(uuid) TO authenticated;`, 'prover_fal_writer(uuid)'],
+    ['invoice_line_allocations in a procedure', `CREATE PROCEDURE public.prover_alloc_writer(p uuid) LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN DELETE FROM public.invoice_line_allocations WHERE invoice_id = p; END $f$;
+      GRANT EXECUTE ON PROCEDURE public.prover_alloc_writer(uuid) TO authenticated;`, 'prover_alloc_writer(uuid)'],
+    ['write_offs TRUNCATE', `CREATE FUNCTION public.prover_truncate_writer() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN TRUNCATE TABLE public.write_offs; END $f$;
+      GRANT EXECUTE ON FUNCTION public.prover_truncate_writer() TO authenticated;`, 'prover_truncate_writer()'],
+    ['a write after a line comment that opens a block comment', `CREATE FUNCTION public.prover_comment_writer(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN
+      -- note /* never closed here
+      DELETE FROM public.invoices WHERE id = p;
+      /* closed */
+      END $f$;
+      GRANT EXECUTE ON FUNCTION public.prover_comment_writer(uuid) TO authenticated;`, 'prover_comment_writer(uuid)'],
+    ['another function with the split key check before the guard', `CREATE FUNCTION public.prover_key_first(p uuid, p_idempotency_key text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'
+      USING ERRCODE = '22023';
+  END IF;
+  PERFORM public._require_invoicing_admin();
+  DELETE FROM public.invoices WHERE id = p;
+END $f$;
+      GRANT EXECUTE ON FUNCTION public.prover_key_first(uuid, text) TO authenticated;`, 'prover_key_first(uuid,text)'],
+  ];
+  for (const [label, sqlText, expected] of sweepCases) assert.equal(sweep(sqlText), expected, `the sweep did not catch ${label}`);
+  console.log(`[prover] SWEEP: nothing authenticated can run reaches an invoice write without the guard unless pinned; a new unguarded writer, a writer whose guard runs after its write, a writer in a DECLARE initializer, a changed upkeep body and ${sweepCases.length} more (${sweepCases.map(([l]) => l).join('; ')}) are all caught; the registered chain runs the same query`);
+}
+function commentDriftSql(signature) {
+  return `DO $drift$ BEGIN EXECUTE regexp_replace(pg_get_functiondef('${signature}'::regprocedure), '[$]function[$]\\s*$', '-- prover drift' || chr(10) || '$function$'); END $drift$;`;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1005,6 +1254,16 @@ async function main() {
     const group = scalar(`BEGIN; ${faGroupSql(`held-dev-${process.pid}`, { posted: true, job: id((0x4a00 + (process.pid % 0xff)).toString(16)) })}
       SELECT set_config('prover.held_group', current_setting('prover.group'), false); COMMIT; SELECT current_setting('prover.held_group');`);
     console.log(`[prover] DEV mutations only: ${await mutations({ adminBefore: null, held: heldLockCases(inv, group) })}`);
+    return;
+  }
+  if (REUSE && process.env.CRX_PROVER_AFTER_ONLY === '1') {
+    // Debugging only: rerun the after-apply checks of sections 5-8 on a kept container that
+    // already applied the candidate (the full proof never takes this path).
+    tableAccess('after');
+    jobsAndQuick('after');
+    await versionChecks('after');
+    sweepChecks();
+    console.log('[prover] DEV after-only checks passed');
     return;
   }
 
@@ -1060,7 +1319,7 @@ async function proof() {
   const chainFirst = runChain(path.basename(CHAIN), lf(CHAIN));
   assert.match(chainFirst, /^FAIL /, 'BEFORE: the new smoke chain passed against the pre-candidate schema, so it does not detect the bug');
   assert.match(chainFirst, /SMOKE_FAIL/, `BEFORE: the new smoke chain failed for a setup reason, not on the bug: ${chainFirst}`);
-  console.log(`[prover] BEFORE (the bug): a sales rep invoiced through ${CASES.filter((c) => !c.repBefore).length} wrapped RPCs (each wrote rows); a rep's, a driver's and an offline completion auto-invoiced; a rep's split completion auto-split; a rep's job completion auto-drafted; reps' and drivers' quick deliveries created invoices; a rep inserted invoice_shares and invoice_line_allocations rows directly; a rep read none of the admin's invoices (${readsBefore.rep}); a post went through an invoice changed by a concurrent save (${versionBefore.race}); the new chain fails first (${chainFirst.slice(0, 120)})`);
+  console.log(`[prover] BEFORE (the bug): a sales rep invoiced through ${CASES.filter((c) => !c.repBefore).length} wrapped RPCs (each wrote rows); a rep's, a driver's and an offline completion auto-invoiced; a rep's split completion auto-split; a rep's job completion auto-drafted; reps' and drivers' quick deliveries created invoices; a rep inserted invoice_shares and invoice_line_allocations rows directly and rewrote a field invoice's field_app_locations (${readsBefore.direct.field_app_locations_update}) and field_app_location_shares (${readsBefore.direct.field_app_location_shares_update}) rows directly; a deactivated admin reversed a write-off; a rep read none of the admin's invoices (${readsBefore.rep}); a post went through an invoice changed by a concurrent save (${versionBefore.race}); the new chain fails first (${chainFirst.slice(0, 120)})`);
 
   // 2a. AUTOCOMMIT.
   stageText('candidate.sql', lf(CANDIDATE));
@@ -1071,7 +1330,7 @@ async function proof() {
   console.log('[prover] AUTOCOMMIT: run statement by statement the file stops at its first check and changes nothing');
 
   // 2b. PREFLIGHT: each pin group refuses its own drift (each inside a transaction that rolls back).
-  const commentDrift = (signature) => `DO $drift$ BEGIN EXECUTE regexp_replace(pg_get_functiondef('${signature}'::regprocedure), '[$]function[$]\\s*$', '-- prover drift' || chr(10) || '$function$'); END $drift$;`;
+  const commentDrift = commentDriftSql;
   const drifts = [
     ['wrapped RPC body', commentDrift('public.save_invoice(jsonb,jsonb,text)'), 'PREFLIGHT_RPC_DRIFT'],
     ['wrapped RPC granted to anon', 'GRANT EXECUTE ON FUNCTION public.post_invoice(uuid,text) TO anon;', 'PREFLIGHT_RPC_DRIFT'],
@@ -1084,6 +1343,8 @@ async function proof() {
     ['already-admin-only list', commentDrift('public.void_invoice(uuid,text,text)'), 'PREFLIGHT_SWEEP_LIST_DRIFT'],
     ['upkeep list', commentDrift('public.price_order(uuid,jsonb,uuid,text)'), 'PREFLIGHT_SWEEP_LIST_DRIFT'],
     ['replaced policy', 'ALTER POLICY invoices_select ON public.invoices USING (is_admin());', 'PREFLIGHT_POLICY_DRIFT'],
+    ['replaced field-app write policy', 'ALTER POLICY field_app_locations_update ON public.field_app_locations USING (is_admin());', 'PREFLIGHT_POLICY_DRIFT'],
+    ['newly wrapped RPC body (reverse_write_off)', commentDrift('public.reverse_write_off(uuid,text,uuid,text)'), 'PREFLIGHT_RPC_DRIFT'],
     ['extra policy', 'CREATE POLICY prover_extra ON public.invoice_shares FOR SELECT TO authenticated USING (true);', 'PREFLIGHT_POLICY_SET_DRIFT'],
     ['PR #889 missing from the ledger', `DELETE FROM supabase_migrations.schema_migrations WHERE name = '${PR889_DATA[1]}';`, 'PREFLIGHT_PR889_NOT_APPLIED'],
     ['an object it creates already exists', 'CREATE FUNCTION public._require_invoicing_admin() RETURNS void LANGUAGE sql AS $$ SELECT $$;', 'PREFLIGHT_ALREADY_APPLIED'],
@@ -1168,10 +1429,7 @@ async function proof() {
   const quickAfter = attempt(U.APPLICATOR, '', QUICK_CALL(U.APPLICATOR, 'prover-ao-qd-applicator'));
   assert.equal(quickAfter.result, 'P0001|INSUFFICIENT_ROLE', `AFTER: an applicator's quick delivery outcome changed: ${quickAfter.result}`);
   // The sweep's pinned "already admin-only" list is a claim: check each refuses a sales rep for
-  // its role (reverse_write_off looks its row up first, so it gets a real write-off).
-  const writeOffFx = `${postedMiscSql('prover.inv', 'wo')}
-    ${claims(U.ADMIN)} SELECT set_config('prover.wo', (public.apply_write_off(current_setting('prover.inv')::uuid, 100, '[PROVER] wo', '${U.ADMIN}', 'prover-ao-wo'))::text, true);
-    SELECT set_config('prover.wo', COALESCE((SELECT id::text FROM public.write_offs WHERE invoice_id = current_setting('prover.inv')::uuid LIMIT 1), current_setting('prover.wo')), true);`;
+  // its role (reverse_write_off left that list in review round 1: it is wrapped now).
   const alreadyAdminOnly = [
     ['void_invoice', '', `public.void_invoice(gen_random_uuid(), 'r', 'prover-ao-l1')`, /^P0001\|Only admin users can void invoices$/],
     ['void_invoice_group', '', `public.void_invoice_group(gen_random_uuid(), 'r', 'prover-ao-l2')`, /^P0001\|Only admin users can void invoices$/],
@@ -1181,7 +1439,6 @@ async function proof() {
     ['issue_return_credit', '', `public.issue_return_credit(gen_random_uuid(), auth.uid(), 'prover-ao-l6')`, /^P0001\|ADMIN_REQUIRED$/],
     ['unapply_credit_memo', '', `public.unapply_credit_memo(gen_random_uuid(), 'r', auth.uid(), 'prover-ao-l7')`, /^P0001\|INSUFFICIENT_ROLE$/],
     ['apply_write_off', '', `public.apply_write_off(gen_random_uuid(), 100, 'r', auth.uid(), 'prover-ao-l8')`, /^P0001\|INSUFFICIENT_ROLE$/],
-    ['reverse_write_off', writeOffFx, `public.reverse_write_off(current_setting('prover.wo')::uuid, 'r', auth.uid(), 'prover-ao-l9')`, /^P0001\|.*(INSUFFICIENT_ROLE|admin)/i],
     ['void_payment', '', `public.void_payment(gen_random_uuid(), 'r', auth.uid(), 'prover-ao-l10')`, /^P0001\|INSUFFICIENT_ROLE$/],
     // Hard-disabled for every role (20260620200000) before its admin check.
     ['apply_remaining_prepayments', '', `public.apply_remaining_prepayments(gen_random_uuid(), auth.uid(), 'prover-ao-l11')`, /^P0001\|PREPAY_BULK_APPLY_DISABLED$/],
@@ -1197,7 +1454,7 @@ async function proof() {
 
   // 5. READ SIDE.
   const readsAfter = tableAccess('after');
-  console.log(`[prover] READ SIDE: a rep now reads every invoice table the invoice pages read (${readsAfter.rep}, same as the admin); drivers and applicators read nothing, as before; direct invoice_shares / invoice_line_allocations inserts are permission denied`);
+  console.log(`[prover] READ SIDE: a rep now reads every invoice table the invoice pages read (${readsAfter.rep}, same as the admin, including an invoice on ANOTHER rep's customer); drivers and applicators read nothing, as before; every direct rep write is permission denied: invoice_shares / invoice_line_allocations insert, ${Object.keys(readsAfter.direct).join(', ')} (before: field_app_locations update ${readsBefore.direct.field_app_locations_update}, field_app_location_shares update ${readsBefore.direct.field_app_location_shares_update})`);
 
   // 6. DELIVERIES AND JOBS.
   const completionsAfter = completions('after');
@@ -1214,15 +1471,10 @@ async function proof() {
 
   // 7. POSTING VERSION CHECK.
   const versionAfter = await versionChecks('after');
-  console.log(`[prover] POSTING VERSION CHECK: a post with the reviewed version blocked behind a second admin's uncommitted save and refused once it committed (${versionAfter.race}); unchanged invoice, group and batch post; a replay is not re-checked; old callers (positional and PostgREST named arguments, no version) still post; a stale, a line-only change, a changed group member and one changed batch member are refused with nothing posted; a malformed version is 22023; the version readers are admin-only; one overload per posting RPC`);
+  console.log(`[prover] POSTING VERSION CHECK: a post, a group post and a batch post with the reviewed version each blocked behind a second admin's uncommitted change and refused once it committed (${versionAfter.race}); a same-key duplicate post waited for the first and replayed its success; unchanged invoice, group and batch post (also a group with a soft-deleted member); a replay is not re-checked; old callers (positional and PostgREST named arguments, no version) still post; a stale header, a line-only change, a customer share added, a line share edited, a group member edited, added or soft-deleted and one changed batch member are refused with nothing posted; a version without a key is IDEMPOTENCY_KEY_REQUIRED; a key reused for another invoice is refused; a malformed version is 22023; both version readers are admin-only; one overload per posting RPC`);
 
   // 8. SWEEP.
-  assert.equal(sweep(), 'none', 'AFTER: the catalog sweep found an unclassified invoice writer');
-  assert.equal(sweep(`CREATE FUNCTION public.prover_new_writer(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN DELETE FROM public.invoice_items WHERE invoice_id = p; END $f$;
-    GRANT EXECUTE ON FUNCTION public.prover_new_writer(uuid) TO authenticated;`), 'prover_new_writer(uuid)', 'the sweep did not catch a new unguarded invoice writer');
-  assert.equal(sweep(commentDrift('public.price_order(uuid,jsonb,uuid,text)')), 'price_order(uuid,jsonb,uuid,text)', 'the sweep did not catch a changed upkeep function');
-  assert.equal(sweep(LATE_GUARD_WRITER), 'prover_late_guard(uuid)', 'the sweep accepted a guard that runs after the write');
-  console.log('[prover] SWEEP: nothing authenticated can run reaches an invoice write without the guard unless pinned; a new unguarded writer, a writer whose guard runs after its write and a changed upkeep body are all caught');
+  sweepChecks();
 
   // 9. CHAINS.
   assert.equal(runChain(path.basename(CHAIN), lf(CHAIN)), 'PASS', 'AFTER: the new smoke chain did not pass');
@@ -1240,6 +1492,11 @@ async function proof() {
   }
   console.log(`[prover] CHAINS: smoke-invoicing-admin-only passes; of ${chains.length} registered chains around these RPCs, ${Object.values(chainsAfter).filter((x) => x === 'PASS').length} pass before and after, ${chains.length - changedByDesign.length - Object.values(chainsAfter).filter((x) => x === 'PASS').length} fail identically before and after (container fixtures), and ${changedByDesign.length} that drive invoicing as a sales rep now stop at INVOICING_ADMIN_ONLY - the intended change; they need their rep steps rewritten: ${changedByDesign.join('; ') || 'none'}`);
   console.log(`[prover] CHAIN OUTCOMES: ${chains.map((f) => `${f}=${chainsAfter[f] === 'PASS' ? 'PASS' : 'FAIL'}`).join(', ')}`);
+  // The label "container fixtures" above is NOT checked: these chains already fail on the
+  // pre-candidate schema (main), so they give no evidence either way about this change. Each
+  // one's first error, identical before and after, is printed so a reader can judge it.
+  const unchangedFailures = chains.filter((f) => chainsBefore[f] !== 'PASS' && chainsAfter[f] === chainsBefore[f]);
+  console.log(`[prover] CHAINS FAILING BEFORE AND AFTER (no signal; first error, identical both times): ${unchangedFailures.map((f) => `${f}: ${chainsBefore[f].slice(0, 160)}`).join(' | ') || 'none'}`);
 
   // 10. RE-APPLY.
   const reapplied = apply('candidate.sql');
@@ -1330,6 +1587,13 @@ async function mutations({ adminBefore, held }) {
   applyText('mutant-job.sql', once(job, '      IF is_admin() THEN\n', '      IF (is_admin() OR is_sales_rep()) THEN\n', 'job'));
   detect('complete_job auto-draft for reps', () => jobsAndQuick('after'));
   applyText('restore-job.sql', job);
+  // (5b) 1d: no admin notification when a non-admin's completion skips the draft.
+  const notifyStart = job.indexOf('        INSERT INTO notifications (');
+  const notifyEnd = job.indexOf("WHERE p.role = 'admin' AND p.is_active = true;\n", notifyStart) + "WHERE p.role = 'admin' AND p.is_active = true;\n".length;
+  assert.ok(notifyStart > 0 && notifyEnd > notifyStart, 'mutation: complete_job has no admin notification hunk');
+  applyText('mutant-job-notify.sql', job.slice(0, notifyStart) + job.slice(notifyEnd));
+  detect('complete_job without the admin notification', () => jobsAndQuick('after'));
+  applyText('restore-job-notify.sql', job);
   // (6) 1e: quick delivery without the coercion.
   const quick = statementOf('CREATE FUNCTION public.create_quick_delivery(');
   applyText('mutant-quick.sql', once(quick, 'p_skip_invoice => CASE WHEN public.is_admin() THEN p_skip_invoice ELSE true END', 'p_skip_invoice => p_skip_invoice', 'quick'));
@@ -1339,6 +1603,13 @@ async function mutations({ adminBefore, held }) {
   const layers = [
     ['invoice_shares INSERT re-granted', 'GRANT INSERT ON public.invoice_shares TO authenticated;', 'REVOKE INSERT ON public.invoice_shares FROM authenticated;'],
     ['invoice_line_allocations INSERT re-granted', 'GRANT INSERT ON public.invoice_line_allocations TO authenticated;', 'REVOKE INSERT ON public.invoice_line_allocations FROM authenticated;'],
+    ['write_offs INSERT re-granted', 'GRANT INSERT ON public.write_offs TO authenticated;', 'REVOKE INSERT ON public.write_offs FROM authenticated;'],
+    // Both layers removed together: the rep's write really lands, so the check fails on the
+    // outcome (a row written), not on an error message.
+    ['invoice_shares INSERT re-granted AND its policy widened', 'GRANT INSERT ON public.invoice_shares TO authenticated; ALTER POLICY invoice_shares_insert ON public.invoice_shares WITH CHECK (is_admin() OR is_sales_rep());',
+      'REVOKE INSERT ON public.invoice_shares FROM authenticated; ALTER POLICY invoice_shares_insert ON public.invoice_shares WITH CHECK (public.is_admin());'],
+    ['field_app_locations UPDATE re-granted AND its policy widened', 'GRANT UPDATE ON public.field_app_locations TO authenticated; ALTER POLICY field_app_locations_update ON public.field_app_locations USING (is_admin() OR is_sales_rep()) WITH CHECK (is_admin() OR is_sales_rep());',
+      'REVOKE UPDATE ON public.field_app_locations FROM authenticated; ALTER POLICY field_app_locations_update ON public.field_app_locations USING (public.is_admin()) WITH CHECK (public.is_admin());'],
   ];
   for (const [label, mutate, restoreSql] of layers) {
     psql(mutate);
@@ -1346,17 +1617,24 @@ async function mutations({ adminBefore, held }) {
     psql(restoreSql);
   }
   const policyChecks = {
-    invoices_insert: ['invoices', 'bd1972a06eea215895d9ecec861d5991'],
-    invoice_items_insert: ['invoice_items', 'bd1972a06eea215895d9ecec861d5991'],
-    invoice_shares_insert: ['invoice_shares', 'd99642aa0333a7d54b96a4dac2a8821b'],
-    invoice_line_alloc_insert: ['invoice_line_allocations', 'bd1972a06eea215895d9ecec861d5991'],
+    invoices_insert: ['invoices', 'bd1972a06eea215895d9ecec861d5991', 'insert'],
+    invoice_items_insert: ['invoice_items', 'bd1972a06eea215895d9ecec861d5991', 'insert'],
+    invoice_shares_insert: ['invoice_shares', 'd99642aa0333a7d54b96a4dac2a8821b', 'insert'],
+    invoice_line_alloc_insert: ['invoice_line_allocations', 'bd1972a06eea215895d9ecec861d5991', 'insert'],
+    field_app_locations_insert: ['field_app_locations', 'bd1972a06eea215895d9ecec861d5991', 'insert'],
+    field_app_locations_update: ['field_app_locations', 'd4f3167a940eee97d1cd03f0bc03df5f', 'update'],
+    field_app_locations_delete: ['field_app_locations', 'e95dffee2933869bf3a622fe2ef0456a', 'delete'],
+    field_app_location_shares_insert: ['field_app_location_shares', 'bd1972a06eea215895d9ecec861d5991', 'insert'],
+    field_app_location_shares_update: ['field_app_location_shares', 'd4f3167a940eee97d1cd03f0bc03df5f', 'update'],
+    field_app_location_shares_delete: ['field_app_location_shares', 'e95dffee2933869bf3a622fe2ef0456a', 'delete'],
   };
   const policyContract = () => { for (const [p, [t, pin]] of Object.entries(policyChecks)) assert.equal(policyMd5(t, p), pin, `${t}.${p} is not the reviewed write policy`); };
+  const policyClause = (kind, expr) => ({ insert: `WITH CHECK (${expr})`, update: `USING (${expr}) WITH CHECK (${expr})`, delete: `USING (${expr})` })[kind];
   policyContract();
-  for (const [p, [t]] of Object.entries(policyChecks)) {
-    psql(`ALTER POLICY ${p} ON public.${t} WITH CHECK (is_admin() OR is_sales_rep());`);
+  for (const [p, [t, , kind]] of Object.entries(policyChecks)) {
+    psql(`ALTER POLICY ${p} ON public.${t} ${policyClause(kind, 'is_admin() OR is_sales_rep()')};`);
     detect(`${p} widened back to sales reps`, policyContract);
-    psql(`ALTER POLICY ${p} ON public.${t} WITH CHECK (public.is_admin());`);
+    psql(`ALTER POLICY ${p} ON public.${t} ${policyClause(kind, 'public.is_admin()')};`);
     policyContract();
   }
   // (8) Read policies: each reverted, the rep's read check fails.
@@ -1369,6 +1647,13 @@ async function mutations({ adminBefore, held }) {
     detect(`${p} without the rep read`, () => tableAccess('after'));
     psql(`ALTER POLICY ${p} ON public.${t} USING (${original});`);
   }
+  // A rep-SCOPED read (a rep sees only invoices of customers assigned to them: the scoping Mason
+  // rejected) must turn the read check red too: the fixture has an invoice on REP_B's customer.
+  const invoicesSelect = docker([...psqlArgs(), '-A', '-t'], { input: "SELECT qual FROM pg_policies WHERE schemaname = 'public' AND tablename = 'invoices' AND policyname = 'invoices_select';" }).stdout.trim();
+  assert.equal(invoicesSelect.split('is_sales_rep()').length - 1, 1, 'invoices_select: the reviewed read policy is not in place');
+  psql(`ALTER POLICY invoices_select ON public.invoices USING (${invoicesSelect.replace('is_sales_rep()', '(is_sales_rep() AND EXISTS (SELECT 1 FROM public.customers c WHERE c.id = invoices.customer_id AND c.assigned_sales_rep = (SELECT auth.uid())))')});`);
+  detect('invoices_select scoped to the rep\'s own customers', () => tableAccess('after'));
+  psql(`ALTER POLICY invoices_select ON public.invoices USING (${invoicesSelect});`);
   psql('DROP POLICY write_offs_select_sales_rep ON public.write_offs;');
   detect('write_offs without the rep read', () => tableAccess('after'));
   psql('CREATE POLICY write_offs_select_sales_rep ON public.write_offs FOR SELECT TO authenticated USING (public.is_sales_rep());');
@@ -1382,26 +1667,62 @@ async function mutations({ adminBefore, held }) {
     applyText(`restore-ver-${name}.sql`, original);
   }
   const post = statementOf('CREATE FUNCTION public.post_invoice(');
-  const lockLine = '        PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;\n';
-  const compare = post.slice(post.indexOf('        IF public._invoice_review_fingerprint'), post.indexOf('        END IF;\n      END IF;') + '        END IF;\n'.length);
-  applyText('mutant-ver-unlocked.sql', once(post, `        PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice:' || p_idempotency_key, 0));\n${lockLine}${compare}`, `${compare}        PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice:' || p_idempotency_key, 0));\n${lockLine}`, 'unlocked'));
+  const lockLine = '      PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;\n';
+  const compareStart = post.indexOf('      IF public._invoice_review_fingerprint');
+  const compare = post.slice(compareStart, post.indexOf('      END IF;\n', compareStart) + '      END IF;\n'.length);
+  applyText('mutant-ver-unlocked.sql', once(post, `${lockLine}${compare}`, `${compare}${lockLine}`, 'unlocked'));
   await detectAsync('post_invoice version check before the row lock', () => versionChecks('after'));
   applyText('restore-ver-unlocked.sql', post);
-  // (10) The fingerprint without the lines.
+  // The group and batch checks without their row locks: the two-session races must catch it.
+  const groupPost = statementOf('CREATE FUNCTION public.post_invoice_group(');
+  applyText('mutant-ver-group-unlocked.sql', once(groupPost, '                 ORDER BY i.id\n                   FOR UPDATE) m;', '                 ORDER BY i.id) m;', 'group unlocked'));
+  await detectAsync('post_invoice_group version check without the member row locks', () => versionChecks('after'));
+  applyText('restore-ver-group-unlocked.sql', groupPost);
+  const batchPost = statementOf('CREATE FUNCTION public.batch_post_invoices(');
+  applyText('mutant-ver-batch-unlocked.sql', once(batchPost, ' ORDER BY i.id FOR UPDATE;', ';', 'batch unlocked'));
+  await detectAsync('batch_post_invoices version check without the row locks', () => versionChecks('after'));
+  applyText('restore-ver-batch-unlocked.sql', batchPost);
+  // The group check fingerprints soft-deleted members while the reader skips them.
+  applyText('mutant-ver-group-deleted.sql', once(groupPost, '                 WHERE i.invoice_group_id = p_invoice_group_id\n                   AND i.deleted_at IS NULL\n', '                 WHERE i.invoice_group_id = p_invoice_group_id\n', 'group deleted_at'));
+  await detectAsync('post_invoice_group counting soft-deleted members', () => versionChecks('after'));
+  applyText('restore-ver-group-deleted.sql', groupPost);
+  // A replay re-checked (no receipt test): the same-key duplicate must fail.
+  applyText('mutant-ver-recheck.sql', once(post, '    IF v_cached IS NULL THEN\n', '    IF true THEN\n', 'recheck'));
+  await detectAsync('post_invoice re-checking a call that has a stored receipt', async () => {
+    const d = await dupKeyPost(`mutant_${process.pid}_${Date.now().toString(36)}`);
+    assert.equal(d.result, 'ok', `mutant: the same-key duplicate did not replay: ${d.result}`);
+  });
+  applyText('restore-ver-recheck.sql', post);
+  // (10) The fingerprint without each of its child legs.
   const fingerprint = statementOf('CREATE FUNCTION public._invoice_review_fingerprint(');
-  applyText('mutant-fingerprint.sql', once(fingerprint, `           || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(ii) ORDER BY ii.id)::text
+  const legs = {
+    'the invoice lines': [`           || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(ii) ORDER BY ii.id)::text
                                  FROM public.invoice_items ii
-                                WHERE ii.invoice_id = i.id), '[]')\n`, '', 'fingerprint'));
-  await detectAsync('fingerprint without the invoice lines', () => versionChecks('after'));
-  applyText('restore-fingerprint.sql', fingerprint);
+                                WHERE ii.invoice_id = i.id), '[]')\n`, ''],
+    'the line shares': [`           || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(ls) ORDER BY ls.id)::text
+                                 FROM public.invoice_line_shares ls
+                                 JOIN public.invoice_items lii ON lii.id = ls.invoice_item_id
+                                WHERE lii.invoice_id = i.id), '[]')\n`, ''],
+    'the customer shares': [`           || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id)::text
+                                 FROM public.invoice_shares s
+                                WHERE s.invoice_id = i.id), '[]'),\n`, ',\n'],
+  };
+  for (const [leg, [cut, replacement]] of Object.entries(legs)) {
+    applyText('mutant-fingerprint.sql', once(fingerprint, cut, replacement, `fingerprint ${leg}`));
+    await detectAsync(`fingerprint without ${leg}`, () => versionChecks('after'));
+    applyText('restore-fingerprint.sql', fingerprint);
+  }
   // (11) The sweep's guard-first rule weakened to "mentions the guard": a writer whose guard runs
-  // after its write slips through, so the section-8 late-guard check fails.
+  // after its write slips through, so the section-8 late-guard check fails. And the old, loose
+  // DECLARE rule: a writer in a DECLARE initializer, before the guard, slips through.
   detect('sweep accepting a guard anywhere in the body', () => assert.equal(sweep(LATE_GUARD_WRITER, { weak: true }), 'prover_late_guard(uuid)', 'the weakened sweep accepted a guard that runs after the write'));
   assert.equal(sweep(LATE_GUARD_WRITER), 'prover_late_guard(uuid)', 'RESTORED: the sweep does not flag a guard that runs after the write');
+  detect('sweep accepting any DECLARE section before the guard', () => assert.equal(sweep(DECLARE_WRITER, { looseDeclare: true }), 'prover_declare_writer(uuid)', 'the loose sweep accepted a writer in a DECLARE initializer'));
+  assert.equal(sweep(DECLARE_WRITER), 'prover_declare_writer(uuid)', 'RESTORED: the sweep does not flag a writer in a DECLARE initializer');
   // Final: everything restored behaves exactly as reviewed.
   const restored = invoicingMatrix('after');
   if (adminBefore) for (const c of CASES) assert.deepEqual(restored[c.n], adminBefore[c.n], `RESTORED ${c.n}: admin outcome drifted`);
-  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate, the quick-delivery coercion, 2 table grants, 4 write policies, 6 read policies and the write_offs rep read, the version check in each of 3 posting wrappers, a version check taken before the row lock and a fingerprint without lines each turned the prover red, and the sweep flags a guard that runs after the write; restored, every check is green again`);
+  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate and its admin notification, the quick-delivery coercion, ${layers.length} table-grant layers (2 with the policy widened too, caught by the write landing), ${Object.keys(policyChecks).length} write policies, 6 read policies, a rep-scoped invoices read and the write_offs rep read, the version check in each of 3 posting wrappers, each posting wrapper's check without its row locks, a group check counting soft-deleted members, a re-check of a stored receipt (same-key duplicate), the fingerprint without each of its 3 child legs, and the sweep accepting a late guard or any DECLARE section each turned the prover red; restored, every check is green again (${count} detections)`);
   return count;
 }
 

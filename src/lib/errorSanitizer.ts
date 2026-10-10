@@ -13,9 +13,11 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'You can only work with customers assigned to you'],
   // Migration 20261009120000 (Mason 2026-10-09): invoicing is admin-only.
   [/^INVOICING_ADMIN_ONLY\b/i,
-   'Only an admin can do invoicing.'],
+   'Only an admin can do invoicing'],
   [/^INVOICE_CHANGED_SINCE_REVIEW\b/i,
    'This invoice changed after you reviewed it, so nothing was posted. Reload it, check it again, then post'],
+  [/^INVOICE_EXPECTED_VERSION_INVALID\b/i,
+   'This invoice could not be checked before posting, so nothing was posted. Reload the page and try again'],
   [/^RETURN_NOT_FOUND\b/i,
    'This return could not be found'],
   [/^RETURN_CREDIT_UNIT_MISMATCH\b/i,

@@ -1097,6 +1097,7 @@
         "reverse_credit_memo_application",
         "apply_prepay_to_invoice",
         "batch_apply_all_prepayments",
+        "reverse_write_off",
         "create_quick_delivery",
         "complete_delivery",
         "_complete_delivery_authorized_impl",

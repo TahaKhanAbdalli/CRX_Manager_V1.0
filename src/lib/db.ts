@@ -167,13 +167,18 @@ export const RpcErrorCodes = {
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
   // Invoicing is admin-only (Mason 2026-10-09, migration 20261009120000): every
-  // invoicing RPC refuses a non-admin with 42501 'INVOICING_ADMIN_ONLY: ...' before
-  // anything else. Sales reps can still read invoices.
+  // invoicing RPC refuses a non-admin with 42501 'INVOICING_ADMIN_ONLY: ...'
+  // (create_split_invoices_from_order checks its idempotency key first).
+  // create_quick_delivery, complete_job and complete_delivery do NOT refuse: for a
+  // non-admin they skip the invoice. Sales reps can still read invoices.
   INVOICING_ADMIN_ONLY: 'INVOICING_ADMIN_ONLY',
   // post_invoice / post_invoice_group / batch_post_invoices with p_expected_version
   // (same migration): an invoice that would post changed after the admin reviewed it
   // (get_invoice_post_version / get_invoice_group_post_version). Reload and review.
   INVOICE_CHANGED_SINCE_REVIEW: 'INVOICE_CHANGED_SINCE_REVIEW',
+  // Same three posting RPCs: p_expected_version is not a 32-char lowercase md5 from
+  // get_invoice_post_version / get_invoice_group_post_version (22023). A client bug.
+  INVOICE_EXPECTED_VERSION_INVALID: 'INVOICE_EXPECTED_VERSION_INVALID',
   PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
   // complete_cycle_count optimistic-concurrency refusal (20260831212415). Raised
   // when another client changed a counted quantity after the completing client

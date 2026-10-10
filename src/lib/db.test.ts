@@ -127,6 +127,7 @@ describe('hasRpcCode', () => {
     expect(hasRpcCode({ code: '42501', message: 'INVOICING_ADMIN_ONLY: only an admin can create, edit, post, unpost, void or transfer invoices' }, RpcErrorCodes.INVOICING_ADMIN_ONLY)).toBe(true);
     expect(hasRpcCode({ code: 'P0001', message: 'INVOICE_CHANGED_SINCE_REVIEW: an invoice in this group changed after it was reviewed' }, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)).toBe(true);
     expect(hasRpcCode({ message: 'CUSTOMER_SCOPE_DENIED' }, RpcErrorCodes.INVOICING_ADMIN_ONLY)).toBe(false);
+    expect(hasRpcCode({ code: '22023', message: 'INVOICE_EXPECTED_VERSION_INVALID: batch_post_invoices expects the version from get_invoice_post_version' }, RpcErrorCodes.INVOICE_EXPECTED_VERSION_INVALID)).toBe(true);
   });
   // save_job raises the BARE token: `RAISE EXCEPTION 'SHARE_NOT_100' USING
   // DETAIL = 'Field shares must total 100%; got ...'`. JobDetail detected it with

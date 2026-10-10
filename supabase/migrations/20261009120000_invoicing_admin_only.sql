@@ -36,9 +36,13 @@
 --     transfer_job_to_invoice, transfer_invoice_to_job, consolidate_draft_invoices,
 --     update_field_app_applied_info, update_field_app_invoice_billing, post_invoice,
 --     post_invoice_group, batch_post_invoices, unpost_invoice, unpost_invoice_group,
---     batch_void_invoices (tidy-up: reps already fail inside void_invoice), and (Q1)
+--     batch_void_invoices (tidy-up: reps already fail inside void_invoice), (Q1)
 --     apply_credit_memo_to_invoice, reverse_credit_memo_application, apply_prepay_to_invoice,
---     batch_apply_all_prepayments.
+--     batch_apply_all_prepayments, and reverse_write_off (review round 1: its own role test
+--     `(SELECT role ...) != 'admin'` is NULL, not true, for a caller with no active profile, so a
+--     deactivated admin was not refused; the wrapper's EXISTS guard refuses that caller first).
+--     A service_role caller has no auth.uid(), so the guard refuses it too; no server-side caller
+--     of these RPCs exists (pg_cron, triggers and supabase/functions checked 2026-10-09).
 --     create_split_invoices_from_order also REQUIRES its idempotency key first (carried over from
 --     closed PR #891): a NULL, empty or all-whitespace key is
 --     IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order (22023) for every role. Its
@@ -52,20 +56,32 @@
 --     allocated) order already falls back to needs_split_billing + notify when the split wrapper
 --     refuses, inside its own BEGIN/EXCEPTION. Upkeep of an admin's existing draft (the tote
 --     stamp, the partial-delivery resize) is unchanged. Nothing raises, so an offline replay
---     still ends 'applied'.
+--     still ends 'applied'. A delivery with no order_id was never auto-invoiced (by anyone) and
+--     still writes no pending-admin row; that is unchanged behaviour, not part of this file.
+--     RESIDUAL (pre-existing, KNOWN_ISSUES): that upkeep writes invoice_items before it locks the
+--     invoices row, so a completion racing an admin's versioned post can still change lines the
+--     admin reviewed; the version check below binds only against writers that lock the invoice
+--     row first (save_invoice, price_order, the field-app saves, the posting RPCs).
 --  1d complete_job (verbatim live body plus one hunk): the automatic draft runs only for an
 --     admin; anyone else writes the existing 'auto_draft_skipped' row, now saying invoicing is
---     admin-only (not 'auto_draft_failed').
+--     admin-only (not 'auto_draft_failed'), and (Q4/Q5: admins are notified) one notification per
+--     active admin ('job_needs_invoice').
 --  1e create_quick_delivery is renamed and wrapped WITHOUT the guard: for a non-admin the wrapper
 --     passes p_skip_invoice = true (coerce, do not refuse, so an old cached client that still
 --     sends false keeps working); for an admin it passes p_skip_invoice through unchanged. The
---     frozen body creates no invoice and draws no number when p_skip_invoice is true.
+--     frozen body creates no invoice and draws no number when p_skip_invoice is true. Its replay
+--     fingerprint includes skip_invoice, so a non-admin retrying, after the apply, a request first
+--     sent before it (same key, skip=false) gets IDEMPOTENCY_INTENT_MISMATCH instead of the stored
+--     result; no rep or driver has ever made a quick delivery on live.
 --  1h Table layer (defence in depth; every app write goes through the RPCs above): INSERT,
---     UPDATE, DELETE and TRUNCATE on invoice_shares and invoice_line_allocations are revoked from
---     authenticated, anon and PUBLIC; TRUNCATE on invoice_line_shares and
---     invoice_line_share_snapshots from authenticated; the INSERT policies invoices_insert,
---     invoice_items_insert, invoice_shares_insert and invoice_line_alloc_insert become
---     WITH CHECK (is_admin()) (they were is_admin() OR is_sales_rep()).
+--     UPDATE, DELETE and TRUNCATE on invoice_shares, invoice_line_allocations, field_app_locations,
+--     field_app_location_shares and write_offs are revoked from authenticated, anon and PUBLIC (no
+--     app code writes them directly; every writer is a postgres-owned SECURITY DEFINER function,
+--     read live 2026-10-09); TRUNCATE on invoice_line_shares, invoice_line_share_snapshots,
+--     field_app_billing_sets and field_app_billing_lines from authenticated; the INSERT policies
+--     invoices_insert, invoice_items_insert, invoice_shares_insert and invoice_line_alloc_insert,
+--     and the INSERT/UPDATE/DELETE policies of field_app_locations and field_app_location_shares,
+--     become is_admin() only (they were is_admin() OR is_sales_rep()).
 --  Addendum 2 Read side (Mason 2026-10-09, a read-permission WIDENING): the SELECT policies of
 --     invoices, invoice_items, invoice_shares, invoice_line_shares, invoice_line_share_snapshots
 --     and field_app_billing_sets add is_sales_rep() (the invoice list, detail, field-invoice and
@@ -78,12 +94,17 @@
 --     get_invoice_post_version(ids) / get_invoice_group_post_version(group) returned when the
 --     admin reviewed: an md5 over every invoice that would post (header row, lines, line shares
 --     and customer shares; for a group, every non-deleted member, so a new member also counts).
---     When it is supplied and the call will really post (not an idempotent replay), the wrapper
---     takes the locks the posting implementation takes, in the same order (the key's advisory
---     locks, then the group lock, then the invoice rows ordered by id), and refuses with
---     INVOICE_CHANGED_SINCE_REVIEW if anything differs. NULL keeps the old behaviour, so old
---     callers keep working. The old two/three-argument functions are renamed away, so exactly one
---     public overload of each name exists and PostgREST cannot see two callable signatures.
+--     When it is supplied, the wrapper first requires the idempotency key (post_invoice and
+--     batch_post_invoices: IDEMPOTENCY_KEY_REQUIRED, 22023, the same refusal their frozen bodies
+--     raise, so a version is never silently ignored), takes the key's advisory locks the
+--     implementation takes (post_invoice: 'crx:idempotency:'||key, the lock check_idempotency
+--     holds to the end of the transaction, so a duplicate same-key call waits and then replays;
+--     the group and batch wrappers: their implementation's key locks), then, only when the call
+--     will really post (no stored receipt under that key), the group lock and the invoice rows
+--     ordered by id, and refuses with INVOICE_CHANGED_SINCE_REVIEW if anything differs. NULL keeps
+--     the old behaviour, so old callers keep working. The old two/three-argument functions are
+--     renamed away, so exactly one public overload of each name exists and PostgREST cannot see
+--     two callable signatures.
 --
 -- CALLERS (MANDATORY comment-stripped pg_proc scan, read live 2026-10-09, every schema): the only
 -- SQL callers of the renamed names are
@@ -94,13 +115,54 @@
 --   unpost_invoice_group -> unpost_invoice (same, admin context)
 --   complete_job -> transfer_job_to_invoice (re-emitted in 1d: only an admin reaches it)
 -- No pg_cron job, edge function or trigger calls any of them (cron.job read live; supabase/functions grepped).
+-- actor-binding-check: exempt - complete_job is the verbatim live body plus the admin-only hunk; it
+-- binds p_performed_by to auth.uid() before any write (RAISE 'p_performed_by does not match
+-- authenticated user'). _complete_delivery_authorized_impl is internal (EXECUTE for postgres only)
+-- behind complete_delivery, which refuses ACTOR_MISMATCH first. Every wrapper passes its actor
+-- argument to its frozen implementation, which keeps its own strict actor refusal.
+-- Every REVOKE below on a renamed function closes the FROZEN implementation; a wrapper with the
+-- same public name, arguments, defaults, result and EXECUTE grants (authenticated, service_role)
+-- takes its place, so every UI callsite keeps calling the same name and reaches the wrapper (which
+-- refuses non-admins: Mason's decision 2026-10-09).
+-- caller-analysis: save_invoice :: renamed; same-name wrapper keeps the grants; InvoiceDetail callsite reaches the wrapper
+-- caller-analysis: save_field_app_invoice :: renamed; same-name wrapper keeps the grants; FieldApplicationInvoice callsite reaches the wrapper
+-- caller-analysis: save_field_app_split_invoice :: renamed; same-name wrapper keeps the grants; FieldAppSplitInvoiceEditor callsite reaches the wrapper
+-- caller-analysis: create_invoice_from_order :: renamed; same-name wrapper keeps the grants; OrderDetail callsite reaches the wrapper
+-- caller-analysis: create_split_invoices_from_order :: renamed; same-name wrapper keeps the grants; OrderDetail callsite (always sends a key) reaches the wrapper
+-- caller-analysis: create_invoice_from_blend_ticket :: renamed; same-name wrapper keeps the grants; BlendTicketDetail callsite reaches the wrapper
+-- caller-analysis: transfer_job_to_invoice :: renamed; same-name wrapper keeps the grants; UnbilledApplicationsPanel and JobDetail callsites reach the wrapper
+-- caller-analysis: transfer_invoice_to_job :: renamed; same-name wrapper keeps the grants; FieldApplicationInvoice and InvoiceDetail callsites reach the wrapper
+-- caller-analysis: consolidate_draft_invoices :: renamed; same-name wrapper keeps the grants; OrderDetail callsite reaches the wrapper
+-- caller-analysis: update_field_app_applied_info :: renamed; same-name wrapper keeps the grants; FieldApplicationInvoice callsite reaches the wrapper
+-- caller-analysis: update_field_app_invoice_billing :: renamed; same-name wrapper keeps the grants; FieldApplicationInvoice callsite reaches the wrapper
+-- caller-analysis: post_invoice :: renamed; same-name wrapper (extra trailing p_expected_version DEFAULT NULL) keeps the grants; every existing callsite reaches it unchanged
+-- caller-analysis: post_invoice_group :: renamed; same-name wrapper (extra trailing p_expected_version DEFAULT NULL) keeps the grants; every existing callsite reaches it unchanged
+-- caller-analysis: batch_post_invoices :: renamed; same-name wrapper (extra trailing p_expected_version DEFAULT NULL) keeps the grants; every existing callsite reaches it unchanged
+-- caller-analysis: unpost_invoice :: renamed; same-name wrapper keeps the grants; FieldInvoicesPostedPanel, FieldApplicationInvoice and InvoiceDetail callsites reach the wrapper
+-- caller-analysis: unpost_invoice_group :: renamed; same-name wrapper keeps the grants; FieldApplicationInvoice and InvoiceDetail callsites reach the wrapper
+-- caller-analysis: batch_void_invoices :: renamed; same-name wrapper keeps the grants; Invoices callsite reaches the wrapper
+-- caller-analysis: apply_credit_memo_to_invoice :: renamed; same-name wrapper keeps the grants; InvoiceDetail callsite reaches the wrapper
+-- caller-analysis: reverse_credit_memo_application :: renamed; same-name wrapper keeps the grants; no UI callsite found (src grepped 2026-10-09)
+-- caller-analysis: apply_prepay_to_invoice :: renamed; same-name wrapper keeps the grants; its SQL caller _batch_apply_prepayments_impl runs as postgres
+-- caller-analysis: batch_apply_all_prepayments :: renamed; same-name wrapper keeps the grants; PrepaymentManagerPanel callsite reaches the wrapper
+-- caller-analysis: reverse_write_off :: renamed; same-name wrapper keeps the grants; InvoiceDetail callsite reaches the wrapper
+-- caller-analysis: create_quick_delivery :: renamed; same-name wrapper (no guard, coerces p_skip_invoice for non-admins) keeps the grants; QuickDeliveryModal callsite reaches it
+-- caller-analysis: _require_invoicing_admin :: new internal helper, never granted to an API role; only the wrappers (postgres-owned) call it
+-- caller-analysis: _invoice_review_fingerprint :: new internal helper, never granted to an API role; only postgres-owned functions call it
 --
 -- NOT CHANGED: cancel_delivery / batch_cancel_deliveries (Mason: reps may cancel deliveries with an
 -- invoice; the "cancel reverses a COMPLETED delivery" bug stays OPEN in KNOWN_ISSUES); price_order,
 -- update_order_items and create_rush_order (upkeep of admin drafts); allocate_payment (Q1); the
 -- already-admin-only invoice, credit, write-off, payment and order functions (pinned below).
--- The postflight HARD-GUARD sweep refuses the apply if any function authenticated can run can
--- reach an invoice write without calling the guard first and is not on one of those pinned lists.
+-- The postflight HARD-GUARD sweep refuses the apply if any function or procedure authenticated can
+-- run can reach (by name) a write (INSERT, UPDATE, DELETE, MERGE or TRUNCATE, with or without ONLY
+-- or quotes) to an invoice table (invoices, invoice_items, invoice_shares, invoice_line_shares,
+-- invoice_line_share_snapshots, invoice_line_allocations, field_app_locations,
+-- field_app_location_shares, field_app_billing_sets, field_app_billing_lines, write_offs) without
+-- calling the guard first and is not on one of those pinned lists. "First" means no statement and
+-- no DECLARE initializer runs before it. It is a catalog regex, not a parser: dynamic SQL
+-- (EXECUTE) and other schemas are outside it. src/lib/invoiceWriterGuard.test.ts applies the same
+-- rule to every migration after this one on every PR.
 --
 -- idempotency-body-check: exempt - every wrapper passes p_idempotency_key unchanged to the frozen
 -- implementation, which keeps its existing claim/check before any write and its receipt after
@@ -186,6 +248,7 @@ BEGIN
     ('reverse_credit_memo_application', 'uuid,text,uuid,text', 'p_application_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '38cea043fc7dae4e65bc8593c95bddfb'),
     ('apply_prepay_to_invoice', 'uuid,uuid,bigint,uuid,text', 'p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'uuid', 'c9377dab8f2534a03af2c27a6e1d510c'),
     ('batch_apply_all_prepayments', 'uuid,text', 'p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '1d76228210c474da37c9a3cd91b97b7d'),
+    ('reverse_write_off', 'uuid,text,uuid,text', 'p_write_off_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '70ef11ccad193eb6ef5ee88dcba6f8cd'),
     ('create_quick_delivery', 'uuid,jsonb,uuid,date,text,uuid,text,boolean', 'p_customer_id uuid, p_items jsonb, p_driver_id uuid DEFAULT NULL::uuid, p_scheduled_date date DEFAULT CURRENT_DATE, p_delivery_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_skip_invoice boolean DEFAULT false', 'jsonb', '69c1d569fb2e9eb913502d59e41a76fe')
   ) AS t(name, ident, args, ret, md5) LOOP
     v_oid := to_regprocedure('public.' || r.name || '(' || r.ident || ')');
@@ -264,7 +327,6 @@ BEGIN
     ('public.issue_return_credit(uuid,uuid,text)', 'f3fcab7980d1640501fc038b0c8ac902'),
     ('public.unapply_credit_memo(uuid,text,uuid,text)', 'ba69e04e86dec86723d3ac9487f51272'),
     ('public.apply_write_off(uuid,bigint,text,uuid,text)', '00e8d020f9faf6276de8ddaf4f1411fc'),
-    ('public.reverse_write_off(uuid,text,uuid,text)', '70ef11ccad193eb6ef5ee88dcba6f8cd'),
     ('public.void_payment(uuid,text,uuid,text)', '70fd746c15f4a6629680a724f3588967'),
     ('public.apply_remaining_prepayments(uuid,uuid,text)', 'c0d7a2aef843ace0f557af2d096b090e'),
     ('public.batch_apply_prepayments(jsonb,uuid,text)', '15624992c9375e08a0ec1914437e6e40'),
@@ -298,7 +360,13 @@ BEGIN
     ('invoice_items', 'invoice_items_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
     ('invoice_shares', 'invoice_shares_insert', 'e5ca188a3e2901d57253b2c007f5a3bf'),
     ('invoice_line_allocations', 'invoice_line_alloc_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
-    ('write_offs', 'write_offs_select_admin', '3a62ac9ae6afb0b8195d72a0b07a24da')
+    ('write_offs', 'write_offs_select_admin', '3a62ac9ae6afb0b8195d72a0b07a24da'),
+    ('field_app_locations', 'field_app_locations_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
+    ('field_app_locations', 'field_app_locations_update', '7680ae67028c233ada58f74c302d87bd'),
+    ('field_app_locations', 'field_app_locations_delete', '0b3f94a02ac505d82e218752005f2c32'),
+    ('field_app_location_shares', 'field_app_location_shares_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
+    ('field_app_location_shares', 'field_app_location_shares_update', '7680ae67028c233ada58f74c302d87bd'),
+    ('field_app_location_shares', 'field_app_location_shares_delete', '0b3f94a02ac505d82e218752005f2c32')
   ) AS t(tbl, pol, pin) LOOP
     IF (SELECT md5(cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''))
           FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl AND policyname = r.pol)
@@ -314,7 +382,9 @@ BEGIN
     ('invoice_line_share_snapshots', ARRAY['invoice_line_share_snapshots_select']::text[]),
     ('invoice_line_allocations', ARRAY['invoice_line_alloc_insert', 'invoice_line_alloc_select']::text[]),
     ('field_app_billing_sets', ARRAY['field_app_billing_sets_select']::text[]),
-    ('write_offs', ARRAY['write_offs_insert_admin', 'write_offs_select_admin']::text[])
+    ('write_offs', ARRAY['write_offs_insert_admin', 'write_offs_select_admin']::text[]),
+    ('field_app_locations', ARRAY['field_app_locations_delete', 'field_app_locations_insert', 'field_app_locations_select', 'field_app_locations_update']::text[]),
+    ('field_app_location_shares', ARRAY['field_app_location_shares_delete', 'field_app_location_shares_insert', 'field_app_location_shares_select', 'field_app_location_shares_update']::text[])
   ) AS t(tbl, pols) LOOP
     IF ARRAY(SELECT policyname::text FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl ORDER BY 1)
        IS DISTINCT FROM r.pols THEN
@@ -695,14 +765,19 @@ BEGIN
       RAISE EXCEPTION 'INVOICE_EXPECTED_VERSION_INVALID: post_invoice expects the version from get_invoice_post_version'
         USING ERRCODE = '22023';
     END IF;
-    IF p_idempotency_key ~ '[^[:space:]]' THEN
-      v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice');
-      IF v_cached IS NULL THEN
-        PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice:' || p_idempotency_key, 0));
-        PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;
-        IF public._invoice_review_fingerprint(ARRAY[p_invoice_id]) IS DISTINCT FROM p_expected_version THEN
-          RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting';
-        END IF;
+    IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice'
+        USING ERRCODE = '22023';
+    END IF;
+    -- The implementation's key lock (check_idempotency takes the same one and holds it to the
+    -- end of the transaction): a duplicate call with this key waits here until the first one
+    -- commits, then finds its receipt and replays without a re-check.
+    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
+    v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice');
+    IF v_cached IS NULL THEN
+      PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;
+      IF public._invoice_review_fingerprint(ARRAY[p_invoice_id]) IS DISTINCT FROM p_expected_version THEN
+        RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting';
       END IF;
     END IF;
   END IF;
@@ -778,7 +853,15 @@ BEGIN
       RAISE EXCEPTION 'INVOICE_EXPECTED_VERSION_INVALID: batch_post_invoices expects the version from get_invoice_post_version'
         USING ERRCODE = '22023';
     END IF;
-    IF p_idempotency_key ~ '[^[:space:]]' AND array_length(p_invoice_ids, 1) IS NOT NULL THEN
+    IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices'
+        USING ERRCODE = '22023';
+    END IF;
+    IF array_length(p_invoice_ids, 1) IS NOT NULL THEN
+      -- The two key locks _claim_bound_lifecycle_idempotency takes, in its order. The receipt
+      -- lookup is key-only on purpose, like that claim: a receipt stored by ANOTHER operation
+      -- skips the re-check here, and the frozen body then refuses the call with
+      -- IDEMPOTENCY_CROSS_OP_KEY_REUSE, so it never posts.
       PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:batch_post_invoices:' || p_idempotency_key, 0));
       PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
       IF NOT EXISTS (
@@ -947,6 +1030,29 @@ END;
 $function$;
 REVOKE ALL ON FUNCTION public.batch_apply_all_prepayments(uuid,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.batch_apply_all_prepayments(uuid,text) TO authenticated, service_role;
+
+-- reverse_write_off was already meant to be admin-only, but its role test lets a caller with no
+-- active profile through (NULL != 'admin' is NULL). The guard refuses that caller first.
+ALTER FUNCTION public.reverse_write_off(uuid,text,uuid,text) RENAME TO _reverse_write_off_pre_admin_only_20261009;
+REVOKE ALL ON FUNCTION public._reverse_write_off_pre_admin_only_20261009(uuid,text,uuid,text) FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.reverse_write_off(p_write_off_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._require_invoicing_admin();
+  RETURN public._reverse_write_off_pre_admin_only_20261009(
+    p_write_off_id => p_write_off_id,
+    p_reason => p_reason,
+    p_performed_by => p_performed_by,
+    p_idempotency_key => p_idempotency_key
+  );
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.reverse_write_off(uuid,text,uuid,text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reverse_write_off(uuid,text,uuid,text) TO authenticated, service_role;
 
 ALTER FUNCTION public.create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean) RENAME TO _create_quick_delivery_pre_admin_only_20261009;
 REVOKE ALL ON FUNCTION public._create_quick_delivery_pre_admin_only_20261009(uuid,jsonb,uuid,date,text,uuid,text,boolean) FROM PUBLIC, anon, authenticated, service_role;
@@ -2020,6 +2126,16 @@ BEGIN
             || 'Bill this job manually.',
           p_performed_by, 'job', p_job_id, v_job.customer_id
         );
+        INSERT INTO notifications (
+          user_id, title, message, notification_type,
+          related_entity_type, related_entity_id
+        )
+        SELECT p.id,
+               'Job needs an invoice',
+               'Job ' || v_job.job_number || ' was completed by a non-admin. Invoicing is admin-only, so no draft invoice was created — open the job and bill it.',
+               'job_needs_invoice', 'job', p_job_id
+          FROM profiles p
+         WHERE p.role = 'admin' AND p.is_active = true;
       END IF;
     END IF;
     -- >>>#117
@@ -2053,6 +2169,46 @@ $function$;
 -- =============================================================================================
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.invoice_shares, public.invoice_line_allocations FROM authenticated, anon, PUBLIC;
 REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated;
+-- Field-application invoice child rows and write-offs: their table grants let a sales rep write
+-- them through the REST API (field_app_locations / _shares RLS allowed is_sales_rep() on any
+-- invoice, draft or posted). Every writer is a postgres-owned SECURITY DEFINER function (read live
+-- 2026-10-09: _save_field_app_invoice_impl_20260714, _save_field_app_split_invoice_impl,
+-- apply_write_off, reverse_write_off) and src/ only reads these tables, so nothing legitimate
+-- needs the grants.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.field_app_locations, public.field_app_location_shares, public.write_offs FROM authenticated, anon, PUBLIC;
+REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated;
+
+DROP POLICY field_app_locations_insert ON public.field_app_locations;
+CREATE POLICY field_app_locations_insert ON public.field_app_locations
+  FOR INSERT TO public
+  WITH CHECK (public.is_admin());
+
+DROP POLICY field_app_locations_update ON public.field_app_locations;
+CREATE POLICY field_app_locations_update ON public.field_app_locations
+  FOR UPDATE TO public
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
+
+DROP POLICY field_app_locations_delete ON public.field_app_locations;
+CREATE POLICY field_app_locations_delete ON public.field_app_locations
+  FOR DELETE TO public
+  USING (public.is_admin());
+
+DROP POLICY field_app_location_shares_insert ON public.field_app_location_shares;
+CREATE POLICY field_app_location_shares_insert ON public.field_app_location_shares
+  FOR INSERT TO public
+  WITH CHECK (public.is_admin());
+
+DROP POLICY field_app_location_shares_update ON public.field_app_location_shares;
+CREATE POLICY field_app_location_shares_update ON public.field_app_location_shares
+  FOR UPDATE TO public
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
+
+DROP POLICY field_app_location_shares_delete ON public.field_app_location_shares;
+CREATE POLICY field_app_location_shares_delete ON public.field_app_location_shares
+  FOR DELETE TO public
+  USING (public.is_admin());
 
 DROP POLICY invoices_insert ON public.invoices;
 CREATE POLICY invoices_insert ON public.invoices
@@ -2169,9 +2325,9 @@ BEGIN
     ('consolidate_draft_invoices', 'uuid,uuid,text', 'p_order_id uuid, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'b8a4dfc983776fd78632da1d43e7469d', '_consolidate_draft_invoices_pre_admin_only_20261009', 'uuid,uuid,text', '0c8394691ef461ba780fd4ba0e770c51', 'guard'),
     ('update_field_app_applied_info', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'p_invoice_ids uuid[], p_wind_direction text DEFAULT NULL::text, p_temperature_text text DEFAULT NULL::text, p_applicator_name text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_start_temp_f numeric DEFAULT NULL::numeric, p_start_wind_mph numeric DEFAULT NULL::numeric, p_start_wind_direction text DEFAULT NULL::text, p_start_humidity_pct numeric DEFAULT NULL::numeric, p_start_weather_time time without time zone DEFAULT NULL::time without time zone, p_start_weather_source text DEFAULT NULL::text, p_end_temp_f numeric DEFAULT NULL::numeric, p_end_wind_mph numeric DEFAULT NULL::numeric, p_end_wind_direction text DEFAULT NULL::text, p_end_humidity_pct numeric DEFAULT NULL::numeric, p_end_weather_time time without time zone DEFAULT NULL::time without time zone, p_end_weather_source text DEFAULT NULL::text, p_weather_manual_override boolean DEFAULT NULL::boolean, p_update_weather boolean DEFAULT false, p_diluent_rate_gpa numeric DEFAULT NULL::numeric, p_update_diluent boolean DEFAULT false', 'jsonb', '5941af2185db68b79304dec3e91e3b1c', '_update_field_app_applied_info_pre_admin_only_20261009', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'e6d5f41411e96cd4453d2209c846645d', 'guard'),
     ('update_field_app_invoice_billing', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', 'p_invoice_ids uuid[], p_purchase_order_ref text DEFAULT NULL::text, p_payment_terms text DEFAULT NULL::text, p_header_notes text DEFAULT NULL::text, p_due_date date DEFAULT NULL::date, p_footer_notes text DEFAULT NULL::text, p_internal_notes text DEFAULT NULL::text, p_discounts jsonb DEFAULT ''{}''::jsonb, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'b1d361da2cb271ee9fa71bd972339d92', '_update_field_app_invoice_billing_pre_admin_only_20261009', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', '34695e4be9724bf46dc5e962f8f0e478', 'guard'),
-    ('post_invoice', 'uuid,text,text', 'p_invoice_id uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'void', 'b6d52aad07e8e08a81bddaa11efde9c0', '_post_invoice_pre_admin_only_20261009', 'uuid,text', '6a5e3ab75bc63936f23eab85383ff6ad', 'guard'),
+    ('post_invoice', 'uuid,text,text', 'p_invoice_id uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'void', 'c7f467aac765b1d2f0cc897b27eca832', '_post_invoice_pre_admin_only_20261009', 'uuid,text', '6a5e3ab75bc63936f23eab85383ff6ad', 'guard'),
     ('post_invoice_group', 'uuid,uuid,text,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '5f3917902a9a86810d48b6e6cadc5d76', '_post_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'd9e36f0dfb055e3cc68c18793e70dbfc', 'guard'),
-    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '4aa2b318c94711cb3877adadb8c256b9', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
+    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '83ebbc30b5266e71ccb1b0c96866cef3', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
     ('unpost_invoice', 'uuid,uuid,text', 'p_invoice_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '7f6bc25acd00ce5731dea00012fb8b82', '_unpost_invoice_pre_admin_only_20261009', 'uuid,uuid,text', '161f18c3ccd6126a6fb683c5160f82dc', 'guard'),
     ('unpost_invoice_group', 'uuid,uuid,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '4d4fc94b5893849b1799329992075c8f', '_unpost_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'dc476e07621c4c7dc86595442ed1a9f0', 'guard'),
     ('batch_void_invoices', 'uuid[],text,uuid,text', 'p_invoice_ids uuid[], p_void_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'integer', '922e078236eb524367d54addec6c6d42', '_batch_void_invoices_pre_admin_only_20261009', 'uuid[],text,uuid,text', '32fa9718f29e18c8eff4539e36ac84b3', 'guard'),
@@ -2179,6 +2335,7 @@ BEGIN
     ('reverse_credit_memo_application', 'uuid,text,uuid,text', 'p_application_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '19cec1a2c82c983e79d68f25b92deef2', '_reverse_credit_memo_application_pre_admin_only_20261009', 'uuid,text,uuid,text', '38cea043fc7dae4e65bc8593c95bddfb', 'guard'),
     ('apply_prepay_to_invoice', 'uuid,uuid,bigint,uuid,text', 'p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'uuid', '6a653820c14a0b250fc13f1e0ca55678', '_apply_prepay_to_invoice_pre_admin_only_20261009', 'uuid,uuid,bigint,uuid,text', 'c9377dab8f2534a03af2c27a6e1d510c', 'guard'),
     ('batch_apply_all_prepayments', 'uuid,text', 'p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '532ca41ae42e4b0fabe026b3b1f59641', '_batch_apply_all_prepayments_pre_admin_only_20261009', 'uuid,text', '1d76228210c474da37c9a3cd91b97b7d', 'guard'),
+    ('reverse_write_off', 'uuid,text,uuid,text', 'p_write_off_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '619599f68aa5e6cfd9a339e831e2516f', '_reverse_write_off_pre_admin_only_20261009', 'uuid,text,uuid,text', '70ef11ccad193eb6ef5ee88dcba6f8cd', 'guard'),
     ('create_quick_delivery', 'uuid,jsonb,uuid,date,text,uuid,text,boolean', 'p_customer_id uuid, p_items jsonb, p_driver_id uuid DEFAULT NULL::uuid, p_scheduled_date date DEFAULT CURRENT_DATE, p_delivery_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_skip_invoice boolean DEFAULT false', 'jsonb', '1bf67e10cae538b5090b067aa3f665f5', '_create_quick_delivery_pre_admin_only_20261009', 'uuid,jsonb,uuid,date,text,uuid,text,boolean', '69c1d569fb2e9eb913502d59e41a76fe', 'coerce')
   ) AS t(name, ident, args, ret, md5, impl, impl_ident, impl_md5, shape) LOOP
     v_oid := to_regprocedure('public.' || r.name || '(' || r.ident || ')');
@@ -2198,8 +2355,10 @@ BEGIN
             FROM pg_proc p WHERE p.oid = v_oid) IS DISTINCT FROM true THEN
       RAISE EXCEPTION 'POSTFLIGHT_WRAPPER_CONTRACT: public.%(%) is not the reviewed wrapper', r.name, r.ident;
     END IF;
+    -- A DECLARE section may only declare (name and type, no initializer, no call), so nothing
+    -- runs before the guard.
     IF r.shape = 'guard' AND (SELECT prosrc FROM pg_proc WHERE oid = v_oid)
-         !~ '^\s*(DECLARE\s[^$]*?)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);' THEN
+         !~ '^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\M)\w+\s+[\w\[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);' THEN
       RAISE EXCEPTION 'POSTFLIGHT_WRAPPER_CONTRACT: public.% must call _require_invoicing_admin() first', r.name;
     END IF;
     IF r.shape = 'key_then_guard' AND (SELECT prosrc FROM pg_proc WHERE oid = v_oid)
@@ -2237,7 +2396,7 @@ BEGIN
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
        IS DISTINCT FROM true
-     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '8346cc8aa146e4e0801b744301343855' AND p.prosecdef
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '9196da7ce6337bd0176a67b37be950f2' AND p.prosecdef
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
              AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
                          FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
@@ -2254,8 +2413,19 @@ BEGIN
      OR has_table_privilege('anon', 'public.invoice_line_allocations', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('authenticated', 'public.invoice_line_shares', 'TRUNCATE')
      OR has_table_privilege('authenticated', 'public.invoice_line_share_snapshots', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.field_app_locations', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.field_app_location_shares', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.write_offs', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('anon', 'public.field_app_locations', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('anon', 'public.field_app_location_shares', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('anon', 'public.write_offs', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.field_app_billing_sets', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.field_app_billing_lines', 'TRUNCATE')
      OR NOT has_table_privilege('authenticated', 'public.invoice_shares', 'SELECT')
-     OR NOT has_table_privilege('authenticated', 'public.invoice_line_allocations', 'SELECT') THEN
+     OR NOT has_table_privilege('authenticated', 'public.invoice_line_allocations', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.field_app_locations', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.field_app_location_shares', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.write_offs', 'SELECT') THEN
     RAISE EXCEPTION 'POSTFLIGHT_TABLE_GRANTS: invoice child-table privileges are not the reviewed set';
   END IF;
 
@@ -2272,7 +2442,13 @@ BEGIN
     ('invoices', 'invoices_insert', 'bd1972a06eea215895d9ecec861d5991'),
     ('invoices', 'invoices_select', 'd4778954168617eaf39b333faa0a18ed'),
     ('write_offs', 'write_offs_select_admin', '3a62ac9ae6afb0b8195d72a0b07a24da'),
-    ('write_offs', 'write_offs_select_sales_rep', '1393b5e874366105fa053906dab34629')
+    ('write_offs', 'write_offs_select_sales_rep', '1393b5e874366105fa053906dab34629'),
+    ('field_app_locations', 'field_app_locations_insert', 'bd1972a06eea215895d9ecec861d5991'),
+    ('field_app_locations', 'field_app_locations_update', 'd4f3167a940eee97d1cd03f0bc03df5f'),
+    ('field_app_locations', 'field_app_locations_delete', 'e95dffee2933869bf3a622fe2ef0456a'),
+    ('field_app_location_shares', 'field_app_location_shares_insert', 'bd1972a06eea215895d9ecec861d5991'),
+    ('field_app_location_shares', 'field_app_location_shares_update', 'd4f3167a940eee97d1cd03f0bc03df5f'),
+    ('field_app_location_shares', 'field_app_location_shares_delete', 'e95dffee2933869bf3a622fe2ef0456a')
   ) AS t(tbl, pol, pin) LOOP
     IF (SELECT md5(cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''))
           FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl AND policyname = r.pol)
@@ -2281,18 +2457,21 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- HARD-GUARD catalog sweep. Every public function that authenticated can execute and that can
-  -- reach (by name, comments stripped) a write to invoices, invoice_items, invoice_shares or
-  -- invoice_line_shares must call _require_invoicing_admin() first, or be a pinned
-  -- already-admin-only function, or a pinned upkeep function. Anything else refuses the apply.
+  -- HARD-GUARD catalog sweep. Every public function or procedure that authenticated can execute
+  -- and that can reach (by name, comments stripped left to right) an INSERT, UPDATE, DELETE, MERGE
+  -- or TRUNCATE (ONLY and quoted names included) on an invoice table must call
+  -- _require_invoicing_admin() first (a DECLARE section before it may only declare: no
+  -- initializer, no call; only create_split_invoices_from_order may check its key before it), or
+  -- be a pinned already-admin-only function, or a pinned upkeep function. Anything else refuses
+  -- the apply. scripts/smoke/smoke-invoicing-admin-only.sql step 8 runs this exact query text.
   WITH RECURSIVE fn AS (
     SELECT p.oid, p.proname, p.prosrc,
-           regexp_replace(regexp_replace(replace(p.prosrc, chr(13), ''), '/[*].*?[*]/', '', 'g'), '--[^\n]*', '', 'g') AS body
+           regexp_replace(replace(p.prosrc, chr(13), ''), '/\*([^*]|\*+[^*/])*\*+/|--[^\n]*', '', 'g') AS body
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-     WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.prolang <> 13
+     WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p') AND p.prolang <> 13
   ), writer AS (
     SELECT oid FROM fn
-     WHERE body ~* '(insert\s+into|update|delete\s+from)\s+(public\.)?(invoices|invoice_items|invoice_shares|invoice_line_shares)\M'
+     WHERE body ~* '\m(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?)\s+(only\s+)?("?public"?\s*\.\s*)?"?(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)("|\M)'
   ), edge AS (
     SELECT a.oid AS caller, b.oid AS callee
       FROM fn a JOIN fn b ON a.oid <> b.oid AND a.body ~ ('\m' || b.proname || '\s*\(')
@@ -2310,7 +2489,6 @@ BEGIN
       ('issue_return_credit(uuid,uuid,text)', 'f3fcab7980d1640501fc038b0c8ac902'),
       ('unapply_credit_memo(uuid,text,uuid,text)', 'ba69e04e86dec86723d3ac9487f51272'),
       ('apply_write_off(uuid,bigint,text,uuid,text)', '00e8d020f9faf6276de8ddaf4f1411fc'),
-      ('reverse_write_off(uuid,text,uuid,text)', '70ef11ccad193eb6ef5ee88dcba6f8cd'),
       ('void_payment(uuid,text,uuid,text)', '70fd746c15f4a6629680a724f3588967'),
       ('apply_remaining_prepayments(uuid,uuid,text)', 'c0d7a2aef843ace0f557af2d096b090e'),
       ('batch_apply_prepayments(jsonb,uuid,text)', '15624992c9375e08a0ec1914437e6e40'),
@@ -2325,14 +2503,16 @@ BEGIN
       ('update_order_items(uuid,jsonb,uuid,text)', 'e35fce6708edee32fb1876fa60d7da4b'),
       ('create_rush_order(uuid,jsonb,text,text,uuid,text)', '9027a97ab42a109f5e81188736f52f9c'),
       ('allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text)', '6a945a2510d8e788d4e6f03c0c6d7563'),
-      ('complete_job(uuid,jsonb,uuid,text)', '8346cc8aa146e4e0801b744301343855'),
+      ('complete_job(uuid,jsonb,uuid,text)', '9196da7ce6337bd0176a67b37be950f2'),
       ('create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', '1bf67e10cae538b5090b067aa3f665f5')
     ) AS t(sig, md5)
   )
   SELECT string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text) INTO v_unclassified
     FROM fn f JOIN reach x ON x.oid = f.oid
    WHERE has_function_privilege('authenticated', f.oid, 'EXECUTE')
-     AND f.prosrc !~ '^\s*(DECLARE\s[^$]*?)?BEGIN\s+(IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''[^'']*''\s+USING ERRCODE = ''22023'';\s+END IF;\s+)?PERFORM public\._require_invoicing_admin\(\);'
+     AND f.prosrc !~ '^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\M)\w+\s+[\w\[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
+     AND NOT (f.proname = 'create_split_invoices_from_order'
+              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')
      AND NOT EXISTS (SELECT 1 FROM pinned pn
                       WHERE to_regprocedure('public.' || pn.sig) = f.oid
                         AND md5(replace(f.prosrc, chr(13), '')) = pn.md5);

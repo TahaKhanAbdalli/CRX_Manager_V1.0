@@ -112,12 +112,16 @@ what), this is what each person can do:
 - **Sales reps:** see every invoice (read-only, including PDFs), record payments, and keep doing
   quotes, orders, pricing, deliveries, jobs, quick deliveries, customers and documents. They can no
   longer create, change, post or unpost any invoice, or apply credit memos or prepayments. If they
-  try, the app says "Only an admin can do invoicing."
+  try, the app says "Only an admin can do invoicing." They also cannot change a field invoice's
+  fields, acres or splits, or write-offs, directly through the database's web API (that back door
+  was found in review and is closed by the same change).
 - **Drivers:** complete their deliveries and make quick deliveries, with no invoice either way.
 - **When a rep or driver completes a delivery,** no invoice is made. Every admin gets a notification
   ("Delivery needs an invoice") and the delivery shows under "Delivered, not invoiced" until an admin
-  opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft;
-  bill it from the unbilled list.
+  opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft,
+  every admin gets "Job needs an invoice", and you bill it from the unbilled list.
+- **Two questions still open for you** (details in KNOWN_ISSUES): may reps keep re-pricing an
+  admin's draft invoice through order changes, and may reps see cost and margin on every invoice?
 - **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
   draft is cancelled with it, as today.
 - **Posting is safer:** when the invoice screens are updated (phase 2), posting will send the version

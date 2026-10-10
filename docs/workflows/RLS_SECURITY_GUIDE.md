@@ -376,24 +376,33 @@ other roles read what they read before. Sales reps still record payments (`alloc
   `IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active = true)`
   raises 42501 `INVOICING_ADMIN_ONLY` — a NULL uid, a missing profile and a deactivated admin all fail.
   Never write a role gate as `(SELECT role ...) <> 'admin'`: that is NULL, not true, for a caller with
-  no active profile, so it lets them through (`reverse_write_off` still has this bug; see KNOWN_ISSUES).
+  no active profile, so it lets them through (`reverse_write_off` had this bug; `20261009120000` wraps
+  it behind the guard).
 - The old bodies are renamed `_<name>_pre_admin_only_20261009` and closed to every role but postgres;
   the wrapper keeps the public name, arguments, defaults and result.
 - Completion paths do not refuse: a non-admin's delivery completion skips the auto-invoice and
   notifies admins; `complete_job` skips its draft; `create_quick_delivery` forces
   `p_skip_invoice = true` for non-admins.
-- Table layer: `invoices_insert`, `invoice_items_insert`, `invoice_shares_insert` and
-  `invoice_line_alloc_insert` are `WITH CHECK (is_admin())`; INSERT/UPDATE/DELETE/TRUNCATE on
-  `invoice_shares` and `invoice_line_allocations` are revoked from `authenticated` and `anon`.
+- Table layer: `invoices_insert`, `invoice_items_insert`, `invoice_shares_insert`,
+  `invoice_line_alloc_insert` and the INSERT/UPDATE/DELETE policies of `field_app_locations` and
+  `field_app_location_shares` are `is_admin()` only; INSERT/UPDATE/DELETE/TRUNCATE on
+  `invoice_shares`, `invoice_line_allocations`, `field_app_locations`, `field_app_location_shares` and
+  `write_offs` are revoked from `authenticated` and `anon` (every writer is a postgres-owned RPC);
+  TRUNCATE on `field_app_billing_sets` / `field_app_billing_lines` too.
 - Read side: the SELECT policies of `invoices`, `invoice_items`, `invoice_shares`,
   `invoice_line_shares`, `invoice_line_share_snapshots` and `field_app_billing_sets` add
   `is_sales_rep()`; `write_offs` gets a second, read-only `write_offs_select_sales_rep`.
-- **HARD-GUARD catalog sweep (apply time).** The migration's postflight refuses the apply if any
-  public function `authenticated` can execute can reach (by name, comments stripped) a write to
-  `invoices`, `invoice_items`, `invoice_shares` or `invoice_line_shares` without calling the guard
-  first, unless it is on a pinned already-admin-only or upkeep list (body md5). **A new invoice writer
-  must call `_require_invoicing_admin()` as its first statement**, or it needs a reviewed entry on one
-  of those lists. The same rule runs in `smoke-invoicing-admin-only.sql` and the container prover.
+- **HARD-GUARD catalog sweep (apply time) and its PR-time twin.** The migration's postflight refuses
+  the apply if any public function or procedure `authenticated` can execute can reach (by name,
+  comments stripped) an INSERT/UPDATE/DELETE/MERGE/TRUNCATE on an invoice table (`invoices`,
+  `invoice_items`, `invoice_shares`, `invoice_line_shares`, `invoice_line_share_snapshots`,
+  `invoice_line_allocations`, `field_app_locations`, `field_app_location_shares`,
+  `field_app_billing_sets`, `field_app_billing_lines`, `write_offs`) without calling the guard first
+  (nothing, not even a DECLARE initializer, may run before it), unless it is on a pinned
+  already-admin-only or upkeep list (body md5). **A new invoice writer must call
+  `_require_invoicing_admin()` as its first statement**, or it needs a reviewed entry on one of those
+  lists. The same rule runs in `smoke-invoicing-admin-only.sql`, the container prover, and on every PR
+  in `src/lib/invoiceWriterGuard.test.ts` (over every migration from `20261009120000` on).
 
 ---
 
