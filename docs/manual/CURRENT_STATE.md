@@ -1,17 +1,22 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-07 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 11:47 UTC, after PR #885's apply: 1019 rows /
-1012 distinct names, `max(version)` `20261007114554`; the read before it, unchanged since PR #800's
-apply, had 1018 rows, `max(version)` `20261002230949`).
+**Last verified:** 2026-10-09 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-10 ~03:00 UTC, after PR #889 applied
+`20261007150000` and `20261007150050`: 1021 rows / 1014 distinct names, `max(version)`
+`20261010014642`; the read before it, 2026-10-07 11:47 UTC after PR #885's apply, had 1019 rows /
+1012 names, `max(version)` `20261007114554`). The local candidate `20261009120000_invoicing_admin_only`
+(not applied) is described below.
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-07)
 
-- **Effective ordering high-water: `20261006200000_refuse_field_invoice_through_order_rpcs`**
-  (ledger version `20261007114554`, UTC; applied live 2026-10-07 from PR #885, CRX-LIFE-001). It
+- **Effective ordering high-water (read 2026-10-09): `20261007150050_lock_soft_deleted_orders`**
+  (ledger version `20261010014642`, applied by PR #889 together with `20261007150000`
+  (`20261010014555`); its data migrations `20261007150100` and `20261007150200` are not applied).
+  Before that it was `20261006200000_refuse_field_invoice_through_order_rpcs`
+  (ledger version `20261007114554`, UTC; applied live 2026-10-07 from PR #885, CRX-LIFE-001), which
   replaced `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`, PR #800). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
@@ -57,6 +62,13 @@ ships or quarterly, whichever comes first.
   change shipped in PR #875, and a test rep's Remove was verified on the live site 2026-10-04.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
   hours. #800 (above) merged 2026-10-02 after its migration applied live.
+- **Invoicing becomes admin-only (Mason 2026-10-09) — database phase written, NOT APPLIED.**
+  `20261009120000_invoicing_admin_only` makes every invoicing RPC refuse non-admins, stops reps' and
+  drivers' completions and quick deliveries from creating invoices (admins are notified instead),
+  lets sales reps read every invoice, and adds a server-side posting version check. Today (until it
+  is applied) sales reps can still create and post invoices through the app and the API. Applying it
+  needs Mason's yes and Windows Hello approval, after PR #889's four migrations. Screens are phase 2.
+  Rep scoping (PR #891) is dropped.
 
 ## Migration and rollout record (condensed, point-in-time)
 

@@ -350,8 +350,8 @@ to show was stale: live also pins the actor.
 | team_note_comments | All authenticated | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
-| invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |
-| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep | Admin | Admin |
+| invoices | Admin / Own created_by / Assigned salesman (pending `20261009120000`: + every Sales Rep) | Admin / Sales Rep (pending `20261009120000`: Admin only) | Admin | Admin |
+| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep (pending `20261009120000`: Admin only) | Admin | Admin |
 | financial_audit_log | Admin | Admin / own actor_user_id | - | - |
 | blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
@@ -360,6 +360,40 @@ to show was stale: live also pins the actor.
 | return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
 | rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+
+---
+
+## Invoicing is admin-only (Mason 2026-10-09) — `20261009120000`, NOT APPLIED yet
+
+**Rule.** Only an active admin creates, edits, posts, unposts, voids or transfers an invoice, or
+applies a credit memo or prepayment to one. Sales reps READ every invoice (read-only). Drivers and
+other roles read what they read before. Sales reps still record payments (`allocate_payment`).
+
+**How it is enforced (once applied).**
+- Every invoicing RPC's first statement is `PERFORM public._require_invoicing_admin();` (the split
+  wrapper first requires its idempotency key, then calls it). The helper is `SECURITY DEFINER`,
+  `SET search_path = public, pg_temp`, executable by no API role, and fail-closed:
+  `IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active = true)`
+  raises 42501 `INVOICING_ADMIN_ONLY` — a NULL uid, a missing profile and a deactivated admin all fail.
+  Never write a role gate as `(SELECT role ...) <> 'admin'`: that is NULL, not true, for a caller with
+  no active profile, so it lets them through (`reverse_write_off` still has this bug; see KNOWN_ISSUES).
+- The old bodies are renamed `_<name>_pre_admin_only_20261009` and closed to every role but postgres;
+  the wrapper keeps the public name, arguments, defaults and result.
+- Completion paths do not refuse: a non-admin's delivery completion skips the auto-invoice and
+  notifies admins; `complete_job` skips its draft; `create_quick_delivery` forces
+  `p_skip_invoice = true` for non-admins.
+- Table layer: `invoices_insert`, `invoice_items_insert`, `invoice_shares_insert` and
+  `invoice_line_alloc_insert` are `WITH CHECK (is_admin())`; INSERT/UPDATE/DELETE/TRUNCATE on
+  `invoice_shares` and `invoice_line_allocations` are revoked from `authenticated` and `anon`.
+- Read side: the SELECT policies of `invoices`, `invoice_items`, `invoice_shares`,
+  `invoice_line_shares`, `invoice_line_share_snapshots` and `field_app_billing_sets` add
+  `is_sales_rep()`; `write_offs` gets a second, read-only `write_offs_select_sales_rep`.
+- **HARD-GUARD catalog sweep (apply time).** The migration's postflight refuses the apply if any
+  public function `authenticated` can execute can reach (by name, comments stripped) a write to
+  `invoices`, `invoice_items`, `invoice_shares` or `invoice_line_shares` without calling the guard
+  first, unless it is on a pinned already-admin-only or upkeep list (body md5). **A new invoice writer
+  must call `_require_invoicing_admin()` as its first statement**, or it needs a reviewed entry on one
+  of those lists. The same rule runs in `smoke-invoicing-admin-only.sql` and the container prover.
 
 ---
 

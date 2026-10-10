@@ -10,6 +10,38 @@
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
 
+**Invoicing admin-only, `20261009120000_invoicing_admin_only` (LOCAL CANDIDATE — NOT APPLIED; Mason 2026-10-09):**
+Once applied, each of these public RPCs is a thin wrapper whose first statement is
+`PERFORM public._require_invoicing_admin()` (42501 `INVOICING_ADMIN_ONLY` for any non-admin), with the
+same name, arguments, defaults, result and ACL as before; the previous body is renamed
+`_<name>_pre_admin_only_20261009` (owner-only) and called with every argument by name, so admin
+behaviour and idempotency receipts are unchanged: `save_invoice`, `save_field_app_invoice`,
+`save_field_app_split_invoice`, `create_invoice_from_order`, `create_split_invoices_from_order` (key
+required first, then the guard), `create_invoice_from_blend_ticket`, `transfer_job_to_invoice`,
+`transfer_invoice_to_job`, `consolidate_draft_invoices`, `update_field_app_applied_info`,
+`update_field_app_invoice_billing`, `post_invoice`, `post_invoice_group`, `batch_post_invoices`,
+`unpost_invoice`, `unpost_invoice_group`, `batch_void_invoices`, `apply_credit_memo_to_invoice`,
+`reverse_credit_memo_application`, `apply_prepay_to_invoice`, `batch_apply_all_prepayments`.
+- `create_quick_delivery` is wrapped WITHOUT the guard: for a non-admin it passes
+  `p_skip_invoice = true` (no invoice, no number); an admin's value passes through.
+- `_complete_delivery_authorized_impl` and `complete_job` are re-emitted with one hunk each: the
+  single-customer auto-invoice and the job auto-draft run only for an admin. A non-admin's delivery
+  completion writes `delivery_invoice_pending_admin` activity and one `delivery_needs_invoice`
+  notification per active admin; `complete_job` writes its `auto_draft_skipped` row.
+- `post_invoice(p_invoice_id, p_idempotency_key, p_expected_version text DEFAULT NULL)`,
+  `post_invoice_group(..., p_expected_version text DEFAULT NULL)` and
+  `batch_post_invoices(..., p_expected_version text DEFAULT NULL)`: when the version is supplied and the
+  call will really post (not a replay), the wrapper takes the implementation's locks in its order and
+  refuses `INVOICE_CHANGED_SINCE_REVIEW` if any invoice that would post (every non-deleted group
+  member) changed. A malformed version is 22023 `INVOICE_EXPECTED_VERSION_INVALID`. One overload per
+  name. Readers: `get_invoice_post_version(p_invoice_ids uuid[])` and
+  `get_invoice_group_post_version(p_invoice_group_id uuid)` → text (admin-only, read-only).
+- Internal: `_require_invoicing_admin()` (void) and `_invoice_review_fingerprint(uuid[])` (md5 of each
+  invoice row, its lines, line shares and customer shares; `TimeZone = UTC`), both owner-only.
+- Unchanged by design: `cancel_delivery`, `batch_cancel_deliveries`, `price_order`,
+  `update_order_items`, `create_rush_order`, `allocate_payment`, and the already-admin-only invoice,
+  credit, write-off, payment and order RPCs.
+
 **Generic-creation follow-up, September 12–13 (LIVE 2026-10-02; no live-count change):**
 Phase 1 (`20260914101200`) applied as ledger `20261002201542` and phase 2
 (`20260914101300`) as ledger `20261002201609`, so the public RPC now refuses CREATE

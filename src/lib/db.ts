@@ -166,6 +166,14 @@ export const RpcErrorCodes = {
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
+  // Invoicing is admin-only (Mason 2026-10-09, migration 20261009120000): every
+  // invoicing RPC refuses a non-admin with 42501 'INVOICING_ADMIN_ONLY: ...' before
+  // anything else. Sales reps can still read invoices.
+  INVOICING_ADMIN_ONLY: 'INVOICING_ADMIN_ONLY',
+  // post_invoice / post_invoice_group / batch_post_invoices with p_expected_version
+  // (same migration): an invoice that would post changed after the admin reviewed it
+  // (get_invoice_post_version / get_invoice_group_post_version). Reload and review.
+  INVOICE_CHANGED_SINCE_REVIEW: 'INVOICE_CHANGED_SINCE_REVIEW',
   PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
   // complete_cycle_count optimistic-concurrency refusal (20260831212415). Raised
   // when another client changed a counted quantity after the completing client

@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-10-06 (CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-09 (invoicing becomes admin-only, rep scoping dropped, reps read every invoice; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,7 +8,22 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-09 — invoicing is ADMIN-ONLY; rep scoping is dropped; reps READ every invoice
+
+**Decision (Mason, in chat, 2026-10-09: "no reps should be able to invoice any customer", "don't do rep scoping").** No sales rep, driver or other non-admin role may create, edit, post, unpost, void or transfer an invoice. This replaces the 2026-10-06 rep-scoping plan below: PR #891 (`20261008120000`) is closed and is never applied. His answers to the design questions:
+- **Payments (Q1):** reps still record payments (`allocate_payment` unchanged); applying credit memos and prepayments to invoices becomes admin-only.
+- **Reads (Q2, a read-permission widening):** sales reps see ALL invoices, read-only — the invoice list, detail, field-invoice and PDF views. Drivers and other roles read exactly what they read before.
+- **Drivers (Q3):** admin-only means every non-admin role, drivers included.
+- **Completions (Q4/Q5):** a rep's or driver's delivery or job completion creates no invoice; every active admin is notified and the delivery waits in "Delivered, not invoiced" until an admin bills it.
+- **Cancel (Q4a):** a rep cancelling a delivery that already has an admin's invoice is NOT blocked (today's automatic cancel of the draft stays). The separate bug that `cancel_delivery` can reverse a COMPLETED delivery stays open in `KNOWN_ISSUES.md`.
+- **Old items (Q6):** the rep/invoice open items close as solved by this change; rep scoping is formally dropped.
+- **PR #892 split (Mason chose "split it"):** the server-side posting version check moves into this change — posting can carry the version the admin reviewed and the database refuses if anything changed.
+**Why.** Live data showed reps had never created, posted, shared or emailed an invoice (all 13 invoices were admins'), so admin-only invoicing removes a large attack and mistake surface at no cost to how the business works today, and is simpler than per-rep scoping.
+**What this implies:** migration `20261009120000_invoicing_admin_only.sql` (database phase; NOT APPLIED — it changes permissions, so applying it needs Mason's explicit yes and his Windows Hello approval, and it must follow PR #889's four migrations). Every invoicing RPC calls `_require_invoicing_admin()` first (42501 `INVOICING_ADMIN_ONLY`); a hard-guard catalog sweep refuses any future function that can reach an invoice write without it unless it is on a pinned already-admin-only or upkeep list. The screens (phase 2) follow PR #892: invoice pages stay readable by reps with every mutating control hidden for non-admins. Source: `docs/changelog.d/2026-10-09-invoicing-admin-only.md`.
+
 ## 2026-10-06 — CRX-LIFE-001 lands as scoped; rep scoping of the order-invoice RPCs is the next change
+
+**Superseded 2026-10-09:** rep scoping is dropped; invoicing is admin-only (entry above).
 
 **Decision (Mason, in chat: "Land it then lock down rep scoping next").** PR #885 lands the CRX-LIFE-001 fix (order invoices may only be `chemical_sale` or `misc_charge`; a `field_application` invoice can never carry an order) without widening it. Codex Luna round 3 rated two pre-existing gaps in the same RPCs HIGH: they check neither that the order's customer is assigned to the calling rep nor that the salesperson the caller names is themselves. Those are deferred by this decision, not by an agent, and are the next job.
 **Why.** Closing them touches delivery completion and split billing (`complete_delivery` calls the split RPC), so it needs its own reviewed change; the CRX-LIFE-001 fix stands on its own and is proven.

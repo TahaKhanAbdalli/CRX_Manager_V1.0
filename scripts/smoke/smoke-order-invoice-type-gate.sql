@@ -11,11 +11,19 @@
 --
 -- Fixtures: an [E2E]-marked product priced through the governed preview/apply path, and a
 -- customer and orders assigned to the rep. One DO block, terminal exception -> nothing commits.
+--
+-- Invoicing admin-only (20261009120000, Mason 2026-10-09): once that migration is applied a
+-- sales rep cannot call create_invoice_from_order at all (42501 INVOICING_ADMIN_ONLY, checked
+-- first below), so steps 0-2 run as the admin, whom the CRX-LIFE-001 type gate binds as well.
+-- Before it is applied they run as the rep, exactly as before. The branch keys on the guard
+-- helper existing; drop it once 20261009120000 is live.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_admin uuid;
   v_rep uuid;
+  v_admin_only boolean := to_regprocedure('public._require_invoicing_admin()') IS NOT NULL;
+  v_actor uuid;
   v_customer uuid;
   v_product uuid;
   v_order uuid;
@@ -111,6 +119,24 @@ BEGIN
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
+  v_actor := v_rep;
+  IF v_admin_only THEN
+    -- The rep is refused before anything else, even for an allowed type with a good key.
+    BEGIN
+      PERFORM public.create_invoice_from_order(v_order, NULL, 'chemical_sale', 'e2e-order-type-rep-' || v_suffix);
+      RAISE EXCEPTION 'SMOKE_FAIL: a sales rep created an order invoice although invoicing is admin-only';
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT, v_state = RETURNED_SQLSTATE;
+      IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      IF v_err NOT LIKE 'INVOICING_ADMIN_ONLY:%' OR v_state <> '42501' THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: wrong admin-only refusal for the rep (SQLSTATE %): %', v_state, v_err;
+      END IF;
+    END;
+    v_actor := v_admin;
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  END IF;
 
   -- 0. The wrapper's existing key requirement is unchanged and still comes first.
   FOR v_i IN 1..4 LOOP
@@ -177,8 +203,8 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   IF (SELECT count(*) FROM public.invoices WHERE order_id = v_order) <> 1
      OR (SELECT invoice_type || '|' || created_by::text FROM public.invoices WHERE id = v_invoice)
-          IS DISTINCT FROM 'chemical_sale|' || v_rep::text THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: the order should carry exactly the rep''s one chemical_sale invoice';
+          IS DISTINCT FROM 'chemical_sale|' || v_actor::text THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the order should carry exactly the caller''s one chemical_sale invoice';
   END IF;
 
   -- 3. An admin is refused too, and an admin's misc_charge still works.

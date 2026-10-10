@@ -228,6 +228,19 @@ BEGIN
   SELECT prosrc INTO v_save_source
   FROM pg_proc
   WHERE oid = 'public.save_field_app_invoice(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)'::regprocedure;
+  -- 20261009120000 (invoicing admin-only) renames the reviewed lock/recheck body to
+  -- _save_field_app_invoice_pre_admin_only_20261009 behind an admin-guard wrapper. Pin the
+  -- wrapper's shape (guard first, then that body) and check the lock/recheck in that body.
+  IF v_save_source LIKE '%_save_field_app_invoice_pre_admin_only_20261009(%' THEN
+    IF v_save_source !~ '^\s*BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
+       OR has_function_privilege('authenticated',
+            'public._save_field_app_invoice_pre_admin_only_20261009(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(P6): the admin-only save wrapper is not guard-first or its frozen body is callable';
+    END IF;
+    SELECT prosrc INTO v_save_source
+    FROM pg_proc
+    WHERE oid = 'public._save_field_app_invoice_pre_admin_only_20261009(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)'::regprocedure;
+  END IF;
   IF v_save_source NOT LIKE '%FOR UPDATE%'
      OR v_save_source NOT LIKE '%LIMIT 1%'
      OR v_save_source NOT LIKE '%v_locked_status NOT IN%'
@@ -241,9 +254,22 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the save lock wrapper';
   END IF;
+  -- One overload either way: (uuid,uuid,text) before 20261009120000, (uuid,uuid,text,text) after,
+  -- whose wrapper guards first and delegates to the renamed reviewed body checked below.
   SELECT prosrc INTO v_post_group_source
   FROM pg_proc
-  WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
+  WHERE oid = COALESCE(to_regprocedure('public.post_invoice_group(uuid,uuid,text)'),
+                       to_regprocedure('public.post_invoice_group(uuid,uuid,text,text)'));
+  IF v_post_group_source LIKE '%_post_invoice_group_pre_admin_only_20261009(%' THEN
+    IF v_post_group_source !~ '^\s*(DECLARE\s[^$]*?)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
+       OR has_function_privilege('authenticated',
+            'public._post_invoice_group_pre_admin_only_20261009(uuid,uuid,text)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(P6): the admin-only group-post wrapper is not guard-first or its frozen body is callable';
+    END IF;
+    SELECT prosrc INTO v_post_group_source
+    FROM pg_proc
+    WHERE oid = 'public._post_invoice_group_pre_admin_only_20261009(uuid,uuid,text)'::regprocedure;
+  END IF;
   IF v_post_group_source NOT LIKE '%pg_advisory_xact_lock%'
      OR v_post_group_source NOT LIKE '%ORDER BY id%'
      OR v_post_group_source NOT LIKE '%FOR UPDATE%'

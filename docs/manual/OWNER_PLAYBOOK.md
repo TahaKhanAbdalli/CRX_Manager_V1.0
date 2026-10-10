@@ -101,6 +101,31 @@ A few other things agents simply never do on their own — overwriting history o
 
 ---
 
+## Who can do invoicing (your decision, 2026-10-09)
+
+Only admins invoice. Once the database change `20261009120000` is applied (it is written and tested,
+NOT applied yet — it needs your yes and your Windows Hello approval, because it changes who can do
+what), this is what each person can do:
+
+- **Admins:** everything, exactly as today — create, edit, post, unpost, void and transfer invoices,
+  apply credit memos and prepayments.
+- **Sales reps:** see every invoice (read-only, including PDFs), record payments, and keep doing
+  quotes, orders, pricing, deliveries, jobs, quick deliveries, customers and documents. They can no
+  longer create, change, post or unpost any invoice, or apply credit memos or prepayments. If they
+  try, the app says "Only an admin can do invoicing."
+- **Drivers:** complete their deliveries and make quick deliveries, with no invoice either way.
+- **When a rep or driver completes a delivery,** no invoice is made. Every admin gets a notification
+  ("Delivery needs an invoice") and the delivery shows under "Delivered, not invoiced" until an admin
+  opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft;
+  bill it from the unbilled list.
+- **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
+  draft is cancelled with it, as today.
+- **Posting is safer:** when the invoice screens are updated (phase 2), posting will send the version
+  of the invoice the admin looked at, and the database refuses the post if someone changed it in the
+  meantime ("This invoice changed after you reviewed it").
+
+---
+
 ## Which AI does what
 
 - **Claude** (Anthropic) is usually the one you talk to. It plans, builds, and runs the reviewer helpers. The careful reviewers use the newest Opus (one of Claude's top-tier models) and quick status checks use the faster Sonnet. Both are named so they update automatically when Anthropic releases a newer version.

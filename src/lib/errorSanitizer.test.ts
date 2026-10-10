@@ -64,6 +64,13 @@ describe('sanitizeError', () => {
 
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
+    // 20261009120000: the guard's real RAISE text, token plus suffix, and the PostgREST object shape.
+    const adminOnly = 'INVOICING_ADMIN_ONLY: only an admin can create, edit, post, unpost, void or transfer invoices, or apply credits and prepayments to them';
+    expect(sanitizeError(adminOnly)).toBe('Only an admin can do invoicing.');
+    expect(sanitizeError({ code: '42501', message: adminOnly })).toBe('Only an admin can do invoicing.');
+    expect(sanitizeError('INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting'))
+      .toBe('This invoice changed after you reviewed it, so nothing was posted. Reload it, check it again, then post');
+    expect(sanitizeError('INVOICING_ADMIN_ONLY_SOMETHING_ELSE')).toBe('INVOICING_ADMIN_ONLY_SOMETHING_ELSE');
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
     expect(sanitizeError('RETURN_CREDIT_INVENTORY_UNIT_MISMATCH')).toContain('warehouse inventory unit');
     expect(sanitizeError('RETURN_CREDIT_UNLINKED_COST_LINE')).toContain('Review the credit memo');

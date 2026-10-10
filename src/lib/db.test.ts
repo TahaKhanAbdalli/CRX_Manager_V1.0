@@ -122,6 +122,12 @@ describe('hasRpcCode', () => {
   it('does NOT false-positive on the token mid-message', () => {
     expect(hasRpcCode({ message: 'note: LICENSE_EXPIRED appears here' }, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
   });
+  // 20261009120000: the admin-only invoicing guard (42501) and the posting version check.
+  it('recognises the admin-only invoicing and posting version refusals', () => {
+    expect(hasRpcCode({ code: '42501', message: 'INVOICING_ADMIN_ONLY: only an admin can create, edit, post, unpost, void or transfer invoices' }, RpcErrorCodes.INVOICING_ADMIN_ONLY)).toBe(true);
+    expect(hasRpcCode({ code: 'P0001', message: 'INVOICE_CHANGED_SINCE_REVIEW: an invoice in this group changed after it was reviewed' }, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)).toBe(true);
+    expect(hasRpcCode({ message: 'CUSTOMER_SCOPE_DENIED' }, RpcErrorCodes.INVOICING_ADMIN_ONLY)).toBe(false);
+  });
   // save_job raises the BARE token: `RAISE EXCEPTION 'SHARE_NOT_100' USING
   // DETAIL = 'Field shares must total 100%; got ...'`. JobDetail detected it with
   // `err instanceof Error && err.message.includes(...)`, which never matched a

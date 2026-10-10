@@ -273,10 +273,10 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
     table: 'invoices',
     access: {
       admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
-      sales_rep: { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'CRITICAL: Invoice data is admin-only (AR, payments, finance charges)',
+    notes: 'CRITICAL: invoicing (every write) is admin-only; sales reps READ every invoice (Mason 2026-10-09, migration 20261009120000 - the intended state once it is applied)',
   },
   {
     table: 'payments',
@@ -427,7 +427,8 @@ const REP_BLOCKED_TABLES = [
   'cost_history',
   'purchase_orders',
   'purchase_order_items',
-  'invoices',
+  // 'invoices' left this list 2026-10-09: reps read every invoice (Mason), and every invoice
+  // write stays admin-only - asserted in 'financial tables are admin-only' below.
   'payments',
   'failed_notifications',
 ];
@@ -712,6 +713,8 @@ describe('RLS Contracts: Sensitive Data Isolation', () => {
       const contract = RLS_ACCESS_MATRIX.find(c => c.table === tableName)!;
       for (const role of ['sales_rep', 'driver'] as const) {
         for (const op of ALL_OPS) {
+          // Mason 2026-10-09: a sales rep reads every invoice; nobody but an admin writes one.
+          if (tableName === 'invoices' && role === 'sales_rep' && op === 'SELECT') continue;
           expect(
             contract.access[role][op],
             `SECURITY: ${role} must not have ${op} on ${tableName}`
@@ -719,6 +722,13 @@ describe('RLS Contracts: Sensitive Data Isolation', () => {
         }
       }
     }
+  });
+
+  it('invoices: sales reps read all of them, drivers none, and only an admin writes (Mason 2026-10-09)', () => {
+    const invoices = RLS_ACCESS_MATRIX.find(c => c.table === 'invoices')!;
+    expect(invoices.access.sales_rep.SELECT).toBe('all');
+    expect(invoices.access.driver.SELECT).toBe('none');
+    expect(ADMIN_ONLY_WRITE_TABLES).toContain('invoices');
   });
 
   it('notifications are user-scoped (no cross-user visibility)', () => {

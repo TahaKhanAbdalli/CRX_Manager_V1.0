@@ -2431,7 +2431,19 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   });
 
   it('batch_post_invoices binds replay and forwards a deterministic key to every child post', () => {
-    const body = latestFunctionBody('batch_post_invoices');
+    // 20261009120000 (invoicing admin-only) renames the reviewed body to
+    // _batch_post_invoices_pre_admin_only_20261009 and puts a wrapper in front that
+    // checks the admin guard (and an optional posting version) and passes the key
+    // through unchanged. The replay contract below lives in that frozen body: the
+    // latest definition authored before the rename.
+    const wrapper = latestFunctionBody('batch_post_invoices');
+    expect(wrapper).toContain('PERFORM public._require_invoicing_admin();');
+    expect(wrapper).toContain('public._batch_post_invoices_pre_admin_only_20261009(');
+    expect(wrapper).toContain('p_idempotency_key => p_idempotency_key');
+    const frozen = getMigrationFiles().filter(({ name }) => name < '20261009120000');
+    const sigRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?batch_post_invoices\s*\(/i;
+    const source = [...frozen].reverse().find(({ content }) => sigRe.test(content))?.content ?? '';
+    const body = /AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/.exec(source.slice(source.search(sigRe)))?.[2] ?? null;
     expect(body).not.toBeNull();
     expect(body).toContain("v_contract CONSTANT text := 'batch_post_invoices_v2'");
     expect(body).toContain('public._claim_bound_lifecycle_idempotency(');
