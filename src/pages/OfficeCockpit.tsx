@@ -71,6 +71,7 @@ import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils'
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages, type DeliveryInvoiceCoverage } from '../lib/deliveryInvoiceCoverage';
 
@@ -959,6 +960,10 @@ export default function OfficeCockpit() {
       toast('error', 'Profile not loaded — please refresh.');
       return;
     }
+    if (!canManageInvoices(profile.role)) {
+      toast('error', 'Only an admin can post invoices.');
+      return;
+    }
     if (cleanInvoices.length === 0) {
       toast('info', 'No clean invoices to post.');
       return;
@@ -1262,17 +1267,20 @@ export default function OfficeCockpit() {
                   </span>
                 )}
               </span>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => setPostAllOpen(true)}
-                disabled={cleanInvoices.length === 0 || posting}
-                loading={posting}
-                className="flex items-center gap-1"
-              >
-                <FileCheck className="w-3.5 h-3.5" />
-                Post all clean
-              </Button>
+              {/* Posting is admin-only (Mason 2026-10-09); a sales rep still sees the queue. */}
+              {canManageInvoices(profile?.role) && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setPostAllOpen(true)}
+                  disabled={cleanInvoices.length === 0 || posting}
+                  loading={posting}
+                  className="flex items-center gap-1"
+                >
+                  <FileCheck className="w-3.5 h-3.5" />
+                  Post all clean
+                </Button>
+              )}
             </div>
           )}
           {data.postableInvoices.length === 0 ? (

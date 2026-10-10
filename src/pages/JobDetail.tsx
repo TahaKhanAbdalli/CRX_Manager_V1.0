@@ -10,6 +10,7 @@ import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
@@ -3093,7 +3094,11 @@ export default function JobDetail() {
       // below writes to whatever job is on screen NOW, so it is gated on that still
       // being the job this completion started on.
       if (stillOnThisJob()) {
-        toast('success', `Job completed! Application record ${result.record_number} created.`);
+        // Invoicing is admin-only (Mason 2026-10-09): a non-admin's completion makes no
+        // invoice and notifies the admins, so say who bills it.
+        toast('success', canManageInvoices(role)
+          ? `Job completed! Application record ${result.record_number} created.`
+          : `Job completed! Application record ${result.record_number} created. An admin will create the invoice.`);
         setShowCompleteModal(false);
         setIsDirty(false);
         await fetchJob();
@@ -3652,7 +3657,8 @@ export default function JobDetail() {
   // role gate at all before U12 (any of admin/sales_rep/applicator viewing this
   // page could click it), and Transfer's only gate was the job's status.
   const canCancel = !isNew && (status === 'scheduled' || status === 'in_progress') && isEditable;
-  const canTransfer = !isNew && status === 'completed' && isEditable;
+  // Transfer to Invoice creates an invoice, so admin-only (Mason 2026-10-09).
+  const canTransfer = !isNew && status === 'completed' && isEditable && canManageInvoices(role);
 
   // Selectable customers for a share row = the field owner + any customer (cross-bill).
   const shareInputCls = 'w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50';

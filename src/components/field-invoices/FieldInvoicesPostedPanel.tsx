@@ -21,6 +21,8 @@ import {
 import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
+import { canManageInvoices } from '../../lib/pagePermissions';
+import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
 import { isCurrentSeason, openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
@@ -86,6 +88,9 @@ export default function FieldInvoicesPostedPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees this list read-only (no
+  // Unpost All).
+  const canManage = canManageInvoices(profile?.role);
 
   const [rows, setRows] = useState<FieldInvoiceListRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +134,9 @@ export default function FieldInvoicesPostedPanel() {
       toast('error', `Showing first ${QUERY_LIMIT} posted field invoices — some may be hidden.`);
     }
 
-    const raws = (data || []) as unknown as RawFieldInvoiceRow[];
+    // A sales rep reads every invoice but only their own customers' records: fill the farm
+    // names the embed left blank from the names-only reader (one call for the list).
+    const raws = await fillHiddenCustomerNames((data || []) as unknown as RawFieldInvoiceRow[]);
 
     // GROUPED (split, multi-customer) invoices: the per-acre engine keys their
     // field_app_locations by invoice_group_id with invoice_id=NULL, so the
@@ -420,6 +427,7 @@ export default function FieldInvoicesPostedPanel() {
   const runUnpostAll = async () => {
     setShowUnpostConfirm(false);
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    if (!canManage) { toast('error', 'Only an admin can unpost invoices'); return; }
     if (candidates.length === 0) { toast('error', 'No unpostable invoices in view (paid invoices cannot be unposted).'); return; }
     setUnposting(true);
     let ok = 0;
@@ -511,7 +519,7 @@ export default function FieldInvoicesPostedPanel() {
       </div>
 
       {/* Dynamic month-batch span warning (only when Unpost All's targets cross batches) */}
-      {crossesBatches && (
+      {canManage && crossesBatches && (
         <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <p>
@@ -772,9 +780,11 @@ export default function FieldInvoicesPostedPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-secondary">
             Print actions apply to all {totals.count} invoice(s) currently shown.
-            {skippedOlderSeasonCount > 0
-              ? ` Unpost All applies to this season's ${candidates.length} only; ${skippedOlderSeasonCount} from another season are left out.`
-              : ' Unpost All applies to the unpaid ones.'}
+            {!canManage
+              ? ' Only an admin can unpost invoices.'
+              : skippedOlderSeasonCount > 0
+                ? ` Unpost All applies to this season's ${candidates.length} only; ${skippedOlderSeasonCount} from another season are left out.`
+                : ' Unpost All applies to the unpaid ones.'}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
@@ -786,19 +796,21 @@ export default function FieldInvoicesPostedPanel() {
             <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={printReport} loading={busy} disabled={visible.length === 0}>
               Print Invoice Report
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<RotateCcw className="w-4 h-4" />}
-              onClick={() => setShowUnpostConfirm(true)}
-              loading={unposting}
-              disabled={unposting || candidates.length === 0}
-              title={scope.kind === 'season'
-                ? "Return this season's unpaid posted invoices in view to the Unposted list"
-                : 'Return every unpaid posted invoice in view to the Unposted list'}
-            >
-              Unpost All{candidates.length > 0 ? ` (${candidates.length})` : ''}
-            </Button>
+            {canManage && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<RotateCcw className="w-4 h-4" />}
+                onClick={() => setShowUnpostConfirm(true)}
+                loading={unposting}
+                disabled={unposting || candidates.length === 0}
+                title={scope.kind === 'season'
+                  ? "Return this season's unpaid posted invoices in view to the Unposted list"
+                  : 'Return every unpaid posted invoice in view to the Unposted list'}
+              >
+                Unpost All{candidates.length > 0 ? ` (${candidates.length})` : ''}
+              </Button>
+            )}
           </div>
         </div>
       </Card>

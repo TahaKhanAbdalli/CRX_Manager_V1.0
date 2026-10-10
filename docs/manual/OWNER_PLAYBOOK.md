@@ -129,15 +129,32 @@ what), this is what each person can do:
 - **Reps see customer names on every invoice (your choice, 2026-10-10, "2:yes"):** the farm name,
   not the customer's address, phone, contacts or account number. Because reps already see every
   invoice (your choice, 2026-10-09), they also see each invoice's own amounts, balance and payment
-  terms. Reps still open full customer records only for their own assigned customers. (The database part is in this same change;
-  the invoice screens start using it in phase 2.)
+  terms. Reps still open full customer records only for their own assigned customers.
 - Also worth knowing: reps will see cost and margin on every invoice, the same numbers they already
   see on every order; and an applicator's job completion now notifies every admin too.
 - **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
   draft is cancelled with it, as today.
-- **Posting is safer:** when the invoice screens are updated (phase 2), posting will send the version
-  of the invoice the admin looked at, and the database refuses the post if someone changed it in the
-  meantime ("This invoice changed after you reviewed it").
+- **Posting is safer:** posting sends the version of the invoice the admin looked at, and the
+  database refuses the post if someone changed it in the meantime.
+
+**What the screens look like for a sales rep (phase 2, built 2026-10-10 in the same change; goes live
+with it):**
+- The **Invoices** and **Field Invoices** pages stay in their menu and show every invoice, with the
+  customer's name. There are no tick boxes, no Post, Void, Delete, Post All or Unpost All buttons, no
+  Misc Charge and no Manual Invoice. Export, Download PDF and Print still work.
+- Opening an invoice shows it **read-only**, with a grey "Read-only — only an admin can change, post
+  or unpost invoices" note. Print (and Email on field invoices, as before) still work.
+- **Create Invoice** buttons are gone for reps on orders, blend tickets, jobs (Transfer to Invoice) and
+  the unbilled list; Consolidate drafts and Post all drafts are gone on orders. Price Order stays.
+- After a rep or driver **completes a delivery**, the app says "Delivery completed. An admin will
+  create the invoice." (a job says "An admin will create the invoice." too). Quick Delivery has no
+  "Create draft invoice" box for them.
+- The **Today** page still lists field invoices waiting to post, without the "Post all clean" button.
+
+**What changes for you (admins):** nothing you have to learn. One new safety step on an invoice's
+page: **Post is greyed out while you have unsaved changes** (save first), and if someone else changed
+the invoice since you opened it, the page reloads and says "This invoice changed since you reviewed
+it — it has been reloaded; check it and post again."
 
 ---
 

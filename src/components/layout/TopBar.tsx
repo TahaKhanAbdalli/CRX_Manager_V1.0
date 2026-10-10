@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Menu, Plus, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { hasPageAccess } from '../../lib/pagePermissions';
+import { canManageInvoices, hasPageAccess } from '../../lib/pagePermissions';
 import NotificationsPanel from '../team/NotificationsPanel';
 
 interface TopBarProps {
@@ -17,7 +17,9 @@ const NEW_MENU_ITEMS = [
   { label: 'Order', path: '/orders/new', pageKey: 'orders' },
   { label: 'Delivery', path: '/deliveries/new', pageKey: 'deliveries' },
   { label: 'Job', path: '/jobs/new', pageKey: 'jobs' },
-  { label: 'Field App Invoice', path: '/invoices/field-app/new', pageKey: 'field-invoices' },
+  // Creates an invoice, so admin-only (Mason 2026-10-09); a sales rep still opens the
+  // Field Invoices page itself, read-only.
+  { label: 'Field App Invoice', path: '/invoices/field-app/new', pageKey: 'field-invoices', createsInvoice: true },
   { label: 'PO', path: '/purchase-orders/new', pageKey: 'purchase-orders' },
   { label: 'Quick Receive', path: '/receiving?tab=quick', pageKey: 'receiving' },
 ];
@@ -29,7 +31,8 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
   const role = profile?.role ?? null;
   const isOfficeRole = role === 'admin' || role === 'sales_rep';
   const allowedNewMenuItems = isOfficeRole
-    ? NEW_MENU_ITEMS.filter((item) => hasPageAccess(role, deniedPages, item.pageKey))
+    ? NEW_MENU_ITEMS.filter((item) =>
+      hasPageAccess(role, deniedPages, item.pageKey) && (!item.createsInvoice || canManageInvoices(role)))
     : [];
 
   const closeWhenFocusLeaves = (event: React.FocusEvent<HTMLDivElement>) => {

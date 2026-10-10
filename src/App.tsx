@@ -227,14 +227,18 @@ const router = createBrowserRouter([
           { path: 'to-ship', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ToShip /></ProtectedRoute> },
           { path: 'inventory', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InventoryPage /></ProtectedRoute> },
           { path: 'invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Invoices /></ProtectedRoute> },
-          { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoiceRoute /></ProtectedRoute> },
+          // Invoicing is admin-only (Mason 2026-10-09): a route whose only purpose is creating
+          // or posting an invoice is admin-only; the invoice list and detail pages stay open to
+          // sales reps, read-only (the pages hide every invoice-changing control for them, and
+          // InvoiceDetail sends a rep away from /invoices/new, the Misc Charge entry).
+          { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin']}><FieldApplicationInvoiceRoute /></ProtectedRoute> },
           { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoiceRoute /></ProtectedRoute> },
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail routeArea="chemical" /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
           // Per-line split-billing editor (flag-gated; page self-gates on per_line_split_billing_enabled).
-          { path: 'split-billing/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
+          { path: 'split-billing/new', element: <ProtectedRoute allowedRoles={['admin']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
           // #H save-now/post-later: reopen a saved billing set (read-only review + Post).
-          { path: 'split-billing/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
+          { path: 'split-billing/:id', element: <ProtectedRoute allowedRoles={['admin']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
           // Kept for bookmarks; all workflow views now live as query-addressable tabs.
           { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=drafts" replace /></ProtectedRoute> },
           { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=posted" replace /></ProtectedRoute> },

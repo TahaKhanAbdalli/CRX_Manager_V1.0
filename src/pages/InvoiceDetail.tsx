@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw, AlertTriangle,
 } from 'lucide-react';
@@ -11,7 +11,15 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
-import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { canManageInvoices } from '../lib/pagePermissions';
+import { fetchInvoiceCustomerNames } from '../lib/invoiceCustomerNames';
+import {
+  fetchInvoiceGroupPostVersion,
+  fetchInvoicePostVersion,
+  postReviewedInvoice,
+  postReviewedInvoiceGroup,
+} from '../lib/invoicePostVersion';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
@@ -73,6 +81,14 @@ interface LineItem {
   product_form: string | null;
 }
 
+// Post bills the SAVED invoice, never the edits on screen (addendum 8b, Mason 2026-10-09).
+const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
+// The posting version moved after the admin reviewed the invoice (on screen, or when the Post
+// confirm opened): the database refused the post (INVOICE_CHANGED_SINCE_REVIEW), or the page
+// noticed before asking. Either way the page reloads the invoice.
+const INVOICE_CHANGED_SINCE_REVIEW_MESSAGE = 'This invoice changed since you reviewed it — it has been reloaded; check it and post again.';
+const POST_RECHECK_FAILED_MESSAGE = 'Could not check the saved invoice before posting. Nothing was posted — please try again.';
+
 const statusBadge = (status: InvoiceStatus) => {
   const map: Record<InvoiceStatus, { variant: 'default' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
     draft: { variant: 'default', label: 'Draft' },
@@ -94,8 +110,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const { profile } = useAuth();
   const { toast } = useToast();
   const { runWithBelowCostApproval } = useBelowCostApproval();
+  const routeLocation = useLocation();
   const isAdmin = profile?.role === 'admin';
-  const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep opens this page read-only (Print
+  // stays), with no Save, Post, Unpost, Transfer, Apply Credit or editable field.
+  const canManage = canManageInvoices(profile?.role);
   const saveIdem = useIdempotencyKey(
     'save_invoice',
     `${profile?.id || ''}:${routeArea || 'all'}:${id || 'unknown'}`,
@@ -258,23 +277,116 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // B1 (deep-dive H1): RUP warning surfaced in the post-confirm when the buyer
   // has no valid applicator license — posting is the legal point of sale.
   const [rupPostWarning, setRupPostWarning] = useState<string | null>(null);
+  // Posting version check (addendum 8b). postVersionBaselineRef is the invoice's (or the whole
+  // split group's) posting version read at the START of each load, before anything shown here
+  // is read, so everything on screen is at least that new. reviewedPostRef is what the Post
+  // confirm reviewed: that same version, plus the SAVED customer and total the credit-limit
+  // check uses. handlePost sends the version; the database refuses the post if anything that
+  // would post changed since (INVOICE_CHANGED_SINCE_REVIEW), under its row locks.
+  const postVersionBaselineRef = useRef<string | null>(null);
+  const reviewedPostRef = useRef<{ version: string; customerId: string; totalCents: number } | null>(null);
+
+  // ── Unsaved-edit tracking (addendum 8b) ─────────────────────────────────────
+  // post_invoice posts the SAVED invoice; posting with unsaved edits on screen billed the old
+  // amounts and silently dropped the edits, so Post waits for a save. A snapshot of every
+  // editable field is taken after each load (and each save, which reloads); any difference from
+  // it is an unsaved edit. Optional text fields are normalized the way handleSave sends them
+  // (`|| null`), so typing into an empty field and clearing it again is not an edit.
+  const editSnapshot = JSON.stringify({
+    customer_id: invoice.customer_id ?? null,
+    invoice_type: invoice.invoice_type ?? null,
+    invoice_date: invoice.invoice_date ?? null,
+    salesman_id: invoice.salesman_id || null,
+    purchase_order_ref: invoice.purchase_order_ref || null,
+    header_notes: invoice.header_notes || null,
+    footer_notes: invoice.footer_notes || null,
+    paymentTerms,
+    customDueDate,
+    customTermsText,
+    items,
+  });
+  const [savedEditSnapshot, setSavedEditSnapshot] = useState<string | null>(null);
+  // Bumped when a load finishes, so the snapshot is taken from the committed loaded state.
+  const [loadVersion, setLoadVersion] = useState(0);
+  useEffect(() => {
+    if (loadVersion === 0) return;
+    setSavedEditSnapshot(editSnapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- capture only when a load completes
+  }, [loadVersion]);
+  // Only an admin can edit (canManage), so a sales rep's read-only page never has unsaved edits.
+  const hasUnsavedChanges = canManage && !isNew && savedEditSnapshot !== null && editSnapshot !== savedEditSnapshot;
 
   const openPostConfirm = async () => {
+    if (!canManage || !id) return;
+    if (hasUnsavedChanges) {
+      toast('error', UNSAVED_POST_MESSAGE);
+      return;
+    }
     postIdem.resetKey();
+    reviewedPostRef.current = null;
+    const groupId = invoice.invoice_group_id ?? null;
+    // 1. The posting version NOW, compared with the one read when this screen loaded: a
+    //    change saved elsewhere since then (another tab or person) means the person posting
+    //    has not seen what would post, so reload instead of asking.
+    let currentVersion: string;
+    try {
+      currentVersion = groupId
+        ? await fetchInvoiceGroupPostVersion(groupId)
+        : await fetchInvoicePostVersion(id);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_version_read' } });
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      return;
+    }
+    if (postVersionBaselineRef.current === null || currentVersion !== postVersionBaselineRef.current) {
+      toast('error', INVOICE_CHANGED_SINCE_REVIEW_MESSAGE);
+      fetchInvoice(id);
+      return;
+    }
+    // 2. The SAVED invoice, read AFTER the version: the credit-limit and restricted-use
+    //    checks run on what post_invoice will post. A save landing after the version read
+    //    changes the version, so the database refuses the post.
+    type SavedInvoiceForPost = {
+      customer_id: string | null;
+      total_amount_cents: number | null;
+      invoice_items: Array<{ product_id: string | null }> | null;
+    };
+    let saved: SavedInvoiceForPost | null = null;
+    try {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('customer_id, total_amount_cents, invoice_items(product_id)')
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      saved = data as SavedInvoiceForPost | null;
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_saved_invoice_read' } });
+    }
+    if (!saved || !saved.customer_id || saved.total_amount_cents === null || saved.total_amount_cents === undefined) {
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      return;
+    }
+    reviewedPostRef.current = {
+      version: currentVersion,
+      customerId: saved.customer_id,
+      totalCents: Number(saved.total_amount_cents),
+    };
     let warning: string | null = null;
     // The RUP check must NEVER block posting — any failure falls through to the
     // plain confirm (warn+confirm by design, not a gate).
     try {
-      if (invoice?.invoice_group_id) {
+      if (groupId) {
         // Posting a grouped invoice posts EVERY sibling atomically via
         // post_invoice_group (see handlePost), so the RUP advisory must cover the
         // WHOLE group, not just the displayed invoice — a non-RUP sibling could
         // otherwise post a RUP sibling with no warning. Check each sibling's own
-        // (customer, products) and aggregate. Still advisory, never a gate.
+        // SAVED (customer, products) and aggregate. Still advisory, never a gate.
         const { data: grp } = await supabase
           .from('invoices')
           .select('id, invoice_number, customer_id, invoice_items(product_id)')
-          .eq('invoice_group_id', invoice.invoice_group_id);
+          .eq('invoice_group_id', groupId)
+          .is('deleted_at', null);
         const parts: string[] = [];
         for (const inv of (grp || []) as Array<{ invoice_number: string; customer_id: string | null; invoice_items: { product_id: string | null }[] | null }>) {
           const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
@@ -289,9 +401,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
         }
       } else {
-        const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
-        if (invoice?.customer_id && productIds.length > 0) {
-          const res = await checkRUPCompliance(invoice.customer_id, productIds);
+        // The SAVED lines and customer (read above), not the copy on screen.
+        const productIds = (saved.invoice_items || []).map((it) => it.product_id).filter((p): p is string => Boolean(p));
+        if (productIds.length > 0) {
+          const res = await checkRUPCompliance(saved.customer_id, productIds);
           if (res.hasRUPProducts && !res.hasValidLicense) {
             // #6: align the warning's stated disposition with what the DB actually
             // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
@@ -321,11 +434,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     fetchRef();
   }, []);
 
+  // Set by FieldApplicationInvoice when it hands a sales rep's draft split child to this page.
+  const splitChildReadOnlyHandoff =
+    (routeLocation.state as { splitChildReadOnly?: boolean } | null)?.splitChildReadOnly === true;
+
   const fetchInvoice = useCallback(async (invoiceId: string) => {
     // Stale-fetch guard: on rapid invoice-to-invoice navigation an older
     // in-flight fetch must not render the previous invoice's amounts.
     const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
+    // No unsaved-edit baseline and no posting version while (re)loading; this load takes both.
+    setSavedEditSnapshot(null);
+    postVersionBaselineRef.current = null;
+    reviewedPostRef.current = null;
 
     // #3 segregation PREFLIGHT (Codex r11): resolve the route-area redirect from a
     // MINIMAL row (invoice_type/job_id/status) BEFORE the full select('*') below, so
@@ -336,7 +457,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
     const pre = await supabase
       .from('invoices')
-      .select('invoice_type, job_id, blend_ticket_id, status')
+      .select('invoice_type, job_id, blend_ticket_id, status, invoice_group_id')
       .eq('id', invoiceId)
       .maybeSingle();
     if (isStale()) return;
@@ -371,10 +492,31 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // the column's absence) redirects it onward to the read-only Split Billing view. A POSTED
       // split child (status not draft/unposted) stays on THIS page and renders read-only from the
       // full select('*') load below (isSplitInvoice), which is deploy-order-safe.
+      // Exception: the per-acre editor sends a sales rep's split child back here to be shown
+      // read-only (the Split Billing editor is admin-only), so do not bounce it there again.
       if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
-          && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
+          && (fieldStatus === 'draft' || fieldStatus === 'unposted') && !splitChildReadOnlyHandoff) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
         return;
+      }
+
+      // The posting version, read BEFORE anything shown below, so the screen is at least this
+      // new: any later save changes the version, Post notices and reloads, and the database
+      // refuses a post that does not match. Only an admin posts (the reader refuses anyone
+      // else), and only a draft or unposted invoice can be posted. A failed read leaves no
+      // baseline; Post then asks for a reload instead of posting unchecked.
+      if (canManage && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
+        const preGroupId = (pre.data as { invoice_group_id?: string | null }).invoice_group_id ?? null;
+        try {
+          const baseline = preGroupId
+            ? await fetchInvoiceGroupPostVersion(preGroupId)
+            : await fetchInvoicePostVersion(invoiceId);
+          if (isStale()) return;
+          postVersionBaselineRef.current = baseline;
+        } catch (err) {
+          if (isStale()) return;
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_version_baseline' } });
+        }
       }
     }
 
@@ -399,10 +541,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // from the tolerant select('*') load — NOT the preflight, which must stay off the parked
     // field_app_billing_set_id column for deploy-order safety. A POSTED split child still renders
     // read-only on this page (isSplitInvoice), unchanged.
+    // The Split Billing editor is admin-only (Mason 2026-10-09), so a sales rep's draft split
+    // child stays HERE, read-only like a posted one.
     {
       const splitSetId = (data as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
       const splitStatus = (data as { status?: string }).status;
-      if (splitSetId && (splitStatus === 'draft' || splitStatus === 'unposted')) {
+      if (canManage && splitSetId && (splitStatus === 'draft' || splitStatus === 'unposted')) {
         navigate(`/split-billing/${splitSetId}`, { replace: true });
         return;
       }
@@ -434,6 +578,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         .maybeSingle();
       customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
       if (isStale()) return;
+    }
+    // A sales rep reads every invoice but only their own customers' records, so the embed is
+    // blank for anyone else's customer: fill the name from the names-only reader.
+    let loadedCustomerName = (data as unknown as { customer?: { farm_name?: string | null } | null }).customer?.farm_name || '';
+    if (!loadedCustomerName.trim() && loadedInvoice.customer_id) {
+      const names = await fetchInvoiceCustomerNames([loadedInvoice.customer_id]);
+      if (isStale()) return;
+      loadedCustomerName = names.get(loadedInvoice.customer_id) || '';
     }
     setInvoice(data as object as Invoice);
     const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;
@@ -472,7 +624,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setCustomTermsText('');
       setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
     }
-    setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
+    setCustomerName(loadedCustomerName);
 
     // Fetch parent order for breadcrumb + related deliveries for cross-link
     if (data.order_id) {
@@ -600,7 +752,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
-  }, [toast, navigate, routeArea]);
+    // The screen now matches the saved invoice: take a new unsaved-edit baseline.
+    setLoadVersion((v) => v + 1);
+  }, [toast, navigate, routeArea, canManage, splitChildReadOnlyHandoff]);
 
   // Fetch existing invoice
   useEffect(() => {
@@ -722,6 +876,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Save invoice
   const handleSave = async () => {
+    if (!canManage) return;
     if (paymentTerms === 'Custom date…' && !customDueDate) {
       toast('error', 'Choose a custom due date before saving.');
       return;
@@ -864,8 +1019,23 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Post invoice
   const handlePost = async () => {
-    const totalCents = items.reduce((sum, i) => sum + (i.extended_cents || 0), 0);
-    const creditOk = await checkCreditLimit({ customerId: invoice.customer_id!, newAmountCents: totalCents });
+    if (!canManage || !id || !profile) return;
+    if (hasUnsavedChanges) {
+      toast('error', UNSAVED_POST_MESSAGE);
+      return;
+    }
+    // What the Post confirm reviewed (openPostConfirm): the posting version, and the SAVED
+    // customer and total. No review, no post.
+    const reviewed = reviewedPostRef.current;
+    if (!reviewed) {
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      return;
+    }
+    // Credit-limit check on the SAVED customer and total, the account and amount post_invoice
+    // will actually post. Limitation (unchanged): for a split group this checks THIS invoice's
+    // total only, although post_invoice_group posts every member; the check is a dismissible
+    // warning, not a gate.
+    const creditOk = await checkCreditLimit({ customerId: reviewed.customerId, newAmountCents: reviewed.totalCents });
     if (!creditOk && !creditWarning?.dismissed) return;
     setPosting(true);
     try {
@@ -873,22 +1043,36 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // Phase 1 (2026-04-29): when the invoice belongs to a split group, route
       // through post_invoice_group so all siblings post atomically. Posting just
       // one member of a group would leave the group in a half-posted state.
+      // Both send the reviewed version, which the database checks under its row locks.
       if (invoice.invoice_group_id) {
-        const { data, error } = await supabase.rpc('post_invoice_group', {
+        await postReviewedInvoiceGroup({
           p_invoice_group_id: invoice.invoice_group_id,
-          p_performed_by: (profile?.id ?? null) as string,
+          p_performed_by: profile.id,
           p_idempotency_key: idemKey,
+          p_expected_version: reviewed.version,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'post_invoice_group');
       } else {
-        // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
-        await supabase.rpc('post_invoice', { p_invoice_id: id!, p_idempotency_key: idemKey }).throwOnError();
+        await postReviewedInvoice({
+          p_invoice_id: id,
+          p_idempotency_key: idemKey,
+          p_expected_version: reviewed.version,
+        });
       }
       postIdem.resetKey();
+      reviewedPostRef.current = null;
       toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
-      fetchInvoice(id!);
+      fetchInvoice(id);
     } catch (err: unknown) {
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)) {
+        // Refused inside the posting transaction: nothing posted and the key was not used.
+        // Show the current invoice so the admin reviews what would actually post.
+        postIdem.resetKey();
+        reviewedPostRef.current = null;
+        toast('error', INVOICE_CHANGED_SINCE_REVIEW_MESSAGE);
+        fetchInvoice(id);
+        setPosting(false);
+        return;
+      }
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
         extra: { context: invoice.invoice_group_id ? 'post_invoice_group' : 'post_invoice' },
       });
@@ -964,7 +1148,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // ALL members in ONE transaction (all-or-nothing) — a single in-JS member loop could
   // leave a half-unposted group. A single invoice still uses unpost_invoice.
   const handleUnpost = async () => {
-    if (!id || !profile) return;
+    if (!id || !profile || !canManage) return;
     setUnposting(true);
     try {
       if (invoice.invoice_group_id) {
@@ -1017,7 +1201,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // saved result, never double-reverses). The RPC also refuses a posted/paid invoice
   // with a plain-English message (the button is only shown for an editable one).
   const handleTransferToScheduling = async () => {
-    if (!id || !profile || !invoice.job_id) return;
+    if (!id || !profile || !invoice.job_id || !canManage) return;
     setTransferringToScheduling(true);
     try {
       const idemKey = transferToSchedulingIdem.getKey();
@@ -1112,6 +1296,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // balance) credit memos, then calls apply_credit_memo_to_invoice — net-zero: it lowers this
   // invoice's balance and consumes the credit, flipping the invoice to paid when it hits 0.
   const openApplyCredit = async () => {
+    if (!canManage) return;
     if (!invoice?.customer_id) { toast('error', 'This invoice has no customer linked'); return; }
     const { data, error } = await supabase
       .from('invoices')
@@ -1380,8 +1565,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // generic page strictly read-only for them so a save can't cascade away their line
   // shares (Codex P1 #6). Paired with the hard guard in handleSave.
   const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
-  const canEdit = isAdminOrRep;
-  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+  const editable = canManage && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
   const storedTotalCostCents = (invoice as { total_cost_cents?: number | null }).total_cost_cents;
   // Total Cost / Margin:
   // - Split invoice (Codex r5 P2): chemical items store PER-UNIT cost, but the header
@@ -1411,6 +1595,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         c.farm_name.toLowerCase().includes(customerSearch.toLowerCase())
       ).slice(0, 10)
     : [];
+
+  // A new invoice (including the Misc Charge entry, /invoices/new?type=misc_charge) is
+  // admin-only: the route stays open because /invoices/:id is also the read-only detail page.
+  if (isNew && !canManage) {
+    return <Navigate to={routeArea === 'field' ? '/field-invoices' : '/invoices'} replace />;
+  }
 
   if (loading) {
     return (
@@ -1469,16 +1659,37 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               Save
             </Button>
           )}
-          {isSplitInvoice && (
+          {isSplitInvoice && canManage && (
             <span className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md">
               Read-only — this per-line split invoice is managed from the Split Billing editor.
             </span>
           )}
+          {!isNew && !canManage && (
+            <span className="inline-flex items-center text-xs bg-gray-100 text-secondary px-2.5 py-1 rounded-md">
+              Read-only — only an admin can change, post or unpost invoices.
+            </span>
+          )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
-          {!isNew && editable && isAdminOrRep && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
+          {!isNew && editable && (
+            <Button
+              variant="secondary"
+              icon={<Send className="w-4 h-4" />}
+              onClick={openPostConfirm}
+              loading={posting}
+              disabled={hasUnsavedChanges}
+              title={hasUnsavedChanges ? UNSAVED_POST_MESSAGE : undefined}
+              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
+            >
               Post
             </Button>
+          )}
+          {!isNew && hasUnsavedChanges && (
+            <span
+              id="invoice-unsaved-post-note"
+              className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md"
+            >
+              {UNSAVED_POST_MESSAGE}
+            </span>
           )}
           {/* #27: reverse Transfer to Scheduling — only for an editable (draft/unposted)
               field invoice that came from a job. Pushes the invoice back to the job. */}
@@ -1553,12 +1764,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               </Button>
             </>
           )}
-          {/* Apply Credit (credit-memo apply, 2026-07-10): admin+sales_rep, on a posted/overdue
-              non-credit invoice that still owes — put an available same-customer credit memo
-              against it. */}
+          {/* Apply Credit (credit-memo apply, 2026-07-10): admin only since 2026-10-09, on a
+              posted/overdue non-credit invoice that still owes — put an available
+              same-customer credit memo against it. */}
           {!isNew && invoice.invoice_type !== 'credit_memo'
             && (invoice.status === 'posted' || invoice.status === 'overdue')
-            && (invoice.balance_cents || 0) > 0 && isAdminOrRep && (
+            && (invoice.balance_cents || 0) > 0 && canManage && (
               <Button
                 variant="secondary"
                 icon={<RotateCcw className="w-4 h-4" />}
@@ -1571,10 +1782,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           {/* #28/U16b: Unpost — reverse a posting on a field-application or chemical-sale
               invoice back to the Unposted list. Posted/overdue only; the RPC refuses one
               with payments/prepay or in a closed period.
-              U16b: explicitly gated to admin/sales_rep, matching the RPC. (Void stays
-              admin-only below.) */}
+              Admin only (invoicing is admin-only since 2026-10-09), matching the RPC. */}
           {!isNew && (invoice.invoice_type === 'field_application' || invoice.invoice_type === 'chemical_sale')
-            && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdminOrRep && (
+            && (invoice.status === 'posted' || invoice.status === 'overdue') && canManage && (
               <Button
                 variant="secondary"
                 icon={<RotateCcw className="w-4 h-4" />}

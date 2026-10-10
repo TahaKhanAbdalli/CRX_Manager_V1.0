@@ -11,6 +11,7 @@ import Input from '../ui/Input';
 import ConfirmModal from '../ui/ConfirmModal';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
+import { canManageInvoices } from '../../lib/pagePermissions';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../../lib/idempotency';
@@ -87,6 +88,11 @@ export default function QuickDeliveryModal({
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createInvoice, setCreateInvoice] = useState(true);
+  // Invoicing is admin-only (Mason 2026-10-09): only an admin's quick delivery can make the
+  // draft invoice. Anyone else gets no checkbox and always sends p_skip_invoice = true (the
+  // database also forces it for them); an admin then bills the delivery.
+  const canInvoice = canManageInvoices(role);
+  const willCreateInvoice = canInvoice && createInvoice;
   const [showConfirm, setShowConfirm] = useState(false);
 
   // Fetch products and drivers on open
@@ -360,7 +366,7 @@ export default function QuickDeliveryModal({
         driver_id: selectedDriver || null,
         scheduled_date: scheduledDate,
         delivery_notes: deliveryNotes || null,
-        skip_invoice: !createInvoice,
+        skip_invoice: !willCreateInvoice,
       });
       const capability = await supabase
         .from('idempotency_keys')
@@ -382,7 +388,7 @@ export default function QuickDeliveryModal({
         p_delivery_notes: deliveryNotes || undefined,
         p_performed_by: profile?.id,
         p_idempotency_key: key,
-        p_skip_invoice: !createInvoice,
+        p_skip_invoice: !willCreateInvoice,
       });
 
       if (error) {
@@ -406,7 +412,9 @@ export default function QuickDeliveryModal({
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');
       const invoiceMsg = result.invoice_number
         ? ` with draft invoice ${result.invoice_number}`
-        : ' (no invoice created)';
+        : canInvoice
+          ? ' (no invoice created)'
+          : '. An admin will create the invoice.';
       toast('success', `Quick delivery ${result.delivery_number} created${invoiceMsg}`);
 
       // #7 (G4 = warn-but-allow): create_quick_delivery already computes the
@@ -460,11 +468,16 @@ export default function QuickDeliveryModal({
             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-amber-800">
-                This will create an order and delivery{createInvoice ? ', plus a draft invoice' : ''}.
+                This will create an order and delivery{willCreateInvoice ? ', plus a draft invoice' : ''}.
               </p>
-              {createInvoice && (
+              {willCreateInvoice && (
                 <p className="text-xs text-amber-700 mt-1">
-                  The invoice must be reviewed and posted by a sales rep before it can be billed.
+                  The invoice must be reviewed and posted by an admin before it can be billed.
+                </p>
+              )}
+              {!canInvoice && (
+                <p className="text-xs text-amber-700 mt-1">
+                  An admin will create the invoice.
                 </p>
               )}
             </div>
@@ -656,16 +669,18 @@ export default function QuickDeliveryModal({
             />
           </div>
 
-          {/* Invoice option */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={createInvoice}
-              onChange={(e) => setCreateInvoice(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/30"
-            />
-            <span className="text-sm text-secondary">Create draft invoice</span>
-          </label>
+          {/* Invoice option (admin only) */}
+          {canInvoice && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createInvoice}
+                onChange={(e) => setCreateInvoice(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/30"
+              />
+              <span className="text-sm text-secondary">Create draft invoice</span>
+            </label>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
@@ -689,7 +704,7 @@ export default function QuickDeliveryModal({
         onClose={() => setShowConfirm(false)}
         onConfirm={() => { setShowConfirm(false); handleSubmit(); }}
         title="Create Quick Delivery"
-        message={`Create delivery for ${selectedCustomer?.farm_name || 'customer'} with ${items.length} product(s) totaling ${fmtCurrency(totalCents)}${selectedDriver ? ` assigned to ${drivers.find(d => d.id === selectedDriver)?.full_name || 'driver'}` : ''}${createInvoice ? '. A draft invoice will also be created.' : '. No invoice will be created.'}`}
+        message={`Create delivery for ${selectedCustomer?.farm_name || 'customer'} with ${items.length} product(s) totaling ${fmtCurrency(totalCents)}${selectedDriver ? ` assigned to ${drivers.find(d => d.id === selectedDriver)?.full_name || 'driver'}` : ''}${willCreateInvoice ? '. A draft invoice will also be created.' : canInvoice ? '. No invoice will be created.' : '. An admin will create the invoice.'}`}
         confirmLabel="Create"
         variant="warning"
         loading={submitting}

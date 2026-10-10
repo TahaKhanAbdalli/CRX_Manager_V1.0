@@ -12,6 +12,7 @@
 
 import type { InvoicePrintOptions } from '../types';
 import { supabase } from './db';
+import { fillHiddenCustomerNames } from './invoiceCustomerNames';
 import { computeTotalDiluentGallons, formatGallons } from './fieldAppDiluent';
 import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
@@ -322,6 +323,23 @@ export async function buildInvoicePdfDataFromRow(
       .maybeSingle(),
   ]);
 
+  // Share customers' names: a sales rep reads every invoice but only their own customers'
+  // records, so the embed is blank for anyone else's customer. Fill it from the names-only
+  // reader (no call when every embed has a name), then the name stored on the share row.
+  // The address block above stays a direct customers read (assigned customers only for a rep,
+  // by decision 2026-10-10).
+  type PdfShareRow = {
+    customer_id?: string | null;
+    customer_name?: string | null;
+    customer?: { farm_name?: string | null } | null;
+    split_percentage: number;
+    acres: number | null;
+    amount_cents: number;
+    price_per_acre_cents?: number | null;
+    pricing_note?: string | null;
+  };
+  const shareRows = await fillHiddenCustomerNames((shares || []) as PdfShareRow[]);
+
   const custRow = cust as {
     billing_address?: string | null; city?: string | null; state?: string | null;
     zip?: string | null; account_number?: string | null; payment_terms?: string | null;
@@ -392,9 +410,9 @@ export async function buildInvoicePdfDataFromRow(
     application_date: inv.application_date || undefined,
     // #2: diluent rate (gal/acre); the renderer derives the total from total_acres.
     diluent_gpa: pickDiluent ?? undefined,
-    shares: ((shares || []) as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).length > 0
-      ? (shares as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).map((s) => ({
-          customer_name: s.customer?.farm_name || 'Unknown',
+    shares: shareRows.length > 0
+      ? shareRows.map((s) => ({
+          customer_name: s.customer?.farm_name || s.customer_name || 'Unknown',
           split_percentage: s.split_percentage,
           acres: s.acres,
           amount_cents: s.amount_cents,

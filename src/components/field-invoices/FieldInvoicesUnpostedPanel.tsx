@@ -22,6 +22,8 @@ import {
 import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
+import { canManageInvoices } from '../../lib/pagePermissions';
+import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import { formatCents as fmt } from '../../lib/money';
 import SeasonTag from '../invoices/SeasonTag';
 import { isCurrentSeason, otherSeasonLabels } from '../../lib/invoiceSeasonWindow';
@@ -81,6 +83,9 @@ export default function FieldInvoicesUnpostedPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees this tray read-only (no
+  // Post All, no Manual Invoice; rows open the invoice to view, not edit).
+  const canManage = canManageInvoices(profile?.role);
 
   const [rows, setRows] = useState<UnpostedFieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,7 +132,9 @@ export default function FieldInvoicesUnpostedPanel() {
       toast('error', `Showing first ${QUERY_LIMIT} unposted field invoices — some may be hidden.`);
     }
 
-    const raws = (data || []) as unknown as RawFieldInvoiceRow[];
+    // A sales rep reads every invoice but only their own customers' records: fill the farm
+    // names the embed left blank from the names-only reader (one call for the list).
+    const raws = await fillHiddenCustomerNames((data || []) as unknown as RawFieldInvoiceRow[]);
 
     // GROUPED (split, multi-customer) invoices: the per-acre engine keys their
     // field_app_locations by invoice_group_id with invoice_id=NULL, so the
@@ -423,6 +430,7 @@ export default function FieldInvoicesUnpostedPanel() {
   const postAll = async () => {
     setShowPostAll(false);
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    if (!canManage) { toast('error', 'Only an admin can post invoices'); return; }
     const { individualTargets, groupTargets } = postAllPlan;
     const targetCount = individualTargets.length + groupTargets.length;
     if (targetCount === 0) { toast('error', 'No invoices to post'); return; }
@@ -521,7 +529,7 @@ export default function FieldInvoicesUnpostedPanel() {
             <p className="text-xs text-secondary mt-0.5">The working tray — field bills that have not yet been posted.</p>
           </div>
         </div>
-        <div
+        {canManage && <div
           className="relative"
           ref={manualInvoiceMenuRef}
           onBlur={(event) => {
@@ -555,7 +563,7 @@ export default function FieldInvoicesUnpostedPanel() {
               </button>
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       {/* Filter bar */}
@@ -632,7 +640,7 @@ export default function FieldInvoicesUnpostedPanel() {
         <MobileCardList
           rows={visible}
           getRowKey={(row) => row.id}
-          getRowLabel={(row) => `Edit invoice ${row.invoice_number} for ${row.customer_name}`}
+          getRowLabel={(row) => `${canManage ? 'Edit' : 'View'} invoice ${row.invoice_number} for ${row.customer_name}`}
           onRowClick={(row) => navigate(editPath(row))}
           className="p-3"
           renderCard={(row) => (
@@ -650,7 +658,7 @@ export default function FieldInvoicesUnpostedPanel() {
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
-                  Edit <Pencil className="h-3.5 w-3.5" />
+                  {canManage ? 'Edit' : 'View'} <Pencil className="h-3.5 w-3.5" />
                 </span>
               </div>
             </div>
@@ -740,8 +748,8 @@ export default function FieldInvoicesUnpostedPanel() {
                           type="button"
                           onClick={(e) => { e.stopPropagation(); navigate(editPath(row)); }}
                           className="p-1.5 rounded hover:bg-gray-100 text-crx-green"
-                          aria-label={`Edit ${row.invoice_number}`}
-                          title="Edit"
+                          aria-label={`${canManage ? 'Edit' : 'View'} ${row.invoice_number}`}
+                          title={canManage ? 'Edit' : 'View'}
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
@@ -774,7 +782,8 @@ export default function FieldInvoicesUnpostedPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-secondary">
             Bulk actions apply to all {totals.count} invoice(s) currently shown.
-            {skippedSeasonCount > 0 && ` Post All leaves out ${skippedSeasonCount} invoice(s) not from this season.`}
+            {canManage && skippedSeasonCount > 0 && ` Post All leaves out ${skippedSeasonCount} invoice(s) not from this season.`}
+            {!canManage && ' Only an admin can post invoices.'}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
@@ -786,18 +795,20 @@ export default function FieldInvoicesUnpostedPanel() {
             <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={printReport} loading={busy} disabled={visible.length === 0}>
               Print Invoice Report
             </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<ClipboardCheck className="w-4 h-4" />}
-              onClick={() => setShowPostAll(true)}
-              disabled={busy || postTargetCount === 0}
-              title={skippedSeasonCount > 0
-                ? "Posts this season's invoices in view. Invoices from another season are left out; post each one from its invoice page."
-                : 'Post every invoice in view'}
-            >
-              Post All
-            </Button>
+            {canManage && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<ClipboardCheck className="w-4 h-4" />}
+                onClick={() => setShowPostAll(true)}
+                disabled={busy || postTargetCount === 0}
+                title={skippedSeasonCount > 0
+                  ? "Posts this season's invoices in view. Invoices from another season are left out; post each one from its invoice page."
+                  : 'Post every invoice in view'}
+              >
+                Post All
+              </Button>
+            )}
           </div>
         </div>
       </Card>

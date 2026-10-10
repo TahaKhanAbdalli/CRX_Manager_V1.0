@@ -14,6 +14,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
@@ -163,6 +164,10 @@ export default function OrderDetail() {
   const [consolidating, setConsolidating] = useState(false);
 
   const isAdmin = role === 'admin';
+  // Invoicing is admin-only (Mason 2026-10-09): Create Invoice, Create Split Invoices,
+  // Consolidate drafts and Post all drafts are admin-only. Price Order and the linked-invoice
+  // list stay for sales reps.
+  const canManage = canManageInvoices(role);
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
   // items are locked server-side (BOOKING_DRAW_ORDER_LOCKED); void/cancel the
   // order to return quantity to the booking, then draw again.
@@ -907,7 +912,7 @@ export default function OrderDetail() {
   };
 
   const handleCreateInvoice = async () => {
-    if (!profile || !id) return;
+    if (!profile || !id || !canManage) return;
     setInvoiceWarnOpen(false);
     await runCriticalAction({
       action: async () => {
@@ -999,6 +1004,7 @@ export default function OrderDetail() {
   // atomic group. PRICING_INCOMPLETE / period errors remain isolated per target.
   const handlePostAllDrafts = async () => {
     if (!profile) { toast('error', 'You must be signed in to post invoices.'); return; }
+    if (!canManage) { toast('error', 'Only an admin can post invoices.'); return; }
     const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
     if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
     const targets = buildInvoicePostTargets(drafts);
@@ -1074,7 +1080,7 @@ export default function OrderDetail() {
 
   // #4 billing cockpit: merge this order's draft invoices into one (Agvance pattern).
   const handleConsolidateDrafts = async () => {
-    if (!order || !profile) return;
+    if (!order || !profile || !canManage) return;
     // F1 (CodeRabbit round 2): on A -> B navigation the route id is already B while
     // `order` still holds A — the id effect refetches but never clears `order`, and
     // `loading` is never reset to true, so this button stays live in that window.
@@ -1252,7 +1258,7 @@ export default function OrderDetail() {
                   Booking draw — items locked
                 </span>
               )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && !hasActiveDelivery && (<>
+              {canManage && order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && !hasActiveDelivery && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
@@ -1278,7 +1284,7 @@ export default function OrderDetail() {
                   fulfilled allocated order whose split group was later VOIDED (flag already cleared,
                   hasActiveInvoice now false) can be RE-billed here — Codex R2 P2. The
                   needs_split_billing flag remains as the Orders-list queue badge/filter. */}
-              {hasAllocations && order.status === 'fulfilled' && !hasActiveInvoice && !hasPendingDelivery && (<>
+              {canManage && hasAllocations && order.status === 'fulfilled' && !hasActiveInvoice && !hasPendingDelivery && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
@@ -1608,7 +1614,7 @@ export default function OrderDetail() {
               <FileText className="w-5 h-5 text-crx-green" />
               <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
             </div>
-            {(role === 'admin' || role === 'sales_rep') && (
+            {canManage && (
               <div className="flex items-center gap-2">
                 {invoices.filter((i) => i.status === 'draft').length >= 2 && (
                   <Button variant="secondary" size="sm" showChevron={false} onClick={handleConsolidateDrafts} loading={consolidating}>

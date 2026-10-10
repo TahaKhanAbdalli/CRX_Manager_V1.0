@@ -162,7 +162,10 @@ type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation';
 const ALLOWED_REASONS: Record<string, Reason[]> = {
   'src/components/deliveries/QuickDeliveryModal.tsx': ['recovery'],
   'src/pages/Returns.tsx': ['recovery'],
-  'src/pages/InvoiceDetail.tsx': ['recovery', 'throw-on-error'],
+  // The page's only `.throwOnError()` post (post_invoice) moved into
+  // src/lib/invoicePostVersion.ts with the posting version check (2026-10-10); the page now
+  // awaits that helper, which rejects on any error, before it resets the key.
+  'src/pages/InvoiceDetail.tsx': ['recovery'],
   'src/pages/CycleCounts.tsx': ['throw-on-error'],
   // Both sites are `if (getIdempotencyBindingRejection(error)) idem.resetKeyFor(scope);`
   // inside an `if (error)` branch that then rethrows — verified in source, not asserted.

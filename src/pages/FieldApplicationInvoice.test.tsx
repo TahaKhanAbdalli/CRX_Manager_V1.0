@@ -33,6 +33,7 @@ const {
   mockUseUnsavedChanges,
   mockBlockerReset,
   mockBlockerProceed,
+  authState,
 } = vi.hoisted(() => {
   const mockRpc = vi.fn();
   const mockFrom = vi.fn();
@@ -42,7 +43,9 @@ const {
   const mockUseUnsavedChanges = vi.fn();
   const mockBlockerReset = vi.fn();
   const mockBlockerProceed = vi.fn();
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams, mockUseUnsavedChanges, mockBlockerReset, mockBlockerProceed };
+  // Invoicing is admin-only (Mason 2026-10-09); the rep cases switch this per test.
+  const authState = { role: 'admin' as 'admin' | 'sales_rep' };
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams, mockUseUnsavedChanges, mockBlockerReset, mockBlockerProceed, authState };
 });
 
 vi.mock('../lib/db', () => ({
@@ -71,7 +74,7 @@ vi.mock('../lib/activityLogger', () => ({
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', role: 'admin' }, role: 'admin' }),
+  useAuth: () => ({ profile: { id: 'user-1', role: authState.role }, role: authState.role }),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -178,6 +181,7 @@ function makeFromMock(perTable: Record<string, { data: unknown; error?: unknown 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authState.role = 'admin';
   mockUseParams.mockReturnValue({ id: undefined });
   mockRpc.mockResolvedValue({ data: null, error: null });
   mockUseUnsavedChanges.mockReturnValue({
@@ -667,12 +671,18 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'delete_invoices')).toBe(false);
   });
 
-  it('pins both production invoice routes to the identity-keyed wrapper without changing access roles', () => {
+  it('pins both production invoice routes to the identity-keyed wrapper; creating one is admin-only', () => {
     const app = readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
-    for (const path of ['invoices/field-app/new', 'invoices/field-app/:id']) {
+    // Invoicing is admin-only (Mason 2026-10-09): /new only creates an invoice, so only an
+    // admin reaches it; an existing invoice stays open to sales reps, read-only.
+    const expectedRoles: Record<string, string> = {
+      'invoices/field-app/new': "allowedRoles={['admin']}",
+      'invoices/field-app/:id': "allowedRoles={['admin', 'sales_rep']}",
+    };
+    for (const [path, roles] of Object.entries(expectedRoles)) {
       const route = app.split(/\r?\n/).find((line) => line.includes(`path: '${path}'`));
       expect(route).toContain('<FieldApplicationInvoiceRoute />');
-      expect(route).toContain("allowedRoles={['admin', 'sales_rep']}");
+      expect(route).toContain(roles);
     }
   });
 
@@ -1275,5 +1285,75 @@ describe('FieldApplicationInvoice — blend-ticket field invoice is bounced to t
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/inv-bt', { replace: true });
     });
+  });
+});
+
+/**
+ * Invoicing is admin-only (Mason 2026-10-09): a sales rep opens a field invoice read-only.
+ * Every input is disabled and there is no Save, Post, Unpost, Delete or Transfer; Print,
+ * Old Print and Email stay. The admin-only Split Billing editor is never the rep's target.
+ */
+describe('FieldApplicationInvoice — a sales rep sees the invoice read-only', () => {
+  function setupInvoice(row: Record<string, unknown>) {
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: { data: [{ invoice_type: 'field_application', application_service_id: null, invoice_group_id: null, header_notes: '', ...row }] },
+        field_app_locations: { data: [] },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+  }
+
+  it('shows a draft with every editing control gone or disabled', async () => {
+    authState.role = 'sales_rep';
+    mockUseParams.mockReturnValue({ id: 'inv-rep-draft' });
+    setupInvoice({ id: 'inv-rep-draft', invoice_number: 'INV-5001', invoice_date: '2026-04-29', season: 2026, status: 'draft', job_id: null, total_amount_cents: 100000 });
+
+    await renderPage();
+    await screen.findByText(/Field Application INV-5001/);
+    expect(screen.getByText(/Read-only — only an admin can change, post or unpost invoices/)).toBeInTheDocument();
+    for (const name of [/^Save$/, /^Post$/, /^Delete$/, /Transfer to Scheduling/, /^Unpost$/]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Print$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Email$/ })).toBeInTheDocument();
+    // Read-only rendering never marks the page dirty, so the leave-page guard stays quiet.
+    expect(mockUseUnsavedChanges.mock.calls.every(([dirty]) => dirty === false)).toBe(true);
+  });
+
+  it('shows a posted invoice with no Unpost and no "unpost to edit" banner', async () => {
+    authState.role = 'sales_rep';
+    mockUseParams.mockReturnValue({ id: 'inv-rep-posted' });
+    setupInvoice({ id: 'inv-rep-posted', invoice_number: 'INV-5002', invoice_date: '2026-04-29', season: 2026, status: 'posted', job_id: null, total_amount_cents: 100000 });
+
+    await renderPage();
+    await screen.findByText(/Field Application INV-5002/);
+    expect(screen.queryByRole('button', { name: /^Unpost$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/unpost it from the posted-invoice list first/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Print$/ })).toBeInTheDocument();
+  });
+
+  it('sends a sales rep to the read-only invoice page for a split child, never the admin-only Split Billing editor', async () => {
+    authState.role = 'sales_rep';
+    mockUseParams.mockReturnValue({ id: 'inv-split' });
+    setupInvoice({ id: 'inv-split', invoice_number: 'INV-5003', status: 'draft', job_id: null, blend_ticket_id: null, field_app_billing_set_id: 'set-1' });
+
+    await renderPage();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith(
+      '/field-invoices/inv-split',
+      { replace: true, state: { splitChildReadOnly: true } },
+    ));
+    expect(mockNavigate).not.toHaveBeenCalledWith('/split-billing/set-1', expect.anything());
+  });
+
+  it('still sends an admin to the Split Billing editor for a split child', async () => {
+    mockUseParams.mockReturnValue({ id: 'inv-split' });
+    setupInvoice({ id: 'inv-split', invoice_number: 'INV-5003', status: 'draft', job_id: null, blend_ticket_id: null, field_app_billing_set_id: 'set-1' });
+
+    await renderPage();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/split-billing/set-1', { replace: true }));
   });
 });

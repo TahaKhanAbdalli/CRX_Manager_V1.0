@@ -15,6 +15,8 @@ import { assertInvoiceLifecycleSendable, assertInvoiceSendable } from '../lib/in
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import { canManageInvoices } from '../lib/pagePermissions';
+import { fillHiddenCustomerNames } from '../lib/invoiceCustomerNames';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
@@ -462,7 +464,7 @@ export default function FieldApplicationInvoice() {
   // ([B1.5]), so the picker is read-only for sales_reps and a non-admin save
   // always sends their own id.
   const isAdmin = profile?.role === 'admin';
-  const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
+  const canManage = canManageInvoices(profile?.role);
 
   // #24: load the Consultant picker list from profile_public_view (admin /
   // sales_rep / applicator, active only). profile_public_view is the non-PII view
@@ -883,7 +885,14 @@ export default function FieldApplicationInvoice() {
     // Billing view keyed by the billing set (breaks any redirect loop with InvoiceDetail).
     const splitSetId = (invoice.field_app_billing_set_id as string | null) ?? null;
     if (splitSetId) {
-      navigate(`/split-billing/${splitSetId}`, { replace: true });
+      // The Split Billing editor is admin-only (Mason 2026-10-09). A sales rep sees a split
+      // child read-only on the generic invoice page instead; the state flag stops that page
+      // sending a job-less draft straight back here.
+      if (canManage) {
+        navigate(`/split-billing/${splitSetId}`, { replace: true });
+      } else {
+        navigate(`/field-invoices/${id}`, { replace: true, state: { splitChildReadOnly: true } });
+      }
       return;
     }
     setInvoiceNumber((invoice.invoice_number as string) || '');
@@ -1058,12 +1067,18 @@ export default function FieldApplicationInvoice() {
 
     // If grouped, load sibling invoices for the banner
     if (groupId) {
-      const { data: sibs } = await supabase
+      const { data: sibRows } = await supabase
         .from('invoices')
         .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
+      if (!isCurrentLoad()) return;
+      // A sales rep reads every invoice but only their own customers' records: fill the
+      // members' farm names the embed left blank from the names-only reader.
+      const sibs = sibRows
+        ? await fillHiddenCustomerNames(sibRows as Array<Record<string, unknown> & { customer_id?: string | null; customer?: { farm_name?: string | null } | null }>)
+        : sibRows;
       if (!isCurrentLoad()) return;
       if (sibs) {
         setSiblings(
@@ -1261,7 +1276,7 @@ export default function FieldApplicationInvoice() {
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
     setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
-  }, [id, toast, navigate]);
+  }, [id, toast, navigate, canManage]);
 
   useEffect(() => {
     // Invalidate any in-flight load for the previous identity BEFORE resetting state,
@@ -2070,14 +2085,18 @@ export default function FieldApplicationInvoice() {
   };
 
   // Phase 1: edit lock covers the whole group — any sibling not in draft/unposted blocks edits.
-  const canEdit = isNew || (
+  const statusEditable = isNew || (
     ['draft', 'unposted'].includes(status) &&
     (siblings.length === 0 || siblings.every((s) => ['draft', 'unposted'].includes(s.status)))
   );
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees this invoice read-only (every
+  // input disabled; Print, Old Print and Email stay), with no Save, Post, Unpost, Delete or
+  // Transfer. canEdit also gates every editable field, so a rep's page never turns dirty.
+  const canEdit = canManage && statusEditable;
   // Terms stay editable in every state the billing RPC accepts (draft AND unposted —
   // 20260625150000 permits both), matching canEdit for the rest of the header fields.
   const canEditPaymentTerms = canEdit && (isNew || ['draft', 'unposted'].includes(status));
-  const canPost = !isNew && canEdit && isAdminOrRep;
+  const canPost = !isNew && canEdit;
   // #28: Unpost is available when this saved invoice (or any group member) is
   // posted/overdue — the inverse condition to Post. paid/voided/cancelled invoices
   // are NOT unpostable here (the RPC also refuses them); a paid invoice must have
@@ -2086,7 +2105,7 @@ export default function FieldApplicationInvoice() {
     invoiceGroupId && siblings.length > 0
       ? siblings.filter((s) => s.status === 'posted' || s.status === 'overdue')
       : (status === 'posted' || status === 'overdue' ? [{ id, status }] : []);
-  const canUnpost = !isNew && unpostTargets.length > 0;
+  const canUnpost = !isNew && canManage && unpostTargets.length > 0;
   // #29: Void is admin-only (the void_invoice RPC rejects a non-admin) and available
   // on any SAVED, non-terminal invoice — draft/unposted (-> cancelled) OR posted/overdue
   // (-> voided). It is hidden once the invoice (or, for a group, every member) is already
@@ -2099,9 +2118,9 @@ export default function FieldApplicationInvoice() {
       : (status !== 'voided' && status !== 'cancelled' ? [{ id, status }] : []);
   const canVoid = !isNew && isAdmin && voidTargets.length > 0;
   // #24: a posted/voided/paid invoice is LOCKED — committed money must not change
-  // (#23 lifecycle). canEdit already encodes this; isLocked is its inverse for an
-  // existing invoice, used to drive the posted-lock banner + read-only chrome.
-  const isLocked = !isNew && !canEdit;
+  // (#23 lifecycle). isLocked is the inverse of the status rule for an existing invoice,
+  // used to drive the posted-lock banner; a rep's read-only view has its own banner.
+  const isLocked = !isNew && !statusEditable;
   // The Consultant picker is editable only by an admin (see isAdmin above).
   const canEditConsultant = canEdit && isAdmin;
 
@@ -2738,7 +2757,17 @@ export default function FieldApplicationInvoice() {
           </div>
         </Card>
       )}
-      {isLocked && status !== 'voided' && status !== 'cancelled' && (
+      {!isNew && !canManage && (
+        <Card>
+          <div className="flex items-start gap-2 px-4 py-3 bg-gray-50 border-l-4 border-gray-300 rounded text-sm text-secondary">
+            <Lock className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              Read-only — only an admin can change, post or unpost invoices. Print and Email are still available.
+            </span>
+          </div>
+        </Card>
+      )}
+      {canManage && isLocked && status !== 'voided' && status !== 'cancelled' && (
         <Card>
           <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-800">
             <Lock className="w-4 h-4 mt-0.5 shrink-0" />

@@ -2,10 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockFrom, mockToast, mockSentryCaptureException } = vi.hoisted(() => ({
+const { mockFrom, mockToast, mockSentryCaptureException, authState } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockToast: vi.fn(),
   mockSentryCaptureException: vi.fn(),
+  // Invoicing is admin-only (Mason 2026-10-09); the rep case switches this.
+  authState: { role: 'admin' as 'admin' | 'sales_rep' },
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
@@ -52,7 +54,7 @@ vi.mock('../lib/db', async () => ({
   )).sanitizeError,
 }));
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'actor-1' }, role: 'admin' }),
+  useAuth: () => ({ profile: { id: 'actor-1', role: authState.role }, role: authState.role }),
 }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
 vi.mock('../hooks/useIdempotencyKey', () => ({
@@ -64,6 +66,26 @@ vi.mock('../hooks/useGuardrails', () => ({
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockSentryCaptureException } }));
 
 import FieldAppSplitInvoiceEditor from './FieldAppSplitInvoiceEditor';
+
+beforeEach(() => {
+  authState.role = 'admin';
+});
+
+// Second layer behind the admin-only route: a non-admin never gets the editor.
+describe('FieldAppSplitInvoiceEditor — admin-only invoicing', () => {
+  it('shows a sales rep a notice instead of the editor, with no Save or Post', async () => {
+    authState.role = 'sales_rep';
+    mockFrom.mockImplementation(() => buildChain({ data: { setting_value: 'true' }, error: null }));
+    render(
+      <MemoryRouter>
+        <FieldAppSplitInvoiceEditor />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Only an admin can create or post split invoices' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save Draft/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Post$/ })).not.toBeInTheDocument();
+  });
+});
 
 describe('FieldAppSplitInvoiceEditor picker loading', () => {
   beforeEach(() => {

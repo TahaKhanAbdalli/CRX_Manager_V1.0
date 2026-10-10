@@ -8,7 +8,7 @@ import QuickDeliveryModal from './QuickDeliveryModal';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey, authState } = vi.hoisted(() => {
   const mockOrder = vi.fn().mockReturnThis();
   const mockIn = vi.fn().mockReturnThis();
   const mockEq = vi.fn().mockReturnThis();
@@ -42,8 +42,10 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = 
   const mockToast = vi.fn();
   const mockNavigate = vi.fn();
   const mockResetKey = vi.fn();
+  // Invoicing is admin-only (Mason 2026-10-09); the rep and driver cases switch this per test.
+  const authState = { role: 'admin' as 'admin' | 'sales_rep' | 'driver' };
 
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey };
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey, authState };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -55,7 +57,7 @@ vi.mock('../../lib/db', () => ({
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', role: 'admin' }, role: 'admin' }),
+  useAuth: () => ({ profile: { id: 'user-1', role: authState.role }, role: authState.role }),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -86,6 +88,7 @@ describe('QuickDeliveryModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.role = 'admin';
     mockRpc.mockResolvedValue({ data: null, error: null });
   });
 
@@ -112,6 +115,22 @@ describe('QuickDeliveryModal', () => {
     await renderModal();
     expect(screen.getByText(/create an order and delivery, plus a draft invoice/i)).toBeInTheDocument();
   });
+
+  it('offers an admin the Create draft invoice checkbox', async () => {
+    await renderModal();
+    expect(screen.getByRole('checkbox', { name: /create draft invoice/i })).toBeChecked();
+  });
+
+  it.each(['sales_rep', 'driver'] as const)(
+    'gives a %s no invoice checkbox and says an admin will create the invoice',
+    async (role) => {
+      authState.role = role;
+      await renderModal();
+      expect(screen.queryByRole('checkbox', { name: /create draft invoice/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/plus a draft invoice/i)).not.toBeInTheDocument();
+      expect(screen.getByText('An admin will create the invoice.')).toBeInTheDocument();
+    },
+  );
 
   it('shows customer search input', async () => {
     await renderModal();

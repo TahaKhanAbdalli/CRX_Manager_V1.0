@@ -16,6 +16,8 @@ import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
+import { canManageInvoices } from '../../lib/pagePermissions';
+import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import {
   JOBS_LIST_KEY,
   defaultJobListSettings,
@@ -74,6 +76,8 @@ export default function FieldInvoicesListPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees this list read-only.
+  const canManage = canManageInvoices(profile?.role);
   const [invoices, setInvoices] = useState<FieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -154,7 +158,12 @@ export default function FieldInvoicesListPanel() {
       toast('error', `Showing first ${QUERY_LIMIT} field invoices — some may be hidden. Contact admin if you need the full list.`);
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string } }>).map((inv) => ({
+    // A sales rep reads every invoice but only their own customers' records: fill the farm
+    // names the embed left blank from the names-only reader (one call for the list).
+    const named = await fillHiddenCustomerNames(
+      (data || []) as Array<Record<string, unknown> & { customer_id?: string | null; customer?: { farm_name?: string | null } | null }>,
+    );
+    const rows = named.map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
     })) as unknown as FieldInvoiceRow[];
@@ -557,7 +566,7 @@ export default function FieldInvoicesListPanel() {
           >
             Customer Summary
           </Button>
-          <div
+          {canManage && <div
             className="relative"
             ref={manualInvoiceMenuRef}
             onBlur={(event) => {
@@ -591,7 +600,7 @@ export default function FieldInvoicesListPanel() {
                 </button>
               </div>
             )}
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -709,7 +718,9 @@ export default function FieldInvoicesListPanel() {
               )
             }
             emptyTitle="No field invoices yet"
-            emptyDescription="Field invoices come from a completed spray job. To add a manual invoice without a job, use More actions."
+            emptyDescription={canManage
+              ? 'Field invoices come from a completed spray job. To add a manual invoice without a job, use More actions.'
+              : 'Field invoices come from a completed spray job. An admin creates them.'}
             loading={loading}
             filters={
               <div className="flex gap-2 items-center">

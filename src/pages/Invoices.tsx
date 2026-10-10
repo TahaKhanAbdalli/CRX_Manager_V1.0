@@ -18,7 +18,8 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
-import { hasPageAccess } from '../lib/pagePermissions';
+import { canManageInvoices, hasPageAccess } from '../lib/pagePermissions';
+import { fillHiddenCustomerNames } from '../lib/invoiceCustomerNames';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import {
   generateBatchInvoicePdf,
@@ -96,8 +97,9 @@ export default function Invoices() {
   const { toast } = useToast();
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
   const batchDeleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
-  const canPostInvoices = profile?.role === 'admin' || profile?.role === 'sales_rep';
-  const isAdmin = profile?.role === 'admin';
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees every invoice here, read-only
+  // (no selection, Post, Void, Delete or Misc Charge); the database refuses them anyway.
+  const canManage = canManageInvoices(profile?.role);
   // Keep one stable key per standalone invoice or split group across a
   // failed/network-lost retry, and clear only that action's key on success.
   const postKeysRef = useRef<Record<string, string>>({});
@@ -180,7 +182,12 @@ export default function Invoices() {
       ((ords || []) as { id: string; order_number: string }[]).forEach((o) => { orderMap[o.id] = o.order_number; });
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null; order_id?: string | null }>).map((inv) => ({
+    // A sales rep reads every invoice but only their own customers' records, so fill the
+    // farm names the embed left blank from the names-only reader (one call for the list).
+    const named = await fillHiddenCustomerNames(
+      (data || []) as Array<Record<string, unknown> & { customer_id?: string | null; customer?: { farm_name?: string | null } | null }>,
+    );
+    const rows = (named as Array<Record<string, unknown> & { customer?: { farm_name?: string | null } | null; salesman_id?: string | null; order_id?: string | null }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
       salesman_name: inv.salesman_id ? salesmanMap[inv.salesman_id] || null : null,
@@ -275,8 +282,8 @@ export default function Invoices() {
   // single group member to bypass the server's GROUP_POST_REQUIRED guard.
   const handleBatchPost = async () => {
     setShowPostModal(false);
-    if (!profile || !canPostInvoices) {
-      toast('error', 'Admin or sales access is required to post invoices');
+    if (!profile || !canManage) {
+      toast('error', 'Only an admin can post invoices');
       return;
     }
     const targets = buildInvoicePostTargets(selectedPostable);
@@ -690,6 +697,10 @@ export default function Invoices() {
     },
   ];
 
+  // The row checkboxes only feed the admin's bulk actions (Post / Void / Delete / Print
+  // selected), so a sales rep gets no selection column.
+  const visibleColumns = canManage ? columns : columns.filter((column) => column.key !== 'id');
+
   // Determine if batch print dialog needs any shares info
   const anySelectedHasShares = selectedInvoices.some(
     (i) => i.invoice_type === 'field_application'
@@ -717,7 +728,7 @@ export default function Invoices() {
         title="Invoices"
         actions={
           <div className="flex gap-2 flex-wrap justify-end">
-            {selectedInvoices.length > 0 && canPostInvoices && (
+            {selectedInvoices.length > 0 && canManage && (
               <>
                 {selectedPostable.length > 0 && (
                   <Button
@@ -729,7 +740,7 @@ export default function Invoices() {
                     Post {selectedPostable.length} Selected
                   </Button>
                 )}
-                {isAdmin && selectedVoidable.length > 0 && (
+                {canManage && selectedVoidable.length > 0 && (
                   <Button
                     variant="danger"
                     icon={<Ban className="w-4 h-4" />}
@@ -754,7 +765,7 @@ export default function Invoices() {
                 >
                   Email
                 </Button>
-                {isAdmin && selectedDeletable.length > 0 && (
+                {canManage && selectedDeletable.length > 0 && (
                   <Button
                     variant="danger"
                     icon={<Trash2 className="w-4 h-4" />}
@@ -795,9 +806,11 @@ export default function Invoices() {
             >
               Download PDF
             </Button>
-            <Button variant="secondary" onClick={() => navigate('/invoices/new?type=misc_charge')}>
-              Misc Charge
-            </Button>
+            {canManage && (
+              <Button variant="secondary" onClick={() => navigate('/invoices/new?type=misc_charge')}>
+                Misc Charge
+              </Button>
+            )}
           </div>
         }
       />
@@ -854,7 +867,7 @@ export default function Invoices() {
         <div className="p-5">
           <DataTable<InvoiceRow>
             data={filtered}
-            columns={columns}
+            columns={visibleColumns}
             searchable
             searchPlaceholder="Search invoices..."
             searchKeys={SEARCH_KEYS}
@@ -917,7 +930,7 @@ export default function Invoices() {
                 >
                   Has a balance
                 </button>
-                {visibleSelectable.length > 0 && (
+                {canManage && visibleSelectable.length > 0 && (
                   <button
                     type="button"
                     onClick={toggleAll}
@@ -934,7 +947,7 @@ export default function Invoices() {
                     {toggleAllClears ? 'Deselect All' : 'Select All'}
                   </button>
                 )}
-                {selectedInvoices.length > 0 && (
+                {canManage && selectedInvoices.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setSelected(new Set())}

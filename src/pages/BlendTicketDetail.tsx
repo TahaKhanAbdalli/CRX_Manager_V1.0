@@ -8,6 +8,7 @@ import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
@@ -1839,7 +1840,7 @@ export function BlendTicketDetail() {
           'unbilled'). The old `!== 'billed'` test also showed the card for prepaid /
           no_charge tickets, giving a Create Invoice button that always errored.
           Re-bill-after-void still works — the sync trigger resets billed -> unbilled. */}
-      {ticket.review_status === 'approved' && ticket.payment_status === 'unbilled' && (
+      {canManageInvoices(profile?.role) && ticket.review_status === 'approved' && ticket.payment_status === 'unbilled' && (
         <Card className="p-6 border-crx-green/30 bg-crx-green-light/20">
           <div className="flex items-center justify-between">
             <div>

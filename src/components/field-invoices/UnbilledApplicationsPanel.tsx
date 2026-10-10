@@ -6,6 +6,7 @@ import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
+import { canManageInvoices } from '../../lib/pagePermissions';
 import {
   supabase,
   assertRpcResult,
@@ -132,6 +133,8 @@ export default function UnbilledApplicationsPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  // Invoicing is admin-only (Mason 2026-10-09): a sales rep sees the backlog, not Create Invoice.
+  const canManage = canManageInvoices(profile?.role);
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<UnbilledRow[]>([]);
   const [tickets, setTickets] = useState<UnbilledRow[]>([]);
@@ -198,7 +201,7 @@ export default function UnbilledApplicationsPanel() {
   }, [fetchAll]);
 
   const handleCreateInvoice = async () => {
-    if (!profile || !pendingJobInvoice) return;
+    if (!profile || !pendingJobInvoice || !canManage) return;
     // Every confirmation path lands here, so an unreconciled job can never start a new transfer.
     if (reconciliationPendingJobIds.has(pendingJobInvoice.row.id)) {
       setPendingJobInvoice(null);
@@ -404,7 +407,7 @@ export default function UnbilledApplicationsPanel() {
                       <th className="py-2 pr-4 font-medium text-right">Acres</th>
                       <th className="py-2 pr-4 font-medium text-right">Est. $</th>
                       <th className="py-2 pr-4 font-medium text-right">Waiting</th>
-                      {s.key === 'jobs' && profile && (
+                      {s.key === 'jobs' && profile && canManage && (
                         <th className="py-2 font-medium text-right">Action</th>
                       )}
                     </tr>
@@ -422,7 +425,7 @@ export default function UnbilledApplicationsPanel() {
                         <td className="py-2 pr-4 text-right">{row.acres != null ? row.acres : '—'}</td>
                         <td className="py-2 pr-4 text-right">{row.amount_cents != null ? fmt(row.amount_cents) : '—'}</td>
                         <td className="py-2 pr-4 text-right text-secondary">{daysWaiting(row.date)}</td>
-                        {s.key === 'jobs' && profile && (
+                        {s.key === 'jobs' && profile && canManage && (
                           <td className="py-2 text-right">
                             <CreateJobInvoiceButton
                               row={row}

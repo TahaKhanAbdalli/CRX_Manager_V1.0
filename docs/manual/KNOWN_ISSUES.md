@@ -52,7 +52,10 @@ rep scoping is formally dropped (PR #891 and its `20261008120000` are closed and
 reps read every invoice. The database phase is
 `supabase/migrations/20261009120000_invoicing_admin_only.sql` — **a local candidate, NOT APPLIED.**
 It changes permissions, so applying it needs Mason's explicit yes and his Windows Hello approval, and
-it must follow PR #889's four migrations (its preflight refuses otherwise). The screens are phase 2.
+it must follow PR #889's four migrations (its preflight refuses otherwise). The screens (phase 2,
+2026-10-10, same branch) hide every invoice-changing control from non-admins, keep the invoice pages
+read-only for reps, fill hidden customer names from the new reader, and send the posting version;
+they call the new readers, so they ship only after the file is applied (see the changelog).
 **Closed by it once applied (fixed, pending apply):**
 - Reps (and drivers, through completions and quick deliveries) could create, edit, post, unpost,
   consolidate, split, transfer and void-batch invoices and apply credit memos and prepayments. Every
@@ -82,7 +85,9 @@ it must follow PR #889's four migrations (its preflight refuses otherwise). The 
 - InvoiceDetail's pre-Post re-check could not bind what `post_invoice` / `post_invoice_group` post
   (Codex Sol HIGH on PR #892): covered by this file's server check (posting takes the reviewed version
   and refuses `INVOICE_CHANGED_SINCE_REVIEW` under the row locks) plus the phase-2 screen change that
-  sends it. Until phase 2 ships the server check is dormant (old callers send no version).
+  sends it (built 2026-10-10; see the editor entry below). The list pages' bulk posts (Post Selected,
+  Post All, Post all clean, Post all drafts) still send no version: old callers, still valid, and they
+  have no single reviewed screen to bind.
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;
 admins byte-identical; reads; completions; the posting race; the hard-guard sweep; one mutation per
@@ -166,14 +171,18 @@ the file is applied and verified live.
   pass `p_performed_by` to their frozen bodies will show up as suspects. The digests are read from
   live after the apply, so `scripts/db-invariant-sweeps/allowlist.json` is updated in the apply step
   (each wrapper's frozen body keeps its strict actor refusal).
-- **Reps see every invoice; until phase 2 ships, not every customer's name on the screens.**
+- **Reps see every invoice and, after phase 2, the customer names on the invoice pages.**
   DECIDED 2026-10-10 (Mason, "2:yes"): reps see customer NAMES on invoices, names only. The database
   side is in `20261009120000`: `get_invoice_customer_names(uuid[])` returns `(id, farm_name)` of
   customers a non-deleted invoice names, to active admins and sales reps only (everyone else gets no
   rows; anon and service_role cannot call it). `customers` itself stays scoped (a rep's direct read
-  returns only assigned customers; its policies are pinned before and after the apply). The pages
-  still read names through the `customers` embed, so the invoice list, detail and PDF show a blank
-  farm name for another rep's customer until phase 2 switches them to the new reader. The PDF's
+  returns only assigned customers; its policies are pinned before and after the apply). Phase 2
+  (2026-10-10, `src/lib/invoiceCustomerNames.ts`) fills every blank `customers` embed from the reader,
+  one call per list: Chemical Invoices, the invoice detail page, the three Field Invoices lists, a
+  split group's member banner on the per-acre field-app editor, and the PDF's customer-share names.
+  Still blank for a rep (left as is, read-only, no leak): the per-acre editor's location table (the
+  field owner, through `fields.customer_id`, which the reader does not cover), the Unbilled backlog
+  (its jobs and blend tickets are on no invoice yet) and the Today page's invoice tiles. The PDF's
   address block (billing address, city, state, zip, account number) stays assigned-customers only for
   reps: names only, by decision. Invoice-level fields are a different matter: under the 2026-10-09
   "reps see all invoices" decision reps already read every invoice's own `payment_terms`,
@@ -224,9 +233,22 @@ the file is applied and verified live.
 - **Nine registered chains around the invoicing RPCs fail on main's schema in the container** (the
   prover prints each one's first error; identical before and after this change, so they give no
   evidence either way). Classifying and repairing them is separate work.
-## OPEN 2026-10-09 — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
+## FIXED, PENDING APPLY 2026-10-10 — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
 
-**What it is.** On the regular invoice editor (`src/pages/InvoiceDetail.tsx`: chemical sales, misc
+**Fixed (phase 2 of the admin-only change, same branch as `20261009120000`; needs that file applied).**
+`src/pages/InvoiceDetail.tsx` now: (1) disables Post while the form has unsaved edits, with the reason
+shown next to it; (2) reads the posting version at the start of every load (before anything shown is
+read) and again when Post is pressed, and reloads with "This invoice changed since you reviewed it —
+it has been reloaded; check it and post again." if they differ; (3) runs the credit-limit and
+restricted-use warnings on the SAVED invoice read after that version; (4) sends the version as
+`p_expected_version` on `post_invoice` / `post_invoice_group` (a split group's version covers every
+member), and on `INVOICE_CHANGED_SINCE_REVIEW` shows the same message and reloads. Proof:
+`src/pages/InvoiceDetail.adminOnly.test.tsx` (each case fails on the pre-change page). Not run in a
+signed-in browser. **Still open:** the editor has no leave-page warning, so a sidebar link, Back or
+closing the tab still drops unsaved edits silently (nothing is posted wrongly). Move this entry to the
+archive once the file is applied and the page is verified live.
+
+**What it was.** On the regular invoice editor (`src/pages/InvoiceDetail.tsx`: chemical sales, misc
 charges, job/blend field invoices) the **Post** button stays clickable while there are unsaved edits on
 screen. `post_invoice` / `post_invoice_group` post what is SAVED, so the invoice posts with the old
 saved amounts, and the page then reloads, dropping the edits. The pre-Post checks run on the on-screen
@@ -236,14 +258,13 @@ the on-screen lines. (A split group's RUP check already reads the saved siblings
 has no leave-page warning, so a sidebar link, Back, or closing the tab drops unsaved edits silently.
 Found by the 2026-10-08 overnight bug hunt.
 
-**Why it is still open.** PR #892 first carried an app-side fix (Post greyed out while there are
+**History.** PR #892 first carried an app-side fix (Post greyed out while there are
 unsaved edits, plus a re-read of the saved invoice before the Post confirm). The final Codex Sol review
 of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what is posted, because
 another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
-fix was taken out of PR #892, so the editor's Post behaves exactly as before.
+fix was taken out of PR #892 and rebuilt in the admin-only change on the database version check.
 
-**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" change, in two parts
-that are both required, because neither alone covers the bug:
+**The two required parts (both now built):**
 1. **In the editor:** Post stays disabled while the form has unsaved edits (the version check below
    cannot see edits that exist only in the browser), and the credit-limit and restricted-use
    warnings are computed from the saved invoice, not the on-screen copy.

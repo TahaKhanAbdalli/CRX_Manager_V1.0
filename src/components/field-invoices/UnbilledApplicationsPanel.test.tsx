@@ -10,6 +10,7 @@ const {
   mockSanitizeError,
   mockResetKey,
   transferIdemState,
+  authState,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
@@ -18,6 +19,8 @@ const {
   mockSanitizeError: vi.fn(),
   mockResetKey: vi.fn(),
   transferIdemState: { generation: 0 },
+  // Invoicing is admin-only (Mason 2026-10-09): Create Invoice is an admin control.
+  authState: { role: 'admin' as 'admin' | 'sales_rep' },
 }));
 
 vi.mock('../../lib/db', async () => {
@@ -30,7 +33,7 @@ vi.mock('../../lib/db', async () => {
 });
 
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'profile-transfer' } }),
+  useAuth: () => ({ profile: { id: 'profile-transfer', role: authState.role }, role: authState.role }),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -96,6 +99,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     transferIdemState.generation = 0;
+    authState.role = 'admin';
     mockSanitizeError.mockReturnValue('sanitized fallback');
     mockFrom.mockImplementation((table: string) => queryResult(table === 'jobs' ? [completedJob] : []));
   });
@@ -330,6 +334,16 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Bill next (1 left)' })).not.toBeDisabled());
     expect(jobReads).toBe(3);
     expect(mockRpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a sales rep the unbilled backlog without Create Invoice', async () => {
+    authState.role = 'sales_rep';
+    render(<UnbilledApplicationsPanel />);
+    await screen.findByText('J-TRANSFER-4004');
+    expect(screen.getByText('Safe Retry Farms')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Invoice' })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Action' })).toBeNull();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('preserves the existing sanitizer fallback for unrelated failures', async () => {

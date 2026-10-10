@@ -69,6 +69,8 @@ describe('MobileBottomNav', () => {
 
     expect(screen.queryByRole('link', { name: 'Inventory' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open navigation menu' })).toBeInTheDocument();
+    // Invoicing is admin-only (Mason 2026-10-09), but a rep still reads field invoices.
+    expect(screen.getByRole('link', { name: 'Field Invoices' })).toBeInTheDocument();
   });
 
   it('opens the full drawer through More', () => {

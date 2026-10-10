@@ -15,6 +15,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -212,6 +213,9 @@ export default function DeliveryDetail() {
 
   const isDriver = role === 'driver';
   const isAdmin = role === 'admin';
+  // Invoicing is admin-only (Mason 2026-10-09): only an admin's completion auto-creates the
+  // draft invoice, so the auto-invoice wording and banner are admin-only.
+  const canInvoice = canManageInvoices(role);
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
   const canCancel = isAdminOrRep && delivery?.status !== 'cancelled' && delivery?.status !== 'completed';
@@ -992,14 +996,22 @@ export default function DeliveryDetail() {
         toast('warning', `Delivery completed, but ${shortN} product(s) were short — on-hand inventory went negative. Admins have been notified to review.`);
       }
 
-      if (invoiceNum) {
+      if (invoiceNum && canInvoice) {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
           : `Delivery completed. Draft invoice ${invoiceNum} created.`);
       } else if (!signatureUploadFailed) {
         // When the signature failed we already showed an accurate warning toast
         // that says the delivery completed — skip the redundant success toast.
-        toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
+        // Invoicing is admin-only (Mason 2026-10-09): a non-admin's completion makes no
+        // invoice (the admins are notified), so the page says who bills it, by role.
+        if (!canInvoice) {
+          toast('success', isPartialDelivery
+            ? 'Delivery completed (partial quantities). An admin will create the invoice.'
+            : 'Delivery completed. An admin will create the invoice.');
+        } else {
+          toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
+        }
       }
       logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
 
@@ -1557,7 +1569,9 @@ export default function DeliveryDetail() {
           {/* Complete delivery section — only when in_progress */}
           {delivery.status === 'in_progress' && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-4">
-              <h3 className="text-white font-semibold">Complete Delivery<HelpTip text="Finalizes the delivery. Inventory is deducted, the customer gets an email receipt, and a draft invoice is created automatically." className="ml-1" /></h3>
+              <h3 className="text-white font-semibold">Complete Delivery<HelpTip text={canInvoice
+                ? 'Finalizes the delivery. Inventory is deducted, the customer gets an email receipt, and a draft invoice is created automatically.'
+                : 'Finalizes the delivery. Inventory is deducted and the customer gets an email receipt. An admin then creates the invoice.'} className="ml-1" /></h3>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Signed By</label>
                 <input
@@ -2110,7 +2124,7 @@ export default function DeliveryDetail() {
       )}
 
       {/* Auto-created invoice banner */}
-      {delivery.status === 'completed' && autoInvoiceId && (
+      {canInvoice && delivery.status === 'completed' && autoInvoiceId && (
         <Card>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">

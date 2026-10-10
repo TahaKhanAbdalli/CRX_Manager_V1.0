@@ -12,7 +12,9 @@ vi.mock('../../contexts/AuthContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/pagePermissions', () => ({
+// Only the deny-list lookup is stubbed; canManageInvoices is the real admin-only rule.
+vi.mock('../../lib/pagePermissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/pagePermissions')>()),
   hasPageAccess: vi.fn(() => true),
 }));
 
@@ -82,5 +84,21 @@ describe('TopBar', () => {
     renderTopBar();
 
     expect(screen.getByRole('button', { name: /new/i }).parentElement).toHaveClass('hidden', 'md:block');
+  });
+
+  // Invoicing is admin-only (Mason 2026-10-09): the New menu's Field App Invoice entry
+  // creates an invoice, so a sales rep no longer sees it (its route is admin-only too).
+  it('offers Field App Invoice in the New menu to an admin', () => {
+    renderTopBar();
+    fireEvent.click(screen.getByRole('button', { name: /new/i }));
+    expect(screen.getByRole('menuitem', { name: 'Field App Invoice' })).toBeInTheDocument();
+  });
+
+  it('keeps the rest of the New menu for a sales rep but drops Field App Invoice', () => {
+    mockProfile.mockReturnValue({ id: '2', role: 'sales_rep', full_name: 'Sales Rep' });
+    renderTopBar();
+    fireEvent.click(screen.getByRole('button', { name: /new/i }));
+    expect(screen.getByRole('menuitem', { name: 'Order' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Field App Invoice' })).not.toBeInTheDocument();
   });
 });

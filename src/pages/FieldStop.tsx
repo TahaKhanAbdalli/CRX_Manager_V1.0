@@ -20,6 +20,7 @@ import {
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageInvoices } from '../lib/pagePermissions';
 import { useToast } from '../components/ui/Toast';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -367,10 +368,15 @@ export default function FieldStop() {
 
       const autoInvoice = result as { auto_invoice?: { invoice_number?: string } } | null;
       const invoiceNum = autoInvoice?.auto_invoice?.invoice_number || null;
-      if (invoiceNum) setAutoInvoiceNumber(invoiceNum);
-      toast('success', invoiceNum
-        ? `Delivery completed${isPartial ? ' (partial)' : ''}. Draft invoice ${invoiceNum} created.`
-        : `Delivery completed${isPartial ? ' (partial)' : ''}`);
+      // Invoicing is admin-only (Mason 2026-10-09): a driver's or rep's completion makes no
+      // invoice (the admins are notified), so the page says who bills it, by role.
+      const canInvoice = canManageInvoices(profile.role);
+      if (invoiceNum && canInvoice) setAutoInvoiceNumber(invoiceNum);
+      toast('success', !canInvoice
+        ? `Delivery completed${isPartial ? ' (partial)' : ''}. An admin will create the invoice.`
+        : invoiceNum
+          ? `Delivery completed${isPartial ? ' (partial)' : ''}. Draft invoice ${invoiceNum} created.`
+          : `Delivery completed${isPartial ? ' (partial)' : ''}`);
 
       logActivity({
         event: 'delivery_completed',
@@ -625,6 +631,11 @@ export default function FieldStop() {
           {autoInvoiceNumber && (
             <p className="inline-flex items-center gap-1 text-sm text-gray-700 mt-3">
               <FileText className="w-4 h-4 text-gray-400" /> Draft invoice {autoInvoiceNumber} created
+            </p>
+          )}
+          {isOnline && !canManageInvoices(profile?.role) && (
+            <p className="inline-flex items-center gap-1 text-sm text-gray-700 mt-3">
+              <FileText className="w-4 h-4 text-gray-400" /> An admin will create the invoice.
             </p>
           )}
           <button type="button" onClick={() => navigate('/my-route')} className="w-full mt-5 flex items-center justify-center gap-2 border border-crx-green text-crx-green font-semibold rounded-xl py-3 active:scale-[0.99]">

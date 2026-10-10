@@ -53,6 +53,9 @@ describe('WorkspaceTabs', () => {
     renderAt('/invoices');
     expect(screen.queryByText('A/R Workspace')).not.toBeInTheDocument();
     expect(screen.getByText('Chemical Invoices')).toBeInTheDocument();
+    // Invoicing is admin-only (Mason 2026-10-09), but reps still SEE every invoice:
+    // both invoice list tabs stay in their Billing workspace.
+    expect(screen.getByText('Field Invoices')).toBeInTheDocument();
   });
 
   it('hides tabs on the per-user deny list', () => {

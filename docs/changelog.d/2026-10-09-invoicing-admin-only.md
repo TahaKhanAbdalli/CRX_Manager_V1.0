@@ -225,24 +225,105 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   postflight=21_mutants ... mutations=87_detected`. `npm run typecheck`, `npm run lint`,
   `npm run test` (5495 passed, 123 skipped) and `check-doc-drift` pass.
 
+### 2026-10-10 - phase 2: the screens (needs the file above applied first)
+
+Mason's decisions applied: reps SEE every invoice, read-only, with customer names; routes whose only
+purpose is creating an invoice are admin-only; reps' order edits and partial completions keep
+updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and record payments.
+
+- **One rule:** `canManageInvoices(role) = role === 'admin'` in `src/lib/pagePermissions.ts`; every
+  invoice-changing control below uses it.
+- **Routes and nav** (`src/App.tsx`, `pagePermissions.ts`, `Sidebar.tsx`, `TopBar.tsx`):
+  `invoices/field-app/new`, `split-billing/new` and `split-billing/:id` are `['admin']`, and the
+  `split-billing` page entry is admin-only. The invoice list and detail routes, the Field Invoices
+  tabs and the field-app invoice view stay `['admin','sales_rep']`; their nav entries stay for reps.
+  `/invoices/new` (the Misc Charge entry) shares the `invoices/:id` detail route, so InvoiceDetail
+  sends a non-admin back to the list. The Split Billing nav link and the New menu's "Field App
+  Invoice" are admin-only. Drivers unchanged.
+- **Inside the pages, hidden or disabled for non-admins:** `Invoices.tsx` (row checkboxes, Select
+  All, Post/Void/Delete/Print Selected, Misc Charge); `InvoiceDetail.tsx` (Save, Post, Transfer to
+  Scheduling, Apply Credit, Unpost, every editable field; a "Read-only — only an admin can change,
+  post or unpost invoices" note; Print and the existing field-invoice Email stay); the three Field
+  Invoices panels (Post All, Unpost All, Manual Invoice; a rep's row action reads "View");
+  `UnbilledApplicationsPanel` (Create Invoice column); `FieldApplicationInvoice.tsx` (every input
+  disabled through `canEdit`; Save, Post, Unpost, Delete, Transfer gone; Print, Old Print, Email
+  stay; a rep gets a read-only note instead of the "unpost to edit" banner); `FieldAppSplitInvoiceEditor`
+  (second layer behind the route: a notice instead of the editor); `OrderDetail` (Create Invoice,
+  Create Split Invoices, Consolidate drafts, Post all drafts; Price Order stays); `BlendTicketDetail`
+  (the Direct Invoice card); `JobDetail` (Transfer to Invoice); `OfficeCockpit` (Post all clean; the
+  queue stays). `PaymentAllocation` needed no change: it has no credit-memo or prepay apply (those
+  live on InvoiceDetail and the admin-only Prepay page). Handlers re-check the rule too.
+- **Split children for reps:** the Split Billing editor is admin-only, so InvoiceDetail no longer
+  sends a rep's draft split child there (it renders read-only), and the per-acre editor hands a
+  rep's split child to `/field-invoices/:id` with a one-shot `splitChildReadOnly` route state that
+  stops InvoiceDetail bouncing a job-less draft straight back (no redirect loop).
+- **Unsaved-changes guards:** a rep's read-only page never turns dirty (InvoiceDetail's new tracking
+  counts only an admin's edits; FieldApplicationInvoice's inputs are disabled through `canEdit`), so
+  neither the Post block nor the leave-page prompt fires for a rep.
+- **Rep-visible copy:** after a non-admin completes a delivery: "Delivery completed. An admin will
+  create the invoice." (DeliveryDetail, FieldStop; the Deliveries list keeps its delivery number:
+  "Delivery D-123 completed. An admin will create the invoice."); a job: "Job completed! Application
+  record R-1 created. An admin will create the invoice." FieldStop's done screen says the same. The
+  page decides by role; no RPC result changed. DeliveryDetail's "a draft invoice is created
+  automatically" help tip has rep wording and the auto-created-invoice banner is admin-only.
+  QuickDeliveryModal: no "Create draft invoice" box for non-admins, `p_skip_invoice` always true for
+  them (the database forces it too), banner, confirm and toast say an admin will create the invoice;
+  an admin's banner now says the invoice is posted "by an admin" (was "by a sales rep").
+- **Customer names for reps** (`src/lib/invoiceCustomerNames.ts`): `fillHiddenCustomerNames` calls
+  `get_invoice_customer_names` once per list with only the ids whose `customers` embed came back blank,
+  so an admin (who reads every customer) never calls it. Used by Chemical Invoices, InvoiceDetail,
+  the three Field Invoices lists, the per-acre editor's split-member banner and
+  `buildInvoicePdfDataFromRow`'s customer-share names (which then fall back to the name stored on the
+  share row). A failed read is not fatal (the page keeps "Unknown"). Not covered (blank for a rep):
+  the per-acre editor's location table (field owner), the Unbilled backlog and the Today page tiles.
+- **InvoiceDetail Post (addendum 8b):** Post is disabled while the form has unsaved edits, with the
+  reason shown; the posting version (`get_invoice_post_version([id])`, or
+  `get_invoice_group_post_version(group)` for a split group) is read at the start of every load,
+  before anything shown is read, and again when Post is pressed; if they differ the page reloads
+  with "This invoice changed since you reviewed it — it has been reloaded; check it and post again."
+  The credit-limit and restricted-use checks run on the SAVED invoice read after that version. The
+  version goes out as `p_expected_version` on `post_invoice` / `post_invoice_group` (with the
+  existing key; a group post passes the signed-in admin as `p_performed_by`, which the group check
+  requires); `INVOICE_CHANGED_SINCE_REVIEW` shows the same message and reloads. The 17de50533
+  browser-side re-check was used as reference only; the database check is the gate. The list pages'
+  bulk posts stay old callers (no version): they have no single reviewed screen to bind.
+- **Types:** `src/types/supabase.ts` is generated from live and does not know the two version readers,
+  the names reader or `p_expected_version` yet. Following the repo's typed-wrapper pattern
+  (`quoteLifecycleRpc.ts`), `src/lib/invoicePostVersion.ts` and `src/lib/invoiceCustomerNames.ts` call
+  them through `supabaseUntyped` with hand-declared argument and result shapes (no `any`, no
+  `@ts-ignore`). **Regenerate `src/types/supabase.ts` after the apply** and move these calls back to
+  the typed client.
+- **Tests:** new `src/pages/InvoiceDetail.adminOnly.test.tsx`, `src/pages/Invoices.adminOnly.test.tsx`,
+  `src/components/field-invoices/FieldInvoicesAdminOnly.test.tsx`; rep cases added to
+  `FieldApplicationInvoice.test.tsx`, `FieldAppSplitInvoiceEditor.test.tsx`,
+  `UnbilledApplicationsPanel.test.tsx`, `QuickDeliveryModal.test.tsx`, `TopBar.test.tsx`,
+  `pagePermissions.test.ts`; nav tests assert reps keep both invoice tabs. All 26 new behaviour cases
+  were run against the pre-change source files (restored from HEAD, tests kept) and every one failed
+  there. `idempotency-reset-order.test.ts`: InvoiceDetail no longer has a `.throwOnError()` site of its
+  own (it moved into the helper), so its stale `throw-on-error` allowance was removed.
+- **Known red gate until the apply:** `src/lib/rpcFixtureLiveDiff.test.ts` ("every literal production
+  RPC call exists live or in a verified queued migration") fails because the page now calls
+  `get_invoice_customer_names`, `get_invoice_post_version` and `get_invoice_group_post_version`, which
+  are not live yet. That guard exists so a frontend cannot merge ahead of its migration; its queued
+  exception may not be committed. It clears when the migration is applied and the checked-in
+  `pg_proc` snapshot in that test is regenerated from live (part of the apply step). Do not merge
+  before that.
+
 ### Not done here (owners)
 
-- Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations.
-- Phase 2 (screens) after PR #892: hide every mutating invoice control for non-admins, send the
-  reviewed version when posting, the rep's customer-name gap on invoice lists, and the
-  `src/types/supabase.ts` entries for `p_expected_version` and the two version readers (regenerate
-  from live after the apply; the renamed `_*_pre_admin_only_20261009` names may then need
+- Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations. Then,
+  before merging this branch: regenerate the `pg_proc` snapshot in `rpcFixtureLiveDiff.test.ts` and
+  `src/types/supabase.ts` from live (the renamed `_*_pre_admin_only_20261009` names may then need
   classifying in `rpcContracts.test.ts` / `rpcFixtureLiveDiff.test.ts`).
-- `package.json` proof script line (ask-listed file): `"proof:invoicing-admin-only": "node scripts/smoke/prove-invoicing-admin-only-real-schema.mjs"`.
+- Phase 2 verification in a signed-in browser (admin and sales rep) after the apply: no signed-in
+  browser run was possible here.
 - CI does not run the container prover or the chain; `src/lib/invoiceWriterGuard.test.ts` is the
   PR-time guard.
 - At apply: re-pin `scripts/db-invariant-sweeps/allowlist.json` (`complete_job`'s contract digest
   changes; the new wrappers pass `p_performed_by` to their frozen bodies) from live digests.
 - Tell Mason: reps read cost/margin on invoices (already on orders); applicators' job completions
   now notify every admin. (Design Q4b, the upkeep question, was decided 2026-10-10: see below.)
-- Phase 2 also switches the invoice list, detail, field-invoice panels and the PDF's share names to
-  `get_invoice_customer_names` for the farm name (one call per page with the ids it shows), adds it
-  to `src/types/supabase.ts`, and keeps the PDF's address block on the direct `customers` read
-  (assigned customers only for reps, by decision).
+- InvoiceDetail still has no leave-page warning (unsaved edits are dropped silently on navigation;
+  nothing posts wrongly). KNOWN_ISSUES keeps it open.
 - Later upkeep change: `update_order_items`' draft line-link detach should lock the invoice first.
 - Regenerate `.claude/schema-registry.json` after the apply.

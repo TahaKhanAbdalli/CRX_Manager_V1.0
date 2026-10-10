@@ -30,10 +30,11 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'jobs', path: '/jobs', label: 'Job Schedule', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'dispatch', path: '/dispatch', label: 'Dispatch Board', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'field-invoices', path: '/field-invoices', label: 'Field Invoices', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
-  // Per-line split-billing editor route (/split-billing/new). Flag-gated OFF; the page
-  // self-gates and the nav link is hidden while off, but the ProtectedRoute still needs a
-  // permission entry so the deny-list applies. Same roles as Field Invoices.
-  { key: 'split-billing', path: '/split-billing/new', label: 'Split Billing', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
+  // Per-line split-billing editor (/split-billing/new and /split-billing/:id). Flag-gated; the
+  // page self-gates and the nav link is hidden while off, but the ProtectedRoute still needs a
+  // permission entry so the deny-list applies. Admin-only: the editor only creates and posts
+  // invoices, and invoicing is admin-only (Mason 2026-10-09).
+  { key: 'split-billing', path: '/split-billing/new', label: 'Split Billing', category: 'Spray Fields', roles: ['admin'] },
   { key: 'application-records', path: '/application-records', label: 'Record Book (Applications)', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'program-tracker', path: '/program-tracker', label: 'Program Tracker', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
   { key: 'recipes', path: '/recipes', label: 'Blend Recipes', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
@@ -175,6 +176,17 @@ export function hasPageAccess(
   if (pageKey === 'integrity' && deniedPages.some((key) => key === 'integrity-report' || key === 'integrity-cleanup')) return false;
   if (deniedPages.includes(pageKey)) return false;
   return true;
+}
+
+/**
+ * Invoicing is admin-only (Mason 2026-10-09): only an admin creates, edits, posts, unposts,
+ * voids, deletes or transfers invoices, or applies credit memos and prepayments to them.
+ * Sales reps still SEE every invoice (list and detail pages, PDF and print) and still record
+ * payments. The database refuses everyone else with INVOICING_ADMIN_ONLY; this helper only
+ * decides which controls a page shows, so every invoice-changing control uses this one check.
+ */
+export function canManageInvoices(role: UserRole | null | undefined): boolean {
+  return role === 'admin';
 }
 
 /** Get all pages accessible by a given role (before deny-list filtering). */

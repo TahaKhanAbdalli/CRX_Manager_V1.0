@@ -12,7 +12,42 @@ import {
   getPagesForRole,
   getCategories,
   isExemptRoute,
+  canManageInvoices,
 } from './pagePermissions';
+
+// ── Invoicing is admin-only (Mason 2026-10-09) ──────────────────────────
+
+describe('canManageInvoices', () => {
+  it('lets only an admin manage invoices', () => {
+    expect(canManageInvoices('admin')).toBe(true);
+    for (const role of ['sales_rep', 'driver', 'applicator'] as const) {
+      expect(canManageInvoices(role)).toBe(false);
+    }
+    expect(canManageInvoices(null)).toBe(false);
+    expect(canManageInvoices(undefined)).toBe(false);
+  });
+
+  it('keeps the invoice list pages open to sales reps (read-only) and makes Split Billing admin-only', () => {
+    expect(hasPageAccess('sales_rep', [], 'invoices')).toBe(true);
+    expect(hasPageAccess('sales_rep', [], 'field-invoices')).toBe(true);
+    expect(hasPageAccess('sales_rep', [], 'split-billing')).toBe(false);
+    expect(hasPageAccess('admin', [], 'split-billing')).toBe(true);
+  });
+
+  it('makes the invoice-creating routes admin-only in App.tsx and keeps the list and detail routes open', () => {
+    const app = readFileSync(resolve(__dirname, '../App.tsx'), 'utf-8');
+    const rolesFor = (path: string) => {
+      const line = app.split(/\r?\n/).find((candidate) => candidate.includes(`path: '${path}'`));
+      return /allowedRoles=\{(\[[^\]]*\])\}/.exec(line ?? '')?.[1];
+    };
+    for (const path of ['invoices/field-app/new', 'split-billing/new', 'split-billing/:id']) {
+      expect(rolesFor(path)).toBe("['admin']");
+    }
+    for (const path of ['invoices', 'invoices/:id', 'invoices/field-app/:id', 'field-invoices', 'field-invoices/:id']) {
+      expect(rolesFor(path)).toBe("['admin', 'sales_rep']");
+    }
+  });
+});
 
 // ── getPageKeyFromPath ──────────────────────────────────────────────────
 

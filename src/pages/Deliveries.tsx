@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
-import { hasPageAccess } from '../lib/pagePermissions';
+import { canManageInvoices, hasPageAccess } from '../lib/pagePermissions';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import PageHeader from '../components/ui/PageHeader';
@@ -458,7 +458,11 @@ export default function Deliveries() {
       },
       toast,
       setLoading: setCompleting,
-      successMessage: `Delivery ${target.delivery_number} completed`,
+      // Invoicing is admin-only (Mason 2026-10-09): a non-admin's completion makes no invoice
+      // (the admins are notified), so say who bills it.
+      successMessage: canManageInvoices(role)
+        ? `Delivery ${target.delivery_number} completed`
+        : `Delivery ${target.delivery_number} completed. An admin will create the invoice.`,
       sentryTag: 'complete_delivery',
       onSuccess: () => {
         completeIdem.resetKey();

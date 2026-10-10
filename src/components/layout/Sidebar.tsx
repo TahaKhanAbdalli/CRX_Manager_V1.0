@@ -231,7 +231,8 @@ const SPLIT_BILLING_NAV_ITEM: NavSubItem = {
   path: '/split-billing/new',
   label: 'Split Billing (per line)',
   icon: <Receipt className="w-4 h-4" />,
-  roles: ['admin', 'sales_rep'],
+  // Creating invoices is admin-only (Mason 2026-10-09).
+  roles: ['admin'],
 };
 
 // --- Helpers ---

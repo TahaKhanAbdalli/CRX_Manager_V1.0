@@ -9,6 +9,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
+import { canManageInvoices } from '../lib/pagePermissions';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
@@ -866,6 +867,31 @@ export default function FieldAppSplitInvoiceEditor() {
   }, [flagEnabled, routeSetId, loadResults, navigate, toast]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  // Invoicing is admin-only (Mason 2026-10-09). The routes are admin-only too; this is the
+  // second layer, so nothing here can save or post for anyone else.
+  if (!canManageInvoices(profile?.role)) {
+    return (
+      <div className="max-w-2xl mx-auto p-6">
+        <Card>
+          <div className="flex items-start gap-3">
+            <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+            <div>
+              <h2 className="text-lg font-semibold font-heading text-nav-dark">Only an admin can create or post split invoices</h2>
+              <p className="text-sm text-secondary mt-1">
+                Invoicing is done by an admin. You can still open every field invoice from Field Invoices.
+              </p>
+              <div className="mt-4">
+                <Button variant="secondary" icon={<ArrowLeft className="w-4 h-4" />} showChevron={false} onClick={() => navigate('/field-invoices')}>
+                  Back to Field Invoices
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   if (flagEnabled === null) {
     return (
       <div className="flex items-center justify-center py-20">
