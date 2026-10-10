@@ -153,10 +153,11 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 
 ### 2026-10-10 - Mason's decisions "1.a" and "2:yes" (still NOT APPLIED)
 
-- **1.a, invoice upkeep (no behaviour change):** a rep's or driver's order pricing / order-line
-  edits / rush order (`price_order`, `update_order_items`, `create_rush_order`), partial delivery
-  completion (the resize and tote stamp in `_complete_delivery_authorized_impl`) and delivery cancel
-  (`cancel_delivery`, `batch_cancel_deliveries`) keep updating an admin's DRAFT or UNPOSTED invoice
+- **1.a, invoice upkeep (no behaviour change):** a sales rep's order pricing / order-line
+  edits / rush order (`price_order`, `update_order_items`, `create_rush_order`) and delivery cancel
+  (`cancel_delivery`, `batch_cancel_deliveries`), and a rep's or driver's partial delivery completion
+  (the resize and tote stamp in `_complete_delivery_authorized_impl`; drivers reach no other upkeep
+  path, the rest role-gate to admin and sales_rep) keep updating an admin's DRAFT or UNPOSTED invoice
   exactly as today; posted invoices never change; an admin still reviews and posts. Recorded in the
   migration header (the "NEEDS MASON" line is gone), the comments on both sweep allowlists (preflight
   and postflight, and the chain's step-8 copy), DECISION_LOG, KNOWN_ISSUES and OWNER_PLAYBOOK. This
@@ -180,6 +181,49 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   customers' farm names (not the customer on no invoice, not the one on a soft-deleted invoice), keys
   `farm_name,id` only; a rep's direct `customers` read of them stays empty. `npm run typecheck`,
   `npm run lint`, `npm run test` (5491 passed, 123 skipped) and `check-doc-drift` pass.
+
+### 2026-10-10 - review round 4 fixes (still NOT APPLIED)
+
+- **Posting version covers the customer's payment terms** (Luna MED, confirmed live: the assigned
+  sales rep can edit `customers.payment_terms` under `customers_update`, and the post falls back to
+  it for the due date). `_invoice_review_fingerprint` now also hashes the invoice customer's
+  `payment_terms`; body pin `658f42b2...` -> `d5645406...` in the postflight and
+  `invoiceWriterGuard.test.ts`. Residual (KNOWN_ISSUES): the customer row is read, not locked.
+- **`batch_post_invoices`' receipt lookup is scoped to its operation** (`k.operation =
+  'batch_post_invoices'`, the name its frozen body claims under, read live), so the version re-check
+  no longer relies on the frozen body's cross-operation refusal. Wrapper pin `83ebbc30...` ->
+  `23f5dde2...`.
+- **TRUNCATE** on `invoice_line_shares`, `invoice_line_share_snapshots`, `field_app_billing_sets`
+  and `field_app_billing_lines` is revoked from `authenticated, anon, PUBLIC` (was `authenticated`
+  only) and the postflight asserts `anon` has none (live 2026-10-10: anon and PUBLIC held none).
+- **PR-time guard** (`invoiceWriterGuard.test.ts`) gains the table layer: a later write grant on an
+  invoice table (or all tables) to an API role, a non-SELECT or altered policy on one, row level
+  security turned off, or a function created through dynamic SQL in a DO block, fails until reviewed.
+- **Prover**: the names reader's four legs are each exercised both ways (C7 line share, C8 snapshot
+  on live invoices returned; C9 share, C10 snapshot, C11 line share on soft-deleted invoices not);
+  sentinels in every writable customer column; a deactivated sales rep gets no names; 10 more
+  runtime mutants (each leg dropped / joined to any invoice / counting deleted invoices, a role gate
+  ignoring `is_active`, other fields folded into `farm_name`), every names mutant names its expected
+  failure; 6 more postflight mutants (no pinned search_path, SECURITY INVOKER, VOLATILE, a
+  service_role grant, a second overload, `customers_select_location_dispatchee` widened) and one
+  more preflight drift; the version check refuses after the assigned rep edits the customer's terms
+  through RLS (on the round-3 body that post went through) and after a cross-operation batch key,
+  each with a mutation.
+- **Chain** step 6b: a rep reads only `(id, farm_name)` of an unassigned customer on an invoice
+  (direct read empty), a driver gets nothing; `get_invoice_customer_names` added to the spec's covers.
+- **Docs**: drivers reach upkeep only through partial completion (the other upkeep RPCs role-gate to
+  admin and sales_rep); reps see invoice-level terms/balances (from the 2026-10-09 read widening),
+  not customer address, phone, contacts or account number.
+- **Deferred, with owners in KNOWN_ISSUES**: `cancel_delivery` reversing a completed delivery (Luna
+  HIGH, pre-existing, not redefined here); `update_order_items`' unlocked line detach (Luna MED,
+  pre-existing); the trigger check not following calls (accepted residual; live has no such
+  trigger); the names reader's field-app / write-off / allocation references (phase 2; none on live).
+- Live read-only checks 2026-10-10: the `customers` policy md5s and five-policy set match the pins;
+  the only trigger that reaches an invoice write (directly or through calls) is
+  `trg_snapshot_line_shares_on_post` on `invoices`, which `authenticated` cannot write.
+- Proof (fresh container, 2026-10-10): `INVOICING_ADMIN_ONLY_PROOF_PASS ... preflight=20_drifts
+  postflight=21_mutants ... mutations=87_detected`. `npm run typecheck`, `npm run lint`,
+  `npm run test` (5495 passed, 123 skipped) and `check-doc-drift` pass.
 
 ### Not done here (owners)
 

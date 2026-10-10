@@ -95,7 +95,11 @@ the file is applied and verified live.
   decided 2026-10-09 that reps keep today's cancel behaviour (including cancelling a delivery that has
   an admin's draft), so `cancel_delivery` and `batch_cancel_deliveries` were deliberately not changed
   and sit on the sweep's upkeep allowlist. The completed-delivery reversal itself is a separate bug,
-  still open.
+  still open. **Deferred out of `20261009120000` (review round 4, Luna HIGH; pre-existing, not a
+  regression):** the file does not redefine `cancel_delivery` and only pins its live body. Owner: the
+  next lifecycle fix — refuse a `completed` delivery in `cancel_delivery` and
+  `batch_cancel_deliveries` (e.g. `DELIVERY_ALREADY_COMPLETED`), then re-pin the upkeep allowlist md5
+  in the postflight, the chain's step 8 and `invoiceWriterGuard.test.ts` if it reaches the list.
 - **`cancel_delivery` refuses an admin's quick delivery whose draft invoice is still open**
   (`ORDER_INVOICE_TERMINAL`), for an admin and a rep alike, in the container replay of the live
   schema (seen 2026-10-09 by the admin-only prover, identical before and after the candidate). Not
@@ -118,12 +122,15 @@ the file is applied and verified live.
   `_update_order_items_impl` sets `invoice_items.order_item_id = NULL` on draft (and voided or
   cancelled) invoices without locking the `invoices` row, so a rep's order-line edit can change that
   link field after an admin's versioned post compared it. No amount changes. Fix with the next
-  upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first.
-- **DECIDED 2026-10-10 (Mason, "1.a") — not a defect: reps' (and drivers') order and delivery work
-  keeps updating an admin's draft or unposted invoice ("upkeep").** `price_order`,
-  `update_order_items`, `create_rush_order` update `invoice_items` and the header of every `draft` /
-  `unposted` invoice on the order; a rep's or driver's partial completion resizes (and tote-stamps) an
-  admin's draft for that delivery; `cancel_delivery` / `batch_cancel_deliveries` cancel the
+  upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first. Deferred out of
+  `20261009120000` (review round 4, Luna MED; pre-existing): fixing it means redefining the live
+  `_update_order_items_impl`, which this file only pins.
+- **DECIDED 2026-10-10 (Mason, "1.a") — not a defect: reps' order and delivery work (and drivers'
+  partial completions) keeps updating an admin's draft or unposted invoice ("upkeep").** A sales
+  rep's `price_order`, `update_order_items`, `create_rush_order` update `invoice_items` and the header
+  of every `draft` / `unposted` invoice on the order (drivers cannot call these: their role gates
+  allow admin and sales_rep only); a rep's or driver's partial completion resizes (and tote-stamps) an
+  admin's draft for that delivery; a rep's `cancel_delivery` / `batch_cancel_deliveries` cancel the
   delivery's draft and `unposted` invoices. Mason approved keeping all of it exactly as today: posted
   invoices never change and an admin still reviews and posts (the order-upkeep functions lock the
   invoice row first, so a versioned post refuses after them). This settles the round-3 Luna BLOCKER
@@ -137,12 +144,18 @@ the file is applied and verified live.
   `total_margin_pct`; `oitems_select` / `orders_select` = `is_admin() OR is_sales_rep()`, read live
   2026-10-10), and invoice line cost is copied from the order line. Hiding it would need a read RPC or
   view for reps and a change to the order policies too; worth telling Mason, not a blocker.
-- **The posting version does not cover rows the post reads from elsewhere**: the customer's default
-  payment terms (used for the due date when the invoice has none) and a field invoice's
-  `field_app_locations` acres. Every writer of those is admin-only after `20261009120000`. The
-  fingerprint hashes every `invoices` column, so a background change to the row (for example
-  `updated_at`) also refuses a post until the admin reloads; no test covers a benign background
-  touch yet.
+- **The posting version does not cover a field invoice's `field_app_locations` acres**, which the
+  post reads from another table; every writer of them is admin-only after `20261009120000`. Since
+  review round 4 it DOES cover the invoice customer's `payment_terms` (the due-date fallback when the
+  invoice has none): the assigned sales rep can still edit that customer row (`customers_update`,
+  read live 2026-10-10), so a terms change after review now refuses the post (prover: the rep edits
+  the terms through RLS, the versioned post is `INVOICE_CHANGED_SINCE_REVIEW`; on the round-3 body
+  it posted). Residual: the customer row is read, not locked, so a terms edit committing in the
+  milliseconds between the wrapper's check and the post's own terms read can still move the due date
+  (never the amount). A rep editing a customer's terms also makes an admin reload an invoice whose own
+  terms are set (a refusal, never a wrong post). The fingerprint hashes every `invoices` column, so a
+  background change to the row (for example `updated_at`) also refuses a post until the admin
+  reloads; no test covers a benign background touch yet.
 - **Applicators' job completions now notify every admin too.** `complete_job`'s gate became
   `IF is_admin()`, so an applicator's completion (previously a silent `auto_draft_skipped` row) also
   sends `job_needs_invoice` to each active admin while `auto_draft_invoice_on_job_completion` is on
@@ -161,8 +174,18 @@ the file is applied and verified live.
   returns only assigned customers; its policies are pinned before and after the apply). The pages
   still read names through the `customers` embed, so the invoice list, detail and PDF show a blank
   farm name for another rep's customer until phase 2 switches them to the new reader. The PDF's
-  address block (billing address, city, state, zip, account number, terms) stays assigned-customers
-  only for reps: names only, by decision.
+  address block (billing address, city, state, zip, account number) stays assigned-customers only for
+  reps: names only, by decision. Invoice-level fields are a different matter: under the 2026-10-09
+  "reps see all invoices" decision reps already read every invoice's own `payment_terms`,
+  `balance_cents`, `paid_amount_cents`, `internal_notes` and `purchase_order_ref`, and the PDF prints
+  `invoices.payment_terms` first (it falls back to the customer's terms only when the invoice has
+  none, and that fallback stays assigned-customers only). Phase 2 note (review round 4): the reader
+  names a customer only through `invoices`, `invoice_shares`, `invoice_line_shares` and
+  `invoice_line_share_snapshots`; a customer shown on an invoice page only through
+  `field_app_location_shares`, a field's owner (`fields.customer_id`), `write_offs` or
+  `invoice_line_allocations.bill_to_customer_id` would stay blank (it fails closed, no leak). Live
+  2026-10-10 has no such case (no `field_app_locations` or `write_offs` on a non-deleted invoice; the
+  one allocation bill-to customer is named); phase 2 adds a leg if its pages need one.
 - **Two registered chains drive invoicing as a sales rep and need their rep steps rewritten:**
   `smoke-adversarial-money-inventory-closeout.sql` and
   `smoke-financial-scope-and-delivery-aggregate.sql`. Both already failed before this change
@@ -184,8 +207,16 @@ the file is applied and verified live.
   hide an unguarded one), keeps string literals when it strips comments, and pins the guard helper,
   the fingerprint, `complete_job` and the delivery-completion implementation, so a later migration
   that re-emits any of them (or any pre-existing invoice-reaching internal function) must be
-  re-reviewed. Still outside both: other schemas, calls through a quoted or schema-dotted name the
-  regex does not match, triggers reached only through calls, and tables outside the list
+  re-reviewed. Review round 4 adds the table layer to the PR test: a later migration that grants
+  INSERT/UPDATE/DELETE/TRUNCATE/ALL on an invoice table (or on every table) to `authenticated`,
+  `anon` or `PUBLIC`, creates a non-SELECT policy or alters any policy on one, turns its row level
+  security off, or creates a function through dynamic SQL in a DO block, fails until its statement
+  is reviewed and pinned. Still outside both: other schemas, calls through a quoted or schema-dotted
+  name the regex does not match, triggers reached only through calls (ACCEPTED RESIDUAL, review
+  round 4: the apply-time trigger check matches only the trigger function's own body; live
+  2026-10-10 has no trigger on an `authenticated`-writable table that reaches an invoice write
+  through a helper, so this guards future regressions only; owner: whoever next adds a trigger on
+  an invoice-adjacent table), and tables outside the list
   (`credit_memo_applications`, `prepay_applications`, `split_invoice_*`, `delivery_external_billings`,
   `invoice_delivery_recovery_capabilities`). The postflight's own comment stripping is not
   literal-aware (it runs once, against live's current bodies; none uses `EXECUTE` with an invoice

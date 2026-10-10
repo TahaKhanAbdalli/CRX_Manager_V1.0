@@ -233,9 +233,14 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     expect(batch.indexOf("RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices'")).toBeLessThan(batch.indexOf("'crx:idempotency:batch_post_invoices:'"));
     expect(batch.indexOf("'crx:idempotency:batch_post_invoices:'")).toBeLessThan(batch.indexOf("'crx:idempotency:' || p_idempotency_key"));
     expect(batch.indexOf('FOR UPDATE')).toBeLessThan(batch.indexOf('_invoice_review_fingerprint(p_invoice_ids)'));
+    // Review round 4: the batch receipt lookup is scoped to its own operation, so a receipt of
+    // another operation never skips the version re-check.
+    expect(batch).toMatch(/WHERE k\.idempotency_key = p_idempotency_key\n\s+AND k\.operation = 'batch_post_invoices'\n/);
     for (const b of [single, group, batch]) expect(b).toContain("RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: ");
     const fingerprint = statement(sql, 'CREATE FUNCTION public._invoice_review_fingerprint(');
     for (const table of ['invoice_items', 'invoice_line_shares', 'invoice_shares']) expect(fingerprint).toContain(`FROM public.${table} `);
+    // Review round 4: the customer's payment terms (the post's due-date fallback) are hashed too.
+    expect(fingerprint).toMatch(/SELECT c\.payment_terms\s+FROM public\.customers c\s+WHERE c\.id = i\.customer_id/);
     expect(fingerprint).toContain('SET "TimeZone" = \'UTC\'');
   });
 
@@ -281,10 +286,14 @@ describe('invoicing admin-only migration (20261009120000)', () => {
       expect(policy).toContain('AND i.deleted_at IS NULL\n       AND (public.is_sales_rep() OR i.created_by');
     }
     expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.invoice_shares, public.invoice_line_allocations FROM authenticated, anon, PUBLIC;');
-    expect(sql).toContain('REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated;');
+    expect(sql).toContain('REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated, anon, PUBLIC;');
     expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.field_app_locations, public.field_app_location_shares, public.write_offs FROM authenticated, anon, PUBLIC;');
-    expect(sql).toContain('REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated;');
+    expect(sql).toContain('REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated, anon, PUBLIC;');
     const postflight = sql.slice(sql.indexOf('DO $postflight$'), sql.indexOf('$postflight$;'));
+    // Review round 4: no TRUNCATE for authenticated or anon (anon's check includes PUBLIC's grants).
+    for (const t of ['invoice_line_shares', 'invoice_line_share_snapshots', 'field_app_billing_sets', 'field_app_billing_lines']) {
+      for (const role of ['authenticated', 'anon']) expect(postflight).toContain(`OR has_table_privilege('${role}', 'public.${t}', 'TRUNCATE')`);
+    }
     for (const t of ['field_app_locations', 'field_app_location_shares', 'write_offs']) {
       expect(postflight).toContain(`OR has_table_privilege('authenticated', 'public.${t}', 'INSERT, UPDATE, DELETE, TRUNCATE')`);
       expect(postflight).toContain(`OR NOT has_table_privilege('authenticated', 'public.${t}', 'SELECT')`);

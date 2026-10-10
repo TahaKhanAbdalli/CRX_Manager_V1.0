@@ -39,7 +39,10 @@
  *   5b. CUSTOMER NAMES (Decision 2, Mason 2026-10-10): through get_invoice_customer_names a rep
  *      (and an admin) reads id + farm_name, nothing else, of the customers a non-deleted invoice
  *      names, also another rep's; a rep's direct customers read is unchanged (policy not widened);
- *      drivers and every other role get no rows; anon and service_role cannot execute it;
+ *      drivers, a deactivated rep and every other role get no rows; anon and service_role cannot
+ *      execute it; (review round 4) each of its four reference legs returns its live-invoice
+ *      customer and none returns a customer only a soft-deleted invoice names; sentinels in every
+ *      writable customer column never reach its output;
  *   6. DELIVERIES AND JOBS: reps' and drivers' completions (online, offline replay, split order,
  *      partial delivery against an admin's quick-delivery draft) complete with no invoice, the
  *      office notified and the delivery listed under "Delivered, not invoiced"; an admin then bills
@@ -187,6 +190,8 @@ const LIVE_POLICY_MD5 = {
 const id = (n) => `6f200000-0000-4000-8000-${n.padStart(12, '0')}`;
 const U = {
   ADMIN: id('a1'), ADMIN2: id('a2'), ADMIN_OFF: id('a3'), REP: id('b1'), REP_B: id('b2'),
+  // Review round 4: a DEACTIVATED sales rep (the names reader's "active" half of its role gate).
+  REP_OFF: id('b3'),
   DRIVER: id('d1'), APPLICATOR: id('e1'), ENTITY: id('e2'), NOPROFILE: id('ee'),
 };
 const C1 = id('c1');
@@ -197,6 +202,16 @@ const C3 = id('c3');
 const C4 = id('c4');
 const C5 = id('c5');
 const C6 = id('c6');
+// Review round 4: one customer per remaining reference leg of the names reader, on a live invoice
+// (C7 only by a line share, C8 only by a line-share snapshot) and on a soft-deleted one (C9 only by
+// a customer share, C10 only by a snapshot, C11 only by a line share).
+const C7 = id('c7');
+const C8 = id('c8');
+const C9 = id('c9');
+const C10 = id('ca');
+const C11 = id('cb');
+const NAMES_LIVE_JOB = id('4e01');
+const NAMES_DELETED_JOB = id('4e02');
 const PROD = id('f1');
 const PROD_GAL = id('f2');
 const F1 = id('1001');
@@ -619,6 +634,7 @@ function seed() {
     [U.ADMIN, 'admin', 'Admin', 9], [U.ADMIN2, 'admin', 'Admin Two', 8], [U.ADMIN_OFF, 'admin', 'Deactivated Admin', 7],
     [U.REP, 'sales_rep', 'Rep', 6], [U.REP_B, 'sales_rep', 'Rep B', 5], [U.DRIVER, 'driver', 'Driver', 4],
     [U.APPLICATOR, 'applicator', 'Applicator', 3], [U.ENTITY, 'entity_recipient', 'Entity Recipient', 2],
+    [U.REP_OFF, 'sales_rep', 'Deactivated Rep', 1],
   ];
   // Deactivating a profile syncs auth.users.banned_until (live GoTrue column the image's stub
   // auth.users lacks); add it so the deactivated admin is made the way production makes one.
@@ -631,7 +647,7 @@ function seed() {
       ${users.map(([u, role, label]) => `('${u}', 'ao-prover-${u.slice(-2)}@example.invalid', '{"full_name":"[PROVER] ${label}","role":"${role}"}'::jsonb)`).join(',\n      ')};
     ${users.map(([u, , , minutes]) => `UPDATE public.profiles SET created_at = now() - interval '${minutes} minutes' WHERE id = '${u}';`).join('\n    ')}
     ${claims(U.ADMIN)}
-    UPDATE public.profiles SET is_active = false WHERE id = '${U.ADMIN_OFF}';
+    UPDATE public.profiles SET is_active = false WHERE id IN ('${U.ADMIN_OFF}', '${U.REP_OFF}');
     INSERT INTO public.customers (id, farm_name, assigned_sales_rep, is_active) VALUES
       ('${C1}', '[PROVER] Rep Farm', '${U.REP}', true),
       ('${C2}', '[PROVER] Rep Farm Two', '${U.REP}', true),
@@ -656,7 +672,7 @@ function seed() {
       ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value;
     COMMIT;`);
   assert.equal(scalar(`SELECT string_agg(role || ':' || is_active, ',' ORDER BY created_at) FROM public.profiles WHERE id::text LIKE '6f200000-%';`),
-    'admin:true,admin:true,admin:false,sales_rep:true,sales_rep:true,driver:true,applicator:true,entity_recipient:true', 'the seeded roles are not what the proof needs');
+    'admin:true,admin:true,admin:false,sales_rep:true,sales_rep:true,driver:true,applicator:true,entity_recipient:true,sales_rep:false', 'the seeded roles are not what the proof needs');
 }
 function activeAdmins() { return Number(scalar("SELECT count(*) FROM public.profiles WHERE role = 'admin' AND is_active = true;")); }
 function activeAdminIds() { return scalar("SELECT string_agg(id::text, ',' ORDER BY id) FROM public.profiles WHERE role = 'admin' AND is_active = true;"); }
@@ -799,45 +815,86 @@ function tableAccess(phase) {
 /**
  * Decision 2 (Mason 2026-10-10): reps SEE CUSTOMER NAMES on invoices, names only. C3 (an invoice's
  * customer) and C4 (only a customer share on that invoice) belong to REP_B, not to U.REP; C5 is on
- * no invoice; C6 only on a soft-deleted invoice. C3 and C4 carry a contact and an address that must
- * never reach a rep.
+ * no invoice; C6 only on a soft-deleted invoice. Review round 4: every reference leg is exercised
+ * both ways - C7 (only a line share) and C8 (only a line-share snapshot) on live invoices must be
+ * returned; C9 (customer share), C10 (snapshot) and C11 (line share), each only on soft-deleted
+ * invoices, must not. Every customer column the fixture can write carries a sentinel ("Secret" in
+ * text, 777 in numbers) that must never reach the reader's output.
  */
+const NAMES_FIXTURE_IDS = [C3, C4, C5, C6, C7, C8, C9, C10, C11];
 function customerNames(phase) {
-  const fixture = `INSERT INTO public.customers (id, farm_name, assigned_sales_rep, is_active, contact_name, billing_address) VALUES
-      ('${C4}', '[PROVER] Share Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd'),
-      ('${C5}', '[PROVER] No Invoice Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd'),
-      ('${C6}', '[PROVER] Deleted Invoice Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd');
-  UPDATE public.customers SET contact_name = '[PROVER] Secret Contact', billing_address = '1 Secret Rd' WHERE id = '${C3}';
+  const farm = { [C4]: 'Share Farm', [C5]: 'No Invoice Farm', [C6]: 'Deleted Invoice Farm', [C7]: 'Line Share Farm', [C8]: 'Snapshot Farm',
+    [C9]: 'Deleted Share Farm', [C10]: 'Deleted Snapshot Farm', [C11]: 'Deleted Line Share Farm' };
+  const ofGroupItems = (guc) => `(SELECT ls.id FROM public.invoice_line_shares ls JOIN public.invoice_items ii ON ii.id = ls.invoice_item_id
+      JOIN public.invoices i ON i.id = ii.invoice_id WHERE i.invoice_group_id = current_setting('${guc}')::uuid ORDER BY ls.id LIMIT 1)`;
+  const snapshot = (guc, customer) => `INSERT INTO public.invoice_line_share_snapshots (invoice_id, customer_id, split_micro_pct, unit_price_cents, amount_cents)
+    VALUES (current_setting('${guc}')::uuid, '${customer}', 1000000, 100, 100);`;
+  const fixture = `INSERT INTO public.customers (id, farm_name, assigned_sales_rep, is_active) VALUES
+      ${Object.entries(farm).map(([c, n]) => `('${c}', '[PROVER] ${n}', '${U.REP_B}', true)`).join(',\n      ')};
+  UPDATE public.customers SET contact_name = '[PROVER] Secret Contact', billing_address = '1 Secret Rd', phone = 'Secret-phone',
+      email = 'secret-email@example.invalid', notes = 'Secret-notes', payment_terms = 'Secret-terms', shipping_address = 'Secret-shipping',
+      city = 'Secret-city', state = 'Secret-state', zip = 'Secret-zip', account_number = 'Secret-account-' || right(id::text, 2),
+      credit_limit_cents = 7770001, prepay_balance_cents = 7770002, finance_charge_rate = 7.77, finance_charge_grace_days = 777,
+      total_acres = 7770.5, corn_acres = 7771.5, soybean_acres = 7772.5, other_acres = 7773.5,
+      default_commission_split = '{"Secret": "Secret-split"}'::jsonb
+    WHERE id IN (${NAMES_FIXTURE_IDS.map((c) => `'${c}'`).join(', ')});
   ${miscDraftSql('prover.inv_c3', `names-c3-${phase}`, 1700, C3)}
   RESET ROLE;
   INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents)
     VALUES (current_setting('prover.inv_c3')::uuid, '${C4}', '[PROVER] Share Farm', 100, 1700);
+  ${snapshot('prover.inv_c3', C8)}
   ${miscDraftSql('prover.inv_c6', `names-c6-${phase}`, 1800, C6)}
   RESET ROLE;
-  UPDATE public.invoices SET deleted_at = now() WHERE id = current_setting('prover.inv_c6')::uuid;`;
-  const ask = `ARRAY['${C3}', '${C4}', '${C5}', '${C6}']::uuid[]`;
+  INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents)
+    VALUES (current_setting('prover.inv_c6')::uuid, '${C9}', '[PROVER] Deleted Share Farm', 100, 1800);
+  ${snapshot('prover.inv_c6', C10)}
+  UPDATE public.invoices SET deleted_at = now() WHERE id = current_setting('prover.inv_c6')::uuid;
+  ${faGroupSql(`names-live-${phase}`, { job: NAMES_LIVE_JOB })}
+  RESET ROLE;
+  SELECT set_config('prover.names_live', current_setting('prover.group'), true);
+  UPDATE public.invoice_line_shares SET customer_id = '${C7}' WHERE id = ${ofGroupItems('prover.names_live')};
+  ${faGroupSql(`names-del-${phase}`, { job: NAMES_DELETED_JOB })}
+  RESET ROLE;
+  SELECT set_config('prover.names_del', current_setting('prover.group'), true);
+  UPDATE public.invoice_line_shares SET customer_id = '${C11}' WHERE id = ${ofGroupItems('prover.names_del')};
+  UPDATE public.invoices SET deleted_at = now() WHERE invoice_group_id = current_setting('prover.names_del')::uuid;
+  DO $names_fx$
+  BEGIN
+    IF (SELECT count(*) FROM public.invoice_line_shares WHERE customer_id IN ('${C7}', '${C11}')) <> 2
+       OR (SELECT count(*) FROM public.invoices WHERE invoice_group_id = current_setting('prover.names_del')::uuid AND deleted_at IS NULL) <> 0
+       OR (SELECT count(*) FROM public.invoices WHERE invoice_group_id = current_setting('prover.names_live')::uuid AND deleted_at IS NULL) = 0 THEN
+      RAISE EXCEPTION 'PROVER_FIXTURE: the names fixture is not what the proof needs';
+    END IF;
+  END
+  $names_fx$;`;
+  const ask = `ARRAY[${NAMES_FIXTURE_IDS.map((c) => `'${c}'`).join(', ')}]::uuid[]`;
   const names = `(SELECT COALESCE(string_agg(cn.id || '=' || cn.farm_name, ',' ORDER BY cn.farm_name), '') FROM public.get_invoice_customer_names(${ask}) cn)`;
   const keys = `(SELECT COALESCE(string_agg(DISTINCT k, ',' ORDER BY k), '') FROM public.get_invoice_customer_names(${ask}) cn, jsonb_object_keys(to_jsonb(cn)) k)`;
-  const leak = `(SELECT COALESCE(string_agg(to_jsonb(cn)::text, ','), '') ~ 'Secret' FROM public.get_invoice_customer_names(${ask}) cn)`;
+  const leak = `(SELECT COALESCE(string_agg(to_jsonb(cn)::text, ','), '') ~* '(secret|777)' FROM public.get_invoice_customer_names(${ask}) cn)`;
+  // One probe per caller: names # keys # leak.
+  const all = `(SELECT ${names} || '#' || ${keys} || '#' || ${leak}::text)`;
   // The direct table read the invoice pages use today: farm name, and the PDF's address fields.
   const direct = `(SELECT count(*) || ':' || COALESCE(string_agg(farm_name || '/' || COALESCE(contact_name, '') || '/' || COALESCE(billing_address, ''), ',' ORDER BY farm_name), '')
-    FROM public.customers WHERE id IN ('${C3}', '${C4}', '${C5}', '${C6}'))`;
-  const expected = `ok|${C3}=[PROVER] Rep B Farm,${C4}=[PROVER] Share Farm`;
+    FROM public.customers WHERE id IN (${NAMES_FIXTURE_IDS.map((c) => `'${c}'`).join(', ')}))`;
+  const expected = `${C7}=[PROVER] Line Share Farm,${C3}=[PROVER] Rep B Farm,${C4}=[PROVER] Share Farm,${C8}=[PROVER] Snapshot Farm`;
   const repDirect = attempt(U.REP, fixture, direct);
   assert.equal(repDirect.result, 'ok|0:', `${phase}: a sales rep read customer rows that are not assigned to them directly: ${repDirect.result}`);
-  assert.match(attempt(U.ADMIN, fixture, direct).result, /^ok\|4:/, `${phase}: the admin's direct customer read is not the fixture`);
+  assert.match(attempt(U.ADMIN, fixture, direct).result, new RegExp(`^ok\\|${NAMES_FIXTURE_IDS.length}:`), `${phase}: the admin's direct customer read is not the fixture`);
   if (phase === 'before') {
     assert.equal(scalar("SELECT to_regprocedure('public.get_invoice_customer_names(uuid[])') IS NULL;"), 't', 'BEFORE: the names reader already exists');
     return { rep: repDirect.result };
   }
   assert.equal(scalar("SELECT pg_get_function_result('public.get_invoice_customer_names(uuid[])'::regprocedure);"), 'TABLE(id uuid, farm_name text)', 'AFTER: the names reader returns more than id and farm_name');
   for (const [who, uid] of [['sales rep', U.REP], ['other sales rep', U.REP_B], ['admin', U.ADMIN]]) {
-    assert.equal(attempt(uid, fixture, names).result, expected, `AFTER: ${who} does not read exactly the names of the customers a live invoice names`);
-    assert.equal(attempt(uid, fixture, keys).result, 'ok|farm_name,id', `AFTER: the names reader returns other columns to ${who}`);
-    assert.equal(attempt(uid, fixture, leak).result, 'ok|false', `AFTER: the names reader leaks a contact or address to ${who}`);
+    const r = attempt(uid, fixture, all).result;
+    assert.match(r, /^ok\|/, `AFTER: the names probe failed for ${who}: ${r}`);
+    const [got, gotKeys, gotLeak] = r.slice(3).split('#');
+    assert.equal(got, expected, `AFTER: ${who} does not read exactly the names of the customers a live invoice names`);
+    assert.equal(gotKeys, 'farm_name,id', `AFTER: the names reader returns other columns to ${who}`);
+    assert.equal(gotLeak, 'false', `AFTER: the names reader leaks a contact, address or other customer field to ${who}`);
   }
   assert.equal(attempt(U.REP, fixture, `(SELECT count(*) FROM public.get_invoice_customer_names(NULL))`).result, 'ok|0', 'AFTER: a NULL id list returned rows');
-  for (const [who, uid] of NON_ADMINS.filter(([w]) => w !== 'sales rep')) {
+  for (const [who, uid] of [...NON_ADMINS.filter(([w]) => w !== 'sales rep'), ['deactivated sales rep', U.REP_OFF]]) {
     assert.equal(attempt(uid, fixture, names).result, 'ok|', `AFTER: the names reader returned names to a ${who}`);
   }
   for (const role of ['anon', 'service_role']) {
@@ -1270,6 +1327,33 @@ async function versionChecks(phase) {
   const shareStale = attempt(U.ADMIN, `INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents)
       VALUES ('${inv2}', '${C1}', '[PROVER] share added after review', 100, 1500);`, `public.post_invoice('${inv2}', 'prover-ao-ver-share', '${v2}')`);
   assert.match(shareStale.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: an invoice_shares change did not change the version: ${shareStale.result}`);
+  // Review round 4 (Luna MED): the customer's payment terms count. The assigned sales rep edits
+  // them through RLS (customers_update) after the admin's review; the post must refuse.
+  const termsStale = attempt(U.ADMIN, `${asUser(U.REP)}
+    UPDATE public.customers SET payment_terms = '[PROVER] Net 90 after review' WHERE id = '${C1}';
+    RESET ROLE;
+    DO $terms_fx$ BEGIN
+      IF (SELECT payment_terms FROM public.customers WHERE id = '${C1}') IS DISTINCT FROM '[PROVER] Net 90 after review' THEN
+        RAISE EXCEPTION 'PROVER_FIXTURE: the assigned rep could not edit the customer terms';
+      END IF;
+    END $terms_fx$;`, `public.post_invoice('${inv2}', 'prover-ao-ver-terms', '${v2}')`);
+  assert.match(termsStale.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a customer payment-terms change did not change the version: ${termsStale.result}`);
+  // Review round 4 (Luna LOW): a batch key whose stored receipt belongs to ANOTHER operation does
+  // not skip the version re-check (a stale batch is refused as changed), and an unchanged batch
+  // under that key is still refused by the frozen body; nothing posts either way.
+  const xopKey = `prover-ao-ver-xop-${run}`;
+  const xopFx = `${miscDraftSql('prover.b1', 'xop1')}\n${miscDraftSql('prover.b2', 'xop2')}
+    SELECT set_config('prover.bv', public.get_invoice_post_version(ARRAY[current_setting('prover.b1')::uuid, current_setting('prover.b2')::uuid]), true);
+    RESET ROLE;
+    INSERT INTO public.idempotency_keys (idempotency_key, operation, result, expires_at) VALUES ('${xopKey}', 'post_invoice', '{}'::jsonb, now() + interval '1 hour');`;
+  const xopCall = `public.batch_post_invoices(ARRAY[current_setting('prover.b1')::uuid, current_setting('prover.b2')::uuid], '${xopKey}', current_setting('prover.bv'))`;
+  const xopStatus = { after: "SELECT 'BSTATUS|' || (SELECT string_agg(status, ',') FROM public.invoices WHERE id IN (current_setting('prover.b1')::uuid, current_setting('prover.b2')::uuid));" };
+  const xopStale = attempt(U.ADMIN, `${xopFx}\n    UPDATE public.invoices SET header_notes = '[PROVER] xop edited' WHERE id = current_setting('prover.b2')::uuid;`, xopCall, xopStatus);
+  assert.match(xopStale.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a batch whose key holds another operation's receipt skipped the version re-check: ${xopStale.result}`);
+  assert.ok(xopStale.lines.includes('BSTATUS|draft,draft'), 'AFTER: the refused cross-operation batch posted something');
+  const xopSame = attempt(U.ADMIN, xopFx, xopCall, xopStatus);
+  assert.match(xopSame.result, /^P0001\|IDEMPOTENCY_CROSS_OP_KEY_REUSE: /, `AFTER: an unchanged batch under another operation's key was not refused by the frozen body: ${xopSame.result}`);
+  assert.ok(xopSame.lines.includes('BSTATUS|draft,draft'), 'AFTER: the cross-operation batch posted something');
   // Same-key duplicate posts (two sessions): the second waits and replays.
   const dup = await dupKeyPost(`${phase}_${process.pid}_${versionRun}`);
   assert.equal(dup.result, 'ok', `AFTER: a same-key duplicate of a versioned post did not replay the first's success: ${dup.result}`);
@@ -1565,6 +1649,8 @@ async function proof() {
     ['the names reader already exists', 'CREATE FUNCTION public.get_invoice_customer_names(uuid[]) RETURNS TABLE(id uuid, farm_name text) LANGUAGE sql AS $$ SELECT NULL::uuid, NULL::text $$;', 'PREFLIGHT_ALREADY_APPLIED'],
     ['customers read policy widened', 'ALTER POLICY customers_select ON public.customers USING (true);', 'PREFLIGHT_POLICY_DRIFT'],
     ['extra customers policy', 'CREATE POLICY prover_extra ON public.customers FOR SELECT TO authenticated USING (true);', 'PREFLIGHT_POLICY_SET_DRIFT'],
+    // Review round 4: the second pinned customers read policy drifts too.
+    ['customers dispatchee read policy widened', 'ALTER POLICY customers_select_location_dispatchee ON public.customers USING (true);', 'PREFLIGHT_POLICY_DRIFT'],
   ];
   for (const [label, driftSql, code] of drifts) {
     const r = docker(psqlArgs(), { input: `BEGIN;\n${driftSql}\n\\i /tmp/candidate.sql\nCOMMIT;\n`, allowFailure: true });
@@ -1572,7 +1658,7 @@ async function proof() {
     assert.match(`${r.stdout}\n${r.stderr}`, new RegExp(code), `PREFLIGHT (${label}): wrong refusal, expected ${code}:\n${r.stderr}`);
   }
   for (const [signature, pin] of Object.entries(LIVE_BODY_MD5)) assert.equal(lfBodyMd5(signature), pin, `PREFLIGHT: a rolled-back drift left ${signature} changed`);
-  console.log(`[prover] PREFLIGHT: ${drifts.length} drifts (wrapped body, ACL, overload, security mode; both re-emitted bodies; role helper; posting lock-order impl; both sweep lists; a replaced policy; an extra policy; #889 not in the ledger; already applied; the names reader already present; customers_select widened; an extra customers policy) each refused with its own code; nothing changed`);
+  console.log(`[prover] PREFLIGHT: ${drifts.length} drifts (wrapped body, ACL, overload, security mode; both re-emitted bodies; role helper; posting lock-order impl; both sweep lists; a replaced policy; an extra policy; #889 not in the ledger; already applied; the names reader already present; customers_select widened; an extra customers policy; customers_select_location_dispatchee widened) each refused with its own code; nothing changed`);
 
   // 2c. POSTFLIGHT mutants: the whole apply rolls back.
   const candidateText = lf(CANDIDATE);
@@ -1624,6 +1710,17 @@ CREATE TRIGGER prover_invoice_trigger AFTER INSERT ON public.prover_trigger_sour
       .replace('  SELECT c.id, c.farm_name\n', '  SELECT c.id, c.farm_name, c.contact_name\n')), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
     ['customers_select widened in the file', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', '-- prover mutant\nALTER POLICY customers_select ON public.customers USING (true);\n-- POSTFLIGHT: the exact reviewed result'), /POSTFLIGHT_CUSTOMERS_POLICY/],
     ['an extra customers read policy in the file', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', '-- prover mutant\nCREATE POLICY prover_rep_customers ON public.customers FOR SELECT TO authenticated USING (public.is_sales_rep());\n-- POSTFLIGHT: the exact reviewed result'), /POSTFLIGHT_CUSTOMERS_POLICY/],
+    // Review round 4: every other branch of the names-reader contract, each with the body pin
+    // still matching, and the second customers read policy.
+    ['the names reader without its pinned search_path (pin matched)', swapWrapper('get_invoice_customer_names', (s) => uniqueCut(s, ' SECURITY DEFINER\n SET search_path = public, pg_temp\n', ' SECURITY DEFINER\n')), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['the names reader as SECURITY INVOKER (pin matched)', swapWrapper('get_invoice_customer_names', (s) => uniqueCut(s, ' SECURITY DEFINER\n', ' SECURITY INVOKER\n')), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['the names reader VOLATILE (pin matched)', swapWrapper('get_invoice_customer_names', (s) => uniqueCut(s, ' STABLE\n', ' VOLATILE\n')), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['the names reader executable by service_role', uniqueCut(candidateText, 'GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;\n', 'GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated, service_role;\n'), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['a second names reader overload', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', `-- prover mutant
+CREATE FUNCTION public.get_invoice_customer_names(p_customer_ids uuid[], p_all boolean) RETURNS TABLE(id uuid, farm_name text) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT c.id, c.farm_name FROM public.customers c WHERE p_all $f$;
+REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[], boolean) FROM PUBLIC, anon, service_role;
+-- POSTFLIGHT: the exact reviewed result`), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['the customers dispatchee read policy widened in the file', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', '-- prover mutant\nALTER POLICY customers_select_location_dispatchee ON public.customers USING (true);\n-- POSTFLIGHT: the exact reviewed result'), /POSTFLIGHT_CUSTOMERS_POLICY/],
   ];
   for (const [label, text, code] of postflightMutants) {
     assert.notEqual(text, candidateText, `POSTFLIGHT (${label}): the mutant is the candidate`);
@@ -1939,31 +2036,46 @@ async function mutations({ adminBefore, held }) {
   // (8b) Decision 2: each gate of the names-only reader, and the customers policy left unwidened.
   const namesReader = statementOf('CREATE FUNCTION public.get_invoice_customer_names(');
   const namesGrants = 'REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM PUBLIC, anon, authenticated, service_role;\nGRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;\n';
+  // Review round 4: every leg is mutated both ways (dropped, and widened past its invoice join or
+  // its soft-delete filter), and each mutant must fail for its own named reason.
+  const wrongNames = /does not read exactly the names/;
+  const legDeleted = (alias) => [`WHERE ${alias}.customer_id = c.id\n                        AND i.deleted_at IS NULL`, `WHERE ${alias}.customer_id = c.id\n                        AND (i.deleted_at IS NULL OR true)`];
   const namesMutants = [
-    ['names reader without its role gate', (s) => once(s, '     AND (public.is_admin() OR public.is_sales_rep())\n', '', 'names role gate')],
-    ['names reader without its invoice-reference gate', (s) => once(s, '     AND (EXISTS (SELECT 1\n', '     AND (true OR EXISTS (SELECT 1\n', 'names reference gate')],
-    ['names reader counting a soft-deleted invoice', (s) => once(s, '                   WHERE i.customer_id = c.id\n                     AND i.deleted_at IS NULL)\n', '                   WHERE i.customer_id = c.id)\n', 'names deleted_at')],
-    ['names reader without its customer-share leg', (s) => once(s, '                      WHERE s.customer_id = c.id\n', '                      WHERE false AND s.customer_id = c.id\n', 'names share leg')],
+    ['names reader without its role gate', (s) => once(s, '     AND (public.is_admin() OR public.is_sales_rep())\n', '', 'names role gate'), /returned names to a driver/],
+    ['names reader with a role gate that ignores is_active', (s) => once(s, '     AND (public.is_admin() OR public.is_sales_rep())\n',
+      "     AND (public.is_admin() OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'sales_rep'))\n", 'names role-only gate'), /returned names to a deactivated sales rep/],
+    ['names reader without its invoice-reference gate', (s) => once(s, '     AND (EXISTS (SELECT 1\n', '     AND (true OR EXISTS (SELECT 1\n', 'names reference gate'), wrongNames],
+    ['names reader counting a soft-deleted invoice', (s) => once(s, '                   WHERE i.customer_id = c.id\n                     AND i.deleted_at IS NULL)\n', '                   WHERE i.customer_id = c.id)\n', 'names deleted_at'), wrongNames],
+    ['names reader without its customer-share leg', (s) => once(s, '                      WHERE s.customer_id = c.id\n', '                      WHERE false AND s.customer_id = c.id\n', 'names share leg'), wrongNames],
+    ['names reader without its line-share leg', (s) => once(s, '                      WHERE ls.customer_id = c.id\n', '                      WHERE false AND ls.customer_id = c.id\n', 'names line-share leg'), wrongNames],
+    ['names reader without its snapshot leg', (s) => once(s, '                      WHERE sn.customer_id = c.id\n', '                      WHERE false AND sn.customer_id = c.id\n', 'names snapshot leg'), wrongNames],
+    ['names reader share leg joined to any invoice', (s) => once(s, 'JOIN public.invoices i ON i.id = s.invoice_id', 'JOIN public.invoices i ON true', 'names share join'), wrongNames],
+    ['names reader line-share leg joined to any invoice', (s) => once(s, 'JOIN public.invoices i ON i.id = ii.invoice_id', 'JOIN public.invoices i ON true', 'names line-share join'), wrongNames],
+    ['names reader snapshot leg joined to any invoice', (s) => once(s, 'JOIN public.invoices i ON i.id = sn.invoice_id', 'JOIN public.invoices i ON true', 'names snapshot join'), wrongNames],
+    ['names reader share leg counting a soft-deleted invoice', (s) => once(s, ...legDeleted('s'), 'names share deleted_at'), wrongNames],
+    ['names reader line-share leg counting a soft-deleted invoice', (s) => once(s, ...legDeleted('ls'), 'names line-share deleted_at'), wrongNames],
+    ['names reader snapshot leg counting a soft-deleted invoice', (s) => once(s, ...legDeleted('sn'), 'names snapshot deleted_at'), wrongNames],
+    ['names reader folding the phone and account number into farm_name', (s) => once(s, '  SELECT c.id, c.farm_name\n', "  SELECT c.id, concat_ws(' ', c.farm_name, c.phone, c.account_number) AS farm_name\n", 'names concat'), wrongNames],
   ];
-  for (const [label, mutate] of namesMutants) {
+  for (const [label, mutate, expected] of namesMutants) {
     const mutant = mutate(namesReader);
     assert.notEqual(mutant, namesReader, `mutation ${label}: changed nothing`);
     applyText('mutant-names.sql', mutant);
-    detect(label, () => customerNames('after'));
+    detect(label, () => customerNames('after'), expected);
     applyText('restore-names.sql', namesReader);
   }
   // Another column returned (the return type changes, so drop and re-create; restored the same way).
   applyText('mutant-names-column.sql', `DROP FUNCTION public.get_invoice_customer_names(uuid[]);\n${namesReader
     .replace('RETURNS TABLE(id uuid, farm_name text)', 'RETURNS TABLE(id uuid, farm_name text, contact_name text)')
     .replace('  SELECT c.id, c.farm_name\n', '  SELECT c.id, c.farm_name, c.contact_name\n')}${namesGrants}`);
-  detect('names reader returning the contact name too', () => customerNames('after'));
+  detect('names reader returning the contact name too', () => customerNames('after'), /returns more than id and farm_name|returns other columns/);
   applyText('restore-names-column.sql', `DROP FUNCTION public.get_invoice_customer_names(uuid[]);\n${namesReader}${namesGrants}`);
   psql('GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO anon;');
-  detect('names reader executable by anon', () => customerNames('after'));
+  detect('names reader executable by anon', () => customerNames('after'), /anon can execute the names reader/);
   psql('REVOKE EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM anon;');
   const customersSelect = docker([...psqlArgs(), '-A', '-t'], { input: "SELECT qual FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'customers_select';" }).stdout.trim();
   psql(`ALTER POLICY customers_select ON public.customers USING (${customersSelect} OR is_sales_rep());`);
-  detect('customers_select widened to every sales rep', () => customerNames('after'));
+  detect('customers_select widened to every sales rep', () => customerNames('after'), /read customer rows that are not assigned to them/);
   psql(`ALTER POLICY customers_select ON public.customers USING (${customersSelect});`);
   assert.equal(policyMd5('customers', 'customers_select'), LIVE_POLICY_MD5['customers.customers_select'], 'RESTORED: customers_select is not its live pin');
   customerNames('after');
@@ -1991,6 +2103,10 @@ async function mutations({ adminBefore, held }) {
   applyText('mutant-ver-batch-unlocked.sql', once(batchPost, ' ORDER BY i.id FOR UPDATE;', ';', 'batch unlocked'));
   await detectAsync('batch_post_invoices version check without the row locks', () => versionChecks('after'));
   applyText('restore-ver-batch-unlocked.sql', batchPost);
+  // Review round 4: the batch receipt lookup without its operation scope.
+  applyText('mutant-ver-batch-xop.sql', once(batchPost, "           AND k.operation = 'batch_post_invoices'\n", '', 'batch operation scope'));
+  await detectAsync('batch_post_invoices receipt lookup not scoped to its operation', () => versionChecks('after'), /another operation's receipt skipped the version re-check/);
+  applyText('restore-ver-batch-xop.sql', batchPost);
   // The group check fingerprints soft-deleted members while the reader skips them.
   applyText('mutant-ver-group-deleted.sql', once(groupPost, '                 WHERE i.invoice_group_id = p_invoice_group_id\n                   AND i.deleted_at IS NULL\n', '                 WHERE i.invoice_group_id = p_invoice_group_id\n', 'group deleted_at'));
   await detectAsync('post_invoice_group counting soft-deleted members', () => versionChecks('after'));
@@ -2014,7 +2130,11 @@ async function mutations({ adminBefore, held }) {
                                 WHERE lii.invoice_id = i.id), '[]')\n`, ''],
     'the customer shares': [`           || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id)::text
                                  FROM public.invoice_shares s
-                                WHERE s.invoice_id = i.id), '[]'),\n`, ',\n'],
+                                WHERE s.invoice_id = i.id), '[]')\n`, ''],
+    // Review round 4: the invoice customer's payment terms (the post's due-date fallback).
+    'the customer payment terms': [`           || '|' || COALESCE(to_jsonb((SELECT c.payment_terms
+                                          FROM public.customers c
+                                         WHERE c.id = i.customer_id))::text, 'null'),\n`, ',\n'],
   };
   for (const [leg, [cut, replacement]] of Object.entries(legs)) {
     applyText('mutant-fingerprint.sql', once(fingerprint, cut, replacement, `fingerprint ${leg}`));
@@ -2052,7 +2172,7 @@ async function mutations({ adminBefore, held }) {
     assert.ok(pin, `RESTORED: no postflight pin for ${t}.${p}`);
     assert.equal(policyMd5(t, p), pin, `RESTORED: ${t}.${p} is not its postflight pin`);
   }
-  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate and its admin notification, the quick-delivery coercion, ${layers.length} table-grant layers (2 with the policy widened too, caught by the write landing), ${Object.keys(policyChecks).length} write policies, ${readPolicies.length} read policies, a rep-scoped invoices read and the write_offs rep read, the names reader (its role gate, invoice-reference gate, soft-deleted filter, share leg, an extra column, an anon grant) and customers_select widened, the version check in each of 3 posting wrappers, each posting wrapper's check without its row locks, a group check counting soft-deleted members, a re-check of a stored receipt (same-key duplicate), the fingerprint without each of its 3 child legs, and the sweep accepting a late guard, any DECLARE section, an exception handler after the guard or dynamic SQL each turned the prover red (the completion hunk by its named failure); restored, the matrix, completions, jobs and quick deliveries, reads and direct writes, customer names, split keys, the version checks, the completion race and every write and read policy pin were re-run green (${count} detections)`);
+  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate and its admin notification, the quick-delivery coercion, ${layers.length} table-grant layers (2 with the policy widened too, caught by the write landing), ${Object.keys(policyChecks).length} write policies, ${readPolicies.length} read policies, a rep-scoped invoices read and the write_offs rep read, the names reader (its role gate, a role gate ignoring is_active, its invoice-reference gate, the invoices leg's soft-deleted filter, each of its other three legs dropped, joined to any invoice and counting a soft-deleted invoice, other customer fields folded into farm_name, an extra column, an anon grant) and customers_select widened, the version check in each of 3 posting wrappers, each posting wrapper's check without its row locks, a group check counting soft-deleted members, a re-check of a stored receipt (same-key duplicate), the fingerprint without each of its 3 child legs and the customer's payment terms, the batch receipt lookup without its operation scope, and the sweep accepting a late guard, any DECLARE section, an exception handler after the guard or dynamic SQL each turned the prover red (the completion hunk by its named failure); restored, the matrix, completions, jobs and quick deliveries, reads and direct writes, customer names, split keys, the version checks, the completion race and every write and read policy pin were re-run green (${count} detections)`);
   return count;
 }
 

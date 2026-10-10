@@ -16,6 +16,9 @@
 --   5   a rep's delivery completion completes with no invoice and no number, one
 --       delivery_invoice_pending_admin activity row and one notification per active admin;
 --   6   a rep (as authenticated, through RLS) reads an admin's invoice and its lines;
+--   6b  (Decision 2, Mason 2026-10-10) for a customer not assigned to the rep that an invoice
+--       names, a rep's direct customers read returns nothing while get_invoice_customer_names
+--       returns exactly (id, farm_name); a driver gets no names;
 --   7   a post with the version the admin reviewed is refused once the invoice changed
 --       (INVOICE_CHANGED_SINCE_REVIEW) and goes through with the current version;
 --   8   the catalog sweep finds no function authenticated can run that reaches an invoice write
@@ -49,6 +52,8 @@ DECLARE
   v_admins integer;
   v_call text;
   v_unclassified text;
+  v_other_customer uuid;
+  v_names text;
   v_calls text[] := ARRAY[
     $c$SELECT public.save_invoice('{}'::jsonb, '[]'::jsonb, 'e2e-ao-1')$c$,
     $c$SELECT public.save_field_app_invoice(gen_random_uuid(), '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, auth.uid(), NULL, 'e2e-ao-2')$c$,
@@ -207,6 +212,37 @@ BEGIN
   EXECUTE 'RESET ROLE';
   IF v_count <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: step 6: a rep could not read an admin''s invoice and its line (saw % rows)', v_count;
+  END IF;
+
+  -- Step 6b: names only, for a customer the rep is not assigned that an admin's invoice names.
+  INSERT INTO public.customers (farm_name, assigned_sales_rep, contact_name, phone, billing_address)
+  VALUES ('[E2E] Other Rep Farm ' || v_suffix, NULL, '[E2E] Secret Contact', '555-0100', '1 Secret Rd')
+  RETURNING id INTO v_other_customer;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  PERFORM public.save_invoice(
+    jsonb_build_object('customer_id', v_other_customer, 'invoice_type', 'misc_charge', 'status', 'draft', 'invoice_date', v_today, 'header_notes', '[E2E] names'),
+    jsonb_build_array(jsonb_build_object('description', '[E2E] fee', 'quantity', 1, 'unit_price_cents', 1500, 'extended_cents', 1500)),
+    'e2e-ao-misc-names-' || v_suffix);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO v_count FROM public.customers WHERE id = v_other_customer;
+  SELECT string_agg(to_jsonb(cn)::text, ',') INTO v_names FROM public.get_invoice_customer_names(ARRAY[v_other_customer]) cn;
+  EXECUTE 'RESET ROLE';
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: step 6b: a rep read a customer row that is not assigned to them directly';
+  END IF;
+  IF v_names IS DISTINCT FROM jsonb_build_object('id', v_other_customer, 'farm_name', '[E2E] Other Rep Farm ' || v_suffix)::text THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: step 6b: the names reader did not return exactly (id, farm_name) to a rep: %', v_names;
+  END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_driver, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_driver::text, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT count(*) INTO v_count FROM public.get_invoice_customer_names(ARRAY[v_other_customer]);
+  EXECUTE 'RESET ROLE';
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: step 6b: the names reader returned names to a driver';
   END IF;
 
   -- Step 7: the posting version check.

@@ -52,7 +52,8 @@ A service_role caller has no `auth.uid()`, so the guard refuses it too (no serve
   snapshot), to an active admin or sales rep; every other caller gets no rows. `customers` RLS is
   unchanged. Phase 2 switches the invoice pages to it.
 - Internal: `_require_invoicing_admin()` (void) and `_invoice_review_fingerprint(uuid[])` (md5 of each
-  invoice row, its lines, line shares and customer shares; `TimeZone = UTC`), both owner-only.
+  invoice row, its lines, line shares, customer shares and its customer's `payment_terms`;
+  `TimeZone = UTC`), both owner-only.
 - Unchanged by design: `cancel_delivery`, `batch_cancel_deliveries`, `price_order`,
   `update_order_items`, `create_rush_order` (the invoice-upkeep allowlist, Mason-approved 2026-10-10
   "1.a": they keep updating an admin's draft or unposted invoice), `allocate_payment`, and the

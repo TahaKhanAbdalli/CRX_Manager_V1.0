@@ -10,7 +10,9 @@
 -- 2026-10-10, decision 2; see "Decision 2" below). The customers table policy is NOT widened.
 -- WHAT IS NOT CHANGED: INVOICE UPKEEP (Mason-approved 2026-10-10, in chat, "1.a": keep
 -- auto-updating, exactly as today). These are side effects of order and delivery work, not
--- invoicing RPCs, and a sales rep (or driver) keeps them on an admin's DRAFT or UNPOSTED invoice;
+-- invoicing RPCs: a sales rep's order pricing, line edits, rush orders and delivery cancels, and a
+-- rep's or driver's partial delivery completion, keep updating an admin's DRAFT or UNPOSTED invoice
+-- (drivers reach only the completion resize: the other paths role-gate to admin and sales_rep);
 -- a POSTED invoice never changes; an admin still reviews and posts. The upkeep allowlist is exactly:
 --   price_order, update_order_items, create_rush_order (re-price, re-date or detach the lines of an
 --     admin's draft or unposted invoice on that order, and refresh its totals);
@@ -101,7 +103,9 @@
 --     field_app_location_shares and write_offs are revoked from authenticated, anon and PUBLIC (no
 --     app code writes them directly; every writer is a postgres-owned SECURITY DEFINER function,
 --     read live 2026-10-09); TRUNCATE on invoice_line_shares, invoice_line_share_snapshots,
---     field_app_billing_sets and field_app_billing_lines from authenticated; the INSERT policies
+--     field_app_billing_sets and field_app_billing_lines from authenticated, anon and PUBLIC
+--     (review round 4: anon and PUBLIC held no TRUNCATE there on live 2026-10-10; revoked and
+--     asserted anyway, so a later grant cannot slip past the postflight); the INSERT policies
 --     invoices_insert, invoice_items_insert, invoice_shares_insert and invoice_line_alloc_insert,
 --     and the INSERT/UPDATE/DELETE policies of field_app_locations and field_app_location_shares,
 --     become is_admin() only (they were is_admin() OR is_sales_rep()).
@@ -149,11 +153,15 @@
 --     the old behaviour, so old callers keep working. The old two/three-argument functions are
 --     renamed away, so exactly one public overload of each name exists and PostgREST cannot see
 --     two callable signatures. The fingerprint is the invoice header plus its lines and shares
---     (the addendum's "header plus lines"); it does not cover what the post reads from other
---     rows at post time (the customer's default payment terms, when the invoice has none, sets
---     the due date; a field invoice's field_app_locations acres). Every writer of those rows is
---     admin-only after this file, and it hashes every invoices column, so any change to the
---     invoice row (updated_at included) refuses a post until the admin reloads.
+--     (the addendum's "header plus lines") plus the invoice customer's payment_terms (review round
+--     4, Luna MED: when the invoice has no terms of its own, the post sets the due date from the
+--     customer's terms, and the assigned sales rep can still edit that customer row under
+--     customers_update, read live 2026-10-10; a terms change after review now refuses the post).
+--     It hashes every invoices column, so any change to the invoice row (updated_at included)
+--     refuses a post until the admin reloads. Not covered: a field invoice's field_app_locations
+--     acres (every writer is admin-only after this file). The customers row is read, not locked:
+--     a terms edit that commits between the wrapper's check and the post's own terms read (the
+--     same transaction, milliseconds apart) can still move the due date; the amount never moves.
 --
 -- CALLERS (MANDATORY comment-stripped pg_proc scan, read live 2026-10-09, every schema): the only
 -- SQL callers of the renamed names are
@@ -514,7 +522,10 @@ AS $function$
                                 WHERE lii.invoice_id = i.id), '[]')
            || '|' || COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id)::text
                                  FROM public.invoice_shares s
-                                WHERE s.invoice_id = i.id), '[]'),
+                                WHERE s.invoice_id = i.id), '[]')
+           || '|' || COALESCE(to_jsonb((SELECT c.payment_terms
+                                          FROM public.customers c
+                                         WHERE c.id = i.customer_id))::text, 'null'),
            chr(10) ORDER BY i.id), ''))
     FROM public.invoices i
    WHERE i.id = ANY (COALESCE(p_invoice_ids, '{}'::uuid[]));
@@ -935,15 +946,16 @@ BEGIN
     END IF;
     IF array_length(p_invoice_ids, 1) IS NOT NULL THEN
       -- The two key locks _claim_bound_lifecycle_idempotency takes, in its order. The receipt
-      -- lookup is key-only on purpose, like that claim: a receipt stored by ANOTHER operation
-      -- skips the re-check here, and the frozen body then refuses the call with
-      -- IDEMPOTENCY_CROSS_OP_KEY_REUSE, so it never posts.
+      -- lookup is scoped to this operation (review round 4): only a batch_post_invoices receipt
+      -- skips the re-check; a receipt stored by ANOTHER operation does not, so this gate never
+      -- relies on the frozen body's IDEMPOTENCY_CROSS_OP_KEY_REUSE refusal (which still follows).
       PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:batch_post_invoices:' || p_idempotency_key, 0));
       PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
       IF NOT EXISTS (
         SELECT 1
           FROM public.idempotency_keys k
          WHERE k.idempotency_key = p_idempotency_key
+           AND k.operation = 'batch_post_invoices'
            AND (k.expires_at IS NULL OR k.expires_at >= now())
       ) THEN
         PERFORM 1 FROM public.invoices i WHERE i.id = ANY (p_invoice_ids) ORDER BY i.id FOR UPDATE;
@@ -2244,7 +2256,7 @@ $function$;
 -- 1h. Table layer (defence in depth: every app write goes through the RPCs above).
 -- =============================================================================================
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.invoice_shares, public.invoice_line_allocations FROM authenticated, anon, PUBLIC;
-REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated;
+REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated, anon, PUBLIC;
 -- Field-application invoice child rows and write-offs: their table grants let a sales rep write
 -- them through the REST API (field_app_locations / _shares RLS allowed is_sales_rep() on any
 -- invoice, draft or posted). Every writer is a postgres-owned SECURITY DEFINER function (read live
@@ -2252,7 +2264,7 @@ REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapsho
 -- apply_write_off, reverse_write_off) and src/ only reads these tables, so nothing legitimate
 -- needs the grants.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.field_app_locations, public.field_app_location_shares, public.write_offs FROM authenticated, anon, PUBLIC;
-REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated;
+REVOKE TRUNCATE ON public.field_app_billing_sets, public.field_app_billing_lines FROM authenticated, anon, PUBLIC;
 
 DROP POLICY field_app_locations_insert ON public.field_app_locations;
 CREATE POLICY field_app_locations_insert ON public.field_app_locations
@@ -2470,7 +2482,7 @@ BEGIN
     ('update_field_app_invoice_billing', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', 'p_invoice_ids uuid[], p_purchase_order_ref text DEFAULT NULL::text, p_payment_terms text DEFAULT NULL::text, p_header_notes text DEFAULT NULL::text, p_due_date date DEFAULT NULL::date, p_footer_notes text DEFAULT NULL::text, p_internal_notes text DEFAULT NULL::text, p_discounts jsonb DEFAULT ''{}''::jsonb, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'b1d361da2cb271ee9fa71bd972339d92', '_update_field_app_invoice_billing_pre_admin_only_20261009', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', '34695e4be9724bf46dc5e962f8f0e478', 'guard'),
     ('post_invoice', 'uuid,text,text', 'p_invoice_id uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'void', 'c7f467aac765b1d2f0cc897b27eca832', '_post_invoice_pre_admin_only_20261009', 'uuid,text', '6a5e3ab75bc63936f23eab85383ff6ad', 'guard'),
     ('post_invoice_group', 'uuid,uuid,text,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '5f3917902a9a86810d48b6e6cadc5d76', '_post_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'd9e36f0dfb055e3cc68c18793e70dbfc', 'guard'),
-    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '83ebbc30b5266e71ccb1b0c96866cef3', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
+    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '23f5dde223ef83fb14281393bc8cdd3d', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
     ('unpost_invoice', 'uuid,uuid,text', 'p_invoice_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '7f6bc25acd00ce5731dea00012fb8b82', '_unpost_invoice_pre_admin_only_20261009', 'uuid,uuid,text', '161f18c3ccd6126a6fb683c5160f82dc', 'guard'),
     ('unpost_invoice_group', 'uuid,uuid,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '4d4fc94b5893849b1799329992075c8f', '_unpost_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'dc476e07621c4c7dc86595442ed1a9f0', 'guard'),
     ('batch_void_invoices', 'uuid[],text,uuid,text', 'p_invoice_ids uuid[], p_void_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'integer', '922e078236eb524367d54addec6c6d42', '_batch_void_invoices_pre_admin_only_20261009', 'uuid[],text,uuid,text', '32fa9718f29e18c8eff4539e36ac84b3', 'guard'),
@@ -2525,7 +2537,7 @@ BEGIN
   IF (SELECT md5(replace(p.prosrc, chr(13), '')) = '629609ce38f7c192abfde5be47848557' AND p.prosecdef AND p.proacl::text = '{postgres=X/postgres}'
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._require_invoicing_admin()')) IS DISTINCT FROM true
-     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '658f42b242a47462ec8c9b319409583f' AND p.prosecdef AND p.proacl::text = '{postgres=X/postgres}'
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'd56454064dc8f78063a2afd2bada9697' AND p.prosecdef AND p.proacl::text = '{postgres=X/postgres}'
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp', 'TimeZone=UTC']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._invoice_review_fingerprint(uuid[])')) IS DISTINCT FROM true
      OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '55c7d613e474d5eb02431965ba0872a5' AND p.prosecdef
@@ -2611,6 +2623,11 @@ BEGIN
      OR has_table_privilege('anon', 'public.write_offs', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('authenticated', 'public.field_app_billing_sets', 'TRUNCATE')
      OR has_table_privilege('authenticated', 'public.field_app_billing_lines', 'TRUNCATE')
+     -- Review round 4: anon (whose check includes PUBLIC's grants) holds no TRUNCATE on these four.
+     OR has_table_privilege('anon', 'public.invoice_line_shares', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.invoice_line_share_snapshots', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.field_app_billing_sets', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.field_app_billing_lines', 'TRUNCATE')
      OR NOT has_table_privilege('authenticated', 'public.invoice_shares', 'SELECT')
      OR NOT has_table_privilege('authenticated', 'public.invoice_line_allocations', 'SELECT')
      OR NOT has_table_privilege('authenticated', 'public.field_app_locations', 'SELECT')

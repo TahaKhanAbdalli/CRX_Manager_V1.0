@@ -121,12 +121,15 @@ what), this is what each person can do:
   opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft,
   every admin gets "Job needs an invoice", and you bill it from the unbilled list.
 - **Rep work keeps the admin's unposted invoices up to date (your choice, 2026-10-10, "1.a"):** when
-  a rep or driver re-prices or edits an order, makes a rush order, partly completes a delivery or
-  cancels a delivery, the admin's draft or unposted invoice for it updates (or is cancelled) exactly
-  as today. A posted invoice never changes, and an admin still reviews and posts every invoice.
-- **Reps see customer names on every invoice (your choice, 2026-10-10, "2:yes"):** just the farm
-  name, not the customer's address, phone, contacts or account details. Reps still open full
-  customer records only for their own assigned customers. (The database part is in this same change;
+  a sales rep re-prices or edits an order, makes a rush order or cancels a delivery, or when a rep or
+  driver partly completes a delivery, the admin's draft or unposted invoice for it updates (or is
+  cancelled) exactly as today. (Drivers cannot price, edit or rush orders or cancel deliveries; their
+  only effect on an invoice is a partial delivery.) A posted invoice never changes, and an admin
+  still reviews and posts every invoice.
+- **Reps see customer names on every invoice (your choice, 2026-10-10, "2:yes"):** the farm name,
+  not the customer's address, phone, contacts or account number. Because reps already see every
+  invoice (your choice, 2026-10-09), they also see each invoice's own amounts, balance and payment
+  terms. Reps still open full customer records only for their own assigned customers. (The database part is in this same change;
   the invoice screens start using it in phase 2.)
 - Also worth knowing: reps will see cost and margin on every invoice, the same numbers they already
   see on every order; and an applicator's job completion now notifies every admin too.

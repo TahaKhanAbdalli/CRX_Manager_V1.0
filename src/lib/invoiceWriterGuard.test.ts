@@ -95,7 +95,7 @@ const ALLOWLIST: Record<string, { md5: string; reason: string }> = {
 // re-emits any REACH_INTERNAL function must add its reviewed body md5 here as well.
 const REVIEWED_BODIES: Record<string, { md5s: string[]; reason: string }> = {
   _require_invoicing_admin: { md5s: ['629609ce38f7c192abfde5be47848557'], reason: 'the guard every invoicing wrapper relies on (EXISTS on an ACTIVE admin, 42501)' },
-  _invoice_review_fingerprint: { md5s: ['658f42b242a47462ec8c9b319409583f'], reason: 'the posting version check binds to it' },
+  _invoice_review_fingerprint: { md5s: ['d56454064dc8f78063a2afd2bada9697'], reason: 'the posting version check binds to it' },
   _complete_delivery_authorized_impl: { md5s: ['b9b314f56adeba3a58ebe38a48d839b1'], reason: 'its ELSIF v_actor_role = \'admin\' hunk is all that stops a rep\'s or driver\'s completion from auto-invoicing' },
   complete_job: { md5s: ['9196da7ce6337bd0176a67b37be950f2'], reason: 'its IF is_admin() gate is all that stops a rep\'s job completion from auto-drafting' },
 };
@@ -213,6 +213,49 @@ function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[]
   return { fns, unparsed };
 }
 
+// Review round 4 (Luna LOW): the table layer. The function rule below cannot see a LATER
+// migration that hands authenticated (or anon, or PUBLIC) a write privilege on an invoice table,
+// adds or alters a policy on one, turns its row level security off, or creates a function through
+// dynamic SQL inside a DO block (which the function rule cannot scan). Each of those needs a
+// review: pin its statement's md5 (whitespace collapsed) here. Write grants are checked in every
+// scanned file (20261009120000 only revokes); policies and DO blocks in the files after it
+// (20261009120000's own policies are pinned by its postflight).
+const INVOICE_TABLE_REF = `(?:"?public"?\\s*\\.\\s*)?"?(${INVOICE_TABLES.join('|')})"?(?![\\w"])`;
+const REVIEWED_TABLE_STATEMENTS: Record<string, string> = {};
+function tableLayerViolations(file: string, sql: string, top: string): Violation[] {
+  const out: Violation[] = [];
+  const flag = (statement: string, table: string, why: string) => {
+    const key = md5(statement.trim().replace(/\s+/g, ' '));
+    if (!REVIEWED_TABLE_STATEMENTS[key]) out.push({ name: table, file, why: `${why} (statement md5 ${key}): review it and pin it in REVIEWED_TABLE_STATEMENTS` });
+  };
+  const later = file.slice(0, 14) > FIRST_GUARDED_MIGRATION;
+  for (const s of top.split(';')) {
+    const grant = /^\s*GRANT\s+([\s\S]*?)\s+ON\s+(?!FUNCTION\b|PROCEDURE\b|ROUTINE\b|SEQUENCE\b|SCHEMA\b|ALL\s+(?:FUNCTIONS|ROUTINES|PROCEDURES|SEQUENCES)\b)(?:TABLE\s+)?([\s\S]*?)\s+TO\s+([\s\S]*)$/i.exec(s);
+    if (grant && /\b(INSERT|UPDATE|DELETE|TRUNCATE|ALL)\b/i.test(grant[1]) && /\b(authenticated|anon|PUBLIC)\b/i.test(grant[3])) {
+      if (/\bALL\s+TABLES\s+IN\s+SCHEMA\s+public\b/i.test(grant[2])) flag(s, '*', 'grants a write privilege on every public table to an API role');
+      for (const t of grant[2].matchAll(new RegExp(INVOICE_TABLE_REF, 'gi'))) flag(s, t[1], 'grants a write privilege on an invoice table to an API role');
+    }
+    if (!later) continue;
+    // A write policy: FOR INSERT/UPDATE/DELETE/ALL, or no FOR clause (which means ALL).
+    const create = new RegExp(`^\\s*CREATE\\s+POLICY\\s+[\\s\\S]*?\\bON\\s+${INVOICE_TABLE_REF}([\\s\\S]*)$`, 'i').exec(s);
+    if (create && !/^\s*(?:AS\s+\w+\s+)?FOR\s+SELECT\b/i.test(create[2])) flag(s, create[1], 'creates a write policy on an invoice table');
+    // An altered policy (the ALTER does not show its command), or row level security turned off.
+    const alter = new RegExp(`^\\s*ALTER\\s+POLICY\\s+[\\s\\S]*?\\bON\\s+${INVOICE_TABLE_REF}`, 'i').exec(s);
+    if (alter) flag(s, alter[1], 'alters a policy on an invoice table');
+    const rls = new RegExp(`^\\s*ALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?${INVOICE_TABLE_REF}[\\s\\S]*\\b(?:DISABLE|NO\\s+FORCE)\\s+ROW\\s+LEVEL\\s+SECURITY\\b`, 'i').exec(s);
+    if (rls) flag(s, rls[1], 'turns row level security off on an invoice table');
+  }
+  if (later) {
+    for (const m of sql.matchAll(/\bDO\s+(?:LANGUAGE\s+\w+\s+)?(\$\w*\$)([\s\S]*?)\1/gi)) {
+      const code = stripComments(m[2]);
+      if (/\bexecute\b/i.test(code) && /\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure)\b/i.test(code)) {
+        flag(m[0], '*', 'creates a function through dynamic SQL in a DO block, which this scan cannot read');
+      }
+    }
+  }
+  return out;
+}
+
 /** The rule over an ordered list of migration texts. Returns every violation. */
 function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALLOWLIST = ALLOWLIST,
   reviewed: typeof REVIEWED_BODIES = REVIEWED_BODIES): Violation[] {
@@ -226,6 +269,7 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     if (/GRANT\s+[^;]*\bON\s+ALL\s+(FUNCTIONS|ROUTINES)\s+IN\s+SCHEMA\s+public\b[^;]*\bauthenticated\b/i.test(top)) {
       violations.push({ name: '*', file, why: 'blanket EXECUTE grant on every public function to authenticated' });
     }
+    violations.push(...tableLayerViolations(file, sql, top));
     const { fns, unparsed } = functionsIn(file, sql);
     for (const name of unparsed) violations.push({ name, file, why: 'body could not be parsed (use a dollar-quoted body)' });
     for (const f of fns) {
@@ -388,6 +432,41 @@ describe('invoice writers stay admin-only after 20261009120000 (CI companion of 
       // The same signature re-emitted guarded replaces it.
       const regarded = fn('probe_overload', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n', '', 'p_x uuid');
       expect(withNext(`${unguarded}\n${regarded}`)).toEqual([]);
+    });
+
+    // Review round 4 (Luna LOW): the table layer.
+    it('flags a later write grant on an invoice table to an API role, and not a read grant', () => {
+      expect(names(withNext('GRANT UPDATE ON public.invoices TO authenticated;'))).toEqual(['invoices']);
+      expect(names(withNext('GRANT INSERT, DELETE ON TABLE "public"."invoice_items", public.write_offs TO anon;'))).toEqual(['invoice_items', 'write_offs']);
+      expect(names(withNext('GRANT UPDATE (header_notes) ON invoices TO PUBLIC;'))).toEqual(['invoices']);
+      expect(names(withNext('GRANT TRUNCATE ON public.invoice_line_shares TO authenticated;'))).toEqual(['invoice_line_shares']);
+      expect(names(withNext('GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;'))).toEqual(['*']);
+      expect(withNext('GRANT SELECT ON public.invoices TO authenticated;')).toEqual([]);
+      expect(withNext('GRANT UPDATE ON public.invoices TO service_role;')).toEqual([]);
+      expect(withNext('GRANT UPDATE ON public.invoices_archive TO authenticated;')).toEqual([]);
+      expect(withNext('GRANT EXECUTE ON FUNCTION public.get_invoice_post_version(uuid[]) TO authenticated;')).toEqual([]);
+    });
+    it('flags a later write policy, an altered policy or row level security turned off on an invoice table', () => {
+      expect(names(withNext('CREATE POLICY probe ON public.invoices FOR UPDATE TO authenticated USING (public.is_sales_rep());'))).toEqual(['invoices']);
+      expect(names(withNext('CREATE POLICY probe ON public.invoice_shares AS PERMISSIVE FOR ALL TO authenticated USING (true);'))).toEqual(['invoice_shares']);
+      expect(names(withNext('CREATE POLICY probe ON field_app_locations TO authenticated USING (true);'))).toEqual(['field_app_locations']);
+      expect(names(withNext('CREATE POLICY probe ON public.write_offs FOR INSERT TO authenticated WITH CHECK (true);'))).toEqual(['write_offs']);
+      expect(withNext('CREATE POLICY probe ON public.invoices FOR SELECT TO authenticated USING (public.is_sales_rep());')).toEqual([]);
+      expect(withNext('CREATE POLICY probe ON public.orders FOR UPDATE TO authenticated USING (true);')).toEqual([]);
+      expect(names(withNext('ALTER POLICY invoices_insert ON public.invoices WITH CHECK (true);'))).toEqual(['invoices']);
+      expect(names(withNext('ALTER TABLE public.invoice_items DISABLE ROW LEVEL SECURITY;'))).toEqual(['invoice_items']);
+      expect(names(withNext('ALTER TABLE IF EXISTS ONLY public.invoices NO FORCE ROW LEVEL SECURITY;'))).toEqual(['invoices']);
+      expect(withNext('ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;')).toEqual([]);
+    });
+    it('flags a later DO block that creates a function through dynamic SQL', () => {
+      expect(names(withNext("DO $$\nBEGIN\n  EXECUTE 'CREATE FUNCTION public.probe_hidden() RETURNS void LANGUAGE sql AS ''DELETE FROM public.invoices''';\nEND\n$$;"))).toContain('*');
+      expect(names(withNext("DO LANGUAGE plpgsql $do$\nBEGIN\n  EXECUTE format('CREATE OR REPLACE PROCEDURE public.%I() LANGUAGE sql AS $p$ SELECT 1 $p$', 'probe');\nEND\n$do$;"))).toEqual(['*']);
+      expect(withNext("DO $$\nBEGIN\n  IF to_regprocedure('public.probe()') IS NOT NULL THEN RAISE EXCEPTION 'x'; END IF;\nEND\n$$;")).toEqual([]);
+    });
+    it('accepts a reviewed table-layer statement only by its exact pin', () => {
+      const statement = 'GRANT UPDATE ON public.invoices TO authenticated';
+      const key = md5(statement);
+      expect(withNext(`${statement};`)[0]?.why).toContain(`statement md5 ${key}`);
     });
   });
 });

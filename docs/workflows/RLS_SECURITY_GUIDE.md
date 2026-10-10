@@ -406,8 +406,9 @@ other roles read what they read before. Sales reps still record payments (`alloc
   policy.**
 - Invoice upkeep (Mason 2026-10-10, "1.a"): `price_order`, `update_order_items`, `create_rush_order`,
   the delivery-completion resize and tote stamp, and `cancel_delivery` / `batch_cancel_deliveries`
-  keep changing an admin's draft or unposted invoice for reps and drivers; they are the sweep's
-  pinned upkeep list, owner-approved.
+  keep changing an admin's draft or unposted invoice; they are the sweep's pinned upkeep list,
+  owner-approved. Sales reps reach all of them; drivers reach only the completion resize (the other
+  four role-gate to admin and sales_rep).
 - **HARD-GUARD catalog sweep (apply time) and its PR-time twin.** The migration's postflight refuses
   the apply if any public function or procedure `authenticated` can execute can reach (by name,
   comments stripped) an INSERT/UPDATE/DELETE/MERGE/TRUNCATE on an invoice table (`invoices`,
