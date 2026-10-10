@@ -134,14 +134,21 @@ what), this is what each person can do:
   see on every order; and an applicator's job completion now notifies every admin too.
 - **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
   draft is cancelled with it, as today.
-- **Posting is safer:** posting sends the version of the invoice the admin looked at, and the
-  database refuses the post if someone changed it in the meantime.
+- **Posting is safer:** posting from an invoice's own page (the regular invoice page, the field-app
+  invoice page and Split Billing) sends the version of the invoice the admin looked at, and the
+  database refuses the post if someone changed it in the meantime. The list pages' bulk posts (Post
+  Selected, Post All) do not do this check yet.
 
 **What the screens look like for a sales rep (phase 2, built 2026-10-10 in the same change; goes live
 with it):**
 - The **Invoices** and **Field Invoices** pages stay in their menu and show every invoice, with the
   customer's name. There are no tick boxes, no Post, Void, Delete, Post All or Unpost All buttons, no
-  Misc Charge and no Manual Invoice. Export, Download PDF and Print still work.
+  Misc Charge and no Manual Invoice. Export and Download PDF still work, and so do Print, Old Print and
+  Email on each field invoice row and Print All on the Field Invoices lists. Because the tick boxes are
+  gone, the Chemical Invoices list's "Print Selected" and "Email Selected" are gone for reps too; a rep
+  prints one of those invoices from its own page. A customer the rep is not assigned to shows as plain
+  text (no link, no customer peek), and emailing that customer's invoice says the rep can't see the
+  email address.
 - Opening an invoice shows it **read-only**, with a grey "Read-only — only an admin can change, post
   or unpost invoices" note. Print (and Email on field invoices, as before) still work.
 - **Create Invoice** buttons are gone for reps on orders, blend tickets, jobs (Transfer to Invoice) and
@@ -154,7 +161,8 @@ with it):**
 **What changes for you (admins):** nothing you have to learn. One new safety step on an invoice's
 page: **Post is greyed out while you have unsaved changes** (save first), and if someone else changed
 the invoice since you opened it, the page reloads and says "This invoice changed since you reviewed
-it — it has been reloaded; check it and post again."
+it — it has been reloaded; check it and post again." The field-app invoice page and Split Billing do
+the same check when you post.
 
 ---
 

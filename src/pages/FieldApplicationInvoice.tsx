@@ -16,7 +16,15 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { canManageInvoices } from '../lib/pagePermissions';
-import { fillHiddenCustomerNames } from '../lib/invoiceCustomerNames';
+import { CUSTOMER_EMAIL_HIDDEN_MESSAGE, fillHiddenCustomerNames } from '../lib/invoiceCustomerNames';
+import {
+  fetchInvoiceGroupPostVersion,
+  fetchInvoicePostVersion,
+  INVOICE_CHANGED_SINCE_REVIEW_MESSAGE,
+  POST_RECHECK_FAILED_MESSAGE,
+  postReviewedInvoice,
+  postReviewedInvoiceGroup,
+} from '../lib/invoicePostVersion';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
@@ -183,6 +191,12 @@ export default function FieldApplicationInvoice() {
   // and the server dedup never double-applies.
   const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  // Posting version check (addendum 8b, as on InvoiceDetail): the invoice's (or its whole split
+  // group's) posting version, read at the start of each load before anything shown is read, so
+  // the screen is at least this new. Post sends it as p_expected_version and the database refuses
+  // (INVOICE_CHANGED_SINCE_REVIEW) if anything that would post changed since, e.g. a save from
+  // another tab or another admin. groupId records which group the version covers.
+  const postVersionRef = useRef<{ groupId: string | null; version: string } | null>(null);
   // Keep receipt ownership scoped by invoice id even though the route wrapper now
   // remounts per record. Reset only after assertRpcResult confirms success.
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
@@ -818,6 +832,8 @@ export default function FieldApplicationInvoice() {
     const request = ++invoiceLoadRef.current.request;
     const isCurrentLoad = () => invoiceLoadRef.current.id === id
       && invoiceLoadRef.current.request === request;
+    // No posting version while (re)loading; this load takes a fresh one.
+    postVersionRef.current = null;
     // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
     // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
     // expose invoice data — only the type + job_id/blend_ticket_id discriminators are
@@ -827,7 +843,7 @@ export default function FieldApplicationInvoice() {
     // ENGINE-built field invoice (NEITHER set) belongs here. (Codex r13)
     const { data: chk, error: chkErr } = await supabase
       .from('invoices')
-      .select('invoice_type, job_id, blend_ticket_id')
+      .select('invoice_type, job_id, blend_ticket_id, status, invoice_group_id')
       .eq('id', id)
       .maybeSingle();
     if (!isCurrentLoad()) return;
@@ -860,6 +876,25 @@ export default function FieldApplicationInvoice() {
       if (!locCount || locCount === 0) {
         navigate(`/field-invoices/${id}`, { replace: true });
         return;
+      }
+    }
+
+    // The posting version, read BEFORE the invoice data below, so everything shown is at least
+    // this new (see postVersionRef). Only an admin posts (the reader refuses anyone else) and
+    // only a draft or unposted invoice can be posted. A failed read leaves no version, and Post
+    // then refuses instead of posting unchecked.
+    const chkStatus = (chk as { status?: string | null }).status;
+    if (canManage && (chkStatus === 'draft' || chkStatus === 'unposted')) {
+      const chkGroupId = (chk as { invoice_group_id?: string | null }).invoice_group_id ?? null;
+      try {
+        const version = chkGroupId
+          ? await fetchInvoiceGroupPostVersion(chkGroupId)
+          : await fetchInvoicePostVersion(id);
+        if (!isCurrentLoad()) return;
+        postVersionRef.current = { groupId: chkGroupId, version };
+      } catch (err) {
+        if (!isCurrentLoad()) return;
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_version_baseline' } });
       }
     }
 
@@ -1555,7 +1590,8 @@ export default function FieldApplicationInvoice() {
   // proceeds only with a LOGGED reason; a non-admin is told to fix the rate (still no
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
-    if (!profile) return;
+    // Invoicing is admin-only (Mason 2026-10-09): every action handler re-checks the rule.
+    if (!canManage || !profile) return;
     if (crossSeasonDateEdit) {
       toast('error', filedSeasonDateMessage);
       return;
@@ -1596,7 +1632,7 @@ export default function FieldApplicationInvoice() {
   // saved invoice id (Codex follow-up P2). Writing it up front orphaned a 'they overrode'
   // audit row whenever the save then failed (validation / RPC error) and was retried.
   const handleOverrideConfirm = async () => {
-    if (!profile) return;
+    if (!canManage || !profile) return;
     const reason = overrideReason.trim();
     if (reason === '') {
       toast('error', 'Enter a reason for the over-label-rate override.');
@@ -1909,7 +1945,7 @@ export default function FieldApplicationInvoice() {
   };
 
   const handlePost = async () => {
-    if (!profile || !id) return;
+    if (!canManage || !profile || !id) return;
     // Saving is a multi-step financial write (invoice, applied info, billing details).
     // Never let Post race it or commit stale form values. The button is disabled too,
     // but this guard also covers a queued/double-clicked handler.
@@ -1923,29 +1959,46 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Save all invoice changes before posting.');
       return;
     }
+    // The posting version this screen loaded with, for the same group it shows. Without one
+    // (the read failed) nothing is posted unchecked.
+    const reviewed = postVersionRef.current;
+    if (!reviewed || reviewed.groupId !== (invoiceGroupId ?? null)) {
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      return;
+    }
     setPosting(true);
     try {
       const key = postIdem.getKey();
       // Group-aware: route through post_invoice_group when a group exists, otherwise post_invoice.
+      // Both send the version, which the database checks under its row locks.
       if (invoiceGroupId) {
-        const { data, error } = await supabase.rpc('post_invoice_group', {
+        await postReviewedInvoiceGroup({
           p_invoice_group_id: invoiceGroupId,
           p_performed_by: profile.id,
           p_idempotency_key: key,
+          p_expected_version: reviewed.version,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'post_invoice_group');
       } else {
-        // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
-        await supabase.rpc('post_invoice', {
+        await postReviewedInvoice({
           p_invoice_id: id,
           p_idempotency_key: key,
-        }).throwOnError();
+          p_expected_version: reviewed.version,
+        });
       }
       postIdem.resetKey();
       toast('success', invoiceGroupId ? 'Invoice group posted' : 'Invoice posted');
       await fetchInvoice();
     } catch (err) {
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)) {
+        // Refused inside the posting transaction: nothing posted and the key was not used.
+        // Show the current invoice so the admin reviews what would actually post.
+        postIdem.resetKey();
+        toast('error', INVOICE_CHANGED_SINCE_REVIEW_MESSAGE);
+        await fetchInvoice().catch((reloadErr: unknown) => {
+          Sentry.captureException(reloadErr instanceof Error ? reloadErr : new Error(String(reloadErr)), { extra: { context: 'post_changed_reload' } });
+        });
+        return;
+      }
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
       toast('error', `Post failed: ${fieldAppError(err)}`);
     } finally {
@@ -1960,7 +2013,7 @@ export default function FieldApplicationInvoice() {
   // unpost in ONE transaction (all-or-nothing); a mid-loop failure can no longer leave
   // a half-unposted group. A single invoice still uses unpost_invoice.
   const handleUnpost = async () => {
-    if (!profile || !id) return;
+    if (!canManage || !profile || !id) return;
     // Route on invoiceGroupId ALONE (mirrors handlePost): if this invoice belongs to a
     // split group we ALWAYS use unpost_invoice_group so ALL members move atomically — even
     // if the client `siblings` query came back empty (a transient fetch/RLS error). The RPC
@@ -2028,7 +2081,7 @@ export default function FieldApplicationInvoice() {
   // remain member-by-member here. Governed order splits use void_invoice_group from
   // Invoice Detail. Each field-app call carries its own stable idempotency key.
   const handleVoid = async () => {
-    if (!profile || !id) return;
+    if (!canManage || !profile || !id) return;
     const reason = voidReason.trim();
     // Belt-and-suspenders: the confirm button is disabled while blank, but never
     // send an empty reason (the audit record must carry a real reason).
@@ -2125,7 +2178,7 @@ export default function FieldApplicationInvoice() {
   const canEditConsultant = canEdit && isAdmin;
 
   const handleDelete = async () => {
-    if (!id || !profile) return;
+    if (!canManage || !id || !profile) return;
     if (!canEdit) {
       toast('error', 'Cannot delete a posted/voided invoice');
       return;
@@ -2301,6 +2354,7 @@ export default function FieldApplicationInvoice() {
           .select('email')
           .eq('id', pdfSnapshot.customer_id)
           .maybeSingle();
+        if (!cust && !canManage) throw new Error(CUSTOMER_EMAIL_HIDDEN_MESSAGE);
         const email = (cust as { email?: string | null } | null)?.email;
 
         // Build the money-correct attachment FIRST, then the addressed payload.
@@ -2547,7 +2601,7 @@ export default function FieldApplicationInvoice() {
   // paid invoice out — the RPC also refuses anything past 'unposted' with a plain
   // message). On success we navigate to the reopened job.
   const handleTransferToScheduling = async () => {
-    if (!id || !profile || !jobId) return;
+    if (!canManage || !id || !profile || !jobId) return;
     setTransferringToScheduling(true);
     try {
       const idemKey = transferToSchedulingIdem.getKey();

@@ -17,7 +17,7 @@ import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppres
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
 import { canManageInvoices } from '../../lib/pagePermissions';
-import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
+import { CUSTOMER_EMAIL_HIDDEN_MESSAGE, fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import {
   JOBS_LIST_KEY,
   defaultJobListSettings,
@@ -290,6 +290,7 @@ export default function FieldInvoicesListPanel() {
           .select('email')
           .eq('id', row.customer_id)
           .maybeSingle();
+        if (!cust && !canManage) throw new Error(CUSTOMER_EMAIL_HIDDEN_MESSAGE);
         const email = (cust as { email?: string | null } | null)?.email;
 
         const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row));

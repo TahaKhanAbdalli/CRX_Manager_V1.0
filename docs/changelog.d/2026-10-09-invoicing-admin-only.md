@@ -305,9 +305,60 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   RPC call exists live or in a verified queued migration") fails because the page now calls
   `get_invoice_customer_names`, `get_invoice_post_version` and `get_invoice_group_post_version`, which
   are not live yet. That guard exists so a frontend cannot merge ahead of its migration; its queued
-  exception may not be committed. It clears when the migration is applied and the checked-in
-  `pg_proc` snapshot in that test is regenerated from live (part of the apply step). Do not merge
-  before that.
+  exception may not be committed (the same file's "does not commit queued RPC exceptions" case
+  fails on any non-empty `QUEUED_MIGRATION_FUNCTIONS`; the header allows that map only as a local,
+  uncommitted bridge). It clears when the migration is applied and the checked-in `pg_proc` snapshot
+  in that test is regenerated from live (part of the apply step). Do not merge before that. Nobody
+  may report `npm run test` as passing for phase 2 until then.
+
+#### Review round 5 (2026-10-10, compliance + UI-logic + Luna findings)
+
+- **Posting version on the other two editors** (two MEDs): the per-acre field-app editor reads the
+  version (`get_invoice_post_version`, or `get_invoice_group_post_version` for a group, from the
+  preflight's `status` and `invoice_group_id`) at the start of every admin load of a draft or
+  unposted invoice, before the invoice data; the Split Billing editor reads the group's version
+  before every readback of its result card (after a save, on reopen, and after a refusal). Both post
+  through `postReviewedInvoice` / `postReviewedInvoiceGroup` with `p_expected_version`, refuse to
+  post (nothing sent) when the version could not be read or belongs to another group, and on
+  `INVOICE_CHANGED_SINCE_REVIEW` reload with the shared message. The two messages now live in
+  `src/lib/invoicePostVersion.ts`.
+- **Handlers re-check the rule** in `FieldApplicationInvoice` (save, override-save, post, unpost,
+  void, delete, transfer), the Split Billing editor (save, post) and InvoiceDetail's void, apply
+  credit and reverse write-off; InvoiceDetail's Void, Record Payment / Write Off and Reverse
+  write-off controls use `canManage` instead of a second `isAdmin` test (same result).
+- **InvoiceDetail** says "Could not check the saved invoice before posting. Nothing was posted"
+  (and reloads) when the version could not be read at load, instead of "This invoice changed".
+- **Reps and unreadable customers:** the Chemical Invoices list shows another rep's customer as plain
+  text, with no link and no peek drawer (`get_customer_summary` is unscoped; KNOWN_ISSUES); a rep's
+  Email on such a customer's field invoice says "You can't see this customer's email address. Ask an
+  admin to email this invoice." instead of "no email address on file"; a rep's row action in the
+  Drafts tray shows an eye, not a pencil.
+- **PDF share names** use the name stored on the share row before the names reader, so a rep's Print
+  All no longer makes one reader call per invoice (the reader is called only for a share with
+  neither).
+- **Tests:** InvoiceDetail's admin-only test now uses the real `hasRpcCode`, `RpcErrorCodes`,
+  `assertRpcResult` and `describePostInvoiceBlock`; admin rows with a blank embed assert exactly one
+  names call with exactly that id (InvoiceDetail, Chemical Invoices). Every new behaviour case was
+  run against the pre-change page and failed there. `idempotency-reset-order.test.ts`: the per-acre
+  editor's only `.throwOnError()` post moved into the helper, so its stale `throw-on-error` allowance
+  was removed (the guard's own "no allowlist entry is stale" case requires it).
+- **Refuted, with evidence:** Luna HIGH "a member inserted after the member query escapes the group
+  version". Live read-only 2026-10-10: `authenticated` has no INSERT or UPDATE on `invoices`; the
+  only functions that write `invoices.invoice_group_id` are `save_field_app_invoice` (an existing
+  group only through its wrapper, which takes `pg_advisory_xact_lock(hashtextextended(group,0))`),
+  `save_field_app_split_invoice` (same lock on the set's group), and
+  `create_split_invoices_from_order` / `create_invoice_from_blend_ticket` /
+  `transfer_job_to_invoice` / `_save_field_app_split_invoice_impl` for a new set, which mint a new
+  `gen_random_uuid()` group.
+  The versioned group post takes that same lock before its member read, so no writer can add a
+  member to the group in between.
+- **Deferred, unchanged migration** (each already an accepted residual or KNOWN_ISSUES entry with an
+  owner; changing them means re-pinning and re-proving the file): `cancel_delivery` reversing a
+  completed delivery (Luna HIGH, pre-existing, Mason's addendum item 5 says do not fix it here);
+  field-app acres not in the fingerprint and customer terms read, not locked (header lines 161-164);
+  `update_order_items`' unlocked line detach; the completion/post deadlock (one side retries); the
+  trigger check not following calls (no live instance); the postflight's comment stripping not being
+  literal-aware (no live instance).
 
 ### Not done here (owners)
 

@@ -50,6 +50,8 @@ const {
 
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
+  // The posting-version helpers (src/lib/invoicePostVersion.ts) call through supabaseUntyped.
+  supabaseUntyped: { from: mockFrom, rpc: mockRpc },
   assertRpcResult: <T,>(data: T) => data,
   checkMutationResult: () => {},
   sanitizeError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
@@ -58,6 +60,7 @@ vi.mock('../lib/db', () => ({
     ACTOR_MISMATCH: 'ACTOR_MISMATCH',
     INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED',
     INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED',
+    INVOICE_CHANGED_SINCE_REVIEW: 'INVOICE_CHANGED_SINCE_REVIEW',
   },
   hasRpcCode: (err: unknown, code: string) => {
     const m = err instanceof Error ? err.message : String(err ?? '');
@@ -209,6 +212,31 @@ describe('FieldApplicationInvoice — unsaved navigation', () => {
     expect(mockBlockerProceed).toHaveBeenCalledOnce();
   });
 });
+
+/** supabase-js rpc builder: awaitable, with throwOnError() (post_invoice RETURNS void). */
+function rpcBuilder(result: { data: unknown; error: unknown }) {
+  const promise = Promise.resolve(result);
+  return {
+    then: promise.then.bind(promise),
+    catch: promise.catch.bind(promise),
+    throwOnError: () => (result.error ? Promise.reject(result.error) : Promise.resolve(result)),
+  };
+}
+
+const POST_VERSION = 'c'.repeat(32);
+
+/** Route the posting-version readers to POST_VERSION (or `version`), every other RPC to `other`. */
+function routePostRpcs(opts: { version?: { data: unknown; error: unknown }; post?: { data: unknown; error: unknown } } = {}) {
+  mockRpc.mockImplementation((name: string) => {
+    if (name === 'get_invoice_post_version' || name === 'get_invoice_group_post_version') {
+      return rpcBuilder(opts.version ?? { data: POST_VERSION, error: null });
+    }
+    if (name === 'post_invoice' || name === 'post_invoice_group') {
+      return rpcBuilder(opts.post ?? { data: { success: true }, error: null });
+    }
+    return rpcBuilder({ data: null, error: null });
+  });
+}
 
 async function renderPage() {
   let result!: ReturnType<typeof render>;
@@ -704,6 +732,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
   );
 
   it('renders Post button and routes through post_invoice (NOT post_invoice_group) when no group_id', async () => {
+    routePostRpcs();
     await renderPage();
     await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
 
@@ -719,6 +748,55 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
       expect(calls).toContain('post_invoice');
       expect(calls).not.toContain('post_invoice_group');
     });
+    // Addendum 8b on this editor too: the version read at load goes out with the post.
+    expect(mockRpc).toHaveBeenCalledWith('get_invoice_post_version', { p_invoice_ids: ['inv-solo'] });
+    expect(mockRpc).toHaveBeenCalledWith('post_invoice', {
+      p_invoice_id: 'inv-solo',
+      p_idempotency_key: 'test-idem-key',
+      p_expected_version: POST_VERSION,
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice posted'));
+  });
+
+  it('posts nothing when the posting version could not be read at load', async () => {
+    routePostRpcs({ version: { data: null, error: new Error('network down') } });
+    await renderPage();
+    await screen.findByText(/Field Application INV-1001/);
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Post Invoice$/i }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Could not check the saved invoice before posting. Nothing was posted — please try again.',
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
+  });
+
+  it('reloads with a clear message when the database says the invoice changed since review', async () => {
+    routePostRpcs({
+      post: { data: null, error: new Error('INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting') },
+    });
+    await renderPage();
+    await screen.findByText(/Field Application INV-1001/);
+    const versionReadsAtLoad = mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').length;
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Post Invoice$/i }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'This invoice changed since you reviewed it — it has been reloaded; check it and post again.',
+    ));
+    // The reload takes a fresh version for the screen the admin now reviews.
+    await waitFor(() => expect(
+      mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').length,
+    ).toBeGreaterThan(versionReadsAtLoad));
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Invoice posted');
+  });
+
+  it('never reads the posting version for a sales rep (read-only page)', async () => {
+    authState.role = 'sales_rep';
+    routePostRpcs();
+    await renderPage();
+    await screen.findByText(/Field Application INV-1001/);
+    expect(mockRpc.mock.calls.some(([name]) => name === 'get_invoice_post_version' || name === 'get_invoice_group_post_version')).toBe(false);
   });
 
   it('does not render the sibling banner on a single (ungrouped) invoice', async () => {
@@ -1010,6 +1088,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
 
   it('Post button labels itself "Post Group (...)" and routes through post_invoice_group when group_id is set', async () => {
     setupGroup(['draft', 'draft']);
+    routePostRpcs();
     await renderPage();
     await waitFor(() => expect(screen.getByText(/part of a/i)).toBeInTheDocument());
 
@@ -1026,11 +1105,14 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     });
 
     const groupCall = mockRpc.mock.calls.find((c) => c[0] === 'post_invoice_group')!;
-    expect(groupCall[1]).toMatchObject({
+    expect(groupCall[1]).toEqual({
       p_invoice_group_id: 'grp-xyz',
       p_performed_by: 'user-1',
       p_idempotency_key: 'test-idem-key',
+      // The whole group's version, read at load (every member).
+      p_expected_version: POST_VERSION,
     });
+    expect(mockRpc).toHaveBeenCalledWith('get_invoice_group_post_version', { p_invoice_group_id: 'grp-xyz' });
   });
 
   it('locks edit (no Save / Post / Delete buttons) when any sibling is posted', async () => {

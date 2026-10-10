@@ -93,6 +93,31 @@ describe('Invoices list — admin-only invoicing', () => {
     expect(screen.getByRole('button', { name: /Download PDF/ })).toBeInTheDocument();
   });
 
+  it("shows another rep's customer as plain text: no link to an unreadable customer page and no peek", async () => {
+    authState.role = 'sales_rep';
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+
+    expect(await screen.findByText('Hidden Rep Farms')).toBeInTheDocument();
+    // The rep's own customer keeps its link and peek.
+    expect(screen.getAllByRole('button', { name: 'Own Farm' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Peek Own Farm' }).length).toBeGreaterThan(0);
+    // The hidden customer's name is not a link, and get_customer_summary is never one click away.
+    expect(screen.queryByRole('button', { name: 'Hidden Rep Farms' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Peek Hidden Rep Farms' })).not.toBeInTheDocument();
+  });
+
+  it('calls the names reader once, for exactly the blank embed, on an admin row with a blank embed', async () => {
+    const adminRows = [
+      invoice({ invoice_number: 'INV-OWN', status: 'draft' }),
+      invoice({ invoice_number: 'INV-BLANK', status: 'posted', customer_id: 'cust-hidden', customer: null }),
+    ];
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? adminRows : []));
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+
+    expect(await screen.findByText('Hidden Rep Farms')).toBeInTheDocument();
+    expect(namesCalls()).toEqual([['get_invoice_customer_names', { p_customer_ids: ['cust-hidden'] }]]);
+  });
+
   it("keeps an admin's selection and Misc Charge, and never calls the names reader", async () => {
     const adminRows = [invoice({ invoice_number: 'INV-OWN', status: 'draft' }), invoice({ invoice_number: 'INV-B', status: 'posted' })];
     mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? adminRows : []));

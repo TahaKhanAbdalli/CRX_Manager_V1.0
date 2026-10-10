@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockFrom, mockToast, mockSentryCaptureException, authState } = vi.hoisted(() => ({
+const { mockFrom, mockUntypedFrom, mockUntypedRpc, mockToast, mockSentryCaptureException, authState } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
+  mockUntypedFrom: vi.fn(),
+  mockUntypedRpc: vi.fn(),
   mockToast: vi.fn(),
   mockSentryCaptureException: vi.fn(),
   // Invoicing is admin-only (Mason 2026-10-09); the rep case switches this.
@@ -13,7 +15,7 @@ const { mockFrom, mockToast, mockSentryCaptureException, authState } = vi.hoiste
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'order', 'limit', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'is', 'not', 'in', 'order', 'limit', 'maybeSingle']) chain[name] = method;
   const promise = Promise.resolve(result);
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
@@ -42,8 +44,11 @@ function recordingChain(table: string, result: { data: unknown; error: unknown }
 
 vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: vi.fn() },
-  supabaseUntyped: { from: vi.fn(), rpc: vi.fn() },
+  supabaseUntyped: { from: mockUntypedFrom, rpc: mockUntypedRpc },
   assertRpcResult: vi.fn((value) => value),
+  // The REAL error-code matching, so the INVOICE_CHANGED_SINCE_REVIEW case tests what ships.
+  hasRpcCode: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).hasRpcCode,
+  RpcErrorCodes: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).RpcErrorCodes,
   // The REAL sanitizeError, never a stub. The previous stub was typed
   // `(error: Error) => error.message`, which misrepresents the null, string and
   // plain-object inputs the real function exists to survive -- postgrest-js only
@@ -363,5 +368,107 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
       'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
     );
     expect(mockToast).not.toHaveBeenCalledWith('error', 'Units are still loading. Try saving again in a moment.');
+  });
+});
+
+// ── Posting version (addendum 8b on this editor too) ────────────────────────
+// Reopening a saved split reads the group's posting version BEFORE the result card, and Post
+// sends it as p_expected_version, so a re-save from another tab or admin between review and
+// Post is refused by the database instead of posting unseen.
+describe('FieldAppSplitInvoiceEditor — reopened draft posts the reviewed version', () => {
+  const VERSION = 'a'.repeat(32);
+  let events: string[] = [];
+  // Every version read returns this (the reopen effect may load more than once).
+  let versionResult: { data: unknown; error: unknown } = { data: VERSION, error: null };
+  let postResult: { data: unknown; error: unknown } = { data: { success: true }, error: null };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    events = [];
+    versionResult = { data: VERSION, error: null };
+    postResult = { data: { success: true }, error: null };
+    mockTables();
+    const pickerTables = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => (table === 'customers'
+      ? buildChain({ data: [{ id: 'cust-1', farm_name: 'Farm One' }], error: null })
+      : pickerTables(table)));
+    mockUntypedFrom.mockImplementation((table: string) => {
+      events.push(`from:${table}`);
+      if (table === 'field_app_billing_sets') {
+        return buildChain({ data: { id: 'set-1', invoice_group_id: 'grp-1', source_job_id: null }, error: null });
+      }
+      if (table === 'invoices') {
+        return buildChain({
+          data: [{ id: 'inv-1', invoice_number: 'INV-1', customer_id: 'cust-1', total_amount_cents: 0, send_disposition: 'normal', status: 'draft' }],
+          error: null,
+        });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockUntypedRpc.mockImplementation((name: string) => {
+      events.push(`rpc:${name}`);
+      if (name === 'get_invoice_group_post_version') return Promise.resolve(versionResult);
+      if (name === 'post_invoice_group') return Promise.resolve(postResult);
+      return Promise.resolve({ data: null, error: null });
+    });
+  });
+
+  async function openAndConfirmPost() {
+    render(
+      <MemoryRouter initialEntries={['/split-billing/set-1']}>
+        <Routes>
+          <Route path="/split-billing/:id" element={<FieldAppSplitInvoiceEditor />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const post = await screen.findByRole('button', { name: /^Post$/ });
+    await waitFor(() => expect(post).not.toBeDisabled());
+    fireEvent.click(post);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Post$/ }));
+  }
+
+  it('reads the version before the result card and sends it with the post', async () => {
+    await openAndConfirmPost();
+    await waitFor(() => expect(mockUntypedRpc).toHaveBeenCalledWith('post_invoice_group', {
+      p_invoice_group_id: 'grp-1',
+      p_performed_by: 'actor-1',
+      p_idempotency_key: 'idem',
+      p_expected_version: VERSION,
+    }));
+    expect(mockUntypedRpc).toHaveBeenCalledWith('get_invoice_group_post_version', { p_invoice_group_id: 'grp-1' });
+    // The version is read before the child invoices the admin reviews.
+    expect(events.indexOf('rpc:get_invoice_group_post_version')).toBeLessThan(events.indexOf('from:invoices'));
+  });
+
+  it('posts nothing when the version could not be read', async () => {
+    versionResult = { data: null, error: { message: 'network down' } };
+    await openAndConfirmPost();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Could not check the saved invoice before posting. Nothing was posted — please try again.',
+    ));
+    expect(mockUntypedRpc.mock.calls.some(([name]) => name === 'post_invoice_group')).toBe(false);
+  });
+
+  it('reloads with a clear message when the database says the group changed since review', async () => {
+    postResult = {
+      data: null,
+      error: { code: 'P0001', message: 'INVOICE_CHANGED_SINCE_REVIEW: an invoice in this group changed after it was reviewed; reload and review it again before posting' },
+    };
+    await openAndConfirmPost();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'This invoice changed since you reviewed it — it has been reloaded; check it and post again.',
+    ));
+    // A fresh version, then a fresh readback, for the reloaded card.
+    await waitFor(() => {
+      const posted = events.indexOf('rpc:post_invoice_group');
+      expect(posted).toBeGreaterThan(-1);
+      const versionAfter = events.indexOf('rpc:get_invoice_group_post_version', posted);
+      expect(versionAfter).toBeGreaterThan(posted);
+      expect(events.indexOf('from:invoices', versionAfter)).toBeGreaterThan(versionAfter);
+    });
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Invoice group posted.');
   });
 });

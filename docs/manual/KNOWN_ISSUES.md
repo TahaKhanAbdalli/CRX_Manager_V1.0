@@ -85,9 +85,11 @@ they call the new readers, so they ship only after the file is applied (see the 
 - InvoiceDetail's pre-Post re-check could not bind what `post_invoice` / `post_invoice_group` post
   (Codex Sol HIGH on PR #892): covered by this file's server check (posting takes the reviewed version
   and refuses `INVOICE_CHANGED_SINCE_REVIEW` under the row locks) plus the phase-2 screen change that
-  sends it (built 2026-10-10; see the editor entry below). The list pages' bulk posts (Post Selected,
-  Post All, Post all clean, Post all drafts) still send no version: old callers, still valid, and they
-  have no single reviewed screen to bind.
+  sends it (built 2026-10-10; see the editor entry below). All three single-invoice editors send it:
+  the regular invoice page, the per-acre field-app editor and the Split Billing editor (the last two
+  added in review round 5). The list pages' bulk posts (Post Selected, Post All, Post all clean, Post
+  all drafts) still send no version: old callers, still valid, and they have no single reviewed screen
+  to bind. Owner: whoever next changes those bulk posts.
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;
 admins byte-identical; reads; completions; the posting race; the hard-guard sweep; one mutation per
@@ -130,6 +132,22 @@ the file is applied and verified live.
   upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first. Deferred out of
   `20261009120000` (review round 4, Luna MED; pre-existing): fixing it means redefining the live
   `_update_order_items_impl`, which this file only pins.
+- **`get_customer_summary` has no role scope** (review round 5, pre-existing, `20260404040200`): any
+  signed-in user who passes a customer id gets that customer's pricing tier, AR balance, order and
+  delivery counts and last activity. Reps now see every invoice, so they hold every invoiced
+  customer's id. Round 5 stops the invoice list offering it: a customer the rep cannot read shows as
+  plain text, with no link to a "Customer not found" page and no peek drawer. The function itself is
+  unchanged. Owner: the next customer-access change (scope it to admins and the assigned rep).
+- **Email on the regular invoice page never finds an address** (review round 5, pre-existing, not
+  caused by this change): `InvoiceDetail.tsx` loads customers with `select('id, farm_name,
+  payment_terms')` (no `email`), and `handleEmailInvoice` then checks `cust?.email`, so it always says
+  "Customer does not have an email address on file" for admins and reps alike. The field-invoice lists
+  and the per-acre editor read the email on demand and work. Fix: read `customers.email` on demand the
+  same way. Owner: next invoice-page change.
+- **"An admin will create the invoice." can be slightly off** (review round 5, accepted): the
+  message after a non-admin completes a delivery is chosen by role alone. For a delivery with no order
+  (never auto-invoiced), an order that already has an admin's draft (resized instead) or a split order
+  (sent to split billing), no new invoice is made by anyone automatically; an admin still handles it.
 - **DECIDED 2026-10-10 (Mason, "1.a") — not a defect: reps' order and delivery work (and drivers'
   partial completions) keeps updating an admin's draft or unposted invoice ("upkeep").** A sales
   rep's `price_order`, `update_order_items`, `create_rush_order` update `invoice_items` and the header
@@ -242,9 +260,16 @@ read) and again when Post is pressed, and reloads with "This invoice changed sin
 it has been reloaded; check it and post again." if they differ; (3) runs the credit-limit and
 restricted-use warnings on the SAVED invoice read after that version; (4) sends the version as
 `p_expected_version` on `post_invoice` / `post_invoice_group` (a split group's version covers every
-member), and on `INVOICE_CHANGED_SINCE_REVIEW` shows the same message and reloads. Proof:
-`src/pages/InvoiceDetail.adminOnly.test.tsx` (each case fails on the pre-change page). Not run in a
-signed-in browser. **Still open:** the editor has no leave-page warning, so a sidebar link, Back or
+member), and on `INVOICE_CHANGED_SINCE_REVIEW` shows the same message and reloads. If the version
+could not be read at load, Post says "Could not check the saved invoice before posting. Nothing was
+posted" and reloads (review round 5; it used to say the invoice had changed). Review round 5 also
+puts the same check on the other two single-invoice editors: the per-acre field-app editor
+(`FieldApplicationInvoice.tsx`, version read at the start of each load, before the invoice data) and
+the Split Billing editor (`FieldAppSplitInvoiceEditor.tsx`, the group's version read before each
+readback of the result card); both send it as `p_expected_version`, refuse to post when it could not
+be read, and reload on `INVOICE_CHANGED_SINCE_REVIEW`. Proof: `src/pages/InvoiceDetail.adminOnly.test.tsx`,
+`FieldApplicationInvoice.test.tsx`, `FieldAppSplitInvoiceEditor.test.tsx` (each new case fails on the
+pre-change page). Not run in a signed-in browser. **Still open:** the editor has no leave-page warning, so a sidebar link, Back or
 closing the tab still drops unsaved edits silently (nothing is posted wrongly). Move this entry to the
 archive once the file is applied and the page is verified live.
 

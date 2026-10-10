@@ -171,7 +171,9 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
   // inside an `if (error)` branch that then rethrows — verified in source, not asserted.
   'src/pages/InventoryPage.tsx': ['recovery'],
   'src/components/receiving/ReceivingLogPanel.tsx': ['recovery'],
-  'src/pages/FieldApplicationInvoice.tsx': ['throw-on-error'],
+  // FieldApplicationInvoice.tsx is no longer listed: its only `.throwOnError()` post
+  // (post_invoice) moved into src/lib/invoicePostVersion.ts with the posting version check
+  // (review round 5, 2026-10-10), so the page has no reset-before-assert site of its own.
   'src/pages/Fields.tsx': ['throw-on-error'],
   // Two DIFFERENT sites, two different reasons. The post-call reset is throw-on-error;
   // the one in the catch is a getIdempotencyBindingRejection recovery. Before that

@@ -324,8 +324,10 @@ export async function buildInvoicePdfDataFromRow(
   ]);
 
   // Share customers' names: a sales rep reads every invoice but only their own customers'
-  // records, so the embed is blank for anyone else's customer. Fill it from the names-only
-  // reader (no call when every embed has a name), then the name stored on the share row.
+  // records, so the embed is blank for anyone else's customer. The share row stores the
+  // customer's name (invoice_shares.customer_name, NOT NULL), so a blank embed uses that first;
+  // only a share with neither goes to the names-only reader. Print All builds one PDF per
+  // invoice, so this keeps a rep's batch print from making one extra call per invoice.
   // The address block above stays a direct customers read (assigned customers only for a rep,
   // by decision 2026-10-10).
   type PdfShareRow = {
@@ -338,7 +340,11 @@ export async function buildInvoicePdfDataFromRow(
     price_per_acre_cents?: number | null;
     pricing_note?: string | null;
   };
-  const shareRows = await fillHiddenCustomerNames((shares || []) as PdfShareRow[]);
+  const shareRows = await fillHiddenCustomerNames(((shares || []) as PdfShareRow[]).map((s) => (
+    !s.customer?.farm_name?.trim() && s.customer_name?.trim()
+      ? { ...s, customer: { ...(s.customer ?? {}), farm_name: s.customer_name } }
+      : s
+  )));
 
   const custRow = cust as {
     billing_address?: string | null; city?: string | null; state?: string | null;

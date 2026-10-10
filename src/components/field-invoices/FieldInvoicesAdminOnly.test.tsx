@@ -8,7 +8,7 @@
  * control and never calls the reader.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { buildInMemoryQuery } from '../../test-utils/inMemoryQuery';
 
@@ -101,6 +101,24 @@ describe('Field Invoices tabs — admin-only invoicing', () => {
     expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View FA-DRAFT-OTHER' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Print All' })).toBeInTheDocument();
+  });
+
+  it("Drafts tray: a sales rep's Email on another rep's customer says the email is hidden, not missing", async () => {
+    authState.role = 'sales_rep';
+    renderInRouter(<FieldInvoicesUnpostedPanel />);
+
+    // The rep's View action uses the eye icon, not the edit pencil.
+    const view = await screen.findByRole('button', { name: 'View FA-DRAFT-OTHER' });
+    expect(view.querySelector('.lucide-eye')).not.toBeNull();
+    expect(view.querySelector('.lucide-pencil')).toBeNull();
+
+    // customers RLS hides the row from this rep, so the email read comes back empty.
+    fireEvent.click(screen.getByRole('button', { name: 'Email FA-DRAFT-OTHER' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      "You can't see this customer's email address. Ask an admin to email this invoice.",
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Customer does not have an email address on file');
   });
 
   it('Drafts tray: an admin keeps Post All and Manual Invoice, with no names reader call', async () => {

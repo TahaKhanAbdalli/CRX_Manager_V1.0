@@ -16,6 +16,13 @@
 import { assertRpcResult, supabaseUntyped } from './db';
 import { Sentry } from './sentry';
 
+/**
+ * Email needs the customer's own record (customers.email), which a sales rep can read only for
+ * their assigned customers. When that read comes back empty for a rep, say so instead of the
+ * misleading "no email address on file".
+ */
+export const CUSTOMER_EMAIL_HIDDEN_MESSAGE = "You can't see this customer's email address. Ask an admin to email this invoice.";
+
 /** One row of get_invoice_customer_names(p_customer_ids uuid[]). */
 export interface InvoiceCustomerNameRow {
   id: string;

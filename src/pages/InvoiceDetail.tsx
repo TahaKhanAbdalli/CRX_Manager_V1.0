@@ -17,6 +17,8 @@ import { fetchInvoiceCustomerNames } from '../lib/invoiceCustomerNames';
 import {
   fetchInvoiceGroupPostVersion,
   fetchInvoicePostVersion,
+  INVOICE_CHANGED_SINCE_REVIEW_MESSAGE,
+  POST_RECHECK_FAILED_MESSAGE,
   postReviewedInvoice,
   postReviewedInvoiceGroup,
 } from '../lib/invoicePostVersion';
@@ -83,11 +85,11 @@ interface LineItem {
 
 // Post bills the SAVED invoice, never the edits on screen (addendum 8b, Mason 2026-10-09).
 const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
-// The posting version moved after the admin reviewed the invoice (on screen, or when the Post
-// confirm opened): the database refused the post (INVOICE_CHANGED_SINCE_REVIEW), or the page
-// noticed before asking. Either way the page reloads the invoice.
-const INVOICE_CHANGED_SINCE_REVIEW_MESSAGE = 'This invoice changed since you reviewed it — it has been reloaded; check it and post again.';
-const POST_RECHECK_FAILED_MESSAGE = 'Could not check the saved invoice before posting. Nothing was posted — please try again.';
+// INVOICE_CHANGED_SINCE_REVIEW_MESSAGE: the posting version moved after the admin reviewed the
+// invoice (on screen, or when the Post confirm opened): the database refused the post
+// (INVOICE_CHANGED_SINCE_REVIEW), or the page noticed before asking. Either way the page reloads.
+// POST_RECHECK_FAILED_MESSAGE: the version could not be read, so nothing is posted unchecked.
+// Both live in invoicePostVersion.ts, shared with the per-acre and Split Billing editors.
 
 const statusBadge = (status: InvoiceStatus) => {
   const map: Record<InvoiceStatus, { variant: 'default' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
@@ -338,7 +340,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', POST_RECHECK_FAILED_MESSAGE);
       return;
     }
-    if (postVersionBaselineRef.current === null || currentVersion !== postVersionBaselineRef.current) {
+    // No baseline means the read at load failed (nothing is known to have changed): say the
+    // check failed rather than that the invoice changed, and reload to take a fresh baseline.
+    if (postVersionBaselineRef.current === null) {
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      fetchInvoice(id);
+      return;
+    }
+    if (currentVersion !== postVersionBaselineRef.current) {
       toast('error', INVOICE_CHANGED_SINCE_REVIEW_MESSAGE);
       fetchInvoice(id);
       return;
@@ -1087,6 +1096,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Void invoice
   const handleVoid = async () => {
+    if (!canManage) return;
     setVoiding(true);
     let voidedGroup = false;
     try {
@@ -1337,6 +1347,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   const handleApplyCredit = async () => {
+    if (!canManage) return;
     const amountCents = parseDollarsToCents(applyCreditAmount);
     if (amountCents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
     if (amountCents <= 0) { toast('error', 'Enter a valid amount to apply'); return; }
@@ -1381,7 +1392,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   const handleReverseWriteOff = async () => {
-    if (!reverseWoTarget) return;
+    if (!canManage || !reverseWoTarget) return;
     if (!profile) {
       toast('error', 'Cannot reverse write-off — profile not loaded. Please refresh.');
       return;
@@ -1740,7 +1751,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
           {/* U1 (#41): posted OR overdue — an overdue invoice is the one a check most
               often arrives for; allocate_payment and apply_write_off both accept it. */}
-          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
+          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && canManage && (
             <>
               <Button
                 variant="secondary"
@@ -1796,7 +1807,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 Unpost
               </Button>
           )}
-          {!isNew && invoice.status === 'posted' && isAdmin && (
+          {!isNew && invoice.status === 'posted' && canManage && (
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => { voidIdem.resetKey(); setShowVoidModal(true); }}>
                 Void
               </Button>
@@ -2173,7 +2184,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 {wo.reversed_at ? (
                   <span className="text-xs text-amber-600 font-medium">Reversed {new Date(wo.reversed_at).toLocaleDateString()}</span>
                 ) : (
-                  isAdmin && (
+                  canManage && (
                     <button
                       onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
                       className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium shrink-0"

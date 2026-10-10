@@ -36,7 +36,10 @@ import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoic
 import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
 
-type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
+// customer_readable: the signed-in user can read this customer's record (the embed came back).
+// A sales rep sees every invoice but only their own customers, so another rep's customer gets
+// its name as plain text, with no link to a page that would say "not found" and no peek drawer.
+type InvoiceRow = Invoice & { customer_name: string; customer_readable: boolean; salesman_name: string | null; order_number: string | null };
 
 // Only these statuses get a row checkbox, so only these can be part of a selection.
 const SELECTABLE_STATUSES: readonly InvoiceStatus[] = ['draft', 'unposted', 'posted', 'voided'];
@@ -184,9 +187,10 @@ export default function Invoices() {
 
     // A sales rep reads every invoice but only their own customers' records, so fill the
     // farm names the embed left blank from the names-only reader (one call for the list).
-    const named = await fillHiddenCustomerNames(
-      (data || []) as Array<Record<string, unknown> & { customer_id?: string | null; customer?: { farm_name?: string | null } | null }>,
-    );
+    // Whether each customer's own record is readable, taken BEFORE the names are filled in.
+    const loaded = ((data || []) as Array<Record<string, unknown> & { customer_id?: string | null; customer?: { farm_name?: string | null } | null }>)
+      .map((inv) => ({ ...inv, customer_readable: inv.customer != null }));
+    const named = await fillHiddenCustomerNames(loaded);
     const rows = (named as Array<Record<string, unknown> & { customer?: { farm_name?: string | null } | null; salesman_id?: string | null; order_id?: string | null }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
@@ -629,16 +633,20 @@ export default function Invoices() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/customers/${row.customer_id}`);
-            }}
-            className="text-crx-green hover:underline"
-          >
-            {row.customer_name}
-          </button>
-          {row.customer_id && canPeekCustomer && (
+          {row.customer_readable ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/customers/${row.customer_id}`);
+              }}
+              className="text-crx-green hover:underline"
+            >
+              {row.customer_name}
+            </button>
+          ) : (
+            <span className="text-nav-dark">{row.customer_name}</span>
+          )}
+          {row.customer_id && row.customer_readable && canPeekCustomer && (
             <button
               onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name: row.customer_name }); }}
               title="Peek customer"

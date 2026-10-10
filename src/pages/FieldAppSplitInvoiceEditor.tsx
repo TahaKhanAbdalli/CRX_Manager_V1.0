@@ -8,8 +8,14 @@ import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { canManageInvoices } from '../lib/pagePermissions';
+import {
+  fetchInvoiceGroupPostVersion,
+  INVOICE_CHANGED_SINCE_REVIEW_MESSAGE,
+  POST_RECHECK_FAILED_MESSAGE,
+  postReviewedInvoiceGroup,
+} from '../lib/invoicePostVersion';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
@@ -186,6 +192,22 @@ export default function FieldAppSplitInvoiceEditor() {
   const saveIdem = useIdempotencyKey('save_field_app_split_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
   const resetPostIdemKey = postIdem.resetKey; // stable useCallback identity — safe as an effect dep
+  const canManage = canManageInvoices(profile?.role);
+  // Posting version check (addendum 8b, as on InvoiceDetail): the whole group's posting version,
+  // read BEFORE each readback of the result card, so what the admin reviews is at least this new.
+  // Post sends it as p_expected_version and the database refuses (INVOICE_CHANGED_SINCE_REVIEW)
+  // if any member changed since, e.g. another admin re-saved the set from another tab.
+  const postVersionRef = useRef<{ groupId: string; version: string } | null>(null);
+  // The group's posting version, or null when it cannot be read (Post then refuses).
+  const readGroupPostVersion = useCallback(async (groupId: string): Promise<string | null> => {
+    if (!canManage) return null;
+    try {
+      return await fetchInvoiceGroupPostVersion(groupId);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'split_post_version' } });
+      return null;
+    }
+  }, [canManage]);
 
   // Flag gate: null = still reading, false = OFF (render notice), true = ON (render editor).
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
@@ -697,13 +719,14 @@ export default function FieldAppSplitInvoiceEditor() {
   const handleSave = async () => {
     const problem = validateForSave();
     if (problem) { toast('error', problem); return; }
-    if (!profile?.id) return;
+    if (!canManage || !profile?.id) return;
     setSaving(true);
     // Codex round-8 P1: a re-save may RE-PRICE (server-resolved quote/tier/service prices can move).
     // Revoke any prior posting authorization NOW so Post is disabled during the RPC + readback and
     // STAYS disabled if the readback fails — it is restored only after loadResults succeeds below.
     setInvoiceGroupId(null);
     setSavedSig(null);
+    postVersionRef.current = null;
     try {
       const validFields = fields.filter((f) => (parseFloat(f.applied_acres) || 0) > 0);
       const { data, error } = await supabaseUntyped.rpc('save_field_app_split_invoice', {
@@ -732,6 +755,8 @@ export default function FieldAppSplitInvoiceEditor() {
       // readback. A readback failure must not strand the committed key (a Save retry would then resend
       // it with a new payload hash → IDEMPOTENCY_PAYLOAD_CONFLICT, unrecoverable without a reload).
       saveIdem.resetKey();
+      // The posting version BEFORE the readback, so the result card is at least this new.
+      const version = await readGroupPostVersion(res.invoice_group_id);
       let readbackComplete = false;
       try {
         readbackComplete = await loadResults(res.billing_set_id);
@@ -741,6 +766,7 @@ export default function FieldAppSplitInvoiceEditor() {
         toast('info', 'Saved. Reload to refresh the summary before posting.');
       }
       if (readbackComplete) {
+        postVersionRef.current = version ? { groupId: res.invoice_group_id, version } : null;
         setInvoiceGroupId(res.invoice_group_id);
         setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
       }
@@ -792,18 +818,40 @@ export default function FieldAppSplitInvoiceEditor() {
     setShowPostConfirm(true);
   };
 
-  const handlePost = async () => {
-    if (!invoiceGroupId || !profile?.id) return;
-    setPosting(true);
-    setShowPostConfirm(false);
+  // After INVOICE_CHANGED_SINCE_REVIEW: a fresh version, then a fresh readback, before Post is
+  // offered again (same order as the first load).
+  const reloadForReview = async (setId: string, groupId: string) => {
+    setInvoiceGroupId(null);
+    postVersionRef.current = null;
+    const version = await readGroupPostVersion(groupId);
     try {
-      const { data, error } = await supabaseUntyped.rpc('post_invoice_group', {
+      if (await loadResults(setId)) {
+        postVersionRef.current = version ? { groupId, version } : null;
+        setInvoiceGroupId(groupId);
+      }
+    } catch {
+      toast('info', 'Reload to refresh the summary before posting.');
+    }
+  };
+
+  const handlePost = async () => {
+    if (!canManage || !invoiceGroupId || !profile?.id) return;
+    setShowPostConfirm(false);
+    // The version read before the result card the admin reviewed, for this same group. Without
+    // one (the read failed) nothing is posted unchecked.
+    const reviewed = postVersionRef.current;
+    if (!reviewed || reviewed.groupId !== invoiceGroupId) {
+      toast('error', POST_RECHECK_FAILED_MESSAGE);
+      return;
+    }
+    setPosting(true);
+    try {
+      await postReviewedInvoiceGroup({
         p_invoice_group_id: invoiceGroupId,
         p_performed_by: profile.id,
         p_idempotency_key: postIdem.getKey(),
+        p_expected_version: reviewed.version,
       });
-      if (error) throw error;
-      assertRpcResult(data, 'post_invoice_group');
       postIdem.resetKey();
       // Codex round-6 P2: the group IS posted now. Reflect it immediately and treat the readback as a
       // best-effort refresh — a failing readback must NOT leave the UI showing "unposted" (a retry
@@ -818,6 +866,14 @@ export default function FieldAppSplitInvoiceEditor() {
         }
       }
     } catch (err) {
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)) {
+        // Refused inside the posting transaction: nothing posted and the key was not used.
+        // Show the current group so the admin reviews what would actually post.
+        postIdem.resetKey();
+        toast('error', INVOICE_CHANGED_SINCE_REVIEW_MESSAGE);
+        if (billingSetId) await reloadForReview(billingSetId, invoiceGroupId);
+        return;
+      }
       toast('error', splitBackendError(err));
     } finally {
       setPosting(false);
@@ -855,8 +911,16 @@ export default function FieldAppSplitInvoiceEditor() {
         // Codex round-6 P1: expose the group id to the posting state ONLY after a COMPLETE readback.
         // If the set row loads but any invoice/item/share query fails, leaving invoiceGroupId set would
         // enable Post on empty/partial results (posted stays false, dirtyAfterSave false).
+        // The posting version BEFORE the readback, so the result card is at least this new.
+        const groupId = row.invoice_group_id ?? null;
+        postVersionRef.current = null;
+        const version = groupId ? await readGroupPostVersion(groupId) : null;
+        if (cancelled) return;
         const readbackComplete = await loadResults(row.id);
-        if (readbackComplete) setInvoiceGroupId(row.invoice_group_id ?? null);
+        if (readbackComplete) {
+          postVersionRef.current = groupId && version ? { groupId, version } : null;
+          setInvoiceGroupId(groupId);
+        }
       } catch (err) {
         if (!cancelled) toast('error', sanitizeError(err));
       } finally {
@@ -864,7 +928,7 @@ export default function FieldAppSplitInvoiceEditor() {
       }
     })();
     return () => { cancelled = true; };
-  }, [flagEnabled, routeSetId, loadResults, navigate, toast]);
+  }, [flagEnabled, routeSetId, loadResults, readGroupPostVersion, navigate, toast]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   // Invoicing is admin-only (Mason 2026-10-09). The routes are admin-only too; this is the

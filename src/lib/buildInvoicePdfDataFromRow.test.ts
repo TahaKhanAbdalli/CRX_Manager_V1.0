@@ -16,11 +16,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Hoisted supabase mock ───────────────────────────────────────────────────
-const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
+const { mockFrom, mockRpc } = vi.hoisted(() => ({ mockFrom: vi.fn(), mockRpc: vi.fn() }));
 
-vi.mock('./db', () => ({
+vi.mock('./db', async () => ({
   supabase: { from: mockFrom },
+  // get_invoice_customer_names (invoiceCustomerNames.ts) goes through supabaseUntyped.
+  supabaseUntyped: { rpc: mockRpc },
+  assertRpcResult: (await vi.importActual<typeof import('./db')>('./db')).assertRpcResult,
 }));
+vi.mock('./sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 
 import { buildInvoicePdfDataFromRow } from './invoicePdf';
 
@@ -178,5 +182,43 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     expect(data.discount_earned_cents).toBe(0);
     expect(data.payment_terms).toBeUndefined(); // cleared, no customer default either
     expect(data.purchase_order_ref).toBeUndefined();
+  });
+});
+
+describe('buildInvoicePdfDataFromRow — share names for a sales rep (customers hidden by RLS)', () => {
+  it('uses the name stored on the share row for a blank embed, with no names-reader call', async () => {
+    installFromMock({
+      customers: null,
+      invoice_items: [],
+      invoice_shares: [
+        { customer_id: 'cust-hidden', customer_name: 'Stored Farm', customer: null, split_percentage: 50, acres: 10, amount_cents: 500 },
+        { customer_id: 'cust-own', customer_name: 'Old Own Name', customer: { farm_name: 'Own Farm' }, split_percentage: 50, acres: 10, amount_cents: 500 },
+      ],
+      invoices: {},
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow());
+
+    expect(data.shares?.map((s) => s.customer_name)).toEqual(['Stored Farm', 'Own Farm']);
+    // Print All maps every invoice through this builder: no extra call per invoice.
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('asks the names reader only for a share with neither an embed nor a stored name', async () => {
+    mockRpc.mockResolvedValue({ data: [{ id: 'cust-blank', farm_name: 'Reader Farm' }], error: null });
+    installFromMock({
+      customers: null,
+      invoice_items: [],
+      invoice_shares: [
+        { customer_id: 'cust-blank', customer_name: '', customer: null, split_percentage: 50, acres: 10, amount_cents: 500 },
+        { customer_id: 'cust-hidden', customer_name: 'Stored Farm', customer: null, split_percentage: 50, acres: 10, amount_cents: 500 },
+      ],
+      invoices: {},
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow());
+
+    expect(data.shares?.map((s) => s.customer_name)).toEqual(['Reader Farm', 'Stored Farm']);
+    expect(mockRpc.mock.calls).toEqual([['get_invoice_customer_names', { p_customer_ids: ['cust-blank'] }]]);
   });
 });

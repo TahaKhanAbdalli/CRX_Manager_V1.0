@@ -55,20 +55,19 @@ function rpcResult(result: QueryResult): Record<string, unknown> {
 }
 
 vi.mock('../lib/db', async () => {
-  const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>('../lib/errorSanitizer');
+  // The REAL result check, error-code matching and codes, so the INVOICE_CHANGED_SINCE_REVIEW
+  // and no-data cases test what ships, not a copy of it.
+  const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
   const client = { from: mockFrom, rpc: mockRpc };
   return {
     supabase: client,
     supabaseUntyped: client,
     checkMutationResult: vi.fn(),
-    assertRpcResult: (data: unknown) => data,
-    sanitizeError,
-    describePostInvoiceBlock: () => null,
-    RpcErrorCodes: { INVOICE_CHANGED_SINCE_REVIEW: 'INVOICE_CHANGED_SINCE_REVIEW' },
-    hasRpcCode: (err: unknown, code: string) => {
-      const message = (err as { message?: unknown } | null)?.message;
-      return typeof message === 'string' && message.startsWith(code);
-    },
+    assertRpcResult: actual.assertRpcResult,
+    sanitizeError: actual.sanitizeError,
+    describePostInvoiceBlock: actual.describePostInvoiceBlock,
+    RpcErrorCodes: actual.RpcErrorCodes,
+    hasRpcCode: actual.hasRpcCode,
   };
 });
 
@@ -295,6 +294,22 @@ describe('InvoiceDetail — an admin keeps the editor', () => {
     expect(screen.queryByText(/Read-only — only an admin/)).toBeNull();
     expect(rpcCalls('get_invoice_customer_names')).toHaveLength(0);
   });
+
+  it('calls the names reader once, for exactly the blank embed, when the embed comes back empty', async () => {
+    // Can fail: a page that skipped the reader for admins, or sent other ids, fails here.
+    setupTables(invoiceRow({ customer_id: 'cust-blank', customer: null }));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_invoice_customer_names') {
+        return rpcResult({ data: [{ id: 'cust-blank', farm_name: 'Blank Embed Farms' }], error: null });
+      }
+      if (name === 'get_invoice_post_version') return rpcResult({ data: VERSION_A, error: null });
+      return rpcResult({ data: null, error: null });
+    });
+    renderAt('/invoices/inv-1');
+    await waitFor(() => expect(rpcCalls('get_invoice_customer_names')).toEqual([
+      ['get_invoice_customer_names', { p_customer_ids: ['cust-blank'] }],
+    ]));
+  });
 });
 
 describe('InvoiceDetail — Post binds the reviewed, saved invoice (addendum 8b)', () => {
@@ -403,6 +418,39 @@ describe('InvoiceDetail — Post binds the reviewed, saved invoice (addendum 8b)
       'This invoice changed since you reviewed it — it has been reloaded; check it and post again.',
     ));
     expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(tracker.fullLoads()).toBe(loadsAfterOpen + 1));
+    expect(rpcCalls('post_invoice')).toHaveLength(0);
+  });
+
+  it('says the check failed (not that the invoice changed) when the version could not be read at load', async () => {
+    const tracker = setupTables(invoiceRow());
+    let versionReads = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_invoice_post_version') {
+        versionReads += 1;
+        return rpcResult(versionReads === 1
+          ? { data: null, error: { message: 'network down' } }
+          : { data: VERSION_A, error: null });
+      }
+      return rpcResult({ data: null, error: null });
+    });
+    renderAt('/invoices/inv-1');
+    const loadsAfterOpen = await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Post$/ })).toBeEnabled();
+      return tracker.fullLoads();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Could not check the saved invoice before posting. Nothing was posted — please try again.',
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'error',
+      'This invoice changed since you reviewed it — it has been reloaded; check it and post again.',
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Reloaded, which takes a fresh baseline.
     await waitFor(() => expect(tracker.fullLoads()).toBe(loadsAfterOpen + 1));
     expect(rpcCalls('post_invoice')).toHaveLength(0);
   });

@@ -22,7 +22,7 @@ import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { canManageInvoices } from '../../lib/pagePermissions';
-import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
+import { CUSTOMER_EMAIL_HIDDEN_MESSAGE, fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
 import { isCurrentSeason, openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
@@ -288,6 +288,7 @@ export default function FieldInvoicesPostedPanel() {
           .select('email')
           .eq('id', row.customer_id)
           .maybeSingle();
+        if (!cust && !canManage) throw new Error(CUSTOMER_EMAIL_HIDDEN_MESSAGE);
         const email = (cust as { email?: string | null } | null)?.email;
         if (!email) throw new Error('Customer does not have an email address on file');
 

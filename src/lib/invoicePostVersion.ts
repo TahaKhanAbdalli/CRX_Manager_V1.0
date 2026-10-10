@@ -16,6 +16,11 @@ import { assertRpcResult, supabaseUntyped } from './db';
 
 const POST_VERSION_PATTERN = /^[0-9a-f]{32}$/;
 
+/** The database (or the screen's own check) found the invoice changed since the screen loaded. */
+export const INVOICE_CHANGED_SINCE_REVIEW_MESSAGE = 'This invoice changed since you reviewed it — it has been reloaded; check it and post again.';
+/** The posting version could not be read, so nothing is posted unchecked. */
+export const POST_RECHECK_FAILED_MESSAGE = 'Could not check the saved invoice before posting. Nothing was posted — please try again.';
+
 function assertPostVersion(version: unknown, rpcName: string): string {
   if (typeof version !== 'string' || !POST_VERSION_PATTERN.test(version)) {
     throw new Error(`${rpcName} returned an unexpected posting version`);

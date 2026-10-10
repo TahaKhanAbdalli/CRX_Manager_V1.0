@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft, MoreHorizontal } from 'lucide-react';
+import { FileText, Printer, FileClock, Mail, Pencil, Eye, X, Search, ClipboardCheck, ArrowLeft, MoreHorizontal } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
@@ -23,7 +23,7 @@ import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { canManageInvoices } from '../../lib/pagePermissions';
-import { fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
+import { CUSTOMER_EMAIL_HIDDEN_MESSAGE, fillHiddenCustomerNames } from '../../lib/invoiceCustomerNames';
 import { formatCents as fmt } from '../../lib/money';
 import SeasonTag from '../invoices/SeasonTag';
 import { isCurrentSeason, otherSeasonLabels } from '../../lib/invoiceSeasonWindow';
@@ -279,6 +279,7 @@ export default function FieldInvoicesUnpostedPanel() {
           .select('email')
           .eq('id', row.customer_id)
           .maybeSingle();
+        if (!cust && !canManage) throw new Error(CUSTOMER_EMAIL_HIDDEN_MESSAGE);
         const email = (cust as { email?: string | null } | null)?.email;
         if (!email) throw new Error('Customer does not have an email address on file');
 
@@ -658,7 +659,7 @@ export default function FieldInvoicesUnpostedPanel() {
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
-                  {canManage ? 'Edit' : 'View'} <Pencil className="h-3.5 w-3.5" />
+                  {canManage ? 'Edit' : 'View'} {canManage ? <Pencil className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </span>
               </div>
             </div>
@@ -751,7 +752,7 @@ export default function FieldInvoicesUnpostedPanel() {
                           aria-label={`${canManage ? 'Edit' : 'View'} ${row.invoice_number}`}
                           title={canManage ? 'Edit' : 'View'}
                         >
-                          <Pencil className="w-4 h-4" />
+                          {canManage ? <Pencil className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
                     </td>
