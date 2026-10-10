@@ -390,19 +390,28 @@ other roles read what they read before. Sales reps still record payments (`alloc
   `write_offs` are revoked from `authenticated` and `anon` (every writer is a postgres-owned RPC);
   TRUNCATE on `field_app_billing_sets` / `field_app_billing_lines` too.
 - Read side: the SELECT policies of `invoices`, `invoice_items`, `invoice_shares`,
-  `invoice_line_shares`, `invoice_line_share_snapshots` and `field_app_billing_sets` add
-  `is_sales_rep()`; `write_offs` gets a second, read-only `write_offs_select_sales_rep`.
+  `invoice_line_shares`, `invoice_line_share_snapshots`, `field_app_billing_sets` and
+  `field_app_billing_lines` add `is_sales_rep()` (the billing set / line ones only through a
+  non-deleted invoice that uses them), all `TO authenticated` (a `TO public` policy that calls
+  `is_sales_rep()` would turn anon's empty read into a permission error); `write_offs` gets a second,
+  read-only `write_offs_select_sales_rep`.
 - **HARD-GUARD catalog sweep (apply time) and its PR-time twin.** The migration's postflight refuses
   the apply if any public function or procedure `authenticated` can execute can reach (by name,
   comments stripped) an INSERT/UPDATE/DELETE/MERGE/TRUNCATE on an invoice table (`invoices`,
   `invoice_items`, `invoice_shares`, `invoice_line_shares`, `invoice_line_share_snapshots`,
   `invoice_line_allocations`, `field_app_locations`, `field_app_location_shares`,
-  `field_app_billing_sets`, `field_app_billing_lines`, `write_offs`) without calling the guard first
-  (nothing, not even a DECLARE initializer, may run before it), unless it is on a pinned
-  already-admin-only or upkeep list (body md5). **A new invoice writer must call
-  `_require_invoicing_admin()` as its first statement**, or it needs a reviewed entry on one of those
-  lists. The same rule runs in `smoke-invoicing-admin-only.sql`, the container prover, and on every PR
-  in `src/lib/invoiceWriterGuard.test.ts` (over every migration from `20261009120000` on).
+  `field_app_billing_sets`, `field_app_billing_lines`, `write_offs`), or runs `EXECUTE` in a body
+  that names one, without calling the guard first (nothing, not even a DECLARE initializer, may run
+  before it, and the body may have no exception handler that could catch its refusal), unless it is on
+  a pinned already-admin-only or upkeep list (body md5). It also refuses a trigger that writes an
+  invoice table from a table `authenticated` can write. **A new invoice writer must call
+  `_require_invoicing_admin()` as its first statement and must not catch exceptions**, or it needs a
+  reviewed entry on one of those lists. The same rule runs in `smoke-invoicing-admin-only.sql`, the
+  container prover, and on every PR in `src/lib/invoiceWriterGuard.test.ts` (over every migration from
+  `20261009120000` on; keyed by signature, literal-aware, and it pins `_require_invoicing_admin`,
+  `_invoice_review_fingerprint`, `complete_job` and `_complete_delivery_authorized_impl`: re-emitting
+  any of them, or any pre-existing invoice-reaching internal function, needs a reviewed md5 in
+  `REVIEWED_BODIES`).
 
 ---
 

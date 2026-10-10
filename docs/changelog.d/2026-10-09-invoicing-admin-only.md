@@ -103,6 +103,54 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   same-key duplicate; every fingerprint leg (line shares, customer shares, a member added or
   soft-deleted); the new sweep cases; mutants for each new gate.
 
+### Review round 2 fixes (same candidate file, still NOT APPLIED)
+
+- Delivery completion vs a versioned post (reviewers: the completion re-sizes an admin's draft
+  before it locks the invoice row): checked in two sessions, before and after the candidate. Posting
+  an order invoice fires `guard_mono_invoice_split_billing_post`, which locks the order's
+  `order_items`, and the completion holds those rows, so the race ends in a deadlock (one side
+  aborted, 40P01, nothing of it committed); a posted invoice is never re-sized. A lock added inside
+  the completion was tried and dropped (it adds the same deadlock to every full completion meeting a
+  post); the completion body stays the round-1 body. The prover keeps the two-session case.
+- Read side: `field_app_billing_lines_select` is widened too; both split-billing read policies let a
+  rep read a set or line only through a non-deleted invoice that uses it; `invoices_select` and
+  `invoice_items_select` are `TO authenticated` (under `TO public` anon got a permission error from
+  `is_sales_rep()` instead of no rows). Cost and margin on invoices: reps already read the same cost
+  and margin on every order line (live policies read 2026-10-10), so no new kind of data opens.
+- Postflight: the version readers' owner and EXECUTE list are pinned; `invoices` / `invoice_items`
+  must have no API write grant; a guard-first body with an exception handler is not accepted; dynamic
+  SQL (`EXECUTE`) naming an invoice table counts as a write; a trigger writing an invoice table from a
+  table `authenticated` can write refuses the apply; the apply session's `search_path` is pinned to
+  live's default so the policy pins do not depend on the apply tool.
+- PR-time guard `src/lib/invoiceWriterGuard.test.ts`: keyed by signature (a guarded overload cannot
+  hide an unguarded one); comment stripping keeps string literals; the exception-handler and
+  dynamic-SQL rules; `REVIEWED_BODIES` pins the guard helper, the fingerprint, `complete_job` and the
+  completion implementation, and any later re-emission of a pre-existing invoice-reaching internal
+  function needs a reviewed pin (probe: re-emitting the pre-candidate completion body is caught).
+  Each new rule was mutation-checked (5 of 5 mutants turned the test red).
+- Live, read-only (2026-10-10): every preflight pin re-checked against live (23 wrapped RPCs: body,
+  owner, security mode, `search_path`, result, grants; 33 more body pins; 17 replaced policies and the
+  policy sets) - all match; `batch_void_invoices` still delegates to `void_invoice` (its pin and
+  `batch_cancel_deliveries`' come from the live body / the 2026-07-27 baseline, not a migration file);
+  no function uses `EXECUTE` with an invoice table; the only invoice-writing trigger is on `invoices`;
+  `guard_mono_invoice_split_billing_post` is enabled live.
+- Prover: the completion race (two sessions, before and after); the BEFORE rep writes must change the
+  invoice itself (posts posted, unposts unposted, field-app header fields set); the admin comparison
+  includes per-table row-count deltas over 18 tables; notification recipients must be exactly the
+  active admins; the split key refusal for every role; frozen implementations closed to every API
+  role and refused when called directly; a service_role caller with no subject refused; 7 more
+  postflight mutants (11 in all, one per postflight branch); sweep cases and mutants for the
+  exception-handler and dynamic-SQL rules; the completion mutant must fail for its named reason;
+  after the mutations every section is re-run green and every policy is back at its pin.
+- Error text: the posting refusals no longer say "This invoice" (they also come from group and batch
+  posts); `db.ts` records that a version-checked post needs a key.
+- Proof (2026-10-10, fresh container): `INVOICING_ADMIN_ONLY_PROOF_PASS ... postflight=11_mutants
+  ... completion_race=posted_invoice_never_resized_before_and_after ... chains=9_pass,
+  9_fail_before_and_after_no_signal,2_rep_chains_stop_at_admin_only ... mutations=68_detected`
+  (the race ended with the rep's completion aborted as the deadlock victim and the admin's post
+  intact, before and after). `npm run typecheck`, `npm run lint`, `npm run test` (5489 passed,
+  123 skipped) and `node scripts/check-doc-drift.mjs` pass.
+
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations.
@@ -116,6 +164,8 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   PR-time guard.
 - At apply: re-pin `scripts/db-invariant-sweeps/allowlist.json` (`complete_job`'s contract digest
   changes; the new wrappers pass `p_performed_by` to their frozen bodies) from live digests.
-- Mason decisions (KNOWN_ISSUES): reps re-pricing an admin's draft/unposted invoice through order
-  upkeep; reps reading cost/margin on every invoice.
+- Mason decision before the apply (KNOWN_ISSUES): reps re-pricing an admin's draft/unposted invoice
+  through order upkeep (design Q4b). Tell him: reps read cost/margin on invoices (already on orders);
+  applicators' job completions now notify every admin.
+- Later upkeep change: `update_order_items`' draft line-link detach should lock the invoice first.
 - Regenerate `.claude/schema-registry.json` after the apply.

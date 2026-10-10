@@ -178,6 +178,10 @@ export const RpcErrorCodes = {
   INVOICE_CHANGED_SINCE_REVIEW: 'INVOICE_CHANGED_SINCE_REVIEW',
   // Same three posting RPCs: p_expected_version is not a 32-char lowercase md5 from
   // get_invoice_post_version / get_invoice_group_post_version (22023). A client bug.
+  // A version also REQUIRES a non-blank p_idempotency_key on post_invoice and
+  // batch_post_invoices (else IDEMPOTENCY_KEY_REQUIRED, 22023, shown raw by
+  // sanitizeError); post_invoice_group's frozen body has its own key rules. Every
+  // version-checked post must send a key.
   INVOICE_EXPECTED_VERSION_INVALID: 'INVOICE_EXPECTED_VERSION_INVALID',
   PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
   // complete_cycle_count optimistic-concurrency refusal (20260831212415). Raised

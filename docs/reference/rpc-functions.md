@@ -41,7 +41,9 @@ A service_role caller has no `auth.uid()`, so the guard refuses it too (no serve
   the group lock and invoice row locks, and refuses `INVOICE_CHANGED_SINCE_REVIEW` if any invoice that
   would post (every non-deleted group member) changed. A malformed version is 22023
   `INVOICE_EXPECTED_VERSION_INVALID`. One overload per name. It binds against writers that lock the
-  invoice row first; delivery completion's upkeep of an admin's draft does not (KNOWN_ISSUES). Readers: `get_invoice_post_version(p_invoice_ids uuid[])` and
+  invoice row first; delivery completion's resize of an admin's draft is serialized by the post's
+  `order_items` lock instead (it can deadlock, never re-size a posted invoice); `update_order_items`'
+  line-link detach can still land after the check (link field only, see KNOWN_ISSUES). Readers: `get_invoice_post_version(p_invoice_ids uuid[])` and
   `get_invoice_group_post_version(p_invoice_group_id uuid)` → text (admin-only, read-only).
 - Internal: `_require_invoicing_admin()` (void) and `_invoice_review_fingerprint(uuid[])` (md5 of each
   invoice row, its lines, line shares and customer shares; `TimeZone = UTC`), both owner-only.

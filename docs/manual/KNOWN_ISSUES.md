@@ -101,24 +101,49 @@ the file is applied and verified live.
 - **`finance_charges` still grants table writes to `authenticated`** (its policy is admin-only, so
   RLS refuses them; the grant is defence-in-depth debt). TRUNCATE is not reachable through PostgREST.
   (`write_offs` and the `field_app_billing_*` TRUNCATE grants are revoked by `20261009120000`.)
-- **A delivery completion can still change an admin's draft while a versioned post runs**
-  (pre-existing; review round 1). `_complete_delivery_authorized_impl`'s upkeep of an admin's draft
-  (the tote stamp, the partial-delivery resize) writes `invoice_items` before it locks the `invoices`
-  row, and the tote stamp also touches posted invoices. The posting version check binds against
-  writers that lock the invoice row first, so a completion committing between the version check and
-  the post can still slip a line change past the admin's review. `20261009120000` re-emits that body
-  verbatim apart from its admin-only hunk; fixing the lock order needs its own change and a
-  two-session prover case.
-- **Needs Mason: reps can still re-price and re-date an admin's draft or unposted invoice through
-  order upkeep** (`price_order`, `update_order_items`, `create_rush_order` update `invoice_items` and
-  the header of every `draft` / `unposted` invoice on the order; their role gate allows sales reps).
-  The design brief called this upkeep "the default in Mason's Q4"; his answers do not mention it.
-  If reps must not change an admin's invoice amounts at all, these need a non-admin refusal when an
-  active invoice exists.
-- **Needs Mason: reps now read cost and margin on every invoice** (`invoices.total_cost_cents`,
-  `invoice_items.cost_cents`), including customers whose names they cannot see. Mason approved "all
-  invoices, read-only"; whether that includes cost/margin was not asked. If not, rep reads must go
-  through a read RPC or view without the cost columns instead of the widened table policies.
+- **A delivery completion racing an admin's post can end in a deadlock (one side aborted), never in a
+  re-sized posted invoice** (checked in review round 2). `_complete_delivery_authorized_impl`'s
+  partial-delivery resize writes `invoice_items` before it locks the `invoices` row, which looked
+  like it could change an invoice after the admin's versioned post compared it. It cannot: posting
+  an order invoice fires `guard_mono_invoice_split_billing_post`, which locks every `order_items`
+  row of the order `FOR UPDATE`, and the completion holds those rows from its own update until it
+  commits. The two serialize, or Postgres aborts one as a deadlock (40P01; seen in the container
+  prover's two-session case, before and after the candidate) and nothing of it commits. The user
+  whose side is aborted sees an error and retries. Locking the invoices inside the completion was
+  tried in round 2 and dropped: it adds the same deadlock to every full completion that meets a
+  post. Only the tote stamp (tote numbers, not money) can land on an invoice posted meanwhile.
+- **`update_order_items` detaches a draft line's order link without locking the invoice.**
+  `_update_order_items_impl` sets `invoice_items.order_item_id = NULL` on draft (and voided or
+  cancelled) invoices without locking the `invoices` row, so a rep's order-line edit can change that
+  link field after an admin's versioned post compared it. No amount changes. Fix with the next
+  upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first.
+- **Needs Mason before apply: reps can still re-price and re-date an admin's draft or unposted invoice
+  through order upkeep** (`price_order`, `update_order_items`, `create_rush_order` update
+  `invoice_items` and the header of every `draft` / `unposted` invoice on the order; their role gate
+  allows sales reps). They lock the invoice row first, so a versioned post refuses after them. The
+  design asked this as Q4(b) with the recommended answer "keep price refresh"; Mason answered Q4(a)
+  (cancel: no block) and never contradicted (b), but no answer to (b) is recorded. If reps must not
+  change an admin's invoice amounts at all, these need a non-admin refusal when an active invoice
+  exists. Likewise `cancel_delivery` cancels the delivery's `unposted` invoices, not only drafts
+  (Mason's Q4(a) answer named "the automatic cancel of the draft invoice").
+- **Reps read cost and margin on every invoice** (`invoices.total_cost_cents`,
+  `invoice_items.cost_cents`) under the "all invoices, read-only" widening. This is not new data for
+  them: reps already read cost and margin on every order line of every customer
+  (`order_items.cost_per_unit`, `cost_at_time_cents`, `net_margin`; `orders.total_cost`,
+  `total_margin_pct`; `oitems_select` / `orders_select` = `is_admin() OR is_sales_rep()`, read live
+  2026-10-10), and invoice line cost is copied from the order line. Hiding it would need a read RPC or
+  view for reps and a change to the order policies too; worth telling Mason, not a blocker.
+- **The posting version does not cover rows the post reads from elsewhere**: the customer's default
+  payment terms (used for the due date when the invoice has none) and a field invoice's
+  `field_app_locations` acres. Every writer of those is admin-only after `20261009120000`. The
+  fingerprint hashes every `invoices` column, so a background change to the row (for example
+  `updated_at`) also refuses a post until the admin reloads; no test covers a benign background
+  touch yet.
+- **Applicators' job completions now notify every admin too.** `complete_job`'s gate became
+  `IF is_admin()`, so an applicator's completion (previously a silent `auto_draft_skipped` row) also
+  sends `job_needs_invoice` to each active admin while `auto_draft_invoice_on_job_completion` is on
+  (it is on live). Tell Mason; narrow it to reps and drivers only if he asks. With that setting off
+  nobody gets a draft or a notification, admins included (unchanged).
 - **At apply: the actor-forgery invariant sweep must be re-pinned.** Its `complete_job` exception
   pins the live contract digest (`46ca21c7...`), which this file changes, and the new wrappers that
   pass `p_performed_by` to their frozen bodies will show up as suspects. The digests are read from
@@ -142,8 +167,19 @@ the file is applied and verified live.
   postflight, `smoke-invoicing-admin-only.sql`, the prover). Since review round 1 the same rule runs on
   every PR as a static test, `src/lib/invoiceWriterGuard.test.ts`: it scans every migration from
   `20261009120000` on and fails on a function that reaches an invoice write without the guard first
-  (or a re-emitted allowlisted body). Like the sweep it is a text regex, not a parser: dynamic SQL and
-  other schemas are outside it.
+  (or a re-emitted allowlisted body). Review round 2 widened both: dynamic SQL (`EXECUTE`) in a body
+  that names an invoice table counts as a write; a guard-first body with an exception handler no
+  longer counts as guarded; the postflight refuses a trigger that writes an invoice table from a table
+  `authenticated` can write; and the PR test keys functions by signature (a guarded overload cannot
+  hide an unguarded one), keeps string literals when it strips comments, and pins the guard helper,
+  the fingerprint, `complete_job` and the delivery-completion implementation, so a later migration
+  that re-emits any of them (or any pre-existing invoice-reaching internal function) must be
+  re-reviewed. Still outside both: other schemas, calls through a quoted or schema-dotted name the
+  regex does not match, triggers reached only through calls, and tables outside the list
+  (`credit_memo_applications`, `prepay_applications`, `split_invoice_*`, `delivery_external_billings`,
+  `invoice_delivery_recovery_capabilities`). The postflight's own comment stripping is not
+  literal-aware (it runs once, against live's current bodies; none uses `EXECUTE` with an invoice
+  table, read 2026-10-10).
 - **Nine registered chains around the invoicing RPCs fail on main's schema in the container** (the
   prover prints each one's first error; identical before and after this change, so they give no
   evidence either way). Classifying and repairing them is separate work.

@@ -69,9 +69,9 @@ describe('sanitizeError', () => {
     expect(sanitizeError(adminOnly)).toBe('Only an admin can do invoicing');
     expect(sanitizeError({ code: '42501', message: adminOnly })).toBe('Only an admin can do invoicing');
     expect(sanitizeError('INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting'))
-      .toBe('This invoice changed after you reviewed it, so nothing was posted. Reload it, check it again, then post');
+      .toBe('An invoice changed after you reviewed it, so nothing was posted. Reload, check it again, then post');
     expect(sanitizeError({ code: '22023', message: 'INVOICE_EXPECTED_VERSION_INVALID: post_invoice expects the version from get_invoice_post_version' }))
-      .toBe('This invoice could not be checked before posting, so nothing was posted. Reload the page and try again');
+      .toBe('The invoice could not be checked before posting, so nothing was posted. Reload the page and try again');
     expect(sanitizeError('INVOICING_ADMIN_ONLY_SOMETHING_ELSE')).toBe('INVOICING_ADMIN_ONLY_SOMETHING_ELSE');
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
     expect(sanitizeError('RETURN_CREDIT_INVENTORY_UNIT_MISMATCH')).toContain('warehouse inventory unit');

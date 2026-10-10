@@ -120,8 +120,11 @@ what), this is what each person can do:
   ("Delivery needs an invoice") and the delivery shows under "Delivered, not invoiced" until an admin
   opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft,
   every admin gets "Job needs an invoice", and you bill it from the unbilled list.
-- **Two questions still open for you** (details in KNOWN_ISSUES): may reps keep re-pricing an
-  admin's draft invoice through order changes, and may reps see cost and margin on every invoice?
+- **One question still open for you, before this goes live** (details in KNOWN_ISSUES): when a rep
+  re-prices an order, should the admin's draft or unposted invoice on that order keep updating to
+  the new prices (today's behaviour, and what this change keeps)? Also worth knowing: reps will see
+  cost and margin on every invoice, the same numbers they already see on every order; and an
+  applicator's job completion now notifies every admin too.
 - **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
   draft is cancelled with it, as today.
 - **Posting is safer:** when the invoice screens are updated (phase 2), posting will send the version

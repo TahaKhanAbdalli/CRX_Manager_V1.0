@@ -5,16 +5,28 @@
 // Mason 2026-10-09: invoicing is admin-only. This test applies the postflight's rule to every
 // migration from 20261009120000 on: a public function or procedure such a file creates must call
 // public._require_invoicing_admin() FIRST (a DECLARE section before it may only declare: no
-// initializer, no call) when its body, comments stripped,
+// initializer, no call) and have no exception handler that could catch that refusal, when its
+// body, comments stripped (string literals kept),
 //   - INSERTs, UPDATEs, DELETEs, MERGEs or TRUNCATEs an invoice table (ONLY and quotes included),
+//   - runs dynamic SQL (EXECUTE) and names an invoice table anywhere, literals included,
 //   - calls a frozen _<name>_pre_admin_only_20261009 implementation,
 //   - calls a pre-existing function that reaches an invoice write unguarded (REACH below), or
 //   - calls another function created in these files that does any of the above,
 // unless that function is internal (EXECUTE revoked from authenticated in these files and never
 // re-granted, or a pre-existing internal function that is never granted) or it is on the
 // reviewed allowlist below, which pins its exact body: a re-emitted body must be re-reviewed.
-// Like the postflight it is a regex over the SQL text, not a parser: dynamic SQL (EXECUTE) and
-// writes from other schemas are outside it.
+// Review round 2 adds:
+//   - REVIEWED_BODIES: the guard helper, the fingerprint, the delivery-completion implementation
+//     (whose admin-only hunk is the only thing between a rep's completion and an auto-invoice)
+//     and complete_job are pinned to their reviewed bodies; and a LATER migration that re-emits
+//     any pre-existing invoice-reaching INTERNAL function (REACH_INTERNAL: the completion chain,
+//     the frozen implementations, ...) needs its body pinned here too. Internal functions are
+//     otherwise exempt, so without this an old body could be re-emitted and quietly bring back
+//     rep auto-invoicing.
+//   - Functions are keyed by name AND argument types, so a guarded overload cannot hide an
+//     unguarded one.
+// Like the postflight it is a regex over the SQL text, not a parser: writes from other schemas
+// and calls through a quoted or schema-dotted name it does not match are outside it.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -30,6 +42,9 @@ const INVOICE_TABLES = ['invoices', 'invoice_items', 'invoice_shares', 'invoice_
   'invoice_line_allocations', 'field_app_locations', 'field_app_location_shares', 'field_app_billing_sets',
   'field_app_billing_lines', 'write_offs'];
 const WRITES = new RegExp(`\\b(insert\\s+into|update|delete\\s+from|merge\\s+into|truncate(\\s+table)?)\\s+(only\\s+)?("?public"?\\s*\\.\\s*)?"?(${INVOICE_TABLES.join('|')})("|\\b)`, 'i');
+const DYNAMIC_SQL = /\bexecute\b/i;
+const NAMES_INVOICE_TABLE = new RegExp(`\\b(${INVOICE_TABLES.join('|')})\\b`, 'i');
+const EXCEPTION_HANDLER = /\bexception\s+when\b/i;
 const FROZEN_CALL = /\b_\w+_pre_admin_only_20261009\s*\(/;
 // The postflight's guard-first rules, character for character in meaning.
 const GUARD_FIRST = /^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\b)\w+\s+[\w[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);/;
@@ -75,12 +90,104 @@ const ALLOWLIST: Record<string, { md5: string; reason: string }> = {
   },
 };
 
-type Fn = { name: string; file: string; body: string; code: string; replace: boolean };
+// Review round 2: bodies whose every definition, in every scanned migration, must be one of the
+// reviewed md5s below (the same md5s 20261009120000's postflight pins). A LATER migration that
+// re-emits any REACH_INTERNAL function must add its reviewed body md5 here as well.
+const REVIEWED_BODIES: Record<string, { md5s: string[]; reason: string }> = {
+  _require_invoicing_admin: { md5s: ['629609ce38f7c192abfde5be47848557'], reason: 'the guard every invoicing wrapper relies on (EXISTS on an ACTIVE admin, 42501)' },
+  _invoice_review_fingerprint: { md5s: ['658f42b242a47462ec8c9b319409583f'], reason: 'the posting version check binds to it' },
+  _complete_delivery_authorized_impl: { md5s: ['b9b314f56adeba3a58ebe38a48d839b1'], reason: 'its ELSIF v_actor_role = \'admin\' hunk is all that stops a rep\'s or driver\'s completion from auto-invoicing' },
+  complete_job: { md5s: ['9196da7ce6337bd0176a67b37be950f2'], reason: 'its IF is_admin() gate is all that stops a rep\'s job completion from auto-drafting' },
+};
+
+type Fn = { key: string; name: string; file: string; body: string; code: string; replace: boolean };
 type Violation = { name: string; file: string; why: string };
 
-/** Comments removed left to right (a block comment inside a line comment and vice versa). */
+/**
+ * Comments removed left to right, string literals kept (review round 2: a '--' or '/*' inside a
+ * literal no longer hides what follows it). Single-quoted literals ('' escapes) and dollar-quoted
+ * literals are copied as they are; an unclosed block comment or literal is kept, not stripped.
+ */
 function stripComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\/|--[^\n]*/g, '');
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const rest = text.slice(i);
+    if (rest.startsWith('--')) {
+      const nl = text.indexOf('\n', i);
+      i = nl < 0 ? text.length : nl;
+      continue;
+    }
+    if (rest.startsWith('/*')) {
+      const close = text.indexOf('*/', i + 2);
+      if (close >= 0) { i = close + 2; continue; }
+      out += '/*';
+      i += 2;
+      continue;
+    }
+    if (text[i] === "'") {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === "'" && text[j + 1] === "'") { j += 2; continue; }
+        if (text[j] === "'") break;
+        j += 1;
+      }
+      out += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    const dollar = /^\$(\w*)\$/.exec(rest);
+    if (dollar) {
+      const close = text.indexOf(dollar[0], i + dollar[0].length);
+      const end = close < 0 ? text.length : close + dollar[0].length;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+/** The text between the parenthesis at `open` and its matching close (quotes respected). */
+function balanced(text: string, open: number): string | null {
+  let depth = 0;
+  let quoted = false;
+  for (let j = open; j < text.length; j += 1) {
+    const c = text[j];
+    if (quoted) { if (c === "'") quoted = false; continue; }
+    if (c === "'") quoted = true;
+    else if (c === '(') depth += 1;
+    else if (c === ')') { depth -= 1; if (depth === 0) return text.slice(open + 1, j); }
+  }
+  return null;
+}
+
+const TYPE_START = new Set(['time', 'timestamp', 'double', 'character', 'bit', 'interval', 'varying']);
+/** name(type,type,...) from an argument list with or without names, modes and defaults. */
+function signatureKey(name: string, args: string): string {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let cur = '';
+  for (const c of args) {
+    if (quoted) { cur += c; if (c === "'") quoted = false; continue; }
+    if (c === "'") quoted = true;
+    if (c === '(') depth += 1;
+    if (c === ')') depth -= 1;
+    if (c === ',' && depth === 0) { parts.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur.trim()) parts.push(cur);
+  const types = parts.map((p) => {
+    let a = p.replace(/\s+(DEFAULT\b|=)[\s\S]*$/i, '').trim().replace(/\s+/g, ' ').toLowerCase();
+    a = a.replace(/^(in|out|inout|variadic) /, '');
+    const words = a.split(' ');
+    if (words.length > 1 && !TYPE_START.has(words[0])) a = words.slice(1).join(' ');
+    return a.replace(/^public\./, '').replace(/"/g, '');
+  });
+  return `${name}(${types.join(',')})`;
 }
 
 function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[] } {
@@ -92,24 +199,27 @@ function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[]
     if (m[3] && m[3].toLowerCase() !== 'public') continue;
     const name = m[4];
     const rest = sql.slice(m.index);
+    const args = balanced(rest, m[0].length - 1);
     const tag = /\bAS\s+(\$\w*\$)/i.exec(rest);
     const stop = rest.indexOf(';');
-    if (!tag || (stop >= 0 && stop < tag.index)) { unparsed.push(name); continue; }
+    if (args === null || !tag || (stop >= 0 && stop < tag.index)) { unparsed.push(name); continue; }
     const bodyStart = tag.index + tag[0].length;
     const bodyEnd = rest.indexOf(tag[1], bodyStart);
     if (bodyEnd < 0) { unparsed.push(name); continue; }
     const body = rest.slice(bodyStart, bodyEnd);
-    fns.push({ name, file, body, code: stripComments(body), replace: Boolean(m[1]) });
+    fns.push({ key: signatureKey(name, args), name, file, body, code: stripComments(body), replace: Boolean(m[1]) });
     head.lastIndex = m.index + bodyEnd + tag[1].length;
   }
   return { fns, unparsed };
 }
 
 /** The rule over an ordered list of migration texts. Returns every violation. */
-function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALLOWLIST = ALLOWLIST): Violation[] {
+function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALLOWLIST = ALLOWLIST,
+  reviewed: typeof REVIEWED_BODIES = REVIEWED_BODIES): Violation[] {
   const violations: Violation[] = [];
   const latest = new Map<string, Fn>();
   const revoked = new Map<string, boolean>();
+  const reachInternal = new Set(REACH_INTERNAL);
   for (const { file, sql: raw } of files) {
     const sql = raw.replace(/\r\n/g, '\n');
     const top = stripComments(sql.replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, '<body>'));
@@ -118,39 +228,58 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     }
     const { fns, unparsed } = functionsIn(file, sql);
     for (const name of unparsed) violations.push({ name, file, why: 'body could not be parsed (use a dollar-quoted body)' });
+    for (const f of fns) {
+      // Every definition of a pinned body must be a reviewed one; a later re-emission of a
+      // pre-existing invoice-reaching internal function needs a reviewed pin too.
+      const pin = reviewed[f.name];
+      const later = file.slice(0, 14) > FIRST_GUARDED_MIGRATION;
+      if ((pin || (later && reachInternal.has(f.name))) && !(pin?.md5s ?? []).includes(md5(f.body))) {
+        violations.push({ name: f.name, file, why: `re-emits a reviewed invoicing body (md5 ${md5(f.body)}): re-review it and pin it in REVIEWED_BODIES` });
+      }
+    }
     // A plain CREATE starts from the default privileges (authenticated can execute); CREATE OR
     // REPLACE keeps whatever ACL the function already had.
-    for (const f of fns) { latest.set(f.name, f); if (!f.replace) revoked.delete(f.name); }
+    for (const f of fns) { latest.set(f.key, f); if (!f.replace) revoked.delete(f.key); }
     // Statement order inside one file does not matter here: a REVOKE from authenticated in the
-    // same or a later file marks the name internal; a later GRANT to authenticated re-exposes it.
+    // same or a later file marks the signature internal; a later GRANT to authenticated re-exposes it.
     for (const s of top.split(';')) {
-      const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*\([^;]*\bFROM\b([^;]*)/i.exec(s);
-      if (rv && /\bauthenticated\b/i.test(rv[3])) revoked.set(rv[2], true);
-      const gr = /GRANT\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*\([^;]*\bTO\b([^;]*)/i.exec(s);
-      if (gr && /\b(authenticated|PUBLIC)\b/i.test(gr[3])) revoked.set(gr[2], false);
+      const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bFROM\b([^;]*)/i.exec(s);
+      if (rv && /\bauthenticated\b/i.test(rv[4])) {
+        const args = balanced(s, rv.index + rv[0].indexOf('(', rv[0].indexOf(rv[2])));
+        if (args !== null) revoked.set(signatureKey(rv[2], args), true);
+      }
+      const gr = /GRANT\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bTO\b([^;]*)/i.exec(s);
+      if (gr && /\b(authenticated|PUBLIC)\b/i.test(gr[4])) {
+        const args = balanced(s, gr.index + gr[0].indexOf('(', gr[0].indexOf(gr[2])));
+        if (args !== null) revoked.set(signatureKey(gr[2], args), false);
+      }
     }
   }
   const reachExposed = new Set(REACH_EXPOSED);
-  const reachInternal = new Set(REACH_INTERNAL);
-  const guarded = (f: Fn) => GUARD_FIRST.test(f.body) || (f.name === 'create_split_invoices_from_order' && SPLIT_KEY_THEN_GUARD.test(f.body));
+  const scannedNames = new Set([...latest.values()].map((f) => f.name));
+  // Guard first, and no exception handler anywhere in the body that could catch its refusal.
+  const guarded = (f: Fn) => !EXCEPTION_HANDLER.test(f.code)
+    && (GUARD_FIRST.test(f.body) || (f.name === 'create_split_invoices_from_order' && SPLIT_KEY_THEN_GUARD.test(f.body)));
   const calls = (code: string, name: string) => new RegExp(`\\b${name}\\s*\\(`).test(code);
-  // Writers among the scanned functions (to a fixed point): direct writes, frozen calls, calls to
-  // a pre-existing unguarded reacher, or calls to another scanned writer that is not guarded.
+  // Writers among the scanned functions (to a fixed point): direct writes, dynamic SQL naming an
+  // invoice table, frozen calls, calls to a pre-existing unguarded reacher, or calls to another
+  // scanned writer that is not guarded (by name: any overload of it counts).
   const writer = new Set<string>();
   let grew = true;
   while (grew) {
     grew = false;
     for (const f of latest.values()) {
-      if (writer.has(f.name)) continue;
-      const reaches = WRITES.test(f.code) || FROZEN_CALL.test(f.code)
-        || [...reachExposed, ...reachInternal].some((n) => n !== f.name && !latest.has(n) && calls(f.code, n))
-        || [...writer].some((n) => n !== f.name && !guarded(latest.get(n) as Fn) && calls(f.code, n));
-      if (reaches) { writer.add(f.name); grew = true; }
+      if (writer.has(f.key)) continue;
+      const unguardedWriterNames = [...latest.values()].filter((w) => writer.has(w.key) && !guarded(w)).map((w) => w.name);
+      const reaches = WRITES.test(f.code) || (DYNAMIC_SQL.test(f.code) && NAMES_INVOICE_TABLE.test(f.code)) || FROZEN_CALL.test(f.code)
+        || [...reachExposed, ...reachInternal].some((n) => n !== f.name && !scannedNames.has(n) && calls(f.code, n))
+        || unguardedWriterNames.some((n) => n !== f.name && calls(f.code, n));
+      if (reaches) { writer.add(f.key); grew = true; }
     }
   }
   for (const f of latest.values()) {
-    if (!writer.has(f.name) || guarded(f)) continue;
-    const internal = revoked.get(f.name) === true || (revoked.get(f.name) === undefined && f.replace && reachInternal.has(f.name));
+    if (!writer.has(f.key) || guarded(f)) continue;
+    const internal = revoked.get(f.key) === true || (revoked.get(f.key) === undefined && f.replace && reachInternal.has(f.name));
     if (internal) continue;
     const allowed = allowlist[f.name];
     if (allowed && md5(f.body) === allowed.md5) continue;
@@ -169,14 +298,17 @@ describe('invoice writers stay admin-only after 20261009120000 (CI companion of 
   it('finds no unguarded invoice writer in any migration from 20261009120000 on', () => {
     const files = migrationFiles.map((file) => ({ file, sql: readFileSync(join(migrationsDir, file), 'utf8') }));
     expect(scan(files)).toEqual([]);
-    // Not vacuous: without the allowlist the scan flags exactly the allowlisted functions.
+    // Not vacuous: without the allowlist the scan flags exactly the allowlisted functions, and
+    // without the reviewed pins it flags exactly the pinned bodies this file defines.
     expect(scan(files, {}).map((v) => v.name).sort()).toEqual(Object.keys(ALLOWLIST).sort());
+    expect(scan(files, ALLOWLIST, Object.fromEntries(Object.entries(REVIEWED_BODIES).map(([k, v]) => [k, { ...v, md5s: [] }]))).map((v) => v.name).sort())
+      .toEqual(Object.keys(REVIEWED_BODIES).sort());
   });
 
   describe('the rule itself (each must fail when it should)', () => {
     const base = readFileSync(join(migrationsDir, '20261009120000_invoicing_admin_only.sql'), 'utf8');
     const withNext = (sql: string) => scan([{ file: '20261009120000_invoicing_admin_only.sql', sql: base }, { file: '29990101000000_probe.sql', sql }]);
-    const fn = (name: string, body: string, extra = '') => `CREATE OR REPLACE FUNCTION public.${name}(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$${body}$f$;\n${extra}`;
+    const fn = (name: string, body: string, extra = '', args = 'p uuid') => `CREATE OR REPLACE FUNCTION public.${name}(${args}) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$${body}$f$;\n${extra}`;
     const names = (v: Violation[]) => v.map((x) => x.name);
 
     it('accepts the guard first, and an internal (revoked) writer', () => {
@@ -216,6 +348,46 @@ describe('invoice writers stay admin-only after 20261009120000 (CI companion of 
       expect(names(withNext('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;'))).toEqual(['*']);
       // An upkeep function re-emitted later (here price_order, unguarded) needs its own review.
       expect(names(withNext(fn('price_order', '\nBEGIN\n  UPDATE public.invoice_items SET quantity = 1 WHERE invoice_id = p;\nEND;\n')))).toEqual(['price_order']);
+    });
+
+    // Review round 2.
+    it('flags a later re-emission of the delivery-completion implementation from its pre-candidate body', () => {
+      // The live body before 20261009120000 (no admin-only hunk): reps' and drivers' completions
+      // auto-invoice again. The implementation is internal, so only the reviewed pin catches it.
+      const prior = readFileSync(join(migrationsDir, '20260827041300_align_return_credit_delivery_surfaces.sql'), 'utf8').replace(/\r\n/g, '\n');
+      const start = prior.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const end = prior.indexOf('$function$;', start) + '$function$;'.length;
+      const reemit = prior.slice(start, end);
+      expect(reemit).not.toContain("ELSIF v_actor_role = 'admin' THEN");
+      expect(names(withNext(reemit))).toEqual(['_complete_delivery_authorized_impl']);
+      // Any other pre-existing invoice-reaching internal function re-emitted later, too.
+      expect(names(withNext(fn('_complete_delivery_aggregate_impl', '\nBEGIN\n  RETURN;\nEND;\n',
+        'REVOKE ALL ON FUNCTION public._complete_delivery_aggregate_impl(uuid) FROM PUBLIC, anon, authenticated;')))).toEqual(['_complete_delivery_aggregate_impl']);
+    });
+    it('flags a weakened guard helper or complete_job', () => {
+      const helper = 'CREATE OR REPLACE FUNCTION public._require_invoicing_admin() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$\nBEGIN\nEND;\n$function$;';
+      expect(names(withNext(helper))).toEqual(['_require_invoicing_admin']);
+      expect(names(withNext(fn('complete_job', '\nBEGIN\n  PERFORM 1;\nEND;\n', '', 'p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text')))).toEqual(['complete_job']);
+    });
+    it('flags a guard-first body whose exception handler swallows the refusal and then writes', () => {
+      expect(names(withNext(fn('probe_swallow', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  RETURN;\nEXCEPTION WHEN OTHERS THEN\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n')))).toEqual(['probe_swallow']);
+    });
+    it('treats dynamic SQL that names an invoice table as a write', () => {
+      expect(names(withNext(fn('probe_dynamic', "\nBEGIN\n  EXECUTE 'DELETE FROM ' || 'public.invoices WHERE id = $1' USING p;\nEND;\n")))).toEqual(['probe_dynamic']);
+      expect(names(withNext(fn('probe_dynamic_format', "\nBEGIN\n  EXECUTE format('UPDATE public.%I SET header_notes = NULL WHERE id = $1', 'write_offs') USING p;\nEND;\n")))).toEqual(['probe_dynamic_format']);
+    });
+    it('does not let a comment marker inside a string literal hide a write', () => {
+      expect(names(withNext(fn('probe_literal', "\nDECLARE\n  v text;\nBEGIN\n  v := '--'; DELETE FROM public.invoices WHERE id = p;\nEND;\n")))).toEqual(['probe_literal']);
+      expect(names(withNext(fn('probe_literal_block', "\nDECLARE\n  v text;\nBEGIN\n  v := '/*';\n  DELETE FROM public.invoices WHERE id = p;\n  v := '*/';\nEND;\n")))).toEqual(['probe_literal_block']);
+    });
+    it('keys functions by signature, so a guarded overload cannot hide an unguarded one', () => {
+      const unguarded = fn('probe_overload', '\nBEGIN\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n', '', 'p uuid');
+      const guarded = fn('probe_overload', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n', '', 'p uuid, q text');
+      expect(names(withNext(`${unguarded}\n${guarded}`))).toEqual(['probe_overload']);
+      // The same signature re-emitted guarded replaces it.
+      const regarded = fn('probe_overload', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n', '', 'p_x uuid');
+      expect(withNext(`${unguarded}\n${regarded}`)).toEqual([]);
     });
   });
 });

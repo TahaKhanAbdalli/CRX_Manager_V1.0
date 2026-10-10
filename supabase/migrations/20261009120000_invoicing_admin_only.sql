@@ -1,10 +1,18 @@
 -- Written 2026-10-09. STATUS: NOT APPLIED (local candidate). Apply status is tracked only in
 -- docs/reference/migration-history.md.
 --
--- WHAT: invoicing becomes ADMIN-ONLY. No sales rep, driver or other non-admin role can create,
--- edit, post, unpost, void or transfer an invoice, or apply a credit memo or prepayment to one.
--- Sales reps can now READ every invoice (read-only). Posting can bind to the version an admin
--- reviewed.
+-- WHAT: invoicing becomes ADMIN-ONLY. No sales rep, driver or other non-admin role can call any
+-- invoicing RPC: create, edit, post, unpost, void or transfer an invoice, or apply a credit memo
+-- or prepayment to one. Sales reps can now READ every invoice (read-only). Posting can bind to
+-- the version an admin reviewed.
+-- WHAT IS NOT CHANGED (side effects of order and delivery work, not invoicing RPCs; listed under
+-- NOT CHANGED below and in KNOWN_ISSUES): a rep's order pricing (price_order, update_order_items,
+-- create_rush_order) still refreshes the lines, totals and date of an admin's DRAFT or UNPOSTED
+-- invoice on that order, and a rep's delivery cancel still cancels a draft or unposted invoice of
+-- that delivery (Mason 2026-10-09, addendum item 5). A rep's or driver's partial delivery
+-- completion still resizes an admin's draft for that delivery (brief 1c, approved in addendum
+-- item 4). NEEDS MASON before apply: confirm the pricing refresh (design question Q4b; its
+-- recommended answer "keep price refresh" was never contradicted, but no answer is recorded).
 --
 -- WHY (Mason, 2026-10-09, in chat): "no reps should be able to invoice any customer"; rep scoping
 -- is dropped (PR #891 closed, its 20261008120000 is never applied). His answers to the design
@@ -55,13 +63,18 @@
 --     notification per active admin ('delivery_needs_invoice') are written. A split (field
 --     allocated) order already falls back to needs_split_billing + notify when the split wrapper
 --     refuses, inside its own BEGIN/EXCEPTION. Upkeep of an admin's existing draft (the tote
---     stamp, the partial-delivery resize) is unchanged. Nothing raises, so an offline replay
+--     stamp, the partial-delivery resize) keeps its effect. Nothing raises, so an offline replay
 --     still ends 'applied'. A delivery with no order_id was never auto-invoiced (by anyone) and
 --     still writes no pending-admin row; that is unchanged behaviour, not part of this file.
---     RESIDUAL (pre-existing, KNOWN_ISSUES): that upkeep writes invoice_items before it locks the
---     invoices row, so a completion racing an admin's versioned post can still change lines the
---     admin reviewed; the version check below binds only against writers that lock the invoice
---     row first (save_invoice, price_order, the field-app saves, the posting RPCs).
+--     That upkeep vs an admin's versioned post (review round 2, checked in two sessions): the
+--     resize writes invoice_items before it locks the invoices row, but posting an order's invoice
+--     fires guard_mono_invoice_split_billing_post, which locks every order_items row of the order
+--     FOR UPDATE, and the completion holds those rows (it updated them) until it commits. So the
+--     two serialize, or, when the post already holds the invoice row and the completion is waiting
+--     for it, Postgres aborts one of them as a deadlock (40P01) and nothing half-done commits; a
+--     posted invoice is never re-sized. Locking the invoices in the completion as well was tried
+--     and dropped: it adds the same deadlock to every FULL completion that meets a post. Only the
+--     tote stamp can land on an invoice posted meanwhile (tote numbers; not money).
 --  1d complete_job (verbatim live body plus one hunk): the automatic draft runs only for an
 --     admin; anyone else writes the existing 'auto_draft_skipped' row, now saying invoicing is
 --     admin-only (not 'auto_draft_failed'), and (Q4/Q5: admins are notified) one notification per
@@ -83,12 +96,19 @@
 --     and the INSERT/UPDATE/DELETE policies of field_app_locations and field_app_location_shares,
 --     become is_admin() only (they were is_admin() OR is_sales_rep()).
 --  Addendum 2 Read side (Mason 2026-10-09, a read-permission WIDENING): the SELECT policies of
---     invoices, invoice_items, invoice_shares, invoice_line_shares, invoice_line_share_snapshots
---     and field_app_billing_sets add is_sales_rep() (the invoice list, detail, field-invoice and
---     PDF views read these); write_offs gets a second read-only policy for sales reps. The
+--     invoices, invoice_items, invoice_shares, invoice_line_shares, invoice_line_share_snapshots,
+--     field_app_billing_sets and field_app_billing_lines add is_sales_rep() (the invoice list,
+--     detail, field-invoice and PDF views read these; a split billing set or line only when a
+--     non-deleted invoice uses it); write_offs gets a second read-only policy for sales reps. The
 --     existing created_by / salesman_id legs stay, so drivers and every other role read exactly
---     what they read today. Every write policy stays admin-only. NOT widened: customers (a rep
---     still sees only assigned customers' names; see KNOWN_ISSUES).
+--     what they read today; invoices_select and invoice_items_select now apply TO authenticated
+--     (anon read no rows before and after). Every write policy stays admin-only. The rows include
+--     cost and margin (invoices.total_cost_cents, invoice_items.cost_cents): reps already read the
+--     same cost and margin on every order of every customer (order_items.cost_per_unit,
+--     cost_at_time_cents and net_margin; orders.total_cost and total_margin_pct; policies
+--     oitems_select / orders_select = is_admin() OR is_sales_rep(), read live 2026-10-10), so this
+--     opens no new kind of data. NOT widened: customers (a rep still sees only assigned customers'
+--     names; see KNOWN_ISSUES).
 --  Addendum 8(a) Posting version check (moved in from PR #892): post_invoice, post_invoice_group
 --     and batch_post_invoices take a trailing p_expected_version text DEFAULT NULL. It is the value
 --     get_invoice_post_version(ids) / get_invoice_group_post_version(group) returned when the
@@ -104,7 +124,12 @@
 --     ordered by id, and refuses with INVOICE_CHANGED_SINCE_REVIEW if anything differs. NULL keeps
 --     the old behaviour, so old callers keep working. The old two/three-argument functions are
 --     renamed away, so exactly one public overload of each name exists and PostgREST cannot see
---     two callable signatures.
+--     two callable signatures. The fingerprint is the invoice header plus its lines and shares
+--     (the addendum's "header plus lines"); it does not cover what the post reads from other
+--     rows at post time (the customer's default payment terms, when the invoice has none, sets
+--     the due date; a field invoice's field_app_locations acres). Every writer of those rows is
+--     admin-only after this file, and it hashes every invoices column, so any change to the
+--     invoice row (updated_at included) refuses a post until the admin reloads.
 --
 -- CALLERS (MANDATORY comment-stripped pg_proc scan, read live 2026-10-09, every schema): the only
 -- SQL callers of the renamed names are
@@ -151,18 +176,28 @@
 -- caller-analysis: _invoice_review_fingerprint :: new internal helper, never granted to an API role; only postgres-owned functions call it
 --
 -- NOT CHANGED: cancel_delivery / batch_cancel_deliveries (Mason: reps may cancel deliveries with an
--- invoice; the "cancel reverses a COMPLETED delivery" bug stays OPEN in KNOWN_ISSUES); price_order,
--- update_order_items and create_rush_order (upkeep of admin drafts); allocate_payment (Q1); the
--- already-admin-only invoice, credit, write-off, payment and order functions (pinned below).
+-- invoice; their draft AND unposted invoices of that delivery are cancelled as today; the "cancel
+-- reverses a COMPLETED delivery" bug stays OPEN in KNOWN_ISSUES); price_order, update_order_items
+-- and create_rush_order (order upkeep: they re-price, re-date or detach lines of an admin's draft
+-- or unposted invoice on the order, under its row lock, so a versioned post refuses after them;
+-- update_order_items' line detach takes no invoice lock, see KNOWN_ISSUES; NEEDS MASON, see WHAT
+-- IS NOT CHANGED above); allocate_payment (Q1); the already-admin-only invoice, credit, write-off,
+-- payment and order functions (pinned below).
 -- The postflight HARD-GUARD sweep refuses the apply if any function or procedure authenticated can
 -- run can reach (by name) a write (INSERT, UPDATE, DELETE, MERGE or TRUNCATE, with or without ONLY
 -- or quotes) to an invoice table (invoices, invoice_items, invoice_shares, invoice_line_shares,
 -- invoice_line_share_snapshots, invoice_line_allocations, field_app_locations,
--- field_app_location_shares, field_app_billing_sets, field_app_billing_lines, write_offs) without
--- calling the guard first and is not on one of those pinned lists. "First" means no statement and
--- no DECLARE initializer runs before it. It is a catalog regex, not a parser: dynamic SQL
--- (EXECUTE) and other schemas are outside it. src/lib/invoiceWriterGuard.test.ts applies the same
--- rule to every migration after this one on every PR.
+-- field_app_location_shares, field_app_billing_sets, field_app_billing_lines, write_offs), or an
+-- EXECUTE in a body that names one, without calling the guard first and is not on one of those
+-- pinned lists. "First" means no statement and no DECLARE initializer runs before it, and the
+-- body has no exception handler that could catch the guard's refusal. A second check refuses a
+-- trigger that writes an invoice table from a table authenticated can write. It is a catalog
+-- regex, not a parser: other schemas, calls through a quoted or schema-dotted name the regex does
+-- not match, string literals that contain comment markers, and tables outside that list (for
+-- example credit_memo_applications, prepay_applications, the split_invoice_* claim tables) are
+-- outside it. src/lib/invoiceWriterGuard.test.ts applies the same rule (literal-aware, overload-
+-- aware, and pinning re-emissions of the completion chain and the guard helper) to every migration
+-- from this one on, on every PR.
 --
 -- idempotency-body-check: exempt - every wrapper passes p_idempotency_key unchanged to the frozen
 -- implementation, which keeps its existing claim/check before any write and its receipt after
@@ -181,6 +216,10 @@
 -- and restores the policy texts and grants pinned in the preflight. No data is involved.
 
 SET LOCAL lock_timeout = '5s';
+-- The policy pins below hash the server's deparsed policy text, which prints is_admin()
+-- unqualified only while public is on the search_path: pin the apply session to live's default
+-- (read 2026-10-10) so the pins do not depend on how the apply tool connects.
+SET LOCAL search_path = "$user", public, extensions;
 
 CREATE TEMP TABLE crx_invoicing_admin_only_tx ON COMMIT DROP AS
 SELECT pg_current_xact_id()::text AS transaction_id;
@@ -356,6 +395,7 @@ BEGIN
     ('invoice_line_shares', 'invoice_line_shares_select', '0b9cdd77443ad18ca53f1bef97ff764e'),
     ('invoice_line_share_snapshots', 'invoice_line_share_snapshots_select', '0162464aed38a378de79388897cd4eb2'),
     ('field_app_billing_sets', 'field_app_billing_sets_select', '1e8067c5a457410dff18572e9a170f03'),
+    ('field_app_billing_lines', 'field_app_billing_lines_select', '54a70c764e751fcacb6fe38d8713ba74'),
     ('invoices', 'invoices_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
     ('invoice_items', 'invoice_items_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
     ('invoice_shares', 'invoice_shares_insert', 'e5ca188a3e2901d57253b2c007f5a3bf'),
@@ -382,6 +422,7 @@ BEGIN
     ('invoice_line_share_snapshots', ARRAY['invoice_line_share_snapshots_select']::text[]),
     ('invoice_line_allocations', ARRAY['invoice_line_alloc_insert', 'invoice_line_alloc_select']::text[]),
     ('field_app_billing_sets', ARRAY['field_app_billing_sets_select']::text[]),
+    ('field_app_billing_lines', ARRAY['field_app_billing_lines_select']::text[]),
     ('write_offs', ARRAY['write_offs_insert_admin', 'write_offs_select_admin']::text[]),
     ('field_app_locations', ARRAY['field_app_locations_delete', 'field_app_locations_insert', 'field_app_locations_select', 'field_app_locations_update']::text[]),
     ('field_app_location_shares', ARRAY['field_app_location_shares_delete', 'field_app_location_shares_insert', 'field_app_location_shares_select', 'field_app_location_shares_update']::text[])
@@ -2235,14 +2276,18 @@ CREATE POLICY invoice_line_alloc_insert ON public.invoice_line_allocations
 -- invoice list, detail, field-invoice and PDF views select. Drivers and other roles: unchanged.
 -- =============================================================================================
 
+-- invoices_select and invoice_items_select move from TO public to TO authenticated (review round
+-- 2): their new is_sales_rep() leg is not executable by anon, so under TO public an anon read
+-- would fail with "permission denied for function is_sales_rep" instead of returning no rows.
+-- Under TO authenticated anon has no read policy here and reads no rows, exactly as before.
 DROP POLICY invoices_select ON public.invoices;
 CREATE POLICY invoices_select ON public.invoices
-  FOR SELECT TO public
+  FOR SELECT TO authenticated
   USING (public.is_admin() OR public.is_sales_rep() OR created_by = (SELECT auth.uid() AS uid) OR salesman_id = (SELECT auth.uid() AS uid));
 
 DROP POLICY invoice_items_select ON public.invoice_items;
 CREATE POLICY invoice_items_select ON public.invoice_items
-  FOR SELECT TO public
+  FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1
       FROM public.invoices
@@ -2284,15 +2329,29 @@ CREATE POLICY invoice_line_share_snapshots_select ON public.invoice_line_share_s
        AND (public.is_admin() OR public.is_sales_rep() OR i.created_by = (SELECT auth.uid() AS uid) OR i.salesman_id = (SELECT auth.uid() AS uid))
   ));
 
+-- Split billing sets and their lines: a sales rep reads the ones linked to a non-deleted invoice
+-- (every invoice, per Mason), not a set that no invoice uses (review round 2: the rep leg sits
+-- inside the invoice EXISTS, exactly like the created_by / salesman_id legs).
 DROP POLICY field_app_billing_sets_select ON public.field_app_billing_sets;
 CREATE POLICY field_app_billing_sets_select ON public.field_app_billing_sets
   FOR SELECT TO authenticated
-  USING (public.is_admin() OR public.is_sales_rep() OR EXISTS (
+  USING (public.is_admin() OR EXISTS (
     SELECT 1
       FROM public.invoices i
      WHERE i.field_app_billing_set_id = field_app_billing_sets.id
        AND i.deleted_at IS NULL
-       AND (i.created_by = (SELECT auth.uid() AS uid) OR i.salesman_id = (SELECT auth.uid() AS uid))
+       AND (public.is_sales_rep() OR i.created_by = (SELECT auth.uid() AS uid) OR i.salesman_id = (SELECT auth.uid() AS uid))
+  ));
+
+DROP POLICY field_app_billing_lines_select ON public.field_app_billing_lines;
+CREATE POLICY field_app_billing_lines_select ON public.field_app_billing_lines
+  FOR SELECT TO authenticated
+  USING (public.is_admin() OR EXISTS (
+    SELECT 1
+      FROM public.invoices i
+     WHERE i.field_app_billing_set_id = field_app_billing_lines.billing_set_id
+       AND i.deleted_at IS NULL
+       AND (public.is_sales_rep() OR i.created_by = (SELECT auth.uid() AS uid) OR i.salesman_id = (SELECT auth.uid() AS uid))
   ));
 
 -- write_offs: the admin read policy stays as it is (its name says what it does); reps get a
@@ -2365,6 +2424,11 @@ BEGIN
          !~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);' THEN
       RAISE EXCEPTION 'POSTFLIGHT_WRAPPER_CONTRACT: public.% must require its key, then call _require_invoicing_admin(), before anything else', r.name;
     END IF;
+    -- An exception handler could catch the guard's refusal and carry on (review round 2).
+    IF r.shape IN ('guard', 'key_then_guard')
+       AND regexp_replace((SELECT prosrc FROM pg_proc WHERE oid = v_oid), '/\*([^*]|\*+[^*/])*\*+/|--[^\n]*', '', 'g') ~* '\mexception\s+when\M' THEN
+      RAISE EXCEPTION 'POSTFLIGHT_WRAPPER_CONTRACT: public.% must not catch exceptions (its guard''s refusal must end the call)', r.name;
+    END IF;
     IF (SELECT md5(replace(p.prosrc, chr(13), '')) = r.impl_md5 AND p.prosecdef
                AND p.proacl::text = '{postgres=X/postgres}'
           FROM pg_proc p WHERE p.oid = to_regprocedure('public.' || r.impl || '(' || r.impl_ident || ')'))
@@ -2381,12 +2445,20 @@ BEGIN
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp', 'TimeZone=UTC']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._invoice_review_fingerprint(uuid[])')) IS DISTINCT FROM true
      OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '55c7d613e474d5eb02431965ba0872a5' AND p.prosecdef
+             AND p.proowner = 'postgres'::regrole
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
-             AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+             AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
+                         FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
+                 IS NOT DISTINCT FROM ARRAY['authenticated', 'postgres', 'service_role']::text[]
+             AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
         FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_invoice_post_version(uuid[])')) IS DISTINCT FROM true
      OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '6a7255f8760de8918bdd727a6d96d222' AND p.prosecdef
+             AND p.proowner = 'postgres'::regrole
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
-             AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+             AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
+                         FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
+                 IS NOT DISTINCT FROM ARRAY['authenticated', 'postgres', 'service_role']::text[]
+             AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
         FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_invoice_group_post_version(uuid)')) IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'POSTFLIGHT_HELPER_CONTRACT: the guard or a posting version helper is not the reviewed function';
   END IF;
@@ -2407,7 +2479,13 @@ BEGIN
   END IF;
 
   -- Table privileges.
-  IF has_table_privilege('authenticated', 'public.invoice_shares', 'INSERT, UPDATE, DELETE, TRUNCATE')
+  -- invoices and invoice_items: authenticated and anon hold no write grant on live (read
+  -- 2026-10-10); nothing here changes that, and the postflight now pins it (review round 2).
+  IF has_table_privilege('authenticated', 'public.invoices', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.invoice_items', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('anon', 'public.invoices', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('anon', 'public.invoice_items', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.invoice_shares', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('authenticated', 'public.invoice_line_allocations', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('anon', 'public.invoice_shares', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('anon', 'public.invoice_line_allocations', 'INSERT, UPDATE, DELETE, TRUNCATE')
@@ -2431,16 +2509,17 @@ BEGIN
 
   -- Policies: the server's deparsed text of each replaced policy, and the new write_offs one.
   FOR r IN SELECT * FROM (VALUES
-    ('field_app_billing_sets', 'field_app_billing_sets_select', '3ed535f0685c3b48fd629ab8e7e79892'),
+    ('field_app_billing_sets', 'field_app_billing_sets_select', 'dd6e7c5a99b656ef6507081cdc03fbde'),
+    ('field_app_billing_lines', 'field_app_billing_lines_select', 'f620450f72e8f20df057ee3a064d2f72'),
     ('invoice_items', 'invoice_items_insert', 'bd1972a06eea215895d9ecec861d5991'),
-    ('invoice_items', 'invoice_items_select', '5db0f7906ee07c4f24e0efae3b8e2185'),
+    ('invoice_items', 'invoice_items_select', '6ad37c59f4084df092b8f92b2cb5b55a'),
     ('invoice_line_allocations', 'invoice_line_alloc_insert', 'bd1972a06eea215895d9ecec861d5991'),
     ('invoice_line_share_snapshots', 'invoice_line_share_snapshots_select', '331e116056bab07ff8ad2cd6822b8422'),
     ('invoice_line_shares', 'invoice_line_shares_select', 'b815c6c25bfbb868be54b7c55539f700'),
     ('invoice_shares', 'invoice_shares_insert', 'd99642aa0333a7d54b96a4dac2a8821b'),
     ('invoice_shares', 'invoice_shares_select', 'a8ccec5b1069a7b20b51cafec4b87e3b'),
     ('invoices', 'invoices_insert', 'bd1972a06eea215895d9ecec861d5991'),
-    ('invoices', 'invoices_select', 'd4778954168617eaf39b333faa0a18ed'),
+    ('invoices', 'invoices_select', 'a782d070f3d4f779cca9c6c8aa19b49a'),
     ('write_offs', 'write_offs_select_admin', '3a62ac9ae6afb0b8195d72a0b07a24da'),
     ('write_offs', 'write_offs_select_sales_rep', '1393b5e874366105fa053906dab34629'),
     ('field_app_locations', 'field_app_locations_insert', 'bd1972a06eea215895d9ecec861d5991'),
@@ -2459,11 +2538,12 @@ BEGIN
 
   -- HARD-GUARD catalog sweep. Every public function or procedure that authenticated can execute
   -- and that can reach (by name, comments stripped left to right) an INSERT, UPDATE, DELETE, MERGE
-  -- or TRUNCATE (ONLY and quoted names included) on an invoice table must call
-  -- _require_invoicing_admin() first (a DECLARE section before it may only declare: no
-  -- initializer, no call; only create_split_invoices_from_order may check its key before it), or
-  -- be a pinned already-admin-only function, or a pinned upkeep function. Anything else refuses
-  -- the apply. scripts/smoke/smoke-invoicing-admin-only.sql step 8 runs this exact query text.
+  -- or TRUNCATE (ONLY and quoted names included) on an invoice table, or an EXECUTE in a body
+  -- that names an invoice table, must call _require_invoicing_admin() first (a DECLARE section
+  -- before it may only declare: no initializer, no call; only create_split_invoices_from_order
+  -- may check its key before it) with no exception handler anywhere in its body, or be a pinned
+  -- already-admin-only function, or a pinned upkeep function. Anything else refuses the apply.
+  -- scripts/smoke/smoke-invoicing-admin-only.sql step 8 runs this exact query text.
   WITH RECURSIVE fn AS (
     SELECT p.oid, p.proname, p.prosrc,
            regexp_replace(replace(p.prosrc, chr(13), ''), '/\*([^*]|\*+[^*/])*\*+/|--[^\n]*', '', 'g') AS body
@@ -2472,6 +2552,10 @@ BEGIN
   ), writer AS (
     SELECT oid FROM fn
      WHERE body ~* '\m(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?)\s+(only\s+)?("?public"?\s*\.\s*)?"?(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)("|\M)'
+        -- Dynamic SQL that names an invoice table anywhere (string literals included) counts as
+        -- a write: the regex cannot see what EXECUTE runs (none on live, read 2026-10-10).
+        OR (body ~* '\mexecute\M'
+            AND body ~* '\m(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)\M')
   ), edge AS (
     SELECT a.oid AS caller, b.oid AS callee
       FROM fn a JOIN fn b ON a.oid <> b.oid AND a.body ~ ('\m' || b.proname || '\s*\(')
@@ -2510,14 +2594,34 @@ BEGIN
   SELECT string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text) INTO v_unclassified
     FROM fn f JOIN reach x ON x.oid = f.oid
    WHERE has_function_privilege('authenticated', f.oid, 'EXECUTE')
+     -- A body with an exception handler can catch the guard's refusal and still write, so a
+     -- guard first does not count there (review round 2).
+     AND (f.body ~* '\mexception\s+when\M' OR (true
      AND f.prosrc !~ '^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\M)\w+\s+[\w\[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
      AND NOT (f.proname = 'create_split_invoices_from_order'
-              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')
+              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')))
      AND NOT EXISTS (SELECT 1 FROM pinned pn
                       WHERE to_regprocedure('public.' || pn.sig) = f.oid
                         AND md5(replace(f.prosrc, chr(13), '')) = pn.md5);
   IF v_unclassified IS NOT NULL THEN
     RAISE EXCEPTION 'POSTFLIGHT_UNGUARDED_INVOICE_WRITER: % can reach an invoice write without _require_invoicing_admin() and is not on a pinned list', v_unclassified;
+  END IF;
+
+  -- Triggers (review round 2): the sweep above follows calls by name only. No trigger whose
+  -- function writes an invoice table may sit on a table authenticated can INSERT, UPDATE or
+  -- DELETE (read live 2026-10-10: the only such trigger, trg_snapshot_line_shares_on_post, is on
+  -- invoices, which authenticated cannot write).
+  SELECT string_agg(t.tgname || ' on ' || t.tgrelid::regclass::text, ', ' ORDER BY t.tgname) INTO v_unclassified
+    FROM pg_trigger t
+    JOIN pg_proc p ON p.oid = t.tgfoid
+   WHERE NOT t.tgisinternal
+     AND (has_table_privilege('authenticated', t.tgrelid, 'INSERT')
+          OR has_table_privilege('authenticated', t.tgrelid, 'UPDATE')
+          OR has_table_privilege('authenticated', t.tgrelid, 'DELETE'))
+     AND regexp_replace(replace(p.prosrc, chr(13), ''), '/\*([^*]|\*+[^*/])*\*+/|--[^\n]*', '', 'g')
+         ~* '\m(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?)\s+(only\s+)?("?public"?\s*\.\s*)?"?(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)("|\M)';
+  IF v_unclassified IS NOT NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_INVOICE_TRIGGER: % writes an invoice table from a table authenticated can write', v_unclassified;
   END IF;
 
   RAISE NOTICE 'POSTFLIGHT_OK: invoicing is admin-only';

@@ -217,7 +217,9 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
   refuse any non-admin with 42501 `INVOICING_ADMIN_ONLY`. Sales reps can read every invoice and still
   record payments. Posting can carry the version the admin reviewed
   (`get_invoice_post_version` / `get_invoice_group_post_version`); if anything changed, posting is
-  refused with `INVOICE_CHANGED_SINCE_REVIEW`.
+  refused with `INVOICE_CHANGED_SINCE_REVIEW`. A delivery completion's partial-delivery resize of an
+  admin's draft never lands on an invoice posted while it ran: posting locks the order's
+  `order_items`, which the completion holds, so the two serialize or one is aborted as a deadlock.
 - Invoice PDFs: 3 layouts via `src/lib/invoicePdf.ts`.
 
 ---

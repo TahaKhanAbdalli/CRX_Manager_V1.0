@@ -251,6 +251,7 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     }
     const created = [...sql.matchAll(/CREATE POLICY (\w+) ON public\.(\w+)\n {2}FOR (\w+)/g)].map((m) => `${m[2]}.${m[1]}.${m[3]}`);
     expect(created.sort()).toEqual([
+      'field_app_billing_lines.field_app_billing_lines_select.SELECT',
       'field_app_billing_sets.field_app_billing_sets_select.SELECT',
       'field_app_location_shares.field_app_location_shares_delete.DELETE', 'field_app_location_shares.field_app_location_shares_insert.INSERT',
       'field_app_location_shares.field_app_location_shares_update.UPDATE',
@@ -267,6 +268,16 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     }
     for (const m of sql.matchAll(/CREATE POLICY \w+_select(?:_sales_rep)? ON public\.\w+\n {2}FOR SELECT TO \w+\n {2}USING \(([\s\S]*?)\);\n/g)) {
       expect(m[1]).toContain('public.is_sales_rep()');
+    }
+    // Review round 2: every new read policy applies TO authenticated (anon cannot execute
+    // is_sales_rep(), so TO public would turn anon's empty read into a permission error), and a
+    // rep reads a split billing set or line only through a non-deleted invoice that uses it.
+    expect([...sql.matchAll(/CREATE POLICY \w+_select(?:_sales_rep)? ON public\.\w+\n {2}FOR SELECT TO (\w+)/g)].map((m) => m[1]))
+      .toEqual(Array(8).fill('authenticated'));
+    for (const t of ['field_app_billing_sets', 'field_app_billing_lines']) {
+      const policy = sql.slice(sql.indexOf(`CREATE POLICY ${t}_select ON public.${t}`), sql.indexOf('));\n', sql.indexOf(`CREATE POLICY ${t}_select ON public.${t}`)));
+      expect(policy).toContain('USING (public.is_admin() OR EXISTS (');
+      expect(policy).toContain('AND i.deleted_at IS NULL\n       AND (public.is_sales_rep() OR i.created_by');
     }
     expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.invoice_shares, public.invoice_line_allocations FROM authenticated, anon, PUBLIC;');
     expect(sql).toContain('REVOKE TRUNCATE ON public.invoice_line_shares, public.invoice_line_share_snapshots FROM authenticated;');
@@ -298,6 +309,18 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     expect(postflight).toContain("p.prokind IN ('f', 'p')");
     // The key-then-guard form is accepted for the split wrapper only.
     expect(postflight).toContain("AND NOT (f.proname = 'create_split_invoices_from_order'");
+    // Review round 2: an exception handler disqualifies a guard-first body; dynamic SQL naming an
+    // invoice table counts as a write; a trigger writing an invoice table from a table
+    // authenticated can write refuses the apply; the posting version readers' owner and EXECUTE
+    // list are pinned; invoices / invoice_items stay without API write grants.
+    expect(postflight).toContain("AND (f.body ~* '\\mexception\\s+when\\M' OR (true");
+    expect(postflight).toContain("OR (body ~* '\\mexecute\\M'");
+    expect(postflight).toContain('POSTFLIGHT_INVOICE_TRIGGER');
+    expect(postflight).toContain('must not catch exceptions');
+    expect(postflight.split("AND p.proowner = 'postgres'::regrole").length - 1).toBe(2);
+    for (const t of ['invoices', 'invoice_items']) {
+      for (const role of ['authenticated', 'anon']) expect(postflight).toContain(`has_table_privilege('${role}', 'public.${t}', 'INSERT, UPDATE, DELETE, TRUNCATE')`);
+    }
     // The smoke chain's step 8 is the same query, byte for byte.
     const query = sql.slice(sql.indexOf('  WITH RECURSIVE fn AS ('), sql.indexOf('  IF v_unclassified IS NOT NULL THEN'));
     expect(query.length).toBeGreaterThan(1000);

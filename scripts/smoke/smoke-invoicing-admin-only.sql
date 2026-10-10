@@ -242,6 +242,10 @@ BEGIN
   ), writer AS (
     SELECT oid FROM fn
      WHERE body ~* '\m(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?)\s+(only\s+)?("?public"?\s*\.\s*)?"?(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)("|\M)'
+        -- Dynamic SQL that names an invoice table anywhere (string literals included) counts as
+        -- a write: the regex cannot see what EXECUTE runs (none on live, read 2026-10-10).
+        OR (body ~* '\mexecute\M'
+            AND body ~* '\m(invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_share_snapshots|invoice_line_allocations|field_app_locations|field_app_location_shares|field_app_billing_sets|field_app_billing_lines|write_offs)\M')
   ), edge AS (
     SELECT a.oid AS caller, b.oid AS callee
       FROM fn a JOIN fn b ON a.oid <> b.oid AND a.body ~ ('\m' || b.proname || '\s*\(')
@@ -280,9 +284,12 @@ BEGIN
   SELECT string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text) INTO v_unclassified
     FROM fn f JOIN reach x ON x.oid = f.oid
    WHERE has_function_privilege('authenticated', f.oid, 'EXECUTE')
+     -- A body with an exception handler can catch the guard's refusal and still write, so a
+     -- guard first does not count there (review round 2).
+     AND (f.body ~* '\mexception\s+when\M' OR (true
      AND f.prosrc !~ '^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\M)\w+\s+[\w\[\]. %]+;)*\s+)?BEGIN\s+PERFORM public\._require_invoicing_admin\(\);'
      AND NOT (f.proname = 'create_split_invoices_from_order'
-              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')
+              AND f.prosrc ~ '^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ ''\[\^\[:space:\]\]'' THEN\s+RAISE EXCEPTION ''IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order''\s+USING ERRCODE = ''22023'';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);')))
      AND NOT EXISTS (SELECT 1 FROM pinned pn
                       WHERE to_regprocedure('public.' || pn.sig) = f.oid
                         AND md5(replace(f.prosrc, chr(13), '')) = pn.md5);
