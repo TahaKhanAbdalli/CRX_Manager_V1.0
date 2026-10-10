@@ -101,7 +101,7 @@ A few other things agents simply never do on their own — overwriting history o
 
 ---
 
-## Who can do invoicing (your decision, 2026-10-09)
+## Who can do invoicing (your decisions, 2026-10-09 and 2026-10-10)
 
 Only admins invoice. Once the database change `20261009120000` is applied (it is written and tested,
 NOT applied yet — it needs your yes and your Windows Hello approval, because it changes who can do
@@ -120,11 +120,16 @@ what), this is what each person can do:
   ("Delivery needs an invoice") and the delivery shows under "Delivered, not invoiced" until an admin
   opens it and clicks Create Invoice. A job completed by a non-admin is the same: no automatic draft,
   every admin gets "Job needs an invoice", and you bill it from the unbilled list.
-- **One question still open for you, before this goes live** (details in KNOWN_ISSUES): when a rep
-  re-prices an order, should the admin's draft or unposted invoice on that order keep updating to
-  the new prices (today's behaviour, and what this change keeps)? Also worth knowing: reps will see
-  cost and margin on every invoice, the same numbers they already see on every order; and an
-  applicator's job completion now notifies every admin too.
+- **Rep work keeps the admin's unposted invoices up to date (your choice, 2026-10-10, "1.a"):** when
+  a rep or driver re-prices or edits an order, makes a rush order, partly completes a delivery or
+  cancels a delivery, the admin's draft or unposted invoice for it updates (or is cancelled) exactly
+  as today. A posted invoice never changes, and an admin still reviews and posts every invoice.
+- **Reps see customer names on every invoice (your choice, 2026-10-10, "2:yes"):** just the farm
+  name, not the customer's address, phone, contacts or account details. Reps still open full
+  customer records only for their own assigned customers. (The database part is in this same change;
+  the invoice screens start using it in phase 2.)
+- Also worth knowing: reps will see cost and margin on every invoice, the same numbers they already
+  see on every order; and an applicator's job completion now notifies every admin too.
 - **Reps can still cancel a delivery** that already has an admin's draft invoice (your choice); the
   draft is cancelled with it, as today.
 - **Posting is safer:** when the invoice screens are updated (phase 2), posting will send the version

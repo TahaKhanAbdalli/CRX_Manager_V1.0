@@ -68,7 +68,9 @@ ships or quarterly, whichever comes first.
   lets sales reps read every invoice, and adds a server-side posting version check. Today (until it
   is applied) sales reps can still create and post invoices through the app and the API. Applying it
   needs Mason's yes and Windows Hello approval, after PR #889's four migrations. Screens are phase 2.
-  Rep scoping (PR #891) is dropped.
+  Rep scoping (PR #891) is dropped. 2026-10-10 (Mason): reps' order/delivery work keeps updating an
+  admin's draft or unposted invoice ("1.a", unchanged behaviour), and reps see customer names (only)
+  on invoices through the new `get_invoice_customer_names` reader ("2:yes"; pages switch in phase 2).
 
 ## Migration and rollout record (condensed, point-in-time)
 

@@ -151,6 +151,36 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   intact, before and after). `npm run typecheck`, `npm run lint`, `npm run test` (5489 passed,
   123 skipped) and `node scripts/check-doc-drift.mjs` pass.
 
+### 2026-10-10 - Mason's decisions "1.a" and "2:yes" (still NOT APPLIED)
+
+- **1.a, invoice upkeep (no behaviour change):** a rep's or driver's order pricing / order-line
+  edits / rush order (`price_order`, `update_order_items`, `create_rush_order`), partial delivery
+  completion (the resize and tote stamp in `_complete_delivery_authorized_impl`) and delivery cancel
+  (`cancel_delivery`, `batch_cancel_deliveries`) keep updating an admin's DRAFT or UNPOSTED invoice
+  exactly as today; posted invoices never change; an admin still reviews and posts. Recorded in the
+  migration header (the "NEEDS MASON" line is gone), the comments on both sweep allowlists (preflight
+  and postflight, and the chain's step-8 copy), DECISION_LOG, KNOWN_ISSUES and OWNER_PLAYBOOK. This
+  settles the round-3 Luna BLOCKER and rls-security HIGH about the upkeep paths. Separate defects stay
+  OPEN: a cancel can reverse a COMPLETED delivery; `update_order_items` does not lock the invoice.
+- **2, customer names for reps:** new `public.get_invoice_customer_names(p_customer_ids uuid[])
+  RETURNS TABLE(id uuid, farm_name text)` (SQL, STABLE, SECURITY DEFINER, `search_path = public,
+  pg_temp`, EXECUTE for `authenticated` only): the farm name of each requested customer that a
+  non-deleted invoice names (customer, customer share, line share or line-share snapshot), for an
+  active admin or sales rep; anyone else gets no rows. The `customers` policies are not touched: the
+  preflight and postflight pin `customers_select`, `customers_select_location_dispatchee` (live md5
+  read 2026-10-10) and the policy set; the postflight pins the reader's body, result columns,
+  volatility, owner and EXECUTE list (`POSTFLIGHT_CUSTOMER_NAMES_CONTRACT`,
+  `POSTFLIGHT_CUSTOMERS_POLICY`). Phase 2 switches the pages to it.
+- Prover: section 5b (customer names) before and after; 3 more preflight drifts, 4 more postflight
+  mutants and 7 more mutations (role gate, invoice-reference gate, soft-deleted filter, share leg, an
+  extra column, an anon grant, `customers_select` widened). Shape test: two new cases.
+- Proof (fresh container, 2026-10-10): `INVOICING_ADMIN_ONLY_PROOF_PASS ... preflight=19_drifts
+  postflight=15_mutants ... customer_names=rep_names_only,customers_policy_unwidened,others_none,anon_denied
+  ... mutations=75_detected`; a rep, another rep and an admin read exactly the two invoice-named
+  customers' farm names (not the customer on no invoice, not the one on a soft-deleted invoice), keys
+  `farm_name,id` only; a rep's direct `customers` read of them stays empty. `npm run typecheck`,
+  `npm run lint`, `npm run test` (5491 passed, 123 skipped) and `check-doc-drift` pass.
+
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations.
@@ -164,8 +194,11 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   PR-time guard.
 - At apply: re-pin `scripts/db-invariant-sweeps/allowlist.json` (`complete_job`'s contract digest
   changes; the new wrappers pass `p_performed_by` to their frozen bodies) from live digests.
-- Mason decision before the apply (KNOWN_ISSUES): reps re-pricing an admin's draft/unposted invoice
-  through order upkeep (design Q4b). Tell him: reps read cost/margin on invoices (already on orders);
-  applicators' job completions now notify every admin.
+- Tell Mason: reps read cost/margin on invoices (already on orders); applicators' job completions
+  now notify every admin. (Design Q4b, the upkeep question, was decided 2026-10-10: see below.)
+- Phase 2 also switches the invoice list, detail, field-invoice panels and the PDF's share names to
+  `get_invoice_customer_names` for the farm name (one call per page with the ids it shows), adds it
+  to `src/types/supabase.ts`, and keeps the PDF's address block on the direct `customers` read
+  (assigned customers only for reps, by decision).
 - Later upkeep change: `update_order_items`' draft line-link detach should lock the invoice first.
 - Regenerate `.claude/schema-registry.json` after the apply.

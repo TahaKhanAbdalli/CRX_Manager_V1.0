@@ -4,7 +4,9 @@
 2026-10-10 ~03:00 UTC, after PR #889 applied `20261007150000` and `20261007150050`; the counts and
 high-water live only in `docs/reference/migration-history.md`). That read re-certified only the
 applied-migration list in this header and the two 2026-10-09 invoicing entries at the top (the
-candidate `20261009120000` is NOT applied; every body it pins was re-read live that day). The
+candidate `20261009120000` is NOT applied; every body it pins was re-read live that day; on
+2026-10-10 Mason's decisions "1.a" (upkeep) and "2:yes" (names-only customer reads) were recorded
+there and the `customers` policies it pins were read live). The
 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
@@ -117,15 +119,17 @@ the file is applied and verified live.
   cancelled) invoices without locking the `invoices` row, so a rep's order-line edit can change that
   link field after an admin's versioned post compared it. No amount changes. Fix with the next
   upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first.
-- **Needs Mason before apply: reps can still re-price and re-date an admin's draft or unposted invoice
-  through order upkeep** (`price_order`, `update_order_items`, `create_rush_order` update
-  `invoice_items` and the header of every `draft` / `unposted` invoice on the order; their role gate
-  allows sales reps). They lock the invoice row first, so a versioned post refuses after them. The
-  design asked this as Q4(b) with the recommended answer "keep price refresh"; Mason answered Q4(a)
-  (cancel: no block) and never contradicted (b), but no answer to (b) is recorded. If reps must not
-  change an admin's invoice amounts at all, these need a non-admin refusal when an active invoice
-  exists. Likewise `cancel_delivery` cancels the delivery's `unposted` invoices, not only drafts
-  (Mason's Q4(a) answer named "the automatic cancel of the draft invoice").
+- **DECIDED 2026-10-10 (Mason, "1.a") — not a defect: reps' (and drivers') order and delivery work
+  keeps updating an admin's draft or unposted invoice ("upkeep").** `price_order`,
+  `update_order_items`, `create_rush_order` update `invoice_items` and the header of every `draft` /
+  `unposted` invoice on the order; a rep's or driver's partial completion resizes (and tote-stamps) an
+  admin's draft for that delivery; `cancel_delivery` / `batch_cancel_deliveries` cancel the
+  delivery's draft and `unposted` invoices. Mason approved keeping all of it exactly as today: posted
+  invoices never change and an admin still reviews and posts (the order-upkeep functions lock the
+  invoice row first, so a versioned post refuses after them). This settles the round-3 Luna BLOCKER
+  and rls-security HIGH about these paths. Recorded in `DECISION_LOG.md` and the migration header;
+  the catalog sweep's upkeep allowlist cites it. The two entries above (cancel reversing a COMPLETED
+  delivery; `update_order_items` not locking the invoice) are separate defects and stay OPEN.
 - **Reps read cost and margin on every invoice** (`invoices.total_cost_cents`,
   `invoice_items.cost_cents`) under the "all invoices, read-only" widening. This is not new data for
   them: reps already read cost and margin on every order line of every customer
@@ -149,10 +153,16 @@ the file is applied and verified live.
   pass `p_performed_by` to their frozen bodies will show up as suspects. The digests are read from
   live after the apply, so `scripts/db-invariant-sweeps/allowlist.json` is updated in the apply step
   (each wrapper's frozen body keeps its strict actor refusal).
-- **Reps see every invoice but not every customer's name.** The read widening covers the invoice
-  tables only; `customers` stays scoped (a rep reads only assigned customers), so the invoice list and
-  detail show a blank farm name for another rep's customer. Phase 2 (screens) must handle it or Mason
-  must decide whether reps may read every customer's name.
+- **Reps see every invoice; until phase 2 ships, not every customer's name on the screens.**
+  DECIDED 2026-10-10 (Mason, "2:yes"): reps see customer NAMES on invoices, names only. The database
+  side is in `20261009120000`: `get_invoice_customer_names(uuid[])` returns `(id, farm_name)` of
+  customers a non-deleted invoice names, to active admins and sales reps only (everyone else gets no
+  rows; anon and service_role cannot call it). `customers` itself stays scoped (a rep's direct read
+  returns only assigned customers; its policies are pinned before and after the apply). The pages
+  still read names through the `customers` embed, so the invoice list, detail and PDF show a blank
+  farm name for another rep's customer until phase 2 switches them to the new reader. The PDF's
+  address block (billing address, city, state, zip, account number, terms) stays assigned-customers
+  only for reps: names only, by decision.
 - **Two registered chains drive invoicing as a sales rep and need their rep steps rewritten:**
   `smoke-adversarial-money-inventory-closeout.sql` and
   `smoke-financial-scope-and-delivery-aggregate.sql`. Both already failed before this change

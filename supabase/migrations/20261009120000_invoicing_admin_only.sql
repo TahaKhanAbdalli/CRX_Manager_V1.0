@@ -5,14 +5,24 @@
 -- invoicing RPC: create, edit, post, unpost, void or transfer an invoice, or apply a credit memo
 -- or prepayment to one. Sales reps can now READ every invoice (read-only). Posting can bind to
 -- the version an admin reviewed.
--- WHAT IS NOT CHANGED (side effects of order and delivery work, not invoicing RPCs; listed under
--- NOT CHANGED below and in KNOWN_ISSUES): a rep's order pricing (price_order, update_order_items,
--- create_rush_order) still refreshes the lines, totals and date of an admin's DRAFT or UNPOSTED
--- invoice on that order, and a rep's delivery cancel still cancels a draft or unposted invoice of
--- that delivery (Mason 2026-10-09, addendum item 5). A rep's or driver's partial delivery
--- completion still resizes an admin's draft for that delivery (brief 1c, approved in addendum
--- item 4). NEEDS MASON before apply: confirm the pricing refresh (design question Q4b; its
--- recommended answer "keep price refresh" was never contradicted, but no answer is recorded).
+-- Active sales reps (and admins) can also read the CUSTOMER NAME (farm_name) of every customer an
+-- invoice names, and nothing else about that customer, through get_invoice_customer_names (Mason
+-- 2026-10-10, decision 2; see "Decision 2" below). The customers table policy is NOT widened.
+-- WHAT IS NOT CHANGED: INVOICE UPKEEP (Mason-approved 2026-10-10, in chat, "1.a": keep
+-- auto-updating, exactly as today). These are side effects of order and delivery work, not
+-- invoicing RPCs, and a sales rep (or driver) keeps them on an admin's DRAFT or UNPOSTED invoice;
+-- a POSTED invoice never changes; an admin still reviews and posts. The upkeep allowlist is exactly:
+--   price_order, update_order_items, create_rush_order (re-price, re-date or detach the lines of an
+--     admin's draft or unposted invoice on that order, and refresh its totals);
+--   the delivery-completion partial resize and tote stamp inside _complete_delivery_authorized_impl
+--     (a rep's or driver's partial completion resizes an admin's draft for that delivery; brief 1c,
+--     addendum item 4);
+--   cancel_delivery and batch_cancel_deliveries (a rep's cancel still cancels a draft or unposted
+--     invoice of that delivery; Mason 2026-10-09, addendum item 5 and Q4a).
+-- This settles the review round 3 Luna BLOCKER and rls-security HIGH about these paths: they are
+-- owner-approved behaviour, not defects. Two separate defects on these paths stay OPEN in
+-- KNOWN_ISSUES (not part of the decision): a cancel can reverse a COMPLETED delivery, and
+-- update_order_items' line detach takes no invoice row lock.
 --
 -- WHY (Mason, 2026-10-09, in chat): "no reps should be able to invoice any customer"; rep scoping
 -- is dropped (PR #891 closed, its 20261008120000 is never applied). His answers to the design
@@ -107,8 +117,22 @@
 --     same cost and margin on every order of every customer (order_items.cost_per_unit,
 --     cost_at_time_cents and net_margin; orders.total_cost and total_margin_pct; policies
 --     oitems_select / orders_select = is_admin() OR is_sales_rep(), read live 2026-10-10), so this
---     opens no new kind of data. NOT widened: customers (a rep still sees only assigned customers'
---     names; see KNOWN_ISSUES).
+--     opens no new kind of data. NOT widened: the customers table (a rep still reads only the
+--     customer rows assigned to them; see Decision 2 for the names-only read).
+--  Decision 2 (Mason 2026-10-10, in chat, "2:yes": reps SEE CUSTOMER NAMES on invoices, names only,
+--     not full customer records): public.get_invoice_customer_names(p_customer_ids uuid[]) returns
+--     TABLE(id uuid, farm_name text) - the display name every invoice page shows - for the ids
+--     asked for that a non-deleted invoice names (invoices.customer_id, invoice_shares.customer_id,
+--     invoice_line_shares.customer_id, invoice_line_share_snapshots.customer_id), and only when the
+--     caller is an active admin or an active sales rep; any other caller (driver, applicator,
+--     entity_recipient, deactivated user, no profile) gets no rows. A SECURITY DEFINER read
+--     function, not a view: the repo retired its SECURITY DEFINER view (profile_public_view became
+--     security_invoker in 20260729125227) and a security_invoker view over customers would still
+--     be filtered by customers_select. It is STABLE, writes nothing, takes no idempotency key (a
+--     read), and is granted to authenticated only (anon and service_role cannot execute it). No
+--     other customer column (address, phone, email, contact, account number, terms, credit) is
+--     reachable through it; customers_select and the customers policy set are pinned before and
+--     after. Phase 2 switches the invoice pages to it.
 --  Addendum 8(a) Posting version check (moved in from PR #892): post_invoice, post_invoice_group
 --     and batch_post_invoices take a trailing p_expected_version text DEFAULT NULL. It is the value
 --     get_invoice_post_version(ids) / get_invoice_group_post_version(group) returned when the
@@ -174,15 +198,17 @@
 -- caller-analysis: create_quick_delivery :: renamed; same-name wrapper (no guard, coerces p_skip_invoice for non-admins) keeps the grants; QuickDeliveryModal callsite reaches it
 -- caller-analysis: _require_invoicing_admin :: new internal helper, never granted to an API role; only the wrappers (postgres-owned) call it
 -- caller-analysis: _invoice_review_fingerprint :: new internal helper, never granted to an API role; only postgres-owned functions call it
+-- caller-analysis: get_invoice_customer_names :: new read-only RPC (Decision 2, Mason 2026-10-10), granted to authenticated only; no callsite yet (phase 2 switches the invoice pages to it)
 --
--- NOT CHANGED: cancel_delivery / batch_cancel_deliveries (Mason: reps may cancel deliveries with an
--- invoice; their draft AND unposted invoices of that delivery are cancelled as today; the "cancel
--- reverses a COMPLETED delivery" bug stays OPEN in KNOWN_ISSUES); price_order, update_order_items
--- and create_rush_order (order upkeep: they re-price, re-date or detach lines of an admin's draft
--- or unposted invoice on the order, under its row lock, so a versioned post refuses after them;
--- update_order_items' line detach takes no invoice lock, see KNOWN_ISSUES; NEEDS MASON, see WHAT
--- IS NOT CHANGED above); allocate_payment (Q1); the already-admin-only invoice, credit, write-off,
--- payment and order functions (pinned below).
+-- NOT CHANGED (the upkeep allowlist, Mason-approved 2026-10-10 "1.a"; see WHAT IS NOT CHANGED
+-- above): cancel_delivery / batch_cancel_deliveries (reps may cancel deliveries with an invoice;
+-- their draft AND unposted invoices of that delivery are cancelled as today; the "cancel reverses
+-- a COMPLETED delivery" bug stays OPEN in KNOWN_ISSUES); price_order, update_order_items and
+-- create_rush_order (order upkeep: they re-price, re-date or detach lines of an admin's draft or
+-- unposted invoice on the order, under its row lock, so a versioned post refuses after them;
+-- update_order_items' line detach takes no invoice lock: a separate defect, OPEN in KNOWN_ISSUES);
+-- the delivery-completion resize and tote stamp (section 1c); allocate_payment (Q1); the
+-- already-admin-only invoice, credit, write-off, payment and order functions (pinned below).
 -- The postflight HARD-GUARD sweep refuses the apply if any function or procedure authenticated can
 -- run can reach (by name) a write (INSERT, UPDATE, DELETE, MERGE or TRUNCATE, with or without ONLY
 -- or quotes) to an invoice table (invoices, invoice_items, invoice_shares, invoice_line_shares,
@@ -212,8 +238,9 @@
 -- file. It is NOT a routine-grant auto-apply.
 -- ROLLBACK: a new migration drops each wrapper, renames each frozen implementation back and
 -- re-grants it to authenticated and service_role, re-emits the two pinned pre-change bodies
--- (f8de9f000e40f7bfd8f792012f04fee0, 4e4c38e3e8be66e2d24c434bb54c0521), drops the four helpers,
--- and restores the policy texts and grants pinned in the preflight. No data is involved.
+-- (f8de9f000e40f7bfd8f792012f04fee0, 4e4c38e3e8be66e2d24c434bb54c0521), drops the four helpers
+-- and get_invoice_customer_names (Decision 2; the pages then fall back to their direct customers
+-- embeds, which show a rep only assigned customers' names), and restores the policy texts and grants pinned in the preflight. No data is involved.
 
 SET LOCAL lock_timeout = '5s';
 -- The policy pins below hash the server's deparsed policy text, which prints is_admin()
@@ -257,7 +284,8 @@ BEGIN
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
        AND (p.proname IN ('_require_invoicing_admin', '_invoice_review_fingerprint',
-                          'get_invoice_post_version', 'get_invoice_group_post_version')
+                          'get_invoice_post_version', 'get_invoice_group_post_version',
+                          'get_invoice_customer_names')
             OR p.proname LIKE '%_pre_admin_only_20261009')
   ) OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND policyname = 'write_offs_select_sales_rep') THEN
     RAISE EXCEPTION 'PREFLIGHT_ALREADY_APPLIED: an object this file creates already exists';
@@ -374,6 +402,8 @@ BEGIN
     ('public.void_delivery(uuid,text,uuid,text)', '3ef685c8f5bf778e3ae38aa2f89304da'),
     ('public.complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)', 'a1e9a043f27d3566f8ecf6d5e3a809ab'),
     ('public.process_offline_action(uuid,text)', '0461eebf65f23ccc8fe3852375eb9c78'),
+    -- The upkeep allowlist: Mason-approved 2026-10-10 ("1.a": a rep's or driver's order and
+    -- delivery work keeps updating an admin's draft or unposted invoice, exactly as today).
     ('public.cancel_delivery(uuid,text,uuid,text)', '8528b344f86c7e1aa735e386ea39f2eb'),
     ('public.batch_cancel_deliveries(uuid[],text,uuid,text)', '25d34db60f098a22a62db53780742eee'),
     ('public.price_order(uuid,jsonb,uuid,text)', 'ab2bcf3ac499cf78eef1f706d4e9501f'),
@@ -406,7 +436,11 @@ BEGIN
     ('field_app_locations', 'field_app_locations_delete', '0b3f94a02ac505d82e218752005f2c32'),
     ('field_app_location_shares', 'field_app_location_shares_insert', '52722e61e9bef7b2ff1a9a2f33cef7be'),
     ('field_app_location_shares', 'field_app_location_shares_update', '7680ae67028c233ada58f74c302d87bd'),
-    ('field_app_location_shares', 'field_app_location_shares_delete', '0b3f94a02ac505d82e218752005f2c32')
+    ('field_app_location_shares', 'field_app_location_shares_delete', '0b3f94a02ac505d82e218752005f2c32'),
+    -- Decision 2 (Mason 2026-10-10): the customers read policies this file must NOT widen (read
+    -- live 2026-10-10); the postflight re-checks the same pins and the same policy set.
+    ('customers', 'customers_select', '4d86cb39838dc338ac722922bbb91b5f'),
+    ('customers', 'customers_select_location_dispatchee', 'a4b57f89a3b63679c902d9bcf25ef25c')
   ) AS t(tbl, pol, pin) LOOP
     IF (SELECT md5(cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''))
           FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl AND policyname = r.pol)
@@ -425,7 +459,8 @@ BEGIN
     ('field_app_billing_lines', ARRAY['field_app_billing_lines_select']::text[]),
     ('write_offs', ARRAY['write_offs_insert_admin', 'write_offs_select_admin']::text[]),
     ('field_app_locations', ARRAY['field_app_locations_delete', 'field_app_locations_insert', 'field_app_locations_select', 'field_app_locations_update']::text[]),
-    ('field_app_location_shares', ARRAY['field_app_location_shares_delete', 'field_app_location_shares_insert', 'field_app_location_shares_select', 'field_app_location_shares_update']::text[])
+    ('field_app_location_shares', ARRAY['field_app_location_shares_delete', 'field_app_location_shares_insert', 'field_app_location_shares_select', 'field_app_location_shares_update']::text[]),
+    ('customers', ARRAY['customers_delete', 'customers_insert', 'customers_select', 'customers_select_location_dispatchee', 'customers_update']::text[])
   ) AS t(tbl, pols) LOOP
     IF ARRAY(SELECT policyname::text FROM pg_policies WHERE schemaname = 'public' AND tablename = r.tbl ORDER BY 1)
        IS DISTINCT FROM r.pols THEN
@@ -2361,6 +2396,55 @@ CREATE POLICY write_offs_select_sales_rep ON public.write_offs
   USING (public.is_sales_rep());
 
 -- =============================================================================================
+-- Decision 2 (Mason 2026-10-10, "2:yes"): reps see CUSTOMER NAMES on invoices - names only, not
+-- the customer record. The customers table and its policies are unchanged (pinned in the preflight
+-- and the postflight): a rep's direct read still returns only the customers assigned to them.
+-- This reader returns id + farm_name, nothing else, for the requested ids that a non-deleted
+-- invoice names (as its customer, a customer share, a line share or a posted line-share snapshot),
+-- and only to an active admin or an active sales rep (is_admin() / is_sales_rep() both require an
+-- active profile); every other caller gets no rows. Read-only (STABLE, no writes, so no
+-- idempotency key). Granted to authenticated only.
+-- =============================================================================================
+CREATE FUNCTION public.get_invoice_customer_names(p_customer_ids uuid[])
+ RETURNS TABLE(id uuid, farm_name text)
+ LANGUAGE sql
+ STABLE
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $function$
+  SELECT c.id, c.farm_name
+    FROM public.customers c
+   WHERE c.id = ANY (COALESCE(p_customer_ids, '{}'::uuid[]))
+     AND (public.is_admin() OR public.is_sales_rep())
+     AND (EXISTS (SELECT 1
+                    FROM public.invoices i
+                   WHERE i.customer_id = c.id
+                     AND i.deleted_at IS NULL)
+          OR EXISTS (SELECT 1
+                       FROM public.invoice_shares s
+                       JOIN public.invoices i ON i.id = s.invoice_id
+                      WHERE s.customer_id = c.id
+                        AND i.deleted_at IS NULL)
+          OR EXISTS (SELECT 1
+                       FROM public.invoice_line_shares ls
+                       JOIN public.invoice_items ii ON ii.id = ls.invoice_item_id
+                       JOIN public.invoices i ON i.id = ii.invoice_id
+                      WHERE ls.customer_id = c.id
+                        AND i.deleted_at IS NULL)
+          OR EXISTS (SELECT 1
+                       FROM public.invoice_line_share_snapshots sn
+                       JOIN public.invoices i ON i.id = sn.invoice_id
+                      WHERE sn.customer_id = c.id
+                        AND i.deleted_at IS NULL))
+   ORDER BY c.id;
+$function$;
+
+REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;
+COMMENT ON FUNCTION public.get_invoice_customer_names(uuid[]) IS
+  'Names-only customer read for invoice pages (Mason 2026-10-10): id + farm_name of customers a non-deleted invoice names; active admins and sales reps only, everyone else gets no rows.';
+
+-- =============================================================================================
 -- POSTFLIGHT: the exact reviewed result, or the whole apply rolls back.
 -- =============================================================================================
 DO $postflight$
@@ -2461,6 +2545,34 @@ BEGIN
              AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
         FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_invoice_group_post_version(uuid)')) IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'POSTFLIGHT_HELPER_CONTRACT: the guard or a posting version helper is not the reviewed function';
+  END IF;
+
+  -- Decision 2: the names-only reader. One overload, the reviewed body, exactly (id, farm_name),
+  -- read-only (STABLE), definer + pinned search_path, owned by postgres, executable by
+  -- authenticated (and its owner) only; and the customers policies unchanged.
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'get_invoice_customer_names') <> 1
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'cd26c61c5150a4f4670a50c91657aec7' AND p.prosecdef
+             AND p.proowner = 'postgres'::regrole AND p.provolatile = 's' AND p.proretset
+             AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+             AND pg_get_function_result(p.oid) = 'TABLE(id uuid, farm_name text)'
+             AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
+                         FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
+                 IS NOT DISTINCT FROM ARRAY['authenticated', 'postgres']::text[]
+             AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+             AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+        FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_invoice_customer_names(uuid[])')) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'POSTFLIGHT_CUSTOMER_NAMES_CONTRACT: get_invoice_customer_names is not the reviewed names-only reader';
+  END IF;
+  IF ARRAY(SELECT policyname::text FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' ORDER BY 1)
+       IS DISTINCT FROM ARRAY['customers_delete', 'customers_insert', 'customers_select', 'customers_select_location_dispatchee', 'customers_update']::text[]
+     OR (SELECT md5(cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''))
+           FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'customers_select')
+          IS DISTINCT FROM '4d86cb39838dc338ac722922bbb91b5f'
+     OR (SELECT md5(cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''))
+           FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'customers_select_location_dispatchee')
+          IS DISTINCT FROM 'a4b57f89a3b63679c902d9bcf25ef25c' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_CUSTOMERS_POLICY: the customers read policies changed (Decision 2 exposes names through get_invoice_customer_names only)';
   END IF;
 
   -- The two re-emissions.
@@ -2581,6 +2693,10 @@ BEGIN
       ('void_delivery(uuid,text,uuid,text)', '3ef685c8f5bf778e3ae38aa2f89304da'),
       ('complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)', 'a1e9a043f27d3566f8ecf6d5e3a809ab'),
       ('process_offline_action(uuid,text)', '0461eebf65f23ccc8fe3852375eb9c78'),
+      -- The upkeep allowlist (Mason-approved 2026-10-10, "1.a"): cancel_delivery,
+      -- batch_cancel_deliveries, price_order, update_order_items and create_rush_order keep
+      -- updating an admin's draft or unposted invoice; complete_delivery's resize and tote stamp
+      -- is reached through its pinned entry above.
       ('cancel_delivery(uuid,text,uuid,text)', '8528b344f86c7e1aa735e386ea39f2eb'),
       ('batch_cancel_deliveries(uuid[],text,uuid,text)', '25d34db60f098a22a62db53780742eee'),
       ('price_order(uuid,jsonb,uuid,text)', 'ab2bcf3ac499cf78eef1f706d4e9501f'),

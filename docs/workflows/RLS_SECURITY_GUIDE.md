@@ -395,6 +395,19 @@ other roles read what they read before. Sales reps still record payments (`alloc
   non-deleted invoice that uses them), all `TO authenticated` (a `TO public` policy that calls
   `is_sales_rep()` would turn anon's empty read into a permission error); `write_offs` gets a second,
   read-only `write_offs_select_sales_rep`.
+- Customer names on invoices (Mason 2026-10-10, "2:yes": names only): `customers` RLS is NOT widened
+  (a rep's direct read stays assigned customers only; `customers_select` and the policy set are pinned
+  before and after the apply). Reps read the farm name of another rep's customer only through
+  `get_invoice_customer_names(uuid[])` → `(id, farm_name)`: a `SECURITY DEFINER` read function, not a
+  view (the repo retired its definer view in `20260729125227`), granted to `authenticated` only,
+  returning rows only to an active admin or sales rep and only for customers a non-deleted invoice
+  names. **Pattern for "role X may see one column of rows RLS hides": a narrow definer read function
+  with an explicit role check, an explicit column list and a reference filter, never a wider table
+  policy.**
+- Invoice upkeep (Mason 2026-10-10, "1.a"): `price_order`, `update_order_items`, `create_rush_order`,
+  the delivery-completion resize and tote stamp, and `cancel_delivery` / `batch_cancel_deliveries`
+  keep changing an admin's draft or unposted invoice for reps and drivers; they are the sweep's
+  pinned upkeep list, owner-approved.
 - **HARD-GUARD catalog sweep (apply time) and its PR-time twin.** The migration's postflight refuses
   the apply if any public function or procedure `authenticated` can execute can reach (by name,
   comments stripped) an INSERT/UPDATE/DELETE/MERGE/TRUNCATE on an invoice table (`invoices`,

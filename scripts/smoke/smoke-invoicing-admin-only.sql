@@ -271,6 +271,10 @@ BEGIN
       ('void_delivery(uuid,text,uuid,text)', '3ef685c8f5bf778e3ae38aa2f89304da'),
       ('complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)', 'a1e9a043f27d3566f8ecf6d5e3a809ab'),
       ('process_offline_action(uuid,text)', '0461eebf65f23ccc8fe3852375eb9c78'),
+      -- The upkeep allowlist (Mason-approved 2026-10-10, "1.a"): cancel_delivery,
+      -- batch_cancel_deliveries, price_order, update_order_items and create_rush_order keep
+      -- updating an admin's draft or unposted invoice; complete_delivery's resize and tote stamp
+      -- is reached through its pinned entry above.
       ('cancel_delivery(uuid,text,uuid,text)', '8528b344f86c7e1aa735e386ea39f2eb'),
       ('batch_cancel_deliveries(uuid[],text,uuid,text)', '25d34db60f098a22a62db53780742eee'),
       ('price_order(uuid,jsonb,uuid,text)', 'ab2bcf3ac499cf78eef1f706d4e9501f'),

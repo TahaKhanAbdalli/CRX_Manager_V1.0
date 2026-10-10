@@ -152,7 +152,8 @@ describe('invoicing admin-only migration (20261009120000)', () => {
 
   it('makes every new function SECURITY DEFINER with a pinned search_path', () => {
     const heads = [...sql.matchAll(/CREATE (OR REPLACE )?FUNCTION public\.(\w+)\(/g)].map((m) => m[0]);
-    expect(heads.length).toBe(WRAPPED.length + 4 + 2);
+    // 4 helpers, the names-only reader (Decision 2, Mason 2026-10-10), 2 re-emissions.
+    expect(heads.length).toBe(WRAPPED.length + 4 + 1 + 2);
     for (const head of heads) {
       const stmt = statement(sql, head);
       expect(stmt, head).toContain(' SECURITY DEFINER\n');
@@ -317,7 +318,8 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     expect(postflight).toContain("OR (body ~* '\\mexecute\\M'");
     expect(postflight).toContain('POSTFLIGHT_INVOICE_TRIGGER');
     expect(postflight).toContain('must not catch exceptions');
-    expect(postflight.split("AND p.proowner = 'postgres'::regrole").length - 1).toBe(2);
+    // The two posting version readers and the names-only reader.
+    expect(postflight.split("AND p.proowner = 'postgres'::regrole").length - 1).toBe(3);
     for (const t of ['invoices', 'invoice_items']) {
       for (const role of ['authenticated', 'anon']) expect(postflight).toContain(`has_table_privilege('${role}', 'public.${t}', 'INSERT, UPDATE, DELETE, TRUNCATE')`);
     }
@@ -325,6 +327,49 @@ describe('invoicing admin-only migration (20261009120000)', () => {
     const query = sql.slice(sql.indexOf('  WITH RECURSIVE fn AS ('), sql.indexOf('  IF v_unclassified IS NOT NULL THEN'));
     expect(query.length).toBeGreaterThan(1000);
     expect(read('scripts/smoke/smoke-invoicing-admin-only.sql')).toContain(query);
+  });
+
+  it('records the upkeep allowlist as Mason-approved 2026-10-10 (decision 1a) and keeps it unwrapped', () => {
+    const header = sql.slice(0, sql.indexOf('SET LOCAL lock_timeout'));
+    expect(header).not.toContain('NEEDS MASON');
+    expect(header).toContain('INVOICE UPKEEP (Mason-approved 2026-10-10, in chat, "1.a"');
+    for (const fn of ['price_order', 'update_order_items', 'create_rush_order', 'cancel_delivery', 'batch_cancel_deliveries']) {
+      expect(header).toContain(fn);
+      expect(sql).not.toMatch(new RegExp(`RENAME TO _${fn}_`));
+    }
+    expect(header).toContain('partial resize and tote stamp inside _complete_delivery_authorized_impl');
+    // Both sweep lists cite the decision next to the upkeep entries.
+    const preflight = sql.slice(sql.indexOf('DO $preflight$'), sql.indexOf('$preflight$;'));
+    const postflight = sql.slice(sql.indexOf('DO $postflight$'), sql.indexOf('$postflight$;'));
+    expect(preflight).toMatch(/-- The upkeep allowlist: Mason-approved 2026-10-10[^\n]*\n[^\n]*\n {4}\('public\.cancel_delivery\(/);
+    expect(postflight).toMatch(/-- The upkeep allowlist \(Mason-approved 2026-10-10, "1\.a"\)[\s\S]{0,400}?\n {6}\('cancel_delivery\(/);
+  });
+
+  it('adds a names-only customer reader for reps (decision 2) without widening the customers policies', () => {
+    const stmt = statement(sql, 'CREATE FUNCTION public.get_invoice_customer_names(');
+    const code = body(stmt);
+    expect(stmt).toContain('(p_customer_ids uuid[])\n RETURNS TABLE(id uuid, farm_name text)\n LANGUAGE sql\n STABLE\n SECURITY DEFINER\n SET search_path = public, pg_temp\n');
+    // Only id and farm_name leave the function; only active admins and sales reps get rows; only
+    // customers a non-deleted invoice names.
+    expect(code).toMatch(/^\s*SELECT c\.id, c\.farm_name\s+FROM public\.customers c\s+WHERE c\.id = ANY \(COALESCE\(p_customer_ids, '\{\}'::uuid\[\]\)\)\s+AND \(public\.is_admin\(\) OR public\.is_sales_rep\(\)\)\s+AND \(EXISTS/);
+    expect(code.split('i.deleted_at IS NULL').length - 1).toBe(4);
+    for (const src of ['public.invoices i', 'public.invoice_shares s', 'public.invoice_line_shares ls', 'public.invoice_line_share_snapshots sn']) expect(code).toContain(src);
+    expect(code).not.toMatch(/\b(insert|update|delete|merge|truncate|execute)\b/i);
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM PUBLIC, anon, authenticated, service_role;\nGRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;\n');
+    // Its body pin in the postflight is this body.
+    const postflight = sql.slice(sql.indexOf('DO $postflight$'), sql.indexOf('$postflight$;'));
+    expect(postflight).toContain(`md5(replace(p.prosrc, chr(13), '')) = '${md5(code)}'`);
+    expect(postflight).toContain("pg_get_function_result(p.oid) = 'TABLE(id uuid, farm_name text)'");
+    expect(postflight).toContain('POSTFLIGHT_CUSTOMERS_POLICY');
+    // No policy on customers is created, altered or dropped, and no customers grant changes; both
+    // read policies and the policy set are pinned before and after.
+    expect(topLevel(sql)).not.toMatch(/(CREATE|ALTER|DROP) POLICY \w+ ON public\.customers\b/);
+    expect(topLevel(sql)).not.toMatch(/(GRANT|REVOKE) [^;]* ON (TABLE )?public\.customers\b/);
+    for (const block of [sql.slice(sql.indexOf('DO $preflight$'), sql.indexOf('$preflight$;')), postflight]) {
+      expect(block).toContain("'4d86cb39838dc338ac722922bbb91b5f'");
+      expect(block).toContain("'a4b57f89a3b63679c902d9bcf25ef25c'");
+      expect(block).toContain("ARRAY['customers_delete', 'customers_insert', 'customers_select', 'customers_select_location_dispatchee', 'customers_update']::text[]");
+    }
   });
 
   it('registers its container-only smoke chain and real-schema prover', () => {

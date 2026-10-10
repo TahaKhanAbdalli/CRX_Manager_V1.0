@@ -36,6 +36,10 @@
  *      customer; a driver's reads are unchanged; direct table writes (invoice_shares,
  *      invoice_line_allocations, field_app_locations, field_app_location_shares, write_offs) are
  *      refused;
+ *   5b. CUSTOMER NAMES (Decision 2, Mason 2026-10-10): through get_invoice_customer_names a rep
+ *      (and an admin) reads id + farm_name, nothing else, of the customers a non-deleted invoice
+ *      names, also another rep's; a rep's direct customers read is unchanged (policy not widened);
+ *      drivers and every other role get no rows; anon and service_role cannot execute it;
  *   6. DELIVERIES AND JOBS: reps' and drivers' completions (online, offline replay, split order,
  *      partial delivery against an admin's quick-delivery draft) complete with no invoice, the
  *      office notified and the delivery listed under "Delivered, not invoiced"; an admin then bills
@@ -174,6 +178,10 @@ const LIVE_POLICY_MD5 = {
   'field_app_location_shares.field_app_location_shares_insert': '52722e61e9bef7b2ff1a9a2f33cef7be',
   'field_app_location_shares.field_app_location_shares_update': '7680ae67028c233ada58f74c302d87bd',
   'field_app_location_shares.field_app_location_shares_delete': '0b3f94a02ac505d82e218752005f2c32',
+  // Decision 2 (Mason 2026-10-10): the customers read policies the candidate must NOT widen, read
+  // live 2026-10-10.
+  'customers.customers_select': '4d86cb39838dc338ac722922bbb91b5f',
+  'customers.customers_select_location_dispatchee': 'a4b57f89a3b63679c902d9bcf25ef25c',
 };
 
 const id = (n) => `6f200000-0000-4000-8000-${n.padStart(12, '0')}`;
@@ -184,6 +192,11 @@ const U = {
 const C1 = id('c1');
 const C2 = id('c2');
 const C3 = id('c3');
+// Decision 2 fixtures (created inside rolled-back probes only): a customer named only by a
+// customer share, one no invoice names, and one named only by a soft-deleted invoice.
+const C4 = id('c4');
+const C5 = id('c5');
+const C6 = id('c6');
 const PROD = id('f1');
 const PROD_GAL = id('f2');
 const F1 = id('1001');
@@ -781,6 +794,56 @@ function tableAccess(phase) {
     }
   }
   return { owner: ownerView.result, rep: repView.result, direct };
+}
+
+/**
+ * Decision 2 (Mason 2026-10-10): reps SEE CUSTOMER NAMES on invoices, names only. C3 (an invoice's
+ * customer) and C4 (only a customer share on that invoice) belong to REP_B, not to U.REP; C5 is on
+ * no invoice; C6 only on a soft-deleted invoice. C3 and C4 carry a contact and an address that must
+ * never reach a rep.
+ */
+function customerNames(phase) {
+  const fixture = `INSERT INTO public.customers (id, farm_name, assigned_sales_rep, is_active, contact_name, billing_address) VALUES
+      ('${C4}', '[PROVER] Share Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd'),
+      ('${C5}', '[PROVER] No Invoice Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd'),
+      ('${C6}', '[PROVER] Deleted Invoice Farm', '${U.REP_B}', true, '[PROVER] Secret Contact', '1 Secret Rd');
+  UPDATE public.customers SET contact_name = '[PROVER] Secret Contact', billing_address = '1 Secret Rd' WHERE id = '${C3}';
+  ${miscDraftSql('prover.inv_c3', `names-c3-${phase}`, 1700, C3)}
+  RESET ROLE;
+  INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents)
+    VALUES (current_setting('prover.inv_c3')::uuid, '${C4}', '[PROVER] Share Farm', 100, 1700);
+  ${miscDraftSql('prover.inv_c6', `names-c6-${phase}`, 1800, C6)}
+  RESET ROLE;
+  UPDATE public.invoices SET deleted_at = now() WHERE id = current_setting('prover.inv_c6')::uuid;`;
+  const ask = `ARRAY['${C3}', '${C4}', '${C5}', '${C6}']::uuid[]`;
+  const names = `(SELECT COALESCE(string_agg(cn.id || '=' || cn.farm_name, ',' ORDER BY cn.farm_name), '') FROM public.get_invoice_customer_names(${ask}) cn)`;
+  const keys = `(SELECT COALESCE(string_agg(DISTINCT k, ',' ORDER BY k), '') FROM public.get_invoice_customer_names(${ask}) cn, jsonb_object_keys(to_jsonb(cn)) k)`;
+  const leak = `(SELECT COALESCE(string_agg(to_jsonb(cn)::text, ','), '') ~ 'Secret' FROM public.get_invoice_customer_names(${ask}) cn)`;
+  // The direct table read the invoice pages use today: farm name, and the PDF's address fields.
+  const direct = `(SELECT count(*) || ':' || COALESCE(string_agg(farm_name || '/' || COALESCE(contact_name, '') || '/' || COALESCE(billing_address, ''), ',' ORDER BY farm_name), '')
+    FROM public.customers WHERE id IN ('${C3}', '${C4}', '${C5}', '${C6}'))`;
+  const expected = `ok|${C3}=[PROVER] Rep B Farm,${C4}=[PROVER] Share Farm`;
+  const repDirect = attempt(U.REP, fixture, direct);
+  assert.equal(repDirect.result, 'ok|0:', `${phase}: a sales rep read customer rows that are not assigned to them directly: ${repDirect.result}`);
+  assert.match(attempt(U.ADMIN, fixture, direct).result, /^ok\|4:/, `${phase}: the admin's direct customer read is not the fixture`);
+  if (phase === 'before') {
+    assert.equal(scalar("SELECT to_regprocedure('public.get_invoice_customer_names(uuid[])') IS NULL;"), 't', 'BEFORE: the names reader already exists');
+    return { rep: repDirect.result };
+  }
+  assert.equal(scalar("SELECT pg_get_function_result('public.get_invoice_customer_names(uuid[])'::regprocedure);"), 'TABLE(id uuid, farm_name text)', 'AFTER: the names reader returns more than id and farm_name');
+  for (const [who, uid] of [['sales rep', U.REP], ['other sales rep', U.REP_B], ['admin', U.ADMIN]]) {
+    assert.equal(attempt(uid, fixture, names).result, expected, `AFTER: ${who} does not read exactly the names of the customers a live invoice names`);
+    assert.equal(attempt(uid, fixture, keys).result, 'ok|farm_name,id', `AFTER: the names reader returns other columns to ${who}`);
+    assert.equal(attempt(uid, fixture, leak).result, 'ok|false', `AFTER: the names reader leaks a contact or address to ${who}`);
+  }
+  assert.equal(attempt(U.REP, fixture, `(SELECT count(*) FROM public.get_invoice_customer_names(NULL))`).result, 'ok|0', 'AFTER: a NULL id list returned rows');
+  for (const [who, uid] of NON_ADMINS.filter(([w]) => w !== 'sales rep')) {
+    assert.equal(attempt(uid, fixture, names).result, 'ok|', `AFTER: the names reader returned names to a ${who}`);
+  }
+  for (const role of ['anon', 'service_role']) {
+    assert.equal(attempt(U.REP, fixture, names, { role }).result, '42501|permission denied for function get_invoice_customer_names', `AFTER: ${role} can execute the names reader`);
+  }
+  return { rep: repDirect.result, names: expected };
 }
 
 /** Delivery and job completions. Returns facts for the before/after comparison. */
@@ -1407,6 +1470,7 @@ async function main() {
     // Debugging only: rerun the after-apply checks of sections 5-8 on a kept container that
     // already applied the candidate (the full proof never takes this path).
     tableAccess('after');
+    customerNames('after');
     jobsAndQuick('after');
     await versionChecks('after');
     sweepChecks();
@@ -1458,6 +1522,7 @@ async function proof() {
   // 1. BEFORE.
   const adminBefore = invoicingMatrix('before');
   const readsBefore = tableAccess('before');
+  const namesBefore = customerNames('before');
   const completionsBefore = completions('before');
   const jobsBefore = jobsAndQuick('before');
   const versionBefore = await versionChecks('before');
@@ -1467,7 +1532,7 @@ async function proof() {
   const chainFirst = runChain(path.basename(CHAIN), lf(CHAIN));
   assert.match(chainFirst, /^FAIL /, 'BEFORE: the new smoke chain passed against the pre-candidate schema, so it does not detect the bug');
   assert.match(chainFirst, /SMOKE_FAIL/, `BEFORE: the new smoke chain failed for a setup reason, not on the bug: ${chainFirst}`);
-  console.log(`[prover] BEFORE (the bug): a sales rep invoiced through ${CASES.filter((c) => !c.repBefore).length} wrapped RPCs (each wrote rows); a rep's, a driver's and an offline completion auto-invoiced; a rep's split completion auto-split; a rep's job completion auto-drafted; reps' and drivers' quick deliveries created invoices; a rep inserted invoice_shares and invoice_line_allocations rows directly and rewrote a field invoice's field_app_locations (${readsBefore.direct.field_app_locations_update}) and field_app_location_shares (${readsBefore.direct.field_app_location_shares_update}) rows directly; a deactivated admin reversed a write-off; a rep read none of the admin's invoices (${readsBefore.rep}); a post went through an invoice changed by a concurrent save (${versionBefore.race}); a rep's partial completion racing an admin's post never re-sized a posted invoice, even before the candidate (${craceBefore}); the new chain fails first (${chainFirst.slice(0, 120)})`);
+  console.log(`[prover] BEFORE (the bug): a sales rep invoiced through ${CASES.filter((c) => !c.repBefore).length} wrapped RPCs (each wrote rows); a rep's, a driver's and an offline completion auto-invoiced; a rep's split completion auto-split; a rep's job completion auto-drafted; reps' and drivers' quick deliveries created invoices; a rep inserted invoice_shares and invoice_line_allocations rows directly and rewrote a field invoice's field_app_locations (${readsBefore.direct.field_app_locations_update}) and field_app_location_shares (${readsBefore.direct.field_app_location_shares_update}) rows directly; a deactivated admin reversed a write-off; a rep read none of the admin's invoices (${readsBefore.rep}) and no name of another rep's customer (direct customers read ${namesBefore.rep}; no names reader); a post went through an invoice changed by a concurrent save (${versionBefore.race}); a rep's partial completion racing an admin's post never re-sized a posted invoice, even before the candidate (${craceBefore}); the new chain fails first (${chainFirst.slice(0, 120)})`);
 
   // 2a. AUTOCOMMIT.
   stageText('candidate.sql', lf(CANDIDATE));
@@ -1496,6 +1561,10 @@ async function proof() {
     ['extra policy', 'CREATE POLICY prover_extra ON public.invoice_shares FOR SELECT TO authenticated USING (true);', 'PREFLIGHT_POLICY_SET_DRIFT'],
     ['PR #889 missing from the ledger', `DELETE FROM supabase_migrations.schema_migrations WHERE name = '${PR889_DATA[1]}';`, 'PREFLIGHT_PR889_NOT_APPLIED'],
     ['an object it creates already exists', 'CREATE FUNCTION public._require_invoicing_admin() RETURNS void LANGUAGE sql AS $$ SELECT $$;', 'PREFLIGHT_ALREADY_APPLIED'],
+    // Decision 2: the names reader already present; the customers read policies drifted.
+    ['the names reader already exists', 'CREATE FUNCTION public.get_invoice_customer_names(uuid[]) RETURNS TABLE(id uuid, farm_name text) LANGUAGE sql AS $$ SELECT NULL::uuid, NULL::text $$;', 'PREFLIGHT_ALREADY_APPLIED'],
+    ['customers read policy widened', 'ALTER POLICY customers_select ON public.customers USING (true);', 'PREFLIGHT_POLICY_DRIFT'],
+    ['extra customers policy', 'CREATE POLICY prover_extra ON public.customers FOR SELECT TO authenticated USING (true);', 'PREFLIGHT_POLICY_SET_DRIFT'],
   ];
   for (const [label, driftSql, code] of drifts) {
     const r = docker(psqlArgs(), { input: `BEGIN;\n${driftSql}\n\\i /tmp/candidate.sql\nCOMMIT;\n`, allowFailure: true });
@@ -1503,7 +1572,7 @@ async function proof() {
     assert.match(`${r.stdout}\n${r.stderr}`, new RegExp(code), `PREFLIGHT (${label}): wrong refusal, expected ${code}:\n${r.stderr}`);
   }
   for (const [signature, pin] of Object.entries(LIVE_BODY_MD5)) assert.equal(lfBodyMd5(signature), pin, `PREFLIGHT: a rolled-back drift left ${signature} changed`);
-  console.log(`[prover] PREFLIGHT: ${drifts.length} drifts (wrapped body, ACL, overload, security mode; both re-emitted bodies; role helper; posting lock-order impl; both sweep lists; a replaced policy; an extra policy; #889 not in the ledger; already applied) each refused with its own code; nothing changed`);
+  console.log(`[prover] PREFLIGHT: ${drifts.length} drifts (wrapped body, ACL, overload, security mode; both re-emitted bodies; role helper; posting lock-order impl; both sweep lists; a replaced policy; an extra policy; #889 not in the ledger; already applied; the names reader already present; customers_select widened; an extra customers policy) each refused with its own code; nothing changed`);
 
   // 2c. POSTFLIGHT mutants: the whole apply rolls back.
   const candidateText = lf(CANDIDATE);
@@ -1548,6 +1617,13 @@ CREATE FUNCTION public.prover_invoice_trigger() RETURNS trigger LANGUAGE plpgsql
 REVOKE ALL ON FUNCTION public.prover_invoice_trigger() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER prover_invoice_trigger AFTER INSERT ON public.prover_trigger_source FOR EACH ROW EXECUTE FUNCTION public.prover_invoice_trigger();
 -- POSTFLIGHT: the exact reviewed result`), /POSTFLIGHT_INVOICE_TRIGGER: prover_invoice_trigger on prover_trigger_source/],
+    // Decision 2 (Mason 2026-10-10): the names-only reader's contract, and the customers policies.
+    ['the names reader left executable by anon', uniqueCut(candidateText, 'GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;\n', 'GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated, anon;\n'), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['the names reader returning another column (pin matched)', swapWrapper('get_invoice_customer_names', (s) => s
+      .replace('RETURNS TABLE(id uuid, farm_name text)', 'RETURNS TABLE(id uuid, farm_name text, contact_name text)')
+      .replace('  SELECT c.id, c.farm_name\n', '  SELECT c.id, c.farm_name, c.contact_name\n')), /POSTFLIGHT_CUSTOMER_NAMES_CONTRACT/],
+    ['customers_select widened in the file', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', '-- prover mutant\nALTER POLICY customers_select ON public.customers USING (true);\n-- POSTFLIGHT: the exact reviewed result'), /POSTFLIGHT_CUSTOMERS_POLICY/],
+    ['an extra customers read policy in the file', candidateText.replace('-- POSTFLIGHT: the exact reviewed result', '-- prover mutant\nCREATE POLICY prover_rep_customers ON public.customers FOR SELECT TO authenticated USING (public.is_sales_rep());\n-- POSTFLIGHT: the exact reviewed result'), /POSTFLIGHT_CUSTOMERS_POLICY/],
   ];
   for (const [label, text, code] of postflightMutants) {
     assert.notEqual(text, candidateText, `POSTFLIGHT (${label}): the mutant is the candidate`);
@@ -1639,6 +1715,8 @@ CREATE TRIGGER prover_invoice_trigger AFTER INSERT ON public.prover_trigger_sour
 
   // 5. READ SIDE.
   const readsAfter = tableAccess('after');
+  const namesAfter = customerNames('after');
+  console.log(`[prover] CUSTOMER NAMES (Decision 2, Mason 2026-10-10): a sales rep, another sales rep and an admin read exactly ${namesAfter.names.slice(3)} through get_invoice_customer_names (the invoice's customer and a share customer, both another rep's; not a customer on no invoice or only on a soft-deleted one), columns id and farm_name only, no contact or address; a rep's direct customers read of the same rows is still ${namesAfter.rep} (customers policy not widened); driver, applicator, entity_recipient, deactivated admin and a caller with no profile get no rows; anon and service_role cannot execute it; a NULL id list returns nothing`);
   console.log(`[prover] READ SIDE: a rep now reads every invoice table the invoice pages read (${readsAfter.rep}, same as the admin, including an invoice on ANOTHER rep's customer); drivers and applicators read nothing, as before; every direct rep write is permission denied: invoice_shares / invoice_line_allocations insert, ${Object.keys(readsAfter.direct).join(', ')} (before: field_app_locations update ${readsBefore.direct.field_app_locations_update}, field_app_location_shares update ${readsBefore.direct.field_app_location_shares_update})`);
 
   // 6. DELIVERIES AND JOBS.
@@ -1693,7 +1771,7 @@ CREATE TRIGGER prover_invoice_trigger AFTER INSERT ON public.prover_trigger_sour
 
   // 11. MUTATIONS: one per gate.
   const mutationCount = await mutations({ adminBefore, held: heldCases });
-  console.log(`INVOICING_ADMIN_ONLY_PROOF_PASS pr889=replayed_and_required before=bug_reproduced(rep_wrote_through_${CASES.filter((c) => !c.repBefore).length}_of_${CASES.length}_rpcs,completions,jobs,quick,rest,reads,post_race) autocommit=refused preflight=${drifts.length}_drifts postflight=${postflightMutants.length}_mutants after=refused_all_non_admins_no_number,held_locks_${Object.keys(heldCases).length}_rpcs,frozen_impls_closed admin=identical_incl_replay_and_row_counts reads=rep_all,driver_unchanged completions=no_invoice,admins_notified,listed,manual_same_lines completion_race=posted_invoice_never_resized_before_and_after version_check=race_refused,unchanged_posts,old_callers sweep=clean,catches_new_writer chains=${Object.values(chainsAfter).filter((x) => x === 'PASS').length}_pass,${unchangedFailures.length}_fail_before_and_after_no_signal,${changedByDesign.length}_rep_chains_stop_at_admin_only reapply=refused mutations=${mutationCount}_detected`);
+  console.log(`INVOICING_ADMIN_ONLY_PROOF_PASS pr889=replayed_and_required before=bug_reproduced(rep_wrote_through_${CASES.filter((c) => !c.repBefore).length}_of_${CASES.length}_rpcs,completions,jobs,quick,rest,reads,post_race) autocommit=refused preflight=${drifts.length}_drifts postflight=${postflightMutants.length}_mutants after=refused_all_non_admins_no_number,held_locks_${Object.keys(heldCases).length}_rpcs,frozen_impls_closed admin=identical_incl_replay_and_row_counts reads=rep_all,driver_unchanged customer_names=rep_names_only,customers_policy_unwidened,others_none,anon_denied completions=no_invoice,admins_notified,listed,manual_same_lines completion_race=posted_invoice_never_resized_before_and_after version_check=race_refused,unchanged_posts,old_callers sweep=clean,catches_new_writer chains=${Object.values(chainsAfter).filter((x) => x === 'PASS').length}_pass,${unchangedFailures.length}_fail_before_and_after_no_signal,${changedByDesign.length}_rep_chains_stop_at_admin_only reapply=refused mutations=${mutationCount}_detected`);
 }
 
 async function mutations({ adminBefore, held }) {
@@ -1858,6 +1936,37 @@ async function mutations({ adminBefore, held }) {
   detect('write_offs without the rep read', () => tableAccess('after'));
   psql('CREATE POLICY write_offs_select_sales_rep ON public.write_offs FOR SELECT TO authenticated USING (public.is_sales_rep());');
   tableAccess('after');
+  // (8b) Decision 2: each gate of the names-only reader, and the customers policy left unwidened.
+  const namesReader = statementOf('CREATE FUNCTION public.get_invoice_customer_names(');
+  const namesGrants = 'REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM PUBLIC, anon, authenticated, service_role;\nGRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO authenticated;\n';
+  const namesMutants = [
+    ['names reader without its role gate', (s) => once(s, '     AND (public.is_admin() OR public.is_sales_rep())\n', '', 'names role gate')],
+    ['names reader without its invoice-reference gate', (s) => once(s, '     AND (EXISTS (SELECT 1\n', '     AND (true OR EXISTS (SELECT 1\n', 'names reference gate')],
+    ['names reader counting a soft-deleted invoice', (s) => once(s, '                   WHERE i.customer_id = c.id\n                     AND i.deleted_at IS NULL)\n', '                   WHERE i.customer_id = c.id)\n', 'names deleted_at')],
+    ['names reader without its customer-share leg', (s) => once(s, '                      WHERE s.customer_id = c.id\n', '                      WHERE false AND s.customer_id = c.id\n', 'names share leg')],
+  ];
+  for (const [label, mutate] of namesMutants) {
+    const mutant = mutate(namesReader);
+    assert.notEqual(mutant, namesReader, `mutation ${label}: changed nothing`);
+    applyText('mutant-names.sql', mutant);
+    detect(label, () => customerNames('after'));
+    applyText('restore-names.sql', namesReader);
+  }
+  // Another column returned (the return type changes, so drop and re-create; restored the same way).
+  applyText('mutant-names-column.sql', `DROP FUNCTION public.get_invoice_customer_names(uuid[]);\n${namesReader
+    .replace('RETURNS TABLE(id uuid, farm_name text)', 'RETURNS TABLE(id uuid, farm_name text, contact_name text)')
+    .replace('  SELECT c.id, c.farm_name\n', '  SELECT c.id, c.farm_name, c.contact_name\n')}${namesGrants}`);
+  detect('names reader returning the contact name too', () => customerNames('after'));
+  applyText('restore-names-column.sql', `DROP FUNCTION public.get_invoice_customer_names(uuid[]);\n${namesReader}${namesGrants}`);
+  psql('GRANT EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) TO anon;');
+  detect('names reader executable by anon', () => customerNames('after'));
+  psql('REVOKE EXECUTE ON FUNCTION public.get_invoice_customer_names(uuid[]) FROM anon;');
+  const customersSelect = docker([...psqlArgs(), '-A', '-t'], { input: "SELECT qual FROM pg_policies WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'customers_select';" }).stdout.trim();
+  psql(`ALTER POLICY customers_select ON public.customers USING (${customersSelect} OR is_sales_rep());`);
+  detect('customers_select widened to every sales rep', () => customerNames('after'));
+  psql(`ALTER POLICY customers_select ON public.customers USING (${customersSelect});`);
+  assert.equal(policyMd5('customers', 'customers_select'), LIVE_POLICY_MD5['customers.customers_select'], 'RESTORED: customers_select is not its live pin');
+  customerNames('after');
   // (9) Version check: removed from each posting wrapper; and taken without the row lock.
   for (const [name, marker] of [['post_invoice', 'the invoice'], ['post_invoice_group', 'an invoice in this group'], ['batch_post_invoices', 'an invoice in this batch']]) {
     const original = statementOf(`CREATE FUNCTION public.${name}(`);
@@ -1933,6 +2042,7 @@ async function mutations({ adminBefore, held }) {
   completions('after');
   jobsAndQuick('after');
   tableAccess('after');
+  customerNames('after');
   splitKeyChecks();
   await versionChecks('after');
   checkCompletionRace('after', await completionRace('after'));
@@ -1942,7 +2052,7 @@ async function mutations({ adminBefore, held }) {
     assert.ok(pin, `RESTORED: no postflight pin for ${t}.${p}`);
     assert.equal(policyMd5(t, p), pin, `RESTORED: ${t}.${p} is not its postflight pin`);
   }
-  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate and its admin notification, the quick-delivery coercion, ${layers.length} table-grant layers (2 with the policy widened too, caught by the write landing), ${Object.keys(policyChecks).length} write policies, ${readPolicies.length} read policies, a rep-scoped invoices read and the write_offs rep read, the version check in each of 3 posting wrappers, each posting wrapper's check without its row locks, a group check counting soft-deleted members, a re-check of a stored receipt (same-key duplicate), the fingerprint without each of its 3 child legs, and the sweep accepting a late guard, any DECLARE section, an exception handler after the guard or dynamic SQL each turned the prover red (the completion hunk by its named failure); restored, the matrix, completions, jobs and quick deliveries, reads and direct writes, split keys, the version checks, the completion race and every write and read policy pin were re-run green (${count} detections)`);
+  console.log(`[prover] MUTATIONS: ${guardedCount} wrapper guards, the split key check, the guard helper (NULL fail-open form, no is_active), the completion hunk, complete_job's gate and its admin notification, the quick-delivery coercion, ${layers.length} table-grant layers (2 with the policy widened too, caught by the write landing), ${Object.keys(policyChecks).length} write policies, ${readPolicies.length} read policies, a rep-scoped invoices read and the write_offs rep read, the names reader (its role gate, invoice-reference gate, soft-deleted filter, share leg, an extra column, an anon grant) and customers_select widened, the version check in each of 3 posting wrappers, each posting wrapper's check without its row locks, a group check counting soft-deleted members, a re-check of a stored receipt (same-key duplicate), the fingerprint without each of its 3 child legs, and the sweep accepting a late guard, any DECLARE section, an exception handler after the guard or dynamic SQL each turned the prover red (the completion hunk by its named failure); restored, the matrix, completions, jobs and quick deliveries, reads and direct writes, customer names, split keys, the version checks, the completion race and every write and read policy pin were re-run green (${count} detections)`);
   return count;
 }
 

@@ -45,10 +45,18 @@ A service_role caller has no `auth.uid()`, so the guard refuses it too (no serve
   `order_items` lock instead (it can deadlock, never re-size a posted invoice); `update_order_items`'
   line-link detach can still land after the check (link field only, see KNOWN_ISSUES). Readers: `get_invoice_post_version(p_invoice_ids uuid[])` and
   `get_invoice_group_post_version(p_invoice_group_id uuid)` → text (admin-only, read-only).
+- `get_invoice_customer_names(p_customer_ids uuid[])` → `TABLE(id uuid, farm_name text)` (Decision 2,
+  Mason 2026-10-10: reps see customer NAMES on invoices, names only). Read-only (STABLE, SECURITY
+  DEFINER, no key); EXECUTE for `authenticated` only. Returns the farm name of each requested
+  customer that a non-deleted invoice names (customer, customer share, line share, line-share
+  snapshot), to an active admin or sales rep; every other caller gets no rows. `customers` RLS is
+  unchanged. Phase 2 switches the invoice pages to it.
 - Internal: `_require_invoicing_admin()` (void) and `_invoice_review_fingerprint(uuid[])` (md5 of each
   invoice row, its lines, line shares and customer shares; `TimeZone = UTC`), both owner-only.
 - Unchanged by design: `cancel_delivery`, `batch_cancel_deliveries`, `price_order`,
-  `update_order_items`, `create_rush_order`, `allocate_payment`, and the already-admin-only invoice,
+  `update_order_items`, `create_rush_order` (the invoice-upkeep allowlist, Mason-approved 2026-10-10
+  "1.a": they keep updating an admin's draft or unposted invoice), `allocate_payment`, and the
+  already-admin-only invoice,
   credit, write-off (`apply_write_off`), payment and order RPCs.
 - Table layer: direct INSERT/UPDATE/DELETE/TRUNCATE by `authenticated` is revoked on
   `invoice_shares`, `invoice_line_allocations`, `field_app_locations`, `field_app_location_shares` and
