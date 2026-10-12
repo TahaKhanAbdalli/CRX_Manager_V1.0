@@ -20,7 +20,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, describePostInvoiceBlock } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -35,7 +35,13 @@ import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
-import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../lib/invoiceBulkPostReview';
+import {
+  describeBulkPostFailure,
+  failedPostReviewMessage,
+  reviewInvoicePostTargets,
+  shownRowsForTargets,
+  useInvoicePostBaseline,
+} from '../lib/invoiceBulkPostReview';
 import { postReviewedInvoice, postReviewedInvoiceGroup } from '../lib/invoicePostVersion';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
@@ -59,6 +65,10 @@ interface NewOrderItem {
 
 let _editKeyCounter = 0;
 function nextEditKey() { return `_new_${++_editKeyCounter}`; }
+
+// The order's invoices "Post all drafts" can post: live (not soft-deleted) drafts and unposted.
+const isPostableOrderInvoice = (invoice: Invoice): boolean =>
+  invoice.deleted_at == null && (invoice.status === 'draft' || invoice.status === 'unposted');
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -316,6 +326,11 @@ export default function OrderDetail() {
     activeOrderIdRef.current = id;
     if (id) fetchOrder();
   }, [id, fetchOrder]);
+
+  // Post all drafts sends the posting version read right after the order's invoices loaded
+  // (admins only), so anything that changes after the load, even a line or the customer's terms,
+  // refuses the post.
+  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, isPostableOrderInvoice);
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
@@ -1007,7 +1022,10 @@ export default function OrderDetail() {
   const handlePostAllDrafts = async () => {
     if (!profile) { toast('error', 'You must be signed in to post invoices.'); return; }
     if (!canManage) { toast('error', 'Only an admin can post invoices.'); return; }
-    const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
+    // The order's invoice load keeps soft-deleted rows (other parts of this page read them), but
+    // a deleted draft is never posted: it would only make the review refuse every run.
+    const liveInvoices = invoices.filter((i) => i.deleted_at == null);
+    const drafts = liveInvoices.filter(isPostableOrderInvoice);
     if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
     const targets = buildInvoicePostTargets(drafts);
     setPostingAll(true);
@@ -1021,12 +1039,16 @@ export default function OrderDetail() {
     // it, skip it (count as done) instead of raising. The idempotency cache is keyed
     // to the exact standalone/group RPC boundary.
     const describePostError = (err: unknown): string => {
-      const blocked = describePostInvoiceBlock(err);
-      if (blocked) return blocked;
-      const sanitized = sanitizeError(err);
-      return sanitized.includes('RETURN_CREDIT_SOURCE_CONCURRENT')
+      const described = describeBulkPostFailure(err);
+      return described.includes('RETURN_CREDIT_SOURCE_CONCURRENT')
         ? 'A related invoice or return credit is being changed elsewhere. Wait a moment and try again.'
-        : sanitized;
+        : described;
+    };
+    // Status re-check failures and post failures go to Sentry as one warning, on every exit.
+    const reportErrors = () => {
+      if (errors.length === 0) return;
+      Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
+      for (const e of errors) toast('error', e);
     };
     const toPost: typeof targets = [];
     for (const target of targets) {
@@ -1047,15 +1069,18 @@ export default function OrderDetail() {
         errors.push(`${target.label}: ${describePostError(err)}`);
       }
     }
-    // Post only what this page showed: read each remaining target's posting version, then
-    // re-read the shown rows (every loaded member of a split group). Anything changed since the
-    // page loaded posts nothing and reloads the order.
+    // Post only what this page loaded: each target carries the posting version read when the
+    // order's invoices loaded, and the shown rows (every live loaded member of a split group) and
+    // each group's members are re-read first. Anything changed since the load posts nothing and
+    // reloads the order (an expected outcome: a toast, not a Sentry error).
+    const shownRows = shownRowsForTargets(toPost, liveInvoices);
     const review = toPost.length > 0
-      ? await reviewInvoicePostTargets(toPost, shownRowsForTargets(toPost, invoices))
+      ? await reviewInvoicePostTargets(toPost, shownRows, postBaselineFor(invoices))
       : null;
     if (review && !review.ok) {
-      toast('error', failedPostReviewMessage(review));
-      for (const e of errors) toast('error', e);
+      toast('error', failedPostReviewMessage(review, 'page', shownRows));
+      if (alreadyPosted > 0) toast('info', `Already posted (${alreadyPosted}).`);
+      reportErrors();
       await fetchOrder();
       setPostingAll(false);
       return;
@@ -1068,9 +1093,10 @@ export default function OrderDetail() {
             `${profile.id}:${target.scopeId}`,
           );
         }
-        // Each post carries the version reviewed above; the database refuses with
-        // INVOICE_CHANGED_SINCE_REVIEW (plain wording via sanitizeError) if it moved since.
-        const expectedVersion = review!.versions.get(target.key)!;
+        // Each post carries the load-time version; the database refuses with
+        // INVOICE_CHANGED_SINCE_REVIEW if anything in it moved since (the post helpers refuse a
+        // missing version).
+        const expectedVersion = review?.ok ? review.versions.get(target.key) ?? '' : '';
         if (target.operation === 'post_invoice_group') {
           await postReviewedInvoiceGroup({
             p_invoice_group_id: target.invoiceGroupId!,
@@ -1095,10 +1121,7 @@ export default function OrderDetail() {
       toast('info', `Already posted (${alreadyPosted}).`);
     }
     if (posted > 0) toast('success', `Posted ${posted} invoice(s).`);
-    if (errors.length > 0) {
-      Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
-      for (const e of errors) toast('error', e);
-    }
+    reportErrors();
     if (errors.length === 0) postDraftKeysRef.current = {}; // clean run — mint fresh keys next time
     await fetchOrder();
     setPostingAll(false);

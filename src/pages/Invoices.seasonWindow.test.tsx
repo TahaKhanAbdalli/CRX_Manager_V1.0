@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { buildInMemoryQuery } from '../test-utils/inMemoryQuery';
+import { POST_RECHECK_FAILED_MESSAGE } from '../lib/invoicePostVersion';
 
 const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), mockRpc: vi.fn(), mockToast: vi.fn() }));
 
@@ -28,6 +29,7 @@ vi.mock('../contexts/AuthContext', () => ({
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
 
 import Invoices from './Invoices';
+import { Sentry } from '../lib/sentry';
 
 function invoice(overrides: Record<string, unknown>) {
   return {
@@ -38,6 +40,7 @@ function invoice(overrides: Record<string, unknown>) {
     salesman_id: null,
     order_id: null,
     deleted_at: null,
+    updated_at: '2026-10-05T10:00:00+00:00',
     total_amount_cents: 10000,
     balance_cents: 10000,
     is_quick_delivery: false,
@@ -145,9 +148,11 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(within(dialog).queryByText(/not from this season/)).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
-    // The post carries the posting version read for exactly that invoice, with a key.
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args))
-      .toEqual([{ p_invoice_ids: ['NEW-DRAFT'] }]);
+    // The post carries the posting version read for that invoice when the list LOADED (every
+    // postable row's version is read then: OLD-DRAFT, OLD-UNPOSTED, NEW-DRAFT), with a key.
+    const beforePost = mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice'));
+    expect(beforePost.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args.p_invoice_ids[0]).sort())
+      .toEqual(['NEW-DRAFT', 'OLD-DRAFT', 'OLD-UNPOSTED']);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toEqual({
       p_invoice_id: 'NEW-DRAFT',
       p_idempotency_key: expect.any(String),
@@ -179,7 +184,9 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post selected + full split groups' }));
 
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(1));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_group_post_version').map(([, args]) => args))
+    // Read once when the list loaded (the reload after the post reads again).
+    const beforeGroupPost = mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice_group'));
+    expect(beforeGroupPost.filter(([name]) => name === 'get_invoice_group_post_version').map(([, args]) => args))
       .toEqual([{ p_invoice_group_id: 'grp-1' }]);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')[0][1]).toEqual({
       p_invoice_group_id: 'grp-1',
@@ -215,12 +222,109 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
-      '1 invoice(s) changed since this list loaded — the list was reloaded; check them and post again.',
+      '1 invoice(s) changed since this list loaded (NEW-DRAFT) — nothing was posted. The list is being refreshed; check them and post again.',
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
     // The re-read, then the reload of the list itself.
     await waitFor(() => expect(listLoads()).toBeGreaterThanOrEqual(loadsBeforePost + 2));
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    // A concurrent edit is an expected outcome, not a fault: no Sentry error.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  // Review round 1 (2026-10-12): the version was read at CLICK time, so a change the list never
+  // shows (the customer's payment terms, a line edit that leaves the total alone) made between
+  // load and click was folded into the version and posted. Now the post carries the version read
+  // when the list LOADED: the database refuses it, only that invoice is named, and the retry
+  // after the reload reuses the same idempotency key.
+  it('a change the list does not show is refused by the database for that invoice only; the retry reuses its key', async () => {
+    const LOAD_VERSION = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const LATER_VERSION = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    let databaseVersion = LOAD_VERSION;
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === 'get_invoice_post_version') return rpcResult(databaseVersion);
+      if (name === 'post_invoice') {
+        if (args.p_expected_version !== databaseVersion) {
+          return rpcResult(null, { message: 'INVOICE_CHANGED_SINCE_REVIEW: invoice NEW-DRAFT changed since it was reviewed' });
+        }
+        return rpcResult(null);
+      }
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version')).toHaveLength(3));
+
+    // After the load, a rep changes the customer's terms: the header row is unchanged.
+    databaseVersion = LATER_VERSION;
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    let dialog = await screen.findByRole('dialog');
+    const readsBeforeClick = mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').length;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Completed 0/1 posting action(s). Failed: NEW-DRAFT: changed since this screen loaded, so it was not posted — check it and post again',
+    ));
+    const posts = () => mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args);
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].p_expected_version).toBe(LOAD_VERSION);
+    // The click itself read no version: the reload after the run read the new ones.
+    expect(mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice'))
+      .filter(([name]) => name === 'get_invoice_post_version')).toHaveLength(readsBeforeClick);
+
+    // The admin checks the reloaded list and posts again: same key, the reloaded version.
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').length).toBeGreaterThanOrEqual(readsBeforeClick + 3));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Post 1 Selected/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]).toEqual({ ...posts()[0], p_expected_version: LATER_VERSION });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', expect.anything()));
+  });
+
+  it('when a posting version could not be read at load, nothing is posted and the list says so', async () => {
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_invoice_post_version') return rpcResult(null, { message: 'network down' });
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', POST_RECHECK_FAILED_MESSAGE));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
+  });
+
+  it('a split-group member added after the list loaded (not on the list) stops the group post', async () => {
+    let rows = [
+      ...ROWS,
+      invoice({ invoice_number: 'NEW-SPLIT-A', status: 'draft', season: 2027, invoice_group_id: 'grp-1', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+    ];
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
+    mockRpc.mockImplementation(answerRpc);
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-SPLIT-A').length).toBeGreaterThan(0));
+    await waitFor(() => expect(mockRpc.mock.calls.some(([name]) => name === 'get_invoice_group_post_version')).toBe(true));
+
+    tickRow('NEW-SPLIT-A');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    // A field re-save adds a member to the group after the load.
+    rows = [...rows, invoice({ invoice_number: 'NEW-SPLIT-B', status: 'draft', season: 2027, invoice_group_id: 'grp-1', customer_id: 'cust-2', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' })];
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post selected + full split groups' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      '1 invoice(s) changed since this list loaded — nothing was posted. The list is being refreshed; check them and post again.',
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice_group' || name === 'post_invoice')).toBe(false);
   });
 
   // Regression (2026-10-09 final review): the toggle compared HOW MANY rows were

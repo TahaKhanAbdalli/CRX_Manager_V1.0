@@ -3,9 +3,10 @@
  *
  * Codex Luna HIGH (2026-10-12): the cockpit's bulk post sent post_invoice with no posting
  * version, so an invoice another admin changed after the cockpit loaded (say from $5,000.00 to
- * $7,000.00) posted at the new amount nobody reviewed. Now, after the fresh watchdog re-check,
- * the cockpit reads each still-clean invoice's posting version, re-reads the rows, refuses if
- * any row differs from what it showed, and sends the version with each post.
+ * $7,000.00) posted at the new amount nobody reviewed. Now the cockpit reads each stand-alone
+ * draft's posting version as soon as it loads (review round 1: reading it at click folded every
+ * change since the load into the version); after the fresh watchdog re-check it re-reads the
+ * rows, refuses if any row differs from what it showed, and sends the load-time version.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -14,7 +15,7 @@ const { mockFrom, mockRpc, mockToast, state } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
-  state: { rereadTotalCents: null as number | null },
+  state: { rereadTotalCents: null as number | null, twoRows: false },
 }));
 
 // The posting version the reader returns (a 32-character lowercase md5).
@@ -35,6 +36,8 @@ const SHOWN = {
   customer: { farm_name: 'Test Farm' },
 };
 
+const SHOWN_2 = { ...SHOWN, id: 'inv-2', invoice_number: 'FA-1002' };
+
 /** A query chain whose result depends on the table and the selected columns. */
 function query(table: string) {
   const chain: Record<string, unknown> = {};
@@ -46,12 +49,13 @@ function query(table: string) {
   }
   const result = () => {
     if (table !== 'invoices') return { data: [], error: null };
+    const rows = state.twoRows ? [SHOWN, SHOWN_2] : [SHOWN];
     // The cockpit's own "Ready to Post" load.
-    if (columns.includes('pricing_pending')) return { data: [SHOWN], error: null };
+    if (columns.includes('pricing_pending')) return { data: rows, error: null };
     // The Post review's re-read of the shown rows.
     if (columns.includes('deleted_at') && columns.includes('updated_at')) {
       const total = state.rereadTotalCents ?? SHOWN.total_amount_cents;
-      return { data: [{ ...SHOWN, total_amount_cents: total }], error: null };
+      return { data: [{ ...SHOWN, total_amount_cents: total }, ...rows.slice(1)], error: null };
     }
     return { data: [], error: null };
   };
@@ -60,9 +64,9 @@ function query(table: string) {
   return chain;
 }
 
-function rpcResult(data: unknown) {
-  const result = Promise.resolve({ data, error: null });
-  return Object.assign(result, { throwOnError: () => result });
+function rpcResult(data: unknown, error: unknown = null) {
+  const result = Promise.resolve({ data, error });
+  return Object.assign(result, { throwOnError: () => (error ? Promise.reject(error) : result) });
 }
 
 function answerRpc(name: string) {
@@ -106,6 +110,7 @@ vi.mock('../lib/db', async () => {
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 
 import OfficeCockpit from './OfficeCockpit';
+import { Sentry } from '../lib/sentry';
 
 async function clickPostAllClean() {
   render(<OfficeCockpit />);
@@ -119,11 +124,12 @@ describe('OfficeCockpit — Post all clean checks what the cockpit showed', () =
   beforeEach(() => {
     vi.clearAllMocks();
     state.rereadTotalCents = null;
+    state.twoRows = false;
     mockFrom.mockImplementation(query);
     mockRpc.mockImplementation(answerRpc);
   });
 
-  it('posts each still-clean invoice with the posting version read after the fresh watchdog check', async () => {
+  it('posts each still-clean invoice with the posting version read when the cockpit loaded', async () => {
     await clickPostAllClean();
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('post_invoice', {
@@ -132,11 +138,37 @@ describe('OfficeCockpit — Post all clean checks what the cockpit showed', () =
       p_expected_version: POST_VERSION,
     }));
     expect(mockRpc).toHaveBeenCalledWith('get_invoice_post_version', { p_invoice_ids: ['inv-1'] });
-    // The version is read after the watchdog refresh, and before the post.
+    // The version is read at load, BEFORE the click (and its watchdog refresh): the click reads
+    // no version, so nothing changed after the load can be folded into it.
     const names = rpcNames();
-    expect(names.indexOf('refresh_watchdog_flags')).toBeLessThan(names.indexOf('get_invoice_post_version'));
-    expect(names.indexOf('get_invoice_post_version')).toBeLessThan(names.indexOf('post_invoice'));
+    const postAt = names.indexOf('post_invoice');
+    expect(names.indexOf('get_invoice_post_version')).toBeLessThan(names.indexOf('refresh_watchdog_flags'));
+    expect(names.slice(names.indexOf('refresh_watchdog_flags'), postAt)).not.toContain('get_invoice_post_version');
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Posted 1 clean invoice(s)'));
+  });
+
+  // Review round 1 (LOW): a partial run kept the idempotency key of an invoice that DID post, so
+  // re-posting that invoice later (after an unpost) replayed the old receipt without posting.
+  it('a partial run clears the key of each invoice that posted; a failed one keeps its key', async () => {
+    state.twoRows = true;
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === 'post_invoice' && args.p_invoice_id === 'inv-2') return rpcResult(null, { message: 'PRICING_INCOMPLETE' });
+      return answerRpc(name);
+    });
+    const postKeys = (id: string) =>
+      mockRpc.mock.calls.filter(([name, args]) => name === 'post_invoice' && args.p_invoice_id === id).map(([, args]) => args.p_idempotency_key);
+
+    render(<OfficeCockpit />);
+    fireEvent.click(await screen.findByRole('button', { name: /Post all clean/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 2 invoice(s)' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Posted 1/2. Failed: FA-1002: needs pricing first'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Post all clean/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 2 invoice(s)' }));
+    await waitFor(() => expect(postKeys('inv-1')).toHaveLength(2));
+    await waitFor(() => expect(postKeys('inv-2')).toHaveLength(2));
+    expect(postKeys('inv-1')[1]).not.toBe(postKeys('inv-1')[0]);
+    expect(postKeys('inv-2')[1]).toBe(postKeys('inv-2')[0]);
   });
 
   it('posts nothing when an invoice changed since the cockpit loaded, reloads and says so', async () => {
@@ -153,11 +185,15 @@ describe('OfficeCockpit — Post all clean checks what the cockpit showed', () =
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
-      '1 invoice(s) changed since this list loaded — the list was reloaded; check them and post again.',
+      '1 invoice(s) changed since this cockpit loaded (FA-1001) — nothing was posted. The cockpit is being refreshed; check them and post again.',
     ));
     expect(rpcNames()).not.toContain('post_invoice');
     expect(rpcNames()).not.toContain('post_invoice_group');
     await waitFor(() => expect(cockpitLoads()).toBeGreaterThan(loadsAtClick));
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    // An expected outcome, not a fault: no Sentry error for the refusal.
+    expect(Sentry.captureException).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      tags: expect.objectContaining({ action: 'cockpit_post_all_clean' }),
+    }));
   });
 });

@@ -18,12 +18,20 @@ const POST_VERSION_PATTERN = /^[0-9a-f]{32}$/;
 
 /** The database (or the screen's own check) found the invoice changed since the screen loaded. */
 export const INVOICE_CHANGED_SINCE_REVIEW_MESSAGE = 'This invoice changed since you reviewed it — it has been reloaded; check it and post again.';
+/** The screens a bulk Post runs from, as the refusal message names them. */
+export type BulkPostScreen = 'list' | 'tray' | 'cockpit' | 'page';
 /**
  * A bulk Post (list, tray, cockpit, order page) found invoices changed since the screen loaded:
- * nothing was posted and the screen reloads (src/lib/invoiceBulkPostReview.ts).
+ * nothing was posted and the screen is being refreshed (src/lib/invoiceBulkPostReview.ts).
+ * `names`: the invoice numbers of the changed invoices the screen showed (up to 3 are named).
  */
-export const INVOICES_CHANGED_SINCE_LIST_LOADED_MESSAGE = (count: number): string =>
-  `${count} invoice(s) changed since this list loaded — the list was reloaded; check them and post again.`;
+export const invoicesChangedSinceLoadMessage = (count: number, screen: BulkPostScreen, names: string[] = []): string => {
+  const named = names.length === 0
+    ? ''
+    : ` (${names.slice(0, 3).join(', ')}${names.length > 3 ? `, +${names.length - 3} more` : ''})`;
+  return `${count} invoice(s) changed since this ${screen} loaded${named} — nothing was posted. ` +
+    `The ${screen} is being refreshed; check them and post again.`;
+};
 /** The posting version could not be read, so nothing is posted unchecked. */
 export const POST_RECHECK_FAILED_MESSAGE = 'Could not check the saved invoice before posting. Nothing was posted — please try again.';
 
@@ -61,8 +69,19 @@ export interface PostReviewedInvoiceArgs {
   p_expected_version: string;
 }
 
+/**
+ * Refuses before any RPC unless the version is a real posting version. A missing one would be
+ * dropped from the JSON body, and the database would then post with no check at all.
+ */
+function requirePostVersion(version: unknown, rpcName: string): void {
+  if (typeof version !== 'string' || !POST_VERSION_PATTERN.test(version)) {
+    throw new Error(`${rpcName} needs the reviewed posting version; nothing was posted`);
+  }
+}
+
 /** post_invoice with the reviewed version. post_invoice RETURNS void, so nothing to assert. */
 export async function postReviewedInvoice(args: PostReviewedInvoiceArgs): Promise<void> {
+  requirePostVersion(args.p_expected_version, 'post_invoice');
   await supabaseUntyped.rpc('post_invoice', { ...args }).throwOnError();
 }
 
@@ -76,6 +95,7 @@ export interface PostReviewedInvoiceGroupArgs {
 
 /** post_invoice_group with the reviewed version of every member. */
 export async function postReviewedInvoiceGroup(args: PostReviewedInvoiceGroupArgs): Promise<unknown> {
+  requirePostVersion(args.p_expected_version, 'post_invoice_group');
   const { data, error } = await supabaseUntyped.rpc('post_invoice_group', { ...args });
   if (error) throw error;
   return assertRpcResult<unknown>(data, 'post_invoice_group');

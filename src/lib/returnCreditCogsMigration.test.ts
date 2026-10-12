@@ -399,7 +399,10 @@ describe('return-credit COGS migration', () => {
     expect(batchPostStart).toBeGreaterThanOrEqual(0);
     expect(batchPrintStart).toBeGreaterThan(batchPostStart);
     const batchPostHandler = invoicesPage.slice(batchPostStart, batchPrintStart);
-    expect(batchPostHandler).toContain('failures.push(`${target.label}: ${sanitizeError(err)}`)');
+    // Bulk post failures go through describeBulkPostFailure, which ends in sanitizeError (bulk Post
+    // review round 1; its own wording is tested in invoiceBulkPostReview.test.ts).
+    expect(batchPostHandler).toContain('failures.push(`${target.label}: ${describeBulkPostFailure(err)}`)');
+    expect(readFileSync('src/lib/invoiceBulkPostReview.ts', 'utf8')).toContain('return describePostInvoiceBlock(err) ?? sanitizeError(err);');
     expect(invoiceSource).toContain('id: it.id');
     expect(invoiceSource).toContain('order_item_id: it.order_item_id');
   });

@@ -137,8 +137,11 @@ what), this is what each person can do:
 - **Posting is safer:** posting from an invoice's own page (the regular invoice page, the field-app
   invoice page and Split Billing) sends the version of the invoice the admin looked at, and the
   database refuses the post if someone changed it in the meantime. The bulk posts (Post Selected,
-  Post All, the cockpit's Post all clean and an order's Post all drafts) do the same: if any invoice
-  changed since the list loaded, nothing is posted and the list reloads so you can look again.
+  Post All, the cockpit's Post all clean and an order's Post all drafts) bind to the moment the
+  screen loaded. If an invoice changed after that, it is not posted. Usually you find out before
+  anything posts: the screen says which invoices changed, posts nothing and refreshes so you can look
+  again. If the change lands while the run is already posting, only that invoice is refused, the
+  others post, and the message names it. Either way, check it and post again.
 
 **What the screens look like for a sales rep (phase 2, built 2026-10-10 in the same change; goes live
 with it):**

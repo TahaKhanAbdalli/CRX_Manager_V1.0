@@ -7,8 +7,8 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
-import { runCriticalAction } from '../lib/criticalAction';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { ExpectedActionRefusal, runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
@@ -33,7 +33,13 @@ import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib
 import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
-import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../lib/invoiceBulkPostReview';
+import {
+  describeBulkPostFailure,
+  failedPostReviewMessage,
+  reviewInvoicePostTargets,
+  shownRowsForTargets,
+  useInvoicePostBaseline,
+} from '../lib/invoiceBulkPostReview';
 import { postReviewedInvoice, postReviewedInvoiceGroup } from '../lib/invoicePostVersion';
 import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
@@ -46,6 +52,8 @@ type InvoiceRow = Invoice & { customer_name: string; customer_readable: boolean;
 // Only these statuses get a row checkbox, so only these can be part of a selection.
 const SELECTABLE_STATUSES: readonly InvoiceStatus[] = ['draft', 'unposted', 'posted', 'voided'];
 const SEARCH_KEYS = ['invoice_number', 'customer_name', 'salesman_name'];
+// The rows Post Selected can post: their posting versions are read as soon as the list loads.
+const isPostableRow = (row: InvoiceRow): boolean => row.status === 'draft' || row.status === 'unposted';
 
 type InvoiceStatusFilter = InvoiceStatus | '' | 'ready_to_post';
 
@@ -207,6 +215,10 @@ export default function Invoices() {
     fetchInvoices();
   }, [fetchInvoices]);
 
+  // Post Selected sends the posting version read right after this list loaded (admins only), so
+  // anything that changes after the load, even a line or the customer's terms, refuses the post.
+  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, isPostableRow);
+
   const filtered = invoices.filter((inv) => {
     if (statusFilter === 'ready_to_post' && !['draft', 'unposted'].includes(inv.status)) return false;
     if (statusFilter && statusFilter !== 'ready_to_post' && inv.status !== statusFilter) return false;
@@ -302,12 +314,14 @@ export default function Invoices() {
     const shownRows = shownRowsForTargets(targets, invoices);
     await runCriticalAction({
       action: async () => {
-        // Post only what the list showed: read each target's posting version, then re-read the
-        // shown rows. Anything changed since the list loaded posts nothing and reloads the list.
-        const review = await reviewInvoicePostTargets(targets, shownRows);
+        // Post only what the list loaded: each target carries the posting version read when the
+        // list loaded, and the shown rows (and each group's members) are re-read first. Anything
+        // changed since the load posts nothing and reloads the list (an expected outcome, so not
+        // reported to Sentry).
+        const review = await reviewInvoicePostTargets(targets, shownRows, postBaselineFor(invoices));
         if (!review.ok) {
           await fetchInvoices();
-          throw new Error(failedPostReviewMessage(review));
+          throw new ExpectedActionRefusal(failedPostReviewMessage(review, 'list', shownRows));
         }
         let completedActions = 0;
         const failures: string[] = [];
@@ -320,9 +334,10 @@ export default function Invoices() {
             );
           }
           try {
-            // Each post carries the version reviewed above; the database refuses with
-            // INVOICE_CHANGED_SINCE_REVIEW (plain wording via sanitizeError) if it moved since.
-            const expectedVersion = review.versions.get(target.key)!;
+            // Each post carries the load-time version; the database refuses with
+            // INVOICE_CHANGED_SINCE_REVIEW if anything in it moved since. The review returned a
+            // version for every target, and the post helpers refuse a missing one anyway.
+            const expectedVersion = review.versions.get(target.key) ?? '';
             if (target.operation === 'post_invoice_group') {
               await postReviewedInvoiceGroup({
                 p_invoice_group_id: target.invoiceGroupId!,
@@ -341,12 +356,7 @@ export default function Invoices() {
             delete postKeysRef.current[target.key];
           } catch (err: unknown) {
             failedIds.push(...target.selectedIds);
-            const blocked = describePostInvoiceBlock(err);
-            if (blocked) {
-              failures.push(`${target.label}: ${blocked}`);
-            } else {
-              failures.push(`${target.label}: ${sanitizeError(err)}`);
-            }
+            failures.push(`${target.label}: ${describeBulkPostFailure(err)}`);
           }
         }
 

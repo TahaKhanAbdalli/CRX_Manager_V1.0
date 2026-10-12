@@ -62,11 +62,11 @@ import Badge from '../components/ui/Badge';
 import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
-import { supabase, supabaseUntyped, assertRpcResult, describePostInvoiceBlock, sanitizeError } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import { failedPostReviewMessage, reviewInvoicePostTargets } from '../lib/invoiceBulkPostReview';
+import { describeBulkPostFailure, failedPostReviewMessage, reviewInvoicePostTargets, useInvoicePostBaseline } from '../lib/invoiceBulkPostReview';
 import { postReviewedInvoice } from '../lib/invoicePostVersion';
-import { runCriticalAction } from '../lib/criticalAction';
+import { ExpectedActionRefusal, runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
@@ -102,6 +102,9 @@ interface PostableInvoiceRow {
   invoice_group_id: string | null;
   pricing_pending: boolean;
 }
+
+// "Post all clean" never posts a split group, so only stand-alone drafts need a posting version.
+const isStandalonePostable = (row: PostableInvoiceRow): boolean => row.invoice_group_id == null;
 
 interface ChemicalDraftRow {
   id: string;
@@ -915,6 +918,15 @@ export default function OfficeCockpit() {
     void fetchAll();
   }, [fetchAll]);
 
+  // Post all clean sends the posting version read right after the cockpit loaded (admins only;
+  // stand-alone drafts only, since split groups are never bulk-posted here), so anything that
+  // changes after the load, even a line or the customer's terms, refuses the post.
+  const postBaselineFor = useInvoicePostBaseline(
+    data.postableInvoices,
+    canManageInvoices(profile?.role),
+    isStandalonePostable,
+  );
+
   const totalExceptions =
     data.unbilledJobs.length +
     data.postableInvoices.length +
@@ -1025,16 +1037,18 @@ export default function OfficeCockpit() {
           );
         }
 
-        // Post only what the cockpit showed: read each still-clean invoice's posting version,
-        // then re-read those rows. Anything changed since the cockpit loaded posts nothing and
-        // reloads the cockpit.
+        // Post only what the cockpit loaded: each still-clean invoice carries the posting version
+        // read when the cockpit loaded, and its row is re-read first. Anything changed since the
+        // load posts nothing and reloads the cockpit (an expected outcome, so not reported to
+        // Sentry).
         const review = await reviewInvoicePostTargets(
           toPost.map((inv) => ({ key: inv.id, invoiceId: inv.id })),
           toPost,
+          postBaselineFor(data.postableInvoices),
         );
         if (!review.ok) {
           await fetchAll();
-          throw new Error(failedPostReviewMessage(review));
+          throw new ExpectedActionRefusal(failedPostReviewMessage(review, 'cockpit', toPost));
         }
 
         let posted = 0;
@@ -1047,21 +1061,20 @@ export default function OfficeCockpit() {
               postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
             }
             // post_invoice RETURNS void; postReviewedInvoice throws on error. It carries the
-            // reviewed version, which the database checks under its row locks
-            // (INVOICE_CHANGED_SINCE_REVIEW, plain wording via sanitizeError).
+            // load-time version, which the database checks under its row locks
+            // (INVOICE_CHANGED_SINCE_REVIEW); the helper refuses a missing version.
             await postReviewedInvoice({
               p_invoice_id: inv.id,
               p_idempotency_key: postKeysRef.current[inv.id],
-              p_expected_version: review.versions.get(inv.id)!,
+              p_expected_version: review.versions.get(inv.id) ?? '',
             });
             posted += 1;
+            // Clear this invoice's key at once (as the other bulk screens do): a partial run keeps
+            // the remaining keys, and a kept key for an invoice that DID post would make a later
+            // re-post of it replay this receipt and report success without posting.
+            delete postKeysRef.current[inv.id];
           } catch (err: unknown) {
-            const blocked = describePostInvoiceBlock(err);
-            if (blocked) {
-              failures.push(`${inv.invoice_number}: ${blocked}`);
-            } else {
-              failures.push(`${inv.invoice_number}: ${sanitizeError(err)}`);
-            }
+            failures.push(`${inv.invoice_number}: ${describeBulkPostFailure(err)}`);
           }
         }
         await fetchAll();

@@ -88,10 +88,17 @@ they call the new readers, so they ship only after the file is applied (see the 
   sends it (built 2026-10-10; see the editor entry below). All three single-invoice editors send it:
   the regular invoice page, the per-acre field-app editor and the Split Billing editor (the last two
   added in review round 5). The list pages' bulk posts (Post Selected, Post All, Post all clean, Post
-  all drafts) send it too since 2026-10-12: each reads every target's version, then re-reads the rows
-  the screen showed, posts nothing and reloads if any changed, and sends the version with each post
-  (`src/lib/invoiceBulkPostReview.ts`; changelog "Bulk Post checks what the list showed"). Closed in
-  code; it takes effect with the migration apply.
+  all drafts) send it too since 2026-10-12: each reads every target's version when the screen LOADS
+  and sends that version, so any change after the load (even a line, a share, the customer's terms or
+  a split-group member the screen never loaded) makes the database refuse that post; at click each
+  also re-reads the rows it showed and each split group's member list, and posts nothing and reloads
+  if any changed (`src/lib/invoiceBulkPostReview.ts`; changelog "Bulk Post review round 1"). Closed in
+  code; it takes effect with the migration apply. **Left open (LOW, owner: whoever next changes these
+  screens):** a change to a line, share or customer terms in the moment between a screen's rows
+  query and its version read (well under a second) is inside the version without being on screen;
+  the version reads cost one call per stand-alone draft or group on each admin load (a many-invoice
+  reader needs a migration); a retry after a lost response whose reload also failed is refused once
+  as "changed".
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;
 admins byte-identical; reads; completions; the posting race; the hard-guard sweep; one mutation per

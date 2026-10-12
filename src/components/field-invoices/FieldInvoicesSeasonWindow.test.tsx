@@ -37,6 +37,7 @@ import FieldInvoicesUnpostedPanel from './FieldInvoicesUnpostedPanel';
 import FieldInvoicesPostedPanel from './FieldInvoicesPostedPanel';
 import FieldInvoicesListPanel from './FieldInvoicesListPanel';
 import FieldInvoices from '../../pages/FieldInvoices';
+import { Sentry } from '../../lib/sentry';
 
 function fieldInvoice(overrides: Record<string, unknown>) {
   return {
@@ -49,6 +50,7 @@ function fieldInvoice(overrides: Record<string, unknown>) {
     blend_ticket_id: null,
     invoice_group_id: null,
     deleted_at: null,
+    updated_at: '2026-10-05T10:00:00+00:00',
     field_app_locations: [],
     invoice_items: [],
     total_acres: 10,
@@ -135,9 +137,11 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
       .filter(([name]) => name === 'post_invoice')
       .map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id);
     expect(posted).toEqual(['FA-NEW-DRAFT']);
-    // The post carries the posting version read for exactly that invoice, with a key.
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args))
-      .toEqual([{ p_invoice_ids: ['FA-NEW-DRAFT'] }]);
+    // The post carries the posting version read when the tray LOADED (every tray row's version
+    // is read then), with a key; Post All itself reads no version.
+    const beforePost = mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice'));
+    expect(beforePost.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args.p_invoice_ids[0]).sort())
+      .toEqual(['FA-NEW-DRAFT', 'FA-OLD-DRAFT', 'FA-OLD-UNPOSTED']);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toEqual({
       p_invoice_id: 'FA-NEW-DRAFT',
       p_idempotency_key: expect.any(String),
@@ -157,7 +161,8 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     fireEvent.click(await screen.findByRole('button', { name: 'Post 1 target(s)' }));
 
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(1));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_group_post_version').map(([, args]) => args))
+    const beforeGroupPost = mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice_group'));
+    expect(beforeGroupPost.filter(([name]) => name === 'get_invoice_group_post_version').map(([, args]) => args))
       .toEqual([{ p_invoice_group_id: 'grp-2' }]);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')[0][1]).toEqual({
       p_invoice_group_id: 'grp-2',
@@ -192,12 +197,38 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
-      '1 invoice(s) changed since this list loaded — the list was reloaded; check them and post again.',
+      '1 invoice(s) changed since this tray loaded (FA-NEW-DRAFT) — nothing was posted. The tray is being refreshed; check them and post again.',
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
     // The re-read, then the reload of the tray itself.
     await waitFor(() => expect(trayLoads()).toBeGreaterThanOrEqual(loadsBeforePost + 2));
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    // An expected outcome, not a fault: no Sentry error.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  // Review round 1: a database refusal of one target (its version moved after the load) names
+  // only that target; the other target still posts and the summary does not claim nothing posted.
+  it('Post All: a group the database refuses is named alone while the other invoice posts', async () => {
+    const groupA = fieldInvoice({ invoice_number: 'FA-GRP-A', status: 'unposted', season: 2027, invoice_group_id: 'grp-2', invoice_date: '2026-10-04', created_at: '2026-10-04T15:00:00+00:00' });
+    const groupB = fieldInvoice({ invoice_number: 'FA-GRP-B', status: 'unposted', season: 2027, invoice_group_id: 'grp-2', customer_id: 'cust-2', invoice_date: '2026-10-04', created_at: '2026-10-04T15:00:00+00:00' });
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? [groupA, groupB, ROWS[6]] : []));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'post_invoice_group') return rpcResult(null, { message: 'INVOICE_CHANGED_SINCE_REVIEW: group grp-2 changed since it was reviewed' });
+      return answerRpc(name);
+    });
+    renderInRouter(<FieldInvoicesUnpostedPanel />);
+    await waitFor(() => expect(screen.getAllByText('FA-GRP-B').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: /Post All/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 2 target(s)' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringMatching(/^Posted 1\/2 target\(s\)\. Failed: split group containing FA-GRP-[AB]: changed since this screen loaded, so it was not posted — check it and post again$/),
+    ));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args.p_invoice_id)).toEqual(['FA-NEW-DRAFT']);
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringMatching(/nothing was posted/));
   });
 
   it('Post All skips a split group with a prior-season member hidden by a filter, and counts that hidden member', async () => {

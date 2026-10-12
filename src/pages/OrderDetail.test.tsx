@@ -7,8 +7,9 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const {
   mockFrom, mockRpc, mockToast, mockNavigate,
-  mockLogActivity, mockNotifyOrderStatusChange, mockSanitizeError,
+  mockLogActivity, mockNotifyOrderStatusChange, mockSanitizeError, mockCaptureException,
 } = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
@@ -76,7 +77,38 @@ const GROUP_VERSION = 'fedcba9876543210fedcba9876543210';
 /** The columns the Post review re-reads the shown invoices with. */
 const isReviewReread = (columns: string) => columns.includes('deleted_at') && columns.includes('total_amount_cents');
 
-vi.mock('../lib/db', () => ({
+/**
+ * Like buildChain, but the result depends on the selected columns AND the eq() filters, so the
+ * order page's per-target status re-check can answer per invoice.
+ */
+function buildFilterAwareChain(
+  resultFor: (columns: string, eqs: Record<string, unknown>) => { data: unknown; error: unknown },
+): Record<string, unknown> {
+  const self: Record<string, unknown> = {};
+  let columns = '';
+  const eqs: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => self;
+  const methods = ['insert', 'update', 'upsert', 'delete', 'neq',
+    'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
+    'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+    'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
+  for (const m of methods) self[m] = method;
+  self.select = (cols?: string) => { columns = cols ?? '*'; return self; };
+  self.eq = (column: string, value: unknown) => { eqs[column] = value; return self; };
+  self.then = (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+    Promise.resolve().then(() => resultFor(columns, eqs)).then(resolve, reject);
+  return self;
+}
+
+vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockCaptureException } }));
+
+vi.mock('../lib/db', async () => {
+  // The bulk Post review names a database version refusal with the real hasRpcCode.
+  const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
+  return {
+  hasRpcCode: actual.hasRpcCode,
+  RpcErrorCodes: actual.RpcErrorCodes,
   supabase: { from: mockFrom, rpc: mockRpc },
   // The posting-version readers and the versioned post go through supabaseUntyped.
   supabaseUntyped: { from: mockFrom, rpc: mockRpc },
@@ -84,7 +116,8 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: vi.fn((d) => d),
   describePostInvoiceBlock: vi.fn(() => null),
   sanitizeError: mockSanitizeError,
-}));
+  };
+});
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
@@ -335,14 +368,16 @@ describe('OrderDetail', () => {
     };
     const splitDrafts = [
       {
-        id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+        id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1', customer_id: 'cust-1',
         status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
         due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+        deleted_at: null, updated_at: '2026-03-15T10:00:00+00:00',
       },
       {
-        id: 'inv-2', invoice_number: 'INV-2', invoice_group_id: 'group-1',
+        id: 'inv-2', invoice_number: 'INV-2', invoice_group_id: 'group-1', customer_id: 'cust-2',
         status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
         due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+        deleted_at: null, updated_at: '2026-03-15T10:00:00+00:00',
       },
     ];
     mockFrom.mockImplementation((table: string) => {
@@ -449,11 +484,107 @@ describe('OrderDetail', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
-      '1 invoice(s) changed since this list loaded — the list was reloaded; check them and post again.',
+      '1 invoice(s) changed since this page loaded (INV-1) — nothing was posted. The page is being refreshed; check them and post again.',
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
     await waitFor(() => expect(orderLoads()).toBeGreaterThan(loadsAtClick));
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+  });
+
+  // Review round 1 (MED): the order's invoice load keeps soft-deleted rows, and a draft deleted
+  // from the Chemical Sales list keeps status 'draft'. It went into the batch, the review saw it
+  // deleted and refused EVERY run, so the order's live drafts could never be posted from here.
+  it('a soft-deleted draft on the order is left out; the live draft still posts', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const live = {
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: null, customer_id: 'cust-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000, deleted_at: null,
+      updated_at: '2026-03-15T10:00:00+00:00',
+    };
+    const deleted = { ...live, id: 'inv-del', invoice_number: 'INV-DEL', deleted_at: '2026-03-16T09:00:00+00:00' };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: [live, deleted], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      const result = Promise.resolve(name === 'get_invoice_post_version'
+        ? { data: POST_VERSION, error: null }
+        : { data: null, error: null });
+      return Object.assign(result, { throwOnError: () => result });
+    });
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Posted 1 invoice(s).'));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args.p_invoice_id)).toEqual(['inv-1']);
+    // Its posting version is never even read.
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args.p_invoice_ids[0]))
+      .not.toContain('inv-del');
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('changed since'));
+  });
+
+  // Review round 1 (LOW): on a refused review the page dropped "Already posted (N)" and never
+  // sent its status re-check errors to Sentry.
+  it('a refused review still reports the already-posted count and sends status-check errors to Sentry', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const draft = (id: string) => ({
+      id, invoice_number: id.toUpperCase(), invoice_group_id: null, customer_id: 'cust-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000, deleted_at: null,
+      updated_at: '2026-03-15T10:00:00+00:00',
+    });
+    const shown = [draft('inv-1'), draft('inv-2'), draft('inv-3')];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') {
+        return buildFilterAwareChain((columns, eqs) => {
+          // The per-target status re-check: inv-2 was already posted, inv-3's check fails.
+          if (columns === 'status') {
+            if (eqs.id === 'inv-2') return { data: [{ status: 'posted' }], error: null };
+            if (eqs.id === 'inv-3') return { data: null, error: { message: 'status check failed' } };
+            return { data: [{ status: 'draft' }], error: null };
+          }
+          // The review's re-read: inv-1 changed since the page loaded.
+          if (isReviewReread(columns)) return { data: [{ ...shown[0], total_amount_cents: 70000 }], error: null };
+          return { data: shown, error: null };
+        });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      const result = Promise.resolve(name === 'get_invoice_post_version'
+        ? { data: POST_VERSION, error: null }
+        : { data: null, error: null });
+      return Object.assign(result, { throwOnError: () => result });
+    });
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      '1 invoice(s) changed since this page loaded (INV-1) — nothing was posted. The page is being refreshed; check them and post again.',
+    ));
+    expect(mockToast).toHaveBeenCalledWith('info', 'Already posted (1).');
+    expect(mockToast).toHaveBeenCalledWith('error', 'INV-3: status check failed');
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'post_all_drafts partial failure' }),
+      expect.objectContaining({ level: 'warning', extra: { errors: ['INV-3: status check failed'] } }),
+    );
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
   });
 
   it('sanitizes an internal contention token when posting draft invoices', async () => {
@@ -464,9 +595,10 @@ describe('OrderDetail', () => {
       created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
     };
     const splitDrafts = [{
-      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1', customer_id: 'cust-1',
       status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
       due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+      deleted_at: null, updated_at: '2026-03-15T10:00:00+00:00',
     }];
     mockFrom.mockImplementation((table: string) => {
       if (table === 'orders') return buildChain({ data: orderData, error: null });

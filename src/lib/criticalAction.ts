@@ -2,6 +2,18 @@ import { Sentry } from './sentry';
 import { sanitizeError } from './errorSanitizer';
 import { isBelowCostApprovalHandledError } from './belowCostApproval';
 
+/**
+ * An expected, plain-English refusal (for example a bulk Post refused because an invoice changed
+ * since the screen loaded): shown as an error toast exactly as written, and NOT reported to
+ * Sentry, because it is a normal business outcome rather than a fault.
+ */
+export class ExpectedActionRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExpectedActionRefusal';
+  }
+}
+
 type ToastFn = (type: 'success' | 'error' | 'info' | 'warning', message: string) => void;
 
 export interface CriticalActionOptions<T> {
@@ -47,6 +59,10 @@ export async function runCriticalAction<T = void>(
     return result;
   } catch (err: unknown) {
     if (isBelowCostApprovalHandledError(err)) return undefined;
+    if (err instanceof ExpectedActionRefusal) {
+      toast('error', err.message);
+      return undefined;
+    }
     toast('error', sanitizeError(err));
     Sentry.captureException(err, {
       tags: { source: 'critical_action', action: sentryTag ?? 'unknown' },

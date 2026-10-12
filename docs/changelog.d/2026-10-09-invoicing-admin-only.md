@@ -375,9 +375,9 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   and post again." If the check itself cannot run, nothing is posted and the screen says so. When
   everything matches, each post carries the version just read, so the database still refuses
   (`INVOICE_CHANGED_SINCE_REVIEW`, shown in plain words in the failures list) a change that lands
-  after the check. A split group's check covers every member the screen holds, including ones a
-  filter hides. The order is the point: a change between the two reads either shows in the re-read
-  rows or changes the version, so a post that succeeds is exactly what the screen showed.
+  after the check. (Superseded the same day by review round 1 below: reading the version at click
+  folded changes the list does not show, such as a customer's terms or a split-group member it never
+  loaded, into the version. The versions are now read when the screen loads.)
 - **Kept as before:** each target's idempotency key (reused on a retry), partial-success reporting,
   the Field Invoices this-season skip, the order page's already-posted check (it runs first, so a
   post that already went through is still counted as done), the cockpit's fresh watchdog re-check
@@ -390,6 +390,55 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   change, a missing or deleted row, a failed version read (no row read), a failed row read, the
   six-at-a-time limit and the 100-row chunks. This needs the migration above applied before it can
   run against the real database; no signed-in browser run was possible here.
+
+### 2026-10-12 - Bulk Post review round 1: the version is read when the screen loads
+
+- **What the reviewers found (and was true):** the first version read each target's posting version
+  when Post was CLICKED, then compared only the invoice rows (status, total, customer, date, split
+  group, last-changed time). The version also covers the invoice's lines, line shares, customer
+  shares, the customer's payment terms and every member of a split group, and those can change
+  without touching the invoice row. So a change made between the load and the click (a rep moving a
+  customer from Net 30 to Net 10, a line edit that keeps the total, or a split-group member the list
+  never loaded or that was added later) was folded into the version and posted. The wording "a post
+  that succeeds is exactly what the screen showed" was wrong.
+- **Now:** each of the four screens reads its posting versions as soon as its rows load (admins
+  only; `useInvoicePostBaseline` in `src/lib/invoiceBulkPostReview.ts`), and the post sends THAT
+  version. Anything in the version that changes after the load makes the database refuse that post
+  (`INVOICE_CHANGED_SINCE_REVIEW`). At click the screen still re-reads the rows it showed, and now
+  also each targeted split group's member list; any change refuses the whole batch early, reloads
+  the screen and names up to three of the changed invoices ("2 invoice(s) changed since this page
+  loaded (INV-1, INV-2) — nothing was posted. The page is being refreshed; check them and post
+  again."; it says list, tray, cockpit or page). A target with no load-time version is never posted
+  unversioned: the review refuses, and `postReviewedInvoice` / `postReviewedInvoiceGroup` now
+  refuse a missing or malformed version before calling the database at all.
+- **Other fixes in this round:** the order page's "Post all drafts" left out soft-deleted drafts (the
+  order's invoice load keeps them, and one deleted draft made every run refuse); a database refusal
+  of one target in a bulk run now says that invoice "changed since this screen loaded, so it was not
+  posted" instead of "nothing was posted"; these refusals are an expected outcome, so they no longer
+  go to Sentry as errors (`ExpectedActionRefusal` in `src/lib/criticalAction.ts`); the order page
+  still reports "Already posted (N)" and sends its status-check errors to Sentry when the review
+  refuses; the cockpit clears each invoice's idempotency key as soon as that invoice posts (a kept
+  key could later replay the old receipt and report a post that never happened); a shown row loaded
+  without its last-changed time is refused instead of compared less.
+- **What is left (honest limits):** the load-time read runs right AFTER the rows query, so a change
+  to a line, share or the customer's terms in that moment (well under a second) is in the version
+  without being on screen; the invoice row itself is still compared at click. Reading versions at
+  load costs one call per stand-alone draft or split group (six at a time) each time an admin loads
+  one of these screens; a single "versions for many invoices" reader would need a new migration
+  (deferred). A retry after a lost response whose reload also failed is refused as "changed" once
+  (the admin's own post); the next reload clears it. Split-group members the screen never loaded
+  (past the row cap, or another status) are posted as the group post always did, bound to their
+  load-time state. The cockpit's Post all clean posts every clean draft it loaded, including the ones
+  behind its "+N more" line, not only the six it lists; each is checked the same way.
+- **Proof:** `src/lib/invoiceBulkPostReview.test.ts` (24 tests: load-time reads, members after
+  versions, six at a time, the hook serving only its own load, no version read at click, every kind
+  of header change, required last-changed time, group member added or removed, failed reads, the
+  messages, the per-target wording, the post helpers refusing a missing version). Screen tests: a
+  change the list does not show is refused by the database for that invoice only and the retry
+  reuses its key; a version that could not be read at load posts nothing; a new split-group member
+  stops the group post; a database refusal of a group in the Field Invoices tray names only that
+  group while the other invoice posts; the soft-deleted order draft; the order page's refusal path;
+  the cockpit key. The order and cockpit fixes were each shown to fail with the fix removed.
 
 ### Not done here (owners)
 

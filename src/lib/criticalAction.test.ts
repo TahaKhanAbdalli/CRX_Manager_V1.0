@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { runCriticalAction } from './criticalAction';
+import { ExpectedActionRefusal, runCriticalAction } from './criticalAction';
 
 // Mock Sentry
 vi.mock('./sentry', () => ({
@@ -205,5 +205,19 @@ describe('runCriticalAction', () => {
     });
 
     expect(toast).toHaveBeenCalledWith('error', 'A required field is missing');
+  });
+
+  it('shows an ExpectedActionRefusal as written and does not report it to Sentry', async () => {
+    const result = await runCriticalAction({
+      action: async () => { throw new ExpectedActionRefusal('2 invoice(s) changed since this list loaded'); },
+      toast,
+      setLoading,
+      sentryTag: 'bulk_post',
+    });
+
+    expect(result).toBeUndefined();
+    expect(toast).toHaveBeenCalledWith('error', '2 invoice(s) changed since this list loaded');
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(setLoading).toHaveBeenLastCalledWith(false);
   });
 });

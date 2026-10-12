@@ -7,12 +7,18 @@ import ConfirmModal from '../ui/ConfirmModal';
 import MobileCardList from '../ui/MobileCardList';
 import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
 import { useToast } from '../ui/Toast';
-import { supabase, sanitizeError, describePostInvoiceBlock } from '../../lib/db';
-import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../../lib/invoiceBulkPostReview';
+import { supabase } from '../../lib/db';
+import {
+  describeBulkPostFailure,
+  failedPostReviewMessage,
+  reviewInvoicePostTargets,
+  shownRowsForTargets,
+  useInvoicePostBaseline,
+} from '../../lib/invoiceBulkPostReview';
 import { postReviewedInvoice, postReviewedInvoiceGroup } from '../../lib/invoicePostVersion';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
-import { runCriticalAction } from '../../lib/criticalAction';
+import { ExpectedActionRefusal, runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { logActivity } from '../../lib/activityLogger';
 import {
@@ -54,6 +60,10 @@ type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
   // Kept from the select('*') so Post All can check the row did not change since the tray loaded.
   updated_at: string | null;
 };
+
+// Every tray row is draft or unposted, so every one may be posted by Post All: each one's (or its
+// split group's) posting version is read as soon as the tray loads.
+const isPostableTrayRow = (): boolean => true;
 
 // PostgREST select: the invoice + customer + linked job number + engine-built
 // per-location rows (locations/crops/acres) + line items (chemicals). One round
@@ -194,6 +204,10 @@ export default function FieldInvoicesUnpostedPanel() {
   useEffect(() => {
     fetchInvoices();
   }, [fetchInvoices]);
+
+  // Post All sends the posting version read right after the tray loaded (admins only), so
+  // anything that changes after the load, even a line or the customer's terms, refuses the post.
+  const postBaselineFor = useInvoicePostBaseline(rows, canManage, isPostableTrayRow);
 
   useEffect(() => {
     if (!manualInvoiceMenuOpen) return;
@@ -448,12 +462,14 @@ export default function FieldInvoicesUnpostedPanel() {
     const shownRows = shownRowsForTargets(reviewTargets, rows);
     await runCriticalAction({
       action: async () => {
-        // Post only what the tray showed: read each target's posting version, then re-read the
-        // shown rows. Anything changed since the tray loaded posts nothing and reloads the tray.
-        const review = await reviewInvoicePostTargets(reviewTargets, shownRows);
+        // Post only what the tray loaded: each target carries the posting version read when the
+        // tray loaded, and the shown rows (and each group's members) are re-read first. Anything
+        // changed since the load posts nothing and reloads the tray (an expected outcome, so not
+        // reported to Sentry).
+        const review = await reviewInvoicePostTargets(reviewTargets, shownRows, postBaselineFor(rows));
         if (!review.ok) {
           await fetchInvoices();
-          throw new Error(failedPostReviewMessage(review));
+          throw new ExpectedActionRefusal(failedPostReviewMessage(review, 'tray', shownRows));
         }
         let posted = 0;
         const failures: string[] = [];
@@ -463,23 +479,18 @@ export default function FieldInvoicesUnpostedPanel() {
             postKeysRef.current[keyId] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${group.group_id}`);
           }
           try {
-            // The reviewed version; the database refuses with INVOICE_CHANGED_SINCE_REVIEW
-            // (plain wording via sanitizeError) if the group moved since.
+            // The load-time version; the database refuses with INVOICE_CHANGED_SINCE_REVIEW if
+            // the group moved since (the post helper refuses a missing version).
             await postReviewedInvoiceGroup({
               p_invoice_group_id: group.group_id,
               p_performed_by: profile.id,
               p_idempotency_key: postKeysRef.current[keyId],
-              p_expected_version: review.versions.get(keyId)!,
+              p_expected_version: review.versions.get(keyId) ?? '',
             });
             posted += 1;
             delete postKeysRef.current[keyId];
           } catch (err: unknown) {
-            const blocked = describePostInvoiceBlock(err);
-            if (blocked) {
-              failures.push(`${group.label}: ${blocked}`);
-            } else {
-              failures.push(`${group.label}: ${sanitizeError(err)}`);
-            }
+            failures.push(`${group.label}: ${describeBulkPostFailure(err)}`);
           }
         }
         for (const target of individualTargets) {
@@ -492,20 +503,15 @@ export default function FieldInvoicesUnpostedPanel() {
             await postReviewedInvoice({
               p_invoice_id: target.id,
               p_idempotency_key: postKeysRef.current[target.id],
-              p_expected_version: review.versions.get(target.id)!,
+              p_expected_version: review.versions.get(target.id) ?? '',
             });
             posted += 1;
             delete postKeysRef.current[target.id];
           } catch (err: unknown) {
             // Needs-pricing and needs-delivery are the common, expected reasons a
             // field invoice can't post yet — show plain English instead of the raw
-            // code. (Shared wording via describePostInvoiceBlock.)
-            const blocked = describePostInvoiceBlock(err);
-            if (blocked) {
-              failures.push(`${target.invoice_number}: ${blocked}`);
-            } else {
-              failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
-            }
+            // code. (Shared wording via describePostInvoiceBlock, inside describeBulkPostFailure.)
+            failures.push(`${target.invoice_number}: ${describeBulkPostFailure(err)}`);
           }
         }
         await fetchInvoices();
