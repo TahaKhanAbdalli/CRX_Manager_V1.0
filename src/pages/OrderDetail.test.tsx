@@ -557,8 +557,8 @@ describe('OrderDetail', () => {
             if (eqs.id === 'inv-3') return { data: null, error: { message: 'status check failed' } };
             return { data: [{ status: 'draft' }], error: null };
           }
-          // The review's re-read: inv-1 changed since the page loaded.
-          if (isReviewReread(columns)) return { data: [{ ...shown[0], total_amount_cents: 70000 }], error: null };
+          // The review's re-read: inv-1 changed since the page loaded; the other two did not.
+          if (isReviewReread(columns)) return { data: [{ ...shown[0], total_amount_cents: 70000 }, shown[1], shown[2]], error: null };
           return { data: shown, error: null };
         });
       }
@@ -585,6 +585,92 @@ describe('OrderDetail', () => {
       expect.objectContaining({ level: 'warning', extra: { errors: ['INV-3: status check failed'] } }),
     );
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
+  });
+
+  // Codex Luna round 1 (LOW): a draft the database refuses because it changed since the page
+  // loaded (INVOICE_CHANGED_SINCE_REVIEW) is an expected outcome, as on the other bulk screens:
+  // shown to the admin, never sent to Sentry. Any other post failure still is.
+  it('a database "changed since review" refusal is shown but not sent to Sentry; other failures still are', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const draft = (id: string) => ({
+      id, invoice_number: id.toUpperCase(), invoice_group_id: null, customer_id: 'cust-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000, deleted_at: null,
+      updated_at: '2026-03-15T10:00:00+00:00',
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: [draft('inv-1'), draft('inv-2')], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      let error: unknown = null;
+      if (name === 'post_invoice' && args.p_invoice_id === 'inv-1') {
+        error = { message: 'INVOICE_CHANGED_SINCE_REVIEW: invoice inv-1 changed since it was reviewed' };
+      }
+      if (name === 'post_invoice' && args.p_invoice_id === 'inv-2') error = { message: 'post failed' };
+      const result = Promise.resolve(name === 'get_invoice_post_version'
+        ? { data: POST_VERSION, error: null }
+        : { data: null, error });
+      return Object.assign(result, { throwOnError: () => (error ? Promise.reject(error) : result) });
+    });
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'INV-1: changed since this screen loaded, so it was not posted — check it and post again',
+    ));
+    expect(mockToast).toHaveBeenCalledWith('error', 'INV-2: post failed');
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'post_all_drafts partial failure' }),
+      expect.objectContaining({ level: 'warning', extra: { errors: ['INV-2: post failed'] } }),
+    );
+  });
+
+  it('a database "changed since review" refusal alone sends nothing to Sentry', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const draft = {
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: null, customer_id: 'cust-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000, deleted_at: null,
+      updated_at: '2026-03-15T10:00:00+00:00',
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: [draft], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    const refusal = { message: 'INVOICE_CHANGED_SINCE_REVIEW: invoice inv-1 changed since it was reviewed' };
+    mockRpc.mockImplementation((name: string) => {
+      const error = name === 'post_invoice' ? refusal : null;
+      const result = Promise.resolve(name === 'get_invoice_post_version'
+        ? { data: POST_VERSION, error: null }
+        : { data: null, error });
+      return Object.assign(result, { throwOnError: () => (error ? Promise.reject(error) : result) });
+    });
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'INV-1: changed since this screen loaded, so it was not posted — check it and post again',
+    ));
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
   });
 
   it('sanitizes an internal contention token when posting draft invoices', async () => {

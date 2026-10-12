@@ -198,25 +198,24 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
   });
 
   // Codex Luna HIGH (2026-10-12): Post Selected posted whatever the invoice held at click time.
-  // Another admin changes NEW-DRAFT from $100.00 to $70.00 after this list loaded; the list
-  // re-reads the rows after reading the posting versions, sees the change, posts nothing and
-  // reloads.
+  // Another admin changes NEW-DRAFT from $100.00 to $70.00 after this list loaded; at click the
+  // list re-reads the rows it showed, sees the change, posts nothing and reloads.
   it('an invoice changed since the list loaded is not posted; the list reloads and says so', async () => {
     let rows = ROWS;
     mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
-    mockRpc.mockImplementation((name: string) => {
-      if (name === 'get_invoice_post_version') {
-        rows = ROWS.map((row) => (row.id === 'NEW-DRAFT' ? { ...row, total_amount_cents: 7000, balance_cents: 7000 } : row));
-      }
-      return answerRpc(name);
-    });
+    mockRpc.mockImplementation(answerRpc);
     render(<MemoryRouter><Invoices /></MemoryRouter>);
     await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version')).toHaveLength(3));
     const listLoads = () => mockFrom.mock.calls.filter(([table]) => table === 'invoices').length;
 
     tickRow('NEW-DRAFT');
     fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
     const dialog = await screen.findByRole('dialog');
+    // The change lands after the list loaded and bound its versions.
+    rows = ROWS.map((row) => (row.id === 'NEW-DRAFT'
+      ? { ...row, total_amount_cents: 7000, balance_cents: 7000, updated_at: '2026-10-05T11:00:00+00:00' }
+      : row));
     const loadsBeforePost = listLoads();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
 
@@ -229,6 +228,55 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     await waitFor(() => expect(listLoads()).toBeGreaterThanOrEqual(loadsBeforePost + 2));
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
     // A concurrent edit is an expected outcome, not a fault: no Sentry error.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  // Codex Luna round 1 HIGH: the versions were read right AFTER the rows loaded, so a change
+  // landing in between was inside the version AND in the click-time comparison's baseline, and
+  // posted. Now the list re-reads its rows after reading the versions; here NEW-DRAFT is being
+  // edited the whole time (each version read lands another save), so no load can bind it. The
+  // list reloads once by itself, then Post posts nothing, says the list changed and reloads.
+  it('when the rows change while the list binds its versions, the list reloads once and Post posts nothing', async () => {
+    let rows = ROWS;
+    let saves = 0;
+    const listQueries: string[] = [];
+    mockFrom.mockImplementation((table: string) => {
+      const query = buildInMemoryQuery(table === 'invoices' ? rows : []);
+      const select = query.select as (columns?: string, options?: { count?: string; head?: boolean }) => unknown;
+      query.select = vi.fn((columns?: string, options?: { count?: string; head?: boolean }) => {
+        if (table === 'invoices' && columns?.startsWith('*')) listQueries.push(columns);
+        return select(columns, options);
+      });
+      return query;
+    });
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === 'get_invoice_post_version' && (args.p_invoice_ids as string[])[0] === 'NEW-DRAFT') {
+        saves += 1;
+        rows = ROWS.map((row) => (row.id === 'NEW-DRAFT'
+          ? { ...row, updated_at: `2026-10-05T11:${String(saves).padStart(2, '0')}:00+00:00` }
+          : row));
+      }
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    // The first load could not bind NEW-DRAFT: the list reloaded once by itself, and only once.
+    await waitFor(() => expect(listQueries).toHaveLength(2));
+    await waitFor(() => expect(saves).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(listQueries).toHaveLength(2);
+
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      '1 invoice(s) changed since this list loaded (NEW-DRAFT) — nothing was posted. The list is being refreshed; check them and post again.',
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
+    await waitFor(() => expect(listQueries.length).toBeGreaterThanOrEqual(3));
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 

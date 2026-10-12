@@ -103,8 +103,10 @@ interface PostableInvoiceRow {
   pricing_pending: boolean;
 }
 
-// "Post all clean" never posts a split group, so only stand-alone drafts need a posting version.
-const isStandalonePostable = (row: PostableInvoiceRow): boolean => row.invoice_group_id == null;
+// "Post all clean" never posts a split group or anything already posted, so only stand-alone
+// draft / unposted invoices get a posting version read when the cockpit loads.
+const selectStandalonePostable = (rows: PostableInvoiceRow[]): PostableInvoiceRow[] =>
+  rows.filter((row) => row.invoice_group_id == null && (row.status === 'draft' || row.status === 'unposted'));
 
 interface ChemicalDraftRow {
   id: string;
@@ -918,13 +920,15 @@ export default function OfficeCockpit() {
     void fetchAll();
   }, [fetchAll]);
 
-  // Post all clean sends the posting version read right after the cockpit loaded (admins only;
+  // Post all clean sends the posting version bound to the rows the cockpit loaded (admins only;
   // stand-alone drafts only, since split groups are never bulk-posted here), so anything that
-  // changes after the load, even a line or the customer's terms, refuses the post.
+  // changes after that, even a line or the customer's terms, refuses the post. If the rows changed
+  // while the versions were being read, the cockpit reloads once by itself.
   const postBaselineFor = useInvoicePostBaseline(
     data.postableInvoices,
     canManageInvoices(profile?.role),
-    isStandalonePostable,
+    selectStandalonePostable,
+    fetchAll,
   );
 
   const totalExceptions =

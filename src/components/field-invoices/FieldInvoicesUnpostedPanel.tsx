@@ -61,9 +61,59 @@ type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
   updated_at: string | null;
 };
 
-// Every tray row is draft or unposted, so every one may be posted by Post All: each one's (or its
-// split group's) posting version is read as soon as the tray loads.
-const isPostableTrayRow = (): boolean => true;
+// --- POST ALL targets (2026-10-09). The list shows unposted invoices from EVERY season,
+// but the server does not check the season when posting, so Post All posts only THIS
+// season's work (as the Posted tab's Unpost All does). An invoice from another season
+// (or with no season) is left out and posted from its own invoice page. A split group
+// is a target only when EVERY loaded member is this season: post_invoice_group posts
+// all members, including ones hidden by the current filters, so the check covers the
+// whole loaded group (`rows`), not just the displayed members (`visible`).
+function buildPostAllPlan(rows: UnpostedFieldInvoiceRow[], visible: UnpostedFieldInvoiceRow[]) {
+  const membersByGroup = new Map<string, UnpostedFieldInvoiceRow[]>();
+  for (const row of rows) {
+    if (!row.invoice_group_id) continue;
+    const members = membersByGroup.get(row.invoice_group_id) ?? [];
+    members.push(row);
+    membersByGroup.set(row.invoice_group_id, members);
+  }
+  const individualTargets: { id: string; invoice_number: string }[] = [];
+  const groupTargets = new Map<string, { group_id: string; label: string }>();
+  const skippedGroupIds = new Set<string>();
+  const skippedRows = new Map<string, UnpostedFieldInvoiceRow>();
+  for (const row of visible) {
+    const groupId = row.invoice_group_id;
+    if (!groupId) {
+      if (isCurrentSeason(row.season)) individualTargets.push({ id: row.id, invoice_number: row.invoice_number });
+      else skippedRows.set(row.id, row);
+      continue;
+    }
+    if (groupTargets.has(groupId) || skippedGroupIds.has(groupId)) continue;
+    const members = membersByGroup.get(groupId) ?? [row];
+    const otherSeasonMembers = members.filter((member) => !isCurrentSeason(member.season));
+    if (otherSeasonMembers.length === 0) {
+      groupTargets.set(groupId, { group_id: groupId, label: `split group containing ${row.invoice_number}` });
+    } else {
+      skippedGroupIds.add(groupId);
+      for (const member of otherSeasonMembers) skippedRows.set(member.id, member);
+    }
+  }
+  return {
+    individualTargets,
+    groupTargets: [...groupTargets.values()],
+    skippedRows: [...skippedRows.values()],
+    skippedGroupCount: skippedGroupIds.size,
+  };
+}
+
+// Only the rows Post All could post with no filter set (this season's stand-alone invoices and
+// every loaded row of a this-season split group) get a posting version read when the tray loads;
+// prior-season invoices and the split groups Post All skips get none. A filter only narrows this.
+const selectPostAllRows = (rows: UnpostedFieldInvoiceRow[]): UnpostedFieldInvoiceRow[] => {
+  const plan = buildPostAllPlan(rows, rows);
+  const invoiceIds = new Set(plan.individualTargets.map((target) => target.id));
+  const groupIds = new Set(plan.groupTargets.map((target) => target.group_id));
+  return rows.filter((row) => (row.invoice_group_id ? groupIds.has(row.invoice_group_id) : invoiceIds.has(row.id)));
+};
 
 // PostgREST select: the invoice + customer + linked job number + engine-built
 // per-location rows (locations/crops/acres) + line items (chemicals). One round
@@ -205,9 +255,10 @@ export default function FieldInvoicesUnpostedPanel() {
     fetchInvoices();
   }, [fetchInvoices]);
 
-  // Post All sends the posting version read right after the tray loaded (admins only), so
-  // anything that changes after the load, even a line or the customer's terms, refuses the post.
-  const postBaselineFor = useInvoicePostBaseline(rows, canManage, isPostableTrayRow);
+  // Post All sends the posting version bound to the rows this tray shows (admins only), so
+  // anything that changes after that, even a line or the customer's terms, refuses the post. If
+  // the rows changed while the versions were being read, the tray reloads once by itself.
+  const postBaselineFor = useInvoicePostBaseline(rows, canManage, selectPostAllRows, fetchInvoices);
 
   useEffect(() => {
     if (!manualInvoiceMenuOpen) return;
@@ -394,49 +445,8 @@ export default function FieldInvoicesUnpostedPanel() {
     });
   };
 
-  // --- POST ALL targets (2026-10-09). The list shows unposted invoices from EVERY season,
-  // but the server does not check the season when posting, so Post All posts only THIS
-  // season's work (as the Posted tab's Unpost All does). An invoice from another season
-  // (or with no season) is left out and posted from its own invoice page. A split group
-  // is a target only when EVERY loaded member is this season: post_invoice_group posts
-  // all members, including ones hidden by the current filters, so the check covers the
-  // whole loaded group (`rows`), not just the displayed members.
-  const postAllPlan = useMemo(() => {
-    const membersByGroup = new Map<string, UnpostedFieldInvoiceRow[]>();
-    for (const row of rows) {
-      if (!row.invoice_group_id) continue;
-      const members = membersByGroup.get(row.invoice_group_id) ?? [];
-      members.push(row);
-      membersByGroup.set(row.invoice_group_id, members);
-    }
-    const individualTargets: { id: string; invoice_number: string }[] = [];
-    const groupTargets = new Map<string, { group_id: string; label: string }>();
-    const skippedGroupIds = new Set<string>();
-    const skippedRows = new Map<string, UnpostedFieldInvoiceRow>();
-    for (const row of visible) {
-      const groupId = row.invoice_group_id;
-      if (!groupId) {
-        if (isCurrentSeason(row.season)) individualTargets.push({ id: row.id, invoice_number: row.invoice_number });
-        else skippedRows.set(row.id, row);
-        continue;
-      }
-      if (groupTargets.has(groupId) || skippedGroupIds.has(groupId)) continue;
-      const members = membersByGroup.get(groupId) ?? [row];
-      const otherSeasonMembers = members.filter((member) => !isCurrentSeason(member.season));
-      if (otherSeasonMembers.length === 0) {
-        groupTargets.set(groupId, { group_id: groupId, label: `split group containing ${row.invoice_number}` });
-      } else {
-        skippedGroupIds.add(groupId);
-        for (const member of otherSeasonMembers) skippedRows.set(member.id, member);
-      }
-    }
-    return {
-      individualTargets,
-      groupTargets: [...groupTargets.values()],
-      skippedRows: [...skippedRows.values()],
-      skippedGroupCount: skippedGroupIds.size,
-    };
-  }, [rows, visible]);
+  // Post All's targets for what is on screen (see buildPostAllPlan above).
+  const postAllPlan = useMemo(() => buildPostAllPlan(rows, visible), [rows, visible]);
   const postIndividualCount = postAllPlan.individualTargets.length;
   const postGroupCount = postAllPlan.groupTargets.length;
   const postTargetCount = postIndividualCount + postGroupCount;

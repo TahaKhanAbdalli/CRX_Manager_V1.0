@@ -6,21 +6,29 @@
  * WHEN the posting version is read (review round 1, 2026-10-12): as soon as the screen's rows
  * load, not when Post is clicked. The version is an md5 of everything that would post: the
  * invoice row, its lines, line shares and customer shares, the customer's payment terms, and for
- * a split group every non-deleted member. Read at load, it binds the post to the state the screen
- * loaded, including the parts a list never shows (a customer's terms, a line edit that leaves the
- * total alone, a group member past the row cap or added later): the database refuses the post
- * with INVOICE_CHANGED_SINCE_REVIEW if any of it changed after that read. Reading it at click
- * time instead would fold every change made between load and click into the version.
+ * a split group every non-deleted member. The database refuses the post with
+ * INVOICE_CHANGED_SINCE_REVIEW if any of it changed after that read. Reading it at click time
+ * instead would fold every change made between load and click into the version.
  *
- * At click, reviewInvoicePostTargets then refuses the whole batch early (nothing posted, screen
- * reloads) when a row the screen showed changed (header columns and updated_at) or a split
- * group's membership changed since the load-time read. Every load-time version must exist: a
- * target whose version could not be read is never posted unversioned.
+ * HOW the load binds what the screen shows (Luna round 1 HIGH): the shown rows R1 are already on
+ * screen; then each targeted split group's member list M1 is read, THEN the versions V, THEN the
+ * shown rows (R2) and member lists (M2) again. If R2 differs from R1 or M2 from M1, the baseline
+ * is thrown away (no version is kept, Post refuses as "changed") and the screen reloads once,
+ * which repeats this. Only targets the screen can actually post are bound (the caller picks
+ * them), at most six version reads at a time.
  *
- * What is left (documented in docs/manual/KNOWN_ISSUES.md): the load-time read happens right
- * AFTER the rows query, so a change to a line, share or the customer's terms that lands in that
- * moment (well under a second) is in the version without being on the screen; the invoice row
- * itself is still compared, because the click-time re-read checks it against the shown row.
+ * At click, reviewInvoicePostTargets refuses the whole batch early (nothing posted, screen
+ * reloads) when the baseline was thrown away, a row the screen showed changed (header columns
+ * and updated_at), or a split group's membership changed since M1. Every target needs a version
+ * from a valid baseline: a target without one is never posted unversioned.
+ *
+ * What is left (documented in docs/manual/KNOWN_ISSUES.md): data the list does not display (lines,
+ * shares, the customer's terms) is bound from the moment of the version read, so a change to it
+ * between the rows query and that read is inside the version without being on screen unless it
+ * also touched the invoice row (updated_at); and the member list is bound from M1, so a member
+ * added to a split group between the rows query and M1 is inside M1, M2 and the version unless
+ * the add also changed a shown member row (M1 is not compared with the loaded rows, because a
+ * group may have members a screen never loads: past its row cap, or in another status).
  */
 import { useCallback, useEffect, useRef } from 'react';
 import {
@@ -68,8 +76,14 @@ export interface InvoicePostBaseline {
   invoiceVersions: Map<string, string>;
   /** Split group id -> the group's posting version (every non-deleted member). */
   groupVersions: Map<string, string>;
-  /** Split group id -> the sorted ids of its non-deleted members, read after the version. */
+  /** Split group id -> the sorted ids of its non-deleted members (M1, read before the versions). */
   groupMembers: Map<string, string[]>;
+  /**
+   * Invoices that changed while the baseline was being read (a shown row whose re-read R2
+   * differs, or a member that joined or left between M1 and M2). Non-empty means the baseline is
+   * NOT valid: it holds no versions, Post refuses as "changed" and the screen reloads.
+   */
+  changedIds: string[];
 }
 
 export type InvoicePostReview =
@@ -135,49 +149,23 @@ async function readGroupMembers(groupIds: string[]): Promise<Map<string, string[
   return members;
 }
 
-/**
- * Reads the posting version of every postable row's target (its own, or its split group's), and
- * then each group's member ids. Never rejects: a version that could not be read is absent, and
- * the review refuses that target.
- */
-export async function readInvoicePostBaseline(postableRows: InvoicePostShownRow[]): Promise<InvoicePostBaseline> {
-  const invoiceIds = [...new Set(postableRows.filter((row) => !row.invoice_group_id).map((row) => row.id))];
-  const groupIds = [...new Set(postableRows.map((row) => row.invoice_group_id).filter((id): id is string => !!id))];
-  const [invoiceVersions, groupVersions] = await Promise.all([
-    readEach(invoiceIds, fetchInvoicePostVersion),
-    readEach(groupIds, fetchInvoiceGroupPostVersion),
-  ]);
-  // Members AFTER the versions: a member added in between is in this list but not in the
-  // version, so the database refuses that post; never the other way round.
-  const groupMembers = groupIds.length > 0 ? await readGroupMembers(groupIds) : new Map<string, string[]>();
-  if (!groupMembers) groupVersions.clear();
-  return { invoiceVersions, groupVersions, groupMembers: groupMembers ?? new Map() };
-}
-
-/**
- * Reads the posting baseline whenever `rows` (the screen's loaded rows) change, for the rows
- * `isPostable` keeps (pass a module-level function so it is stable). Returns a getter: given the
- * rows a Post handler acted on, it returns that load's baseline, or null when those are not the
- * rows the baseline was read for (the review then refuses; nothing posts unversioned).
- */
-export function useInvoicePostBaseline<T extends InvoicePostShownRow>(
-  rows: T[],
-  enabled: boolean,
-  isPostable: (row: T) => boolean,
-): (forRows: T[]) => Promise<InvoicePostBaseline> | null {
-  const baselineRef = useRef<{ rows: T[]; promise: Promise<InvoicePostBaseline> } | null>(null);
-  useEffect(() => {
-    if (!enabled) {
-      baselineRef.current = null;
-      return;
+/** The current state of these invoice ids (deleted ones too), or null when the read failed. */
+async function rereadRows(ids: string[]): Promise<Map<string, RereadRow> | null> {
+  const current = new Map<string, RereadRow>();
+  try {
+    for (let start = 0; start < ids.length; start += ROW_REREAD_CHUNK) {
+      const chunk = ids.slice(start, start + ROW_REREAD_CHUNK);
+      const { data, error } = await supabase.from('invoices').select(REREAD_COLUMNS).in('id', chunk);
+      if (error) return null;
+      for (const row of (data ?? []) as RereadRow[]) current.set(row.id, row);
     }
-    baselineRef.current = { rows, promise: readInvoicePostBaseline(rows.filter(isPostable)) };
-  }, [rows, enabled, isPostable]);
-  return useCallback((forRows: T[]) => (
-    baselineRef.current && baselineRef.current.rows === forRows ? baselineRef.current.promise : null
-  ), []);
+  } catch {
+    return null;
+  }
+  return current;
 }
 
+/** True when a shown row is gone, deleted, or no longer matches what the screen showed. */
 function differs(shown: InvoicePostShownRow, current: RereadRow | undefined): boolean {
   if (!current || current.deleted_at != null) return true;
   if (shown.updated_at == null) return true;
@@ -188,6 +176,101 @@ function differs(shown: InvoicePostShownRow, current: RereadRow | undefined): bo
   if (current.invoice_date !== shown.invoice_date) return true;
   if ((current.invoice_group_id ?? null) !== (shown.invoice_group_id ?? null)) return true;
   return false;
+}
+
+/** Ids that are in one member list of a group and not the other. */
+function membershipChanges(groupIds: string[], before: Map<string, string[]>, after: Map<string, string[]>): string[] {
+  const changed: string[] = [];
+  for (const groupId of groupIds) {
+    const was = new Set(before.get(groupId) ?? []);
+    const now = new Set(after.get(groupId) ?? []);
+    for (const id of now) if (!was.has(id)) changed.push(id);
+    for (const id of was) if (!now.has(id)) changed.push(id);
+  }
+  return changed;
+}
+
+/**
+ * Binds the posting versions to the rows the screen shows (`shownRows`: the rows of the targets
+ * the screen can post, exactly as loaded). Never rejects: a version that could not be read is
+ * absent and the review refuses that target; a failed re-read keeps no version at all.
+ */
+export async function readInvoicePostBaseline(shownRows: InvoicePostShownRow[]): Promise<InvoicePostBaseline> {
+  const noVersions = (groupMembers: Map<string, string[]>, changedIds: string[]): InvoicePostBaseline => ({
+    invoiceVersions: new Map(), groupVersions: new Map(), groupMembers, changedIds,
+  });
+  const invoiceIds = [...new Set(shownRows.filter((row) => !row.invoice_group_id).map((row) => row.id))];
+  const groupIds = [...new Set(shownRows.map((row) => row.invoice_group_id).filter((id): id is string => !!id))];
+  if (shownRows.length === 0) return noVersions(new Map(), []);
+
+  // WHY this order (Luna round 1 HIGH). The rows R1 are on screen already. M1, then V, then R2
+  // and M2: any header change between R1 and R2 shows up in R2 (every header save moves
+  // updated_at), and any membership change between M1 and M2 shows up in M2, so a valid V belongs
+  // to exactly the header rows on screen and the member list M1. Data the list does not display
+  // (lines, shares, the customer's terms) is bound from the moment of the version read, and
+  // everything after that read is refused by the database (INVOICE_CHANGED_SINCE_REVIEW).
+  const membersBefore = groupIds.length > 0 ? await readGroupMembers(groupIds) : new Map<string, string[]>();
+  const [invoiceVersions, groupVersions] = await Promise.all([
+    readEach(invoiceIds, fetchInvoicePostVersion),
+    readEach(groupIds, fetchInvoiceGroupPostVersion),
+  ]);
+  const current = await rereadRows(shownRows.map((row) => row.id));
+  const membersAfter = groupIds.length > 0 ? await readGroupMembers(groupIds) : new Map<string, string[]>();
+  // Without the re-read nothing can be bound: keep no version (Post refuses as recheck_failed).
+  if (!current || !membersAfter) return noVersions(membersBefore ?? new Map(), []);
+
+  const changed = new Set(shownRows.filter((row) => differs(row, current.get(row.id))).map((row) => row.id));
+  if (membersBefore) for (const id of membershipChanges(groupIds, membersBefore, membersAfter)) changed.add(id);
+  if (changed.size > 0) return noVersions(membersBefore ?? new Map(), [...changed]);
+  // A group whose first member read failed has no M1 to bind: no version for it.
+  if (!membersBefore) groupVersions.clear();
+  return { invoiceVersions, groupVersions, groupMembers: membersBefore ?? new Map(), changedIds: [] };
+}
+
+/**
+ * Reads the posting baseline whenever `rows` (the screen's loaded rows) change, for the rows
+ * `selectPostable` returns: only the rows of targets this screen's Post can actually post (pass a
+ * module-level function so it is stable). When the baseline is not valid (something changed while
+ * it was read) it calls `reload` once; if the reloaded rows are not valid either, it does not
+ * reload again by itself (Post then refuses and reloads), so a busy invoice cannot loop the screen.
+ * Returns a getter: given the rows a Post handler acted on, it returns that load's baseline, or
+ * null when those are not the rows the baseline was read for (the review then refuses).
+ */
+export function useInvoicePostBaseline<T extends InvoicePostShownRow>(
+  rows: T[],
+  enabled: boolean,
+  selectPostable: (rows: T[]) => T[],
+  reload: () => unknown,
+): (forRows: T[]) => Promise<InvoicePostBaseline> | null {
+  const baselineRef = useRef<{ rows: T[]; promise: Promise<InvoicePostBaseline> } | null>(null);
+  const reloadRef = useRef(reload);
+  useEffect(() => {
+    reloadRef.current = reload;
+  }, [reload]);
+  // True right after this hook asked for a reload; the next baseline decides whether to ask again.
+  const autoReloadedRef = useRef(false);
+  useEffect(() => {
+    if (!enabled) {
+      baselineRef.current = null;
+      return;
+    }
+    const promise = readInvoicePostBaseline(selectPostable(rows));
+    const entry = { rows, promise };
+    baselineRef.current = entry;
+    void promise.then((result) => {
+      // A newer load replaced this one (or the screen turned it off): it decides for itself.
+      if (baselineRef.current !== entry) return;
+      if (result.changedIds.length === 0 || autoReloadedRef.current) {
+        autoReloadedRef.current = false;
+        return;
+      }
+      autoReloadedRef.current = true;
+      void reloadRef.current();
+    });
+  }, [rows, enabled, selectPostable]);
+  return useCallback((forRows: T[]) => (
+    baselineRef.current && baselineRef.current.rows === forRows ? baselineRef.current.promise : null
+  ), []);
 }
 
 /**
@@ -208,6 +291,9 @@ export async function reviewInvoicePostTargets(
   } catch {
     return { ok: false, reason: 'recheck_failed' };
   }
+  // Something changed while the load bound its versions: the baseline holds none; the screen is
+  // already reloading (or reloads on this refusal).
+  if (baseline.changedIds.length > 0) return { ok: false, reason: 'changed', changedIds: [...baseline.changedIds] };
   const versions = new Map<string, string>();
   for (const target of targets) {
     const version = target.invoiceGroupId
@@ -218,32 +304,16 @@ export async function reviewInvoicePostTargets(
   }
 
   // Step 2: re-read the rows the screen showed.
-  const shownById = new Map(shownRows.map((row) => [row.id, row]));
-  const ids = [...shownById.keys()];
-  const current = new Map<string, RereadRow>();
-  try {
-    for (let start = 0; start < ids.length; start += ROW_REREAD_CHUNK) {
-      const chunk = ids.slice(start, start + ROW_REREAD_CHUNK);
-      const { data, error } = await supabase.from('invoices').select(REREAD_COLUMNS).in('id', chunk);
-      if (error) return { ok: false, reason: 'recheck_failed' };
-      for (const row of (data ?? []) as RereadRow[]) current.set(row.id, row);
-    }
-  } catch {
-    return { ok: false, reason: 'recheck_failed' };
-  }
-  const changed = new Set(ids.filter((id) => differs(shownById.get(id)!, current.get(id))));
+  const current = await rereadRows(shownRows.map((row) => row.id));
+  if (!current) return { ok: false, reason: 'recheck_failed' };
+  const changed = new Set(shownRows.filter((row) => differs(row, current.get(row.id))).map((row) => row.id));
 
-  // Step 3: each targeted group must have exactly the members it had when the version was read.
+  // Step 3: each targeted group must have exactly the members it had when the version was bound (M1).
   const groupIds = [...new Set(targets.map((t) => t.invoiceGroupId).filter((id): id is string => !!id))];
   if (groupIds.length > 0) {
     const now = await readGroupMembers(groupIds);
     if (!now) return { ok: false, reason: 'recheck_failed' };
-    for (const groupId of groupIds) {
-      const before = new Set(baseline.groupMembers.get(groupId) ?? []);
-      const after = new Set(now.get(groupId) ?? []);
-      for (const id of after) if (!before.has(id)) changed.add(id);
-      for (const id of before) if (!after.has(id)) changed.add(id);
-    }
+    for (const id of membershipChanges(groupIds, baseline.groupMembers, now)) changed.add(id);
   }
 
   if (changed.size > 0) return { ok: false, reason: 'changed', changedIds: [...changed] };

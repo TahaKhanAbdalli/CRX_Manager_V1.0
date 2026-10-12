@@ -40,6 +40,8 @@ function invoice(overrides: Record<string, unknown>) {
     salesman_id: null,
     order_id: null,
     deleted_at: null,
+    // invoices.updated_at is NOT NULL; the Post Selected baseline compares it.
+    updated_at: '2026-10-06T15:00:00+00:00',
     total_amount_cents: 10000,
     balance_cents: 10000,
     is_quick_delivery: false,

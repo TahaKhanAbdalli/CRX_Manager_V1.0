@@ -440,6 +440,62 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   group while the other invoice posts; the soft-deleted order draft; the order page's refusal path;
   the cockpit key. The order and cockpit fixes were each shown to fail with the fix removed.
 
+### 2026-10-12 - Bulk Post baseline binds what the screen shows (Codex Luna round 1; no database change)
+
+- **What the reviewer found (and was true):** (HIGH) the load read the rows, then the versions, then
+  the split groups' member lists. A change landing between the rows query and the version read (a
+  split member added, a line edit, a customer-terms change) was inside both the version and the
+  member list, so the click-time comparison matched and the post went through with something the
+  admin never saw. (MED) The load read one version per invoice or group for every loaded row, up to
+  ~2,000 calls on a full list, including Field Invoices rows from earlier seasons that Post All
+  never posts. (LOW) The order page's "Post all drafts" still sent a database "changed since review"
+  refusal to Sentry as an error.
+- **Now (HIGH):** the screen binds what it shows: the invoice rows it displays and each split
+  group's member list. With the rows already on screen it reads the member lists, THEN the versions,
+  THEN re-reads the shown rows (the same columns the click-time check compares, including the
+  last-changed and deleted times) and the member lists. If anything differs, it keeps no version
+  and reloads once by itself (the reload repeats the steps); if the reloaded rows change again while
+  being bound, it does not reload again on its own, and Post refuses with the existing "changed
+  since this … loaded — nothing was posted … being refreshed" message, then reloads. If nothing
+  differs it keeps those versions and the first member list. The click-time re-read of the shown
+  rows and member lists is unchanged.
+- **Exactly what that binds (no more):** every invoice-row change shows up in the re-read (each save
+  moves the last-changed time), and every member-list change between the two member reads shows up
+  in the second one, so a kept version belongs to exactly the invoice rows on screen and the member
+  list read before it. Data the list does not display (lines, shares, the customer's terms) is bound
+  from the moment of the version read; anything after that read is refused by the database. A
+  change to that data between the rows query and the version read, that does not also touch the
+  invoice row, is still inside the version; so is a member added to a split group between the rows
+  query and the first member read, unless it also changes a shown member row (the member list is
+  not compared with the loaded rows, because a group may have members a screen never loads).
+- **Now (MED):** only targets a screen can actually post get a version read: Chemical Sales reads
+  draft/unposted rows only (not posted, overdue, paid, voided or cancelled); the Field Invoices tray
+  reads only Post All's own targets (this season's stand-alone invoices and this-season split
+  groups, the same plan Post All uses with no filter set; not earlier-season invoices or the groups
+  Post All skips); the cockpit reads stand-alone draft/unposted rows; the order page reads its live
+  draft/unposted invoices. Still at most six reads at a time, and Post waits for them. A target with
+  no version is still never posted. A single "versions for many invoices" reader (one call per
+  load) is a follow-up that needs a new migration.
+- **Now (LOW):** on the order page, a target the database refuses with `INVOICE_CHANGED_SINCE_REVIEW`
+  is shown to the admin as before but not sent to Sentry; status-check errors and every other post
+  failure still are. A refused target keeps its idempotency key for the retry.
+- **Proof:** written first and run against the code before the change, where each failed:
+  `src/lib/invoiceBulkPostReview.test.ts` (a header change and, separately, a split member added
+  while the versions are read each make the baseline invalid and refuse at click with no read; the
+  read order member list, versions, re-read; a failed re-read keeps no version; the hook reads only
+  the rows the screen can post (posted and paid rows get no read), asks for one reload on an invalid
+  baseline and not a second in a row), `src/pages/Invoices.seasonWindow.test.tsx` (an invoice being
+  saved while the list binds: the list reloads once by itself, then Post posts nothing, says so and
+  reloads), `src/components/field-invoices/FieldInvoicesSeasonWindow.test.tsx` (earlier-season
+  invoices and a skipped split group get no version read), `src/pages/OrderDetail.test.tsx` (the
+  database refusal is shown but not sent to Sentry; another post failure still is). Existing screen
+  tests that changed a row DURING the version read now change it after the load (at-click path);
+  two admin-only fixtures gained the rows' last-changed time (NOT NULL in the real table; without
+  it the screen now reloads once), the order page's refused-review fixture re-reads all three
+  drafts, and the cockpit's changed-invoice test waits for the one automatic reload. `npm run
+  typecheck`, `npm run lint` and the full `npx vitest run` (393 files: 5615 passed, 123 skipped,
+  1 failed: `rpcFixtureLiveDiff.test.ts`, expected until the readers are live) on this change.
+
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations. Then,

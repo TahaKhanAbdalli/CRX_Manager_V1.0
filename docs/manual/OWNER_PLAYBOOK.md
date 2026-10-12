@@ -141,7 +141,8 @@ what), this is what each person can do:
   screen loaded. If an invoice changed after that, it is not posted. Usually you find out before
   anything posts: the screen says which invoices changed, posts nothing and refreshes so you can look
   again. If the change lands while the run is already posting, only that invoice is refused, the
-  others post, and the message names it. Either way, check it and post again.
+  others post, and the message names it. Either way, check it and post again. If someone was saving
+  an invoice at the very moment the screen opened, the screen may refresh itself once right away.
 
 **What the screens look like for a sales rep (phase 2, built 2026-10-10 in the same change; goes live
 with it):**

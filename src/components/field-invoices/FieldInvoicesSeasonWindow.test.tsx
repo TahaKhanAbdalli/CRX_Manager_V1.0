@@ -137,11 +137,12 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
       .filter(([name]) => name === 'post_invoice')
       .map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id);
     expect(posted).toEqual(['FA-NEW-DRAFT']);
-    // The post carries the posting version read when the tray LOADED (every tray row's version
-    // is read then), with a key; Post All itself reads no version.
+    // The post carries the posting version read when the tray LOADED, with a key; Post All itself
+    // reads no version. Only Post All's own targets get a version read (review round 1, MED): the
+    // two Season 2026 invoices Post All leaves out get none.
     const beforePost = mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice'));
     expect(beforePost.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args.p_invoice_ids[0]).sort())
-      .toEqual(['FA-NEW-DRAFT', 'FA-OLD-DRAFT', 'FA-OLD-UNPOSTED']);
+      .toEqual(['FA-NEW-DRAFT']);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toEqual({
       p_invoice_id: 'FA-NEW-DRAFT',
       p_idempotency_key: expect.any(String),
@@ -174,24 +175,23 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
   });
 
   // Codex Luna HIGH (2026-10-12): Post All posted whatever the invoice held at click time.
-  // Another admin changes FA-NEW-DRAFT from $500.00 to $700.00 after the tray loaded; Post All
-  // re-reads the rows after reading the posting versions, sees the change, posts nothing and
-  // reloads the tray.
+  // Another admin changes FA-NEW-DRAFT from $500.00 to $700.00 after the tray loaded; at click
+  // Post All re-reads the rows the tray showed, sees the change, posts nothing and reloads.
   it('Post All posts nothing when an invoice changed since the tray loaded, reloads and says so', async () => {
     let rows = ROWS;
     mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
-    mockRpc.mockImplementation((name: string) => {
-      if (name === 'get_invoice_post_version') {
-        rows = ROWS.map((row) => (row.id === 'FA-NEW-DRAFT' ? { ...row, total_amount_cents: 70000, balance_cents: 70000 } : row));
-      }
-      return answerRpc(name);
-    });
+    mockRpc.mockImplementation(answerRpc);
     renderInRouter(<FieldInvoicesUnpostedPanel />);
     await waitFor(() => expect(screen.getAllByText('FA-NEW-DRAFT').length).toBeGreaterThan(0));
+    await waitFor(() => expect(mockRpc.mock.calls.some(([name]) => name === 'get_invoice_post_version')).toBe(true));
     const trayLoads = () => mockFrom.mock.calls.filter(([table]) => table === 'invoices').length;
 
     fireEvent.click(screen.getByRole('button', { name: /Post All/ }));
     const confirm = await screen.findByRole('button', { name: 'Post 1 target(s)' });
+    // The change lands after the tray loaded and bound its versions.
+    rows = ROWS.map((row) => (row.id === 'FA-NEW-DRAFT'
+      ? { ...row, total_amount_cents: 70000, balance_cents: 70000, updated_at: '2026-10-05T11:00:00+00:00' }
+      : row));
     const loadsBeforePost = trayLoads();
     fireEvent.click(confirm);
 
@@ -255,6 +255,8 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'FA-NEW-DRAFT' });
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(0);
+    // A group Post All skips gets no version read at all (review round 1, MED).
+    expect(mockRpc.mock.calls.some(([name]) => name === 'get_invoice_group_post_version')).toBe(false);
   });
 
   it('Posted tab keeps prior-season overdue invoices but season-windows paid ones', async () => {

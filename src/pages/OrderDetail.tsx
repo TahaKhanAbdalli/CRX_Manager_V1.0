@@ -69,6 +69,8 @@ function nextEditKey() { return `_new_${++_editKeyCounter}`; }
 // The order's invoices "Post all drafts" can post: live (not soft-deleted) drafts and unposted.
 const isPostableOrderInvoice = (invoice: Invoice): boolean =>
   invoice.deleted_at == null && (invoice.status === 'draft' || invoice.status === 'unposted');
+// Only those get a posting version read when the order loads (posted / paid ones get none).
+const selectPostableOrderInvoices = (invoices: Invoice[]): Invoice[] => invoices.filter(isPostableOrderInvoice);
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -327,10 +329,10 @@ export default function OrderDetail() {
     if (id) fetchOrder();
   }, [id, fetchOrder]);
 
-  // Post all drafts sends the posting version read right after the order's invoices loaded
-  // (admins only), so anything that changes after the load, even a line or the customer's terms,
-  // refuses the post.
-  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, isPostableOrderInvoice);
+  // Post all drafts sends the posting version bound to the order's invoices as loaded (admins
+  // only), so anything that changes after that, even a line or the customer's terms, refuses the
+  // post. If they changed while the versions were being read, the order reloads once by itself.
+  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, selectPostableOrderInvoices, fetchOrder);
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
@@ -1044,11 +1046,16 @@ export default function OrderDetail() {
         ? 'A related invoice or return credit is being changed elsewhere. Wait a moment and try again.'
         : described;
     };
-    // Status re-check failures and post failures go to Sentry as one warning, on every exit.
+    // A target the database refused because it changed since this page loaded
+    // (INVOICE_CHANGED_SINCE_REVIEW) is an expected outcome, as on the other bulk screens: shown to
+    // the admin, never sent to Sentry.
+    const refusals: string[] = [];
+    // Status re-check failures and other post failures go to Sentry as one warning, on every exit.
     const reportErrors = () => {
-      if (errors.length === 0) return;
-      Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
-      for (const e of errors) toast('error', e);
+      if (errors.length > 0) {
+        Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
+      }
+      for (const e of [...refusals, ...errors]) toast('error', e);
     };
     const toPost: typeof targets = [];
     for (const target of targets) {
@@ -1114,15 +1121,18 @@ export default function OrderDetail() {
         posted += target.selectedIds.length;
         delete postDraftKeysRef.current[target.key];
       } catch (err) {
-        errors.push(`${target.label}: ${describePostError(err)}`);
+        const message = `${target.label}: ${describePostError(err)}`;
+        if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_REVIEW)) refusals.push(message);
+        else errors.push(message);
       }
     }
-    if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {
+    if (alreadyPosted > 0 && posted === 0 && errors.length === 0 && refusals.length === 0) {
       toast('info', `Already posted (${alreadyPosted}).`);
     }
     if (posted > 0) toast('success', `Posted ${posted} invoice(s).`);
     reportErrors();
-    if (errors.length === 0) postDraftKeysRef.current = {}; // clean run — mint fresh keys next time
+    // Clean run: mint fresh keys next time. A refused or failed target keeps its key for the retry.
+    if (errors.length === 0 && refusals.length === 0) postDraftKeysRef.current = {};
     await fetchOrder();
     setPostingAll(false);
   };

@@ -52,8 +52,10 @@ type InvoiceRow = Invoice & { customer_name: string; customer_readable: boolean;
 // Only these statuses get a row checkbox, so only these can be part of a selection.
 const SELECTABLE_STATUSES: readonly InvoiceStatus[] = ['draft', 'unposted', 'posted', 'voided'];
 const SEARCH_KEYS = ['invoice_number', 'customer_name', 'salesman_name'];
-// The rows Post Selected can post: their posting versions are read as soon as the list loads.
-const isPostableRow = (row: InvoiceRow): boolean => row.status === 'draft' || row.status === 'unposted';
+// The rows Post Selected can post (draft / unposted): only their posting versions are read when the
+// list loads; posted, overdue, paid, voided and cancelled rows get none.
+const selectPostableRows = (rows: InvoiceRow[]): InvoiceRow[] =>
+  rows.filter((row) => row.status === 'draft' || row.status === 'unposted');
 
 type InvoiceStatusFilter = InvoiceStatus | '' | 'ready_to_post';
 
@@ -215,9 +217,10 @@ export default function Invoices() {
     fetchInvoices();
   }, [fetchInvoices]);
 
-  // Post Selected sends the posting version read right after this list loaded (admins only), so
-  // anything that changes after the load, even a line or the customer's terms, refuses the post.
-  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, isPostableRow);
+  // Post Selected sends the posting version bound to the rows this list shows (admins only), so
+  // anything that changes after that, even a line or the customer's terms, refuses the post. If
+  // the rows changed while the versions were being read, the list reloads once by itself.
+  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, selectPostableRows, fetchInvoices);
 
   const filtered = invoices.filter((inv) => {
     if (statusFilter === 'ready_to_post' && !['draft', 'unposted'].includes(inv.status)) return false;

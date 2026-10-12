@@ -95,6 +95,7 @@ function baseline(parts: Partial<InvoicePostBaseline> = {}): Promise<InvoicePost
     invoiceVersions: new Map(),
     groupVersions: new Map(),
     groupMembers: new Map(),
+    changedIds: [],
     ...parts,
   });
 }
@@ -107,7 +108,7 @@ beforeEach(() => {
 });
 
 describe('readInvoicePostBaseline (at load)', () => {
-  it('reads a version per stand-alone invoice and per split group, then the group members', async () => {
+  it('reads the group members, then the versions, then re-reads the shown rows and the members', async () => {
     const rows = [shown('inv-1'), shown('inv-2', { invoice_group_id: 'grp-1' }), shown('inv-3', { invoice_group_id: 'grp-1' })];
     // inv-9 is a member the screen never loaded (past the row cap, or another status).
     databaseHolds([...rows, shown('inv-9', { invoice_group_id: 'grp-1' })].map((r) => current(r)));
@@ -117,24 +118,82 @@ describe('readInvoicePostBaseline (at load)', () => {
     expect(result.invoiceVersions).toEqual(new Map([['inv-1', V1]]));
     expect(result.groupVersions).toEqual(new Map([['grp-1', VG]]));
     expect(result.groupMembers).toEqual(new Map([['grp-1', ['inv-2', 'inv-3', 'inv-9']]]));
+    expect(result.changedIds).toEqual([]);
     expect(mockReadInvoice).toHaveBeenCalledTimes(1);
     expect(mockReadGroup).toHaveBeenCalledTimes(1);
-    // Members only after every version.
-    expect(events.indexOf('members:1')).toBeGreaterThan(Math.max(events.indexOf('version:inv-1'), events.indexOf('group-version:grp-1')));
+    // M1 before every version; the row re-read (R2) and the second member read (M2) after them.
+    const lastVersion = Math.max(events.indexOf('version:inv-1'), events.indexOf('group-version:grp-1'));
+    expect(events.indexOf('members:1')).toBeLessThan(Math.min(events.indexOf('version:inv-1'), events.indexOf('group-version:grp-1')));
+    expect(events.indexOf('reread:3')).toBeGreaterThan(lastVersion);
+    expect(events.lastIndexOf('members:1')).toBeGreaterThan(lastVersion);
   });
 
-  it('leaves out a version that could not be read, and drops group versions if members cannot be read', async () => {
+  it('leaves out a version that could not be read', async () => {
     mockReadInvoice.mockImplementation(async (id: string) => {
       if (id === 'inv-2') throw new Error('network');
       return V1;
     });
-    const rows = [shown('inv-1'), shown('inv-2'), shown('inv-3', { invoice_group_id: 'grp-1' })];
-    databaseHolds([], { message: 'down' });
+    const rows = [shown('inv-1'), shown('inv-2')];
+    databaseHolds(rows.map((r) => current(r)));
 
     const result = await readInvoicePostBaseline(rows);
 
     expect(result.invoiceVersions).toEqual(new Map([['inv-1', V1]]));
+    expect(result.changedIds).toEqual([]);
+  });
+
+  it('keeps no version at all when the rows or members cannot be re-read (refused at click as recheck_failed)', async () => {
+    const rows = [shown('inv-1'), shown('inv-3', { invoice_group_id: 'grp-1' })];
+    databaseHolds([], { message: 'down' });
+
+    const result = await readInvoicePostBaseline(rows);
+
+    expect(result.invoiceVersions.size).toBe(0);
     expect(result.groupVersions.size).toBe(0);
+    expect(result.changedIds).toEqual([]);
+  });
+
+  // Codex Luna round 1 HIGH: the versions were read AFTER the rows and BEFORE the members, so a
+  // change landing between the rows query and the version read was inside both the version and
+  // the member baseline, and the click-time comparison matched. Now the rows and members are
+  // re-read after the versions; any difference throws the baseline away.
+  it('a header change between the rows the screen shows and the re-read makes the baseline invalid', async () => {
+    const row = shown('inv-1');
+    const db = [current(row)];
+    databaseHolds(db);
+    // The change lands while the version is being read: it is inside the version.
+    mockReadInvoice.mockImplementation(async () => {
+      db[0] = current(row, { total_amount_cents: 700000, updated_at: '2026-10-05T10:05:00+00:00' });
+      return V2;
+    });
+
+    const result = await readInvoicePostBaseline([row]);
+
+    expect(result.changedIds).toEqual(['inv-1']);
+    expect(result.invoiceVersions.size).toBe(0);
+    // At click the review refuses as changed without reading anything.
+    mockFrom.mockClear();
+    expect(await reviewInvoicePostTargets([{ key: 'k1', invoiceId: 'inv-1' }], [row], Promise.resolve(result)))
+      .toEqual({ ok: false, reason: 'changed', changedIds: ['inv-1'] });
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it('a split member added between the two member reads makes the baseline invalid', async () => {
+    const rows = [shown('inv-2', { invoice_group_id: 'grp-1' }), shown('inv-3', { invoice_group_id: 'grp-1' })];
+    const db = rows.map((r) => current(r));
+    databaseHolds(db);
+    // The new member lands while the group version is being read: it is inside the version.
+    mockReadGroup.mockImplementation(async () => {
+      db.push(current(shown('inv-new', { invoice_group_id: 'grp-1' })));
+      return VG;
+    });
+
+    const result = await readInvoicePostBaseline(rows);
+
+    expect(result.changedIds).toEqual(['inv-new']);
+    expect(result.groupVersions.size).toBe(0);
+    expect(await reviewInvoicePostTargets([{ key: 'g', invoiceGroupId: 'grp-1' }], rows, Promise.resolve(result)))
+      .toEqual({ ok: false, reason: 'changed', changedIds: ['inv-new'] });
   });
 
   it('reads at most 6 versions at a time', async () => {
@@ -148,6 +207,7 @@ describe('readInvoicePostBaseline (at load)', () => {
       return V1;
     });
     const rows = Array.from({ length: 40 }, (_, i) => shown(`inv-${i}`));
+    databaseHolds(rows.map((r) => current(r)));
 
     const result = await readInvoicePostBaseline(rows);
 
@@ -157,17 +217,23 @@ describe('readInvoicePostBaseline (at load)', () => {
 });
 
 describe('useInvoicePostBaseline', () => {
-  it('reads once per loaded rows array, for the postable rows only, and serves only those rows', async () => {
-    const rows = [shown('inv-1'), shown('inv-2', { status: 'posted' })];
-    const isPostable = (row: InvoicePostShownRow) => row.status === 'draft';
-    const { result, rerender } = renderHook(({ r, on }) => useInvoicePostBaseline(r, on, isPostable), {
+  const draftsOnly = (rows: InvoicePostShownRow[]) => rows.filter((row) => row.status === 'draft');
+
+  it('reads once per loaded rows array, for the rows the screen can post only, and serves only those rows', async () => {
+    const rows = [shown('inv-1'), shown('inv-2', { status: 'posted' }), shown('inv-3', { status: 'paid' })];
+    databaseHolds(rows.map((r) => current(r)));
+    const reload = vi.fn();
+    const { result, rerender } = renderHook(({ r, on }) => useInvoicePostBaseline(r, on, draftsOnly, reload), {
       initialProps: { r: rows, on: true },
     });
 
     const promise = result.current(rows);
     expect(promise).not.toBeNull();
     expect((await promise!).invoiceVersions).toEqual(new Map([['inv-1', V1]]));
+    // The posted and paid rows get no version read and are not re-read.
     expect(mockReadInvoice.mock.calls.map(([id]) => id)).toEqual(['inv-1']);
+    expect(events.filter((e) => e.startsWith('reread:'))).toEqual(['reread:1']);
+    expect(reload).not.toHaveBeenCalled();
     // A different rows array (another load) is never served this load's versions.
     expect(result.current([...rows])).toBeNull();
 
@@ -177,9 +243,39 @@ describe('useInvoicePostBaseline', () => {
 
   it('reads nothing when disabled (a non-admin)', () => {
     const rows = [shown('inv-1')];
-    const { result } = renderHook(() => useInvoicePostBaseline(rows, false, () => true));
+    const reload = vi.fn();
+    const { result } = renderHook(() => useInvoicePostBaseline(rows, false, (r: InvoicePostShownRow[]) => r, reload));
     expect(result.current(rows)).toBeNull();
     expect(mockReadInvoice).not.toHaveBeenCalled();
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it('an invalid baseline asks the screen to reload once; a second invalid one in a row does not loop', async () => {
+    const row = shown('inv-1');
+    const db = [current(row)];
+    databaseHolds(db);
+    // Every version read lands another change on the row (a busy invoice).
+    let edits = 0;
+    mockReadInvoice.mockImplementation(async () => {
+      edits += 1;
+      db[0] = current(row, { updated_at: `2026-10-05T10:0${edits}:00+00:00` });
+      return V1;
+    });
+    const reload = vi.fn();
+    const loaded = [row];
+    const { result, rerender } = renderHook(({ r }) => useInvoicePostBaseline(r, true, draftsOnly, reload), {
+      initialProps: { r: loaded },
+    });
+
+    expect((await result.current(loaded)!).changedIds).toEqual(['inv-1']);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // The reload brings new rows; they change again while being bound: no second automatic reload.
+    const reloaded = [{ ...row, updated_at: db[0].updated_at as string }];
+    rerender({ r: reloaded });
+    expect((await result.current(reloaded)!).changedIds).toEqual(['inv-1']);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -88,17 +88,26 @@ they call the new readers, so they ship only after the file is applied (see the 
   sends it (built 2026-10-10; see the editor entry below). All three single-invoice editors send it:
   the regular invoice page, the per-acre field-app editor and the Split Billing editor (the last two
   added in review round 5). The list pages' bulk posts (Post Selected, Post All, Post all clean, Post
-  all drafts) send it too since 2026-10-12: each reads every target's version when the screen LOADS
-  and sends that version, so any change after the load (even a line, a share, the customer's terms or
-  a split-group member the screen never loaded) makes the database refuse that post; at click each
-  also re-reads the rows it showed and each split group's member list, and posts nothing and reloads
-  if any changed (`src/lib/invoiceBulkPostReview.ts`; changelog "Bulk Post review round 1"). Closed in
-  code; it takes effect with the migration apply. **Left open (LOW, owner: whoever next changes these
-  screens):** a change to a line, share or customer terms in the moment between a screen's rows
-  query and its version read (well under a second) is inside the version without being on screen;
-  the version reads cost one call per stand-alone draft or group on each admin load (a many-invoice
-  reader needs a migration); a retry after a lost response whose reload also failed is refused once
-  as "changed".
+  all drafts) send it too since 2026-10-12, for the targets each can actually post (draft/unposted;
+  on the Field Invoices tray only Post All's this-season targets): when the screen LOADS it reads
+  each split group's member list, then the versions, then re-reads the rows it shows and the member
+  lists; if any shown row or member list changed in between it keeps no version and reloads once by
+  itself (Post refuses as "changed" until a load binds cleanly). So a kept version belongs to exactly
+  the invoice rows on screen and the member list read before it, and any change after the version
+  read (even a line, a share, the customer's terms or a split-group member the screen never loaded)
+  makes the database refuse that post; at click each also re-reads the rows it showed and each split
+  group's member list, and posts nothing and reloads if any changed (`src/lib/invoiceBulkPostReview.ts`;
+  changelog "Bulk Post review round 1" and "Luna round 1"). Closed in code; it takes effect with the
+  migration apply. **Left open (LOW, owner: whoever next changes these screens):** data a list does
+  not display (lines, shares, the customer's terms) is bound from the moment of the version read, so
+  a change to it between the screen's rows query and that read (well under a second) is inside the
+  version without being on screen, unless it also moved the invoice row's last-changed time; a
+  member added to a split group between the rows query and the first member read is inside both
+  member lists and the version, unless it also changed a shown member row (the member list is not
+  compared with the loaded rows, because a group may have members a screen never loads); the
+  version reads cost one call per postable stand-alone invoice or group on each admin load, six at a
+  time (a many-invoice reader needs a migration); a retry after a lost response whose reload also
+  failed is refused once as "changed".
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;
 admins byte-identical; reads; completions; the posting race; the hard-guard sweep; one mutation per

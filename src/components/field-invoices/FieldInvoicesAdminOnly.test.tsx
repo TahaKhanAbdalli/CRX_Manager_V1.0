@@ -46,6 +46,8 @@ function fieldInvoice(overrides: Record<string, unknown>) {
     blend_ticket_id: null,
     invoice_group_id: null,
     deleted_at: null,
+    // invoices.updated_at is NOT NULL; the Post All baseline compares it.
+    updated_at: '2026-10-03T15:00:00+00:00',
     field_app_locations: [],
     invoice_items: [],
     total_acres: 10,

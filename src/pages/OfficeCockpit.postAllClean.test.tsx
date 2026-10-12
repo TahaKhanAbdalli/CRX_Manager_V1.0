@@ -172,12 +172,19 @@ describe('OfficeCockpit — Post all clean checks what the cockpit showed', () =
   });
 
   it('posts nothing when an invoice changed since the cockpit loaded, reloads and says so', async () => {
-    // Another admin changes the invoice from $5,000.00 to $7,000.00 after the cockpit loaded.
+    // Another admin changes the invoice from $5,000.00 to $7,000.00 after the cockpit's rows
+    // loaded (and keeps it that way in this mock, so every reload still shows $5,000.00). The
+    // re-read after the version read sees it: the cockpit reloads once by itself, keeps no
+    // version, and Post all clean posts nothing.
     state.rereadTotalCents = 700000;
     const cockpitLoads = () =>
       mockRpc.mock.calls.filter(([name]) => name === 'operational_dashboard_summary').length;
 
     render(<OfficeCockpit />);
+    await waitFor(() => expect(cockpitLoads()).toBe(2));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version')).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(cockpitLoads()).toBe(2);
     fireEvent.click(await screen.findByRole('button', { name: /Post all clean/ }));
     const confirm = await screen.findByRole('button', { name: 'Post 1 invoice(s)' });
     const loadsAtClick = cockpitLoads();
