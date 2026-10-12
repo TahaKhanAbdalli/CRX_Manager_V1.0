@@ -9,11 +9,13 @@ import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelect
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
 import {
-  describeBulkPostFailure,
+  bulkPostFailure,
+  bulkPostOutcomeError,
   failedPostReviewMessage,
   reviewInvoicePostTargets,
   shownRowsForTargets,
   useInvoicePostBaseline,
+  type BulkPostFailure,
 } from '../../lib/invoiceBulkPostReview';
 import { postReviewedInvoice, postReviewedInvoiceGroup } from '../../lib/invoicePostVersion';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
@@ -482,7 +484,7 @@ export default function FieldInvoicesUnpostedPanel() {
           throw new ExpectedActionRefusal(failedPostReviewMessage(review, 'tray', shownRows));
         }
         let posted = 0;
-        const failures: string[] = [];
+        const failures: BulkPostFailure[] = [];
         for (const group of groupTargets) {
           const keyId = `grp:${group.group_id}`;
           if (!postKeysRef.current[keyId]) {
@@ -500,7 +502,7 @@ export default function FieldInvoicesUnpostedPanel() {
             posted += 1;
             delete postKeysRef.current[keyId];
           } catch (err: unknown) {
-            failures.push(`${group.label}: ${describeBulkPostFailure(err)}`);
+            failures.push(bulkPostFailure(group.label, err));
           }
         }
         for (const target of individualTargets) {
@@ -521,14 +523,19 @@ export default function FieldInvoicesUnpostedPanel() {
             // Needs-pricing and needs-delivery are the common, expected reasons a
             // field invoice can't post yet — show plain English instead of the raw
             // code. (Shared wording via describePostInvoiceBlock, inside describeBulkPostFailure.)
-            failures.push(`${target.invoice_number}: ${describeBulkPostFailure(err)}`);
+            failures.push(bulkPostFailure(target.invoice_number, err));
           }
         }
         await fetchInvoices();
         if (failures.length > 0) {
           // Surface partial outcome honestly — some posting targets succeeded,
-          // some did not. Failed target keys remain stable for a safe retry.
-          throw new Error(`Posted ${posted}/${targetCount} target(s). Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ` | +${failures.length - 3} more` : ''}`);
+          // some did not. Failed target keys remain stable for a safe retry. A target the
+          // database refused as changed since the load is shown, not sent to Sentry.
+          throw bulkPostOutcomeError(
+            failures,
+            (messages) => `Posted ${posted}/${targetCount} target(s). Failed: ${messages.slice(0, 3).join(' | ')}${messages.length > 3 ? ` | +${messages.length - 3} more` : ''}`,
+            'field_invoice_post_all',
+          );
         }
       },
       toast,

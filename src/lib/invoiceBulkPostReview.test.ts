@@ -6,13 +6,16 @@
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockFrom, mockRpc, mockReadInvoice, mockReadGroup, events } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockReadInvoice, mockReadGroup, mockCapture, events } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockReadInvoice: vi.fn(),
   mockReadGroup: vi.fn(),
+  mockCapture: vi.fn(),
   events: [] as string[],
 }));
+
+vi.mock('./sentry', () => ({ Sentry: { captureException: mockCapture } }));
 
 vi.mock('./db', async () => {
   const actual = await vi.importActual<typeof import('./db')>('./db');
@@ -23,8 +26,11 @@ vi.mock('./invoicePostVersion', async () => {
   return { ...actual, fetchInvoicePostVersion: mockReadInvoice, fetchInvoiceGroupPostVersion: mockReadGroup };
 });
 
+import { ExpectedActionRefusal } from './criticalAction';
 import {
   BULK_TARGET_CHANGED_MESSAGE,
+  bulkPostFailure,
+  bulkPostOutcomeError,
   describeBulkPostFailure,
   failedPostReviewMessage,
   readInvoicePostBaseline,
@@ -95,9 +101,18 @@ function baseline(parts: Partial<InvoicePostBaseline> = {}): Promise<InvoicePost
     invoiceVersions: new Map(),
     groupVersions: new Map(),
     groupMembers: new Map(),
+    changedInvoiceIds: [],
+    changedGroups: new Map(),
     changedIds: [],
     ...parts,
   });
+}
+
+/** A promise the test resolves by hand. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => { resolve = r; });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -110,14 +125,13 @@ beforeEach(() => {
 describe('readInvoicePostBaseline (at load)', () => {
   it('reads the group members, then the versions, then re-reads the shown rows and the members', async () => {
     const rows = [shown('inv-1'), shown('inv-2', { invoice_group_id: 'grp-1' }), shown('inv-3', { invoice_group_id: 'grp-1' })];
-    // inv-9 is a member the screen never loaded (past the row cap, or another status).
-    databaseHolds([...rows, shown('inv-9', { invoice_group_id: 'grp-1' })].map((r) => current(r)));
+    databaseHolds(rows.map((r) => current(r)));
 
     const result = await readInvoicePostBaseline(rows);
 
     expect(result.invoiceVersions).toEqual(new Map([['inv-1', V1]]));
     expect(result.groupVersions).toEqual(new Map([['grp-1', VG]]));
-    expect(result.groupMembers).toEqual(new Map([['grp-1', ['inv-2', 'inv-3', 'inv-9']]]));
+    expect(result.groupMembers).toEqual(new Map([['grp-1', ['inv-2', 'inv-3']]]));
     expect(result.changedIds).toEqual([]);
     expect(mockReadInvoice).toHaveBeenCalledTimes(1);
     expect(mockReadGroup).toHaveBeenCalledTimes(1);
@@ -194,6 +208,90 @@ describe('readInvoicePostBaseline (at load)', () => {
     expect(result.groupVersions.size).toBe(0);
     expect(await reviewInvoicePostTargets([{ key: 'g', invoiceGroupId: 'grp-1' }], rows, Promise.resolve(result)))
       .toEqual({ ok: false, reason: 'changed', changedIds: ['inv-new'] });
+  });
+
+  // Review round 2 (MED): a member added AFTER the rows query and BEFORE the first member read
+  // (M1) was inside M1, the version and M2, so the baseline was valid and the group posted an
+  // invoice the screen never showed. M1 is now checked against the rows the screen loaded.
+  it('a split member added before the first member read (never shown) makes the group changed', async () => {
+    const rows = [shown('inv-2', { invoice_group_id: 'grp-1' }), shown('inv-3', { invoice_group_id: 'grp-1' })];
+    // inv-new joined grp-1 after the screen's rows query: the database already holds it at M1.
+    databaseHolds([...rows, shown('inv-new', { invoice_group_id: 'grp-1' })].map((r) => current(r)));
+
+    const result = await readInvoicePostBaseline(rows);
+
+    expect(result.groupVersions.size).toBe(0);
+    expect(result.changedGroups).toEqual(new Map([['grp-1', ['inv-new']]]));
+    expect(result.changedIds).toEqual(['inv-new']);
+    expect(await reviewInvoicePostTargets([{ key: 'g', invoiceGroupId: 'grp-1' }], rows, Promise.resolve(result)))
+      .toEqual({ ok: false, reason: 'changed', changedIds: ['inv-new'] });
+  });
+
+  it('a member the screen never loaded (row cap, another order or status) is changed; a loaded member in any status is not', async () => {
+    const drafts = [shown('inv-2', { invoice_group_id: 'grp-1' })];
+    const postedMember = shown('inv-4', { invoice_group_id: 'grp-1', status: 'posted' });
+    const deletedLoaded = shown('inv-5', { invoice_group_id: 'grp-1', deleted_at: '2026-10-06T09:00:00+00:00' });
+    databaseHolds([...drafts, postedMember].map((r) => current(r)));
+
+    // The posted member is one of the loaded rows: the group binds, and that row is re-read too.
+    const bound = await readInvoicePostBaseline(drafts, [...drafts, postedMember, deletedLoaded]);
+    expect(bound.groupVersions).toEqual(new Map([['grp-1', VG]]));
+    expect(bound.changedIds).toEqual([]);
+    expect(events).toContain('reread:2');
+
+    // Without it among the loaded rows (past the row cap, on another order), the group is changed.
+    const unbound = await readInvoicePostBaseline(drafts, drafts);
+    expect(unbound.groupVersions.size).toBe(0);
+    expect(unbound.changedGroups).toEqual(new Map([['grp-1', ['inv-4']]]));
+  });
+
+  // Review round 2 (MED): one changed row anywhere voided every version, so a selection that did
+  // not include it was refused with a message about an invoice the admin had not selected.
+  it('a change to a row that is not selected drops only that row; the selected one still posts', async () => {
+    const rows = [shown('inv-1'), shown('inv-2'), shown('inv-3', { invoice_group_id: 'grp-1' })];
+    const db = rows.map((r) => current(r));
+    databaseHolds(db);
+    mockReadInvoice.mockImplementation(async (id: string) => {
+      // inv-2 is edited while its version is read.
+      if (id === 'inv-2') db[1] = current(rows[1], { updated_at: '2026-10-05T10:05:00+00:00' });
+      return V1;
+    });
+
+    const result = await readInvoicePostBaseline(rows);
+
+    expect(result.invoiceVersions).toEqual(new Map([['inv-1', V1]]));
+    expect(result.groupVersions).toEqual(new Map([['grp-1', VG]]));
+    expect(result.changedInvoiceIds).toEqual(['inv-2']);
+    expect(result.changedIds).toEqual(['inv-2']);
+    expect(await reviewInvoicePostTargets(
+      [{ key: 'k1', invoiceId: 'inv-1' }, { key: 'g', invoiceGroupId: 'grp-1' }],
+      [rows[0], rows[2]],
+      Promise.resolve(result),
+    )).toEqual({ ok: true, versions: new Map([['k1', V1], ['g', VG]]) });
+    // Selecting the changed one too is refused, naming only it.
+    expect(await reviewInvoicePostTargets(
+      [{ key: 'k1', invoiceId: 'inv-1' }, { key: 'k2', invoiceId: 'inv-2' }],
+      [rows[0], rows[1]],
+      Promise.resolve(result),
+    )).toEqual({ ok: false, reason: 'changed', changedIds: ['inv-2'] });
+  });
+
+  it('a changed member row drops only its group, not the stand-alone invoices', async () => {
+    const rows = [shown('inv-1'), shown('inv-2', { invoice_group_id: 'grp-1' })];
+    const db = rows.map((r) => current(r));
+    databaseHolds(db);
+    mockReadGroup.mockImplementation(async () => {
+      db[1] = current(rows[1], { total_amount_cents: 1, updated_at: '2026-10-05T10:05:00+00:00' });
+      return VG;
+    });
+
+    const result = await readInvoicePostBaseline(rows);
+
+    expect(result.invoiceVersions).toEqual(new Map([['inv-1', V1]]));
+    expect(result.groupVersions.size).toBe(0);
+    expect(result.changedGroups).toEqual(new Map([['grp-1', ['inv-2']]]));
+    expect(await reviewInvoicePostTargets([{ key: 'g', invoiceGroupId: 'grp-1' }], [rows[1]], Promise.resolve(result)))
+      .toEqual({ ok: false, reason: 'changed', changedIds: ['inv-2'] });
   });
 
   it('reads at most 6 versions at a time', async () => {
@@ -276,6 +374,43 @@ describe('useInvoicePostBaseline', () => {
     expect((await result.current(reloaded)!).changedIds).toEqual(['inv-1']);
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(reload).toHaveBeenCalledTimes(1);
+
+    // A clean third load re-arms it: the next invalid load reloads once more.
+    mockReadInvoice.mockImplementation(async () => V1);
+    const third = [{ ...row, updated_at: db[0].updated_at as string }];
+    rerender({ r: third });
+    expect((await result.current(third)!).changedIds).toEqual([]);
+    mockReadInvoice.mockImplementation(async () => {
+      db[0] = current(row, { updated_at: '2026-10-05T11:00:00+00:00' });
+      return V1;
+    });
+    const fourth = [{ ...third[0] }];
+    rerender({ r: fourth });
+    expect((await result.current(fourth)!).changedIds).toEqual(['inv-1']);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+  });
+
+  // Review round 2 (LOW): a baseline that finished after the screen closed still reloaded it.
+  it('never reloads after the screen unmounts, or for a load a newer one replaced', async () => {
+    const row = shown('inv-1');
+    const db = [current(row)];
+    databaseHolds(db);
+    const gate = deferred();
+    mockReadInvoice.mockImplementation(async () => {
+      await gate.promise;
+      db[0] = current(row, { updated_at: '2026-10-05T10:09:00+00:00' });
+      return V1;
+    });
+    const reload = vi.fn();
+    const loaded = [row];
+    const { result, unmount } = renderHook(() => useInvoicePostBaseline(loaded, true, draftsOnly, reload));
+    const pending = result.current(loaded)!;
+
+    unmount();
+    gate.resolve();
+    expect((await pending).changedIds).toEqual(['inv-1']);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 
@@ -365,17 +500,13 @@ describe('reviewInvoicePostTargets (at click)', () => {
     expect(await reviewInvoicePostTargets(target, rows, loaded)).toEqual({ ok: false, reason: 'changed', changedIds: ['inv-3'] });
   });
 
-  it('a member the screen never loaded is fine while the group is unchanged (bound by the load-time version)', async () => {
+  it('a member the screen never loaded is never posted: the load refuses the group, end to end', async () => {
     const rows = [shown('inv-2', { invoice_group_id: 'grp-1' })];
     databaseHolds([...rows, shown('inv-9', { invoice_group_id: 'grp-1' })].map((r) => current(r)));
 
-    const review = await reviewInvoicePostTargets(
-      [{ key: 'g', invoiceGroupId: 'grp-1' }],
-      rows,
-      baseline({ groupVersions: new Map([['grp-1', VG]]), groupMembers: new Map([['grp-1', ['inv-2', 'inv-9']]]) }),
-    );
+    const review = await reviewInvoicePostTargets([{ key: 'g', invoiceGroupId: 'grp-1' }], rows, readInvoicePostBaseline(rows));
 
-    expect(review).toEqual({ ok: true, versions: new Map([['g', VG]]) });
+    expect(review).toEqual({ ok: false, reason: 'changed', changedIds: ['inv-9'] });
   });
 
   it('a row or member query error is recheck_failed', async () => {
@@ -437,6 +568,39 @@ describe('describeBulkPostFailure', () => {
     expect(BULK_TARGET_CHANGED_MESSAGE).not.toMatch(/nothing was posted/);
     expect(describeBulkPostFailure({ message: 'PRICING_INCOMPLETE' })).toBe('needs pricing first');
     expect(describeBulkPostFailure(new Error('post failed'))).toBe('post failed');
+  });
+});
+
+// Review round 2 (LOW): a per-target version refusal from the database is an expected outcome on
+// every bulk screen, not a Sentry error.
+describe('bulkPostOutcomeError', () => {
+  const refusal = { message: 'INVOICE_CHANGED_SINCE_REVIEW: invoice x changed' };
+  const summarize = (messages: string[]) => `Posted 1/3. Failed: ${messages.join(' | ')}`;
+
+  it('only version refusals: an expected refusal, nothing sent to Sentry', () => {
+    const err = bulkPostOutcomeError([bulkPostFailure('A-1', refusal)], summarize, 'tag');
+    expect(err).toBeInstanceOf(ExpectedActionRefusal);
+    expect(err.message).toBe(`Posted 1/3. Failed: A-1: ${BULK_TARGET_CHANGED_MESSAGE}`);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('other failures go to Sentry without the refusals; the toast still names them all', () => {
+    const err = bulkPostOutcomeError(
+      [bulkPostFailure('A-1', refusal), bulkPostFailure('A-2', new Error('post failed'))],
+      summarize,
+      'tag',
+    );
+    expect(err).toBeInstanceOf(ExpectedActionRefusal);
+    expect(err.message).toBe(`Posted 1/3. Failed: A-1: ${BULK_TARGET_CHANGED_MESSAGE} | A-2: post failed`);
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+    const [reported, context] = mockCapture.mock.calls[0];
+    expect((reported as Error).message).toBe('Posted 1/3. Failed: A-2: post failed');
+    expect(context).toEqual({ tags: { source: 'critical_action', action: 'tag' } });
+  });
+
+  it('alsoReport sends it even with no failure (the cockpit held an invoice back)', () => {
+    bulkPostOutcomeError([], () => 'Posted 2/2. 1 held back.', 'tag', true);
+    expect(mockCapture).toHaveBeenCalledTimes(1);
   });
 });
 

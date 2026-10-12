@@ -91,22 +91,25 @@ they call the new readers, so they ship only after the file is applied (see the 
   all drafts) send it too since 2026-10-12, for the targets each can actually post (draft/unposted;
   on the Field Invoices tray only Post All's this-season targets): when the screen LOADS it reads
   each split group's member list, then the versions, then re-reads the rows it shows and the member
-  lists; if any shown row or member list changed in between it keeps no version and reloads once by
-  itself (Post refuses as "changed" until a load binds cleanly). So a kept version belongs to exactly
-  the invoice rows on screen and the member list read before it, and any change after the version
-  read (even a line, a share, the customer's terms or a split-group member the screen never loaded)
-  makes the database refuse that post; at click each also re-reads the rows it showed and each split
-  group's member list, and posts nothing and reloads if any changed (`src/lib/invoiceBulkPostReview.ts`;
-  changelog "Bulk Post review round 1" and "Luna round 1"). Closed in code; it takes effect with the
+  lists. Each target is bound on its own: a stand-alone invoice whose row changed in between, or a
+  split group whose shown rows or member list changed, or whose member list holds an invoice the
+  screen did not load (added after the rows query, past the row cap, on another order, or in a status
+  or type the screen leaves out), keeps no version; every other target keeps its own, and the screen
+  reloads once by itself (Post refuses only a selected target that changed). So a kept version
+  belongs to exactly the invoice rows on screen and the members the screen loaded, and any change
+  after the version read (even a line, a share or the customer's terms) makes the database refuse
+  that post; at click each also re-reads the rows it showed and each split group's member list, and
+  posts nothing and reloads if any changed (`src/lib/invoiceBulkPostReview.ts`; changelog "Bulk Post
+  review round 1", "Luna round 1" and "Luna round 1 review fixes"). A per-target database refusal is
+  shown on every bulk screen and never sent to Sentry. Closed in code; it takes effect with the
   migration apply. **Left open (LOW, owner: whoever next changes these screens):** data a list does
   not display (lines, shares, the customer's terms) is bound from the moment of the version read, so
   a change to it between the screen's rows query and that read (well under a second) is inside the
-  version without being on screen, unless it also moved the invoice row's last-changed time; a
-  member added to a split group between the rows query and the first member read is inside both
-  member lists and the version, unless it also changed a shown member row (the member list is not
-  compared with the loaded rows, because a group may have members a screen never loads); the
-  version reads cost one call per postable stand-alone invoice or group on each admin load, six at a
-  time (a many-invoice reader needs a migration); a retry after a lost response whose reload also
+  version without being on screen, unless it also moved the invoice row's last-changed time; the
+  version reads cost one call per postable stand-alone invoice or group on each admin load (and on
+  the one automatic reload), six at a time, and Post waits for them — the fix is a many-invoice
+  reader (`get_invoice_post_versions(uuid[])`), which needs its own migration and so is a named
+  follow-up for after `20261009120000` is live; a retry after a lost response whose reload also
   failed is refused once as "changed".
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;

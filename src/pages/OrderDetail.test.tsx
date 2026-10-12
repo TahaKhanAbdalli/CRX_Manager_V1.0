@@ -491,6 +491,50 @@ describe('OrderDetail', () => {
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
   });
 
+  // Review round 2 (LOW): the automatic reload after a load that could not bind its versions was
+  // fetchOrder, which also resets the line editor and the price inputs, throwing away edits the
+  // admin had not saved. It now re-reads only the order's invoices.
+  it('when the invoices change while the page binds them, only the invoices reload, not the order', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const shown = {
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: null, customer_id: 'cust-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000, deleted_at: null,
+      updated_at: '2026-03-15T10:00:00+00:00',
+    };
+    const changed = { ...shown, updated_at: '2026-03-15T11:00:00+00:00' };
+    let invoiceListLoads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') {
+        return buildSelectAwareChain((columns) => {
+          if (isReviewReread(columns)) return { data: [changed], error: null };
+          if (columns === '*') invoiceListLoads += 1;
+          return { data: [shown], error: null };
+        });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      const result = Promise.resolve(name === 'get_invoice_post_version'
+        ? { data: POST_VERSION, error: null }
+        : { data: null, error: null });
+      return Object.assign(result, { throwOnError: () => result });
+    });
+
+    renderOrderDetail();
+    await screen.findByRole('button', { name: /post all drafts/i });
+    await waitFor(() => expect(invoiceListLoads).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(invoiceListLoads).toBe(2);
+    expect(mockFrom.mock.calls.filter(([table]) => table === 'orders')).toHaveLength(1);
+  });
+
   // Review round 1 (MED): the order's invoice load keeps soft-deleted rows, and a draft deleted
   // from the Chemical Sales list keeps status 'draft'. It went into the batch, the review saw it
   // deleted and refused EVERY run, so the order's live drafts could never be posted from here.

@@ -318,6 +318,8 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     const posts = () => mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args);
     expect(posts()).toHaveLength(1);
     expect(posts()[0].p_expected_version).toBe(LOAD_VERSION);
+    // Review round 2 (LOW): the database's version refusal is an expected outcome, not a fault.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
     // The click itself read no version: the reload after the run read the new ones.
     expect(mockRpc.mock.calls.slice(0, mockRpc.mock.calls.findIndex(([name]) => name === 'post_invoice'))
       .filter(([name]) => name === 'get_invoice_post_version')).toHaveLength(readsBeforeClick);
@@ -373,6 +375,68 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
       '1 invoice(s) changed since this list loaded — nothing was posted. The list is being refreshed; check them and post again.',
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice_group' || name === 'post_invoice')).toBe(false);
+  });
+
+  // Review round 2 (MED): a member of the ticked split group that this list never loaded (here a
+  // field invoice, which the Chemical Sales list leaves out; equally one past the row cap) was in
+  // the group's member list and version, so the group post posted it unseen.
+  it('a split group with a member the list does not show is not posted', async () => {
+    const rows = [
+      ...ROWS,
+      invoice({ invoice_number: 'NEW-SPLIT-A', status: 'draft', season: 2027, invoice_group_id: 'grp-1', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+      invoice({ invoice_number: 'HIDDEN-SPLIT-B', invoice_type: 'field_application', status: 'draft', season: 2027, invoice_group_id: 'grp-1', customer_id: 'cust-2', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+    ];
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
+    mockRpc.mockImplementation(answerRpc);
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-SPLIT-A').length).toBeGreaterThan(0));
+    expect(screen.queryByText('HIDDEN-SPLIT-B')).not.toBeInTheDocument();
+
+    tickRow('NEW-SPLIT-A');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post selected + full split groups' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      '1 invoice(s) changed since this list loaded — nothing was posted. The list is being refreshed; check them and post again.',
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice_group' || name === 'post_invoice')).toBe(false);
+  });
+
+  // Review round 2 (MED): one row changing while the list bound its versions refused every
+  // selection, even one that did not include it.
+  it('a row that changes while the list binds its versions does not block posting a different row', async () => {
+    let rows = ROWS;
+    let saves = 0;
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      // OLD-DRAFT is saved every time its version is read: it can never be bound.
+      if (name === 'get_invoice_post_version' && (args.p_invoice_ids as string[])[0] === 'OLD-DRAFT') {
+        saves += 1;
+        rows = rows.map((row) => (row.id === 'OLD-DRAFT'
+          ? { ...row, updated_at: `2026-10-05T12:${String(saves).padStart(2, '0')}:00+00:00` }
+          : row));
+      }
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    // The first load and the one automatic reload both failed to bind OLD-DRAFT.
+    await waitFor(() => expect(saves).toBe(2));
+
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toEqual({
+      p_invoice_id: 'NEW-DRAFT',
+      p_idempotency_key: expect.any(String),
+      p_expected_version: POST_VERSION,
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', expect.anything()));
   });
 
   // Regression (2026-10-09 final review): the toggle compared HOW MANY rows were

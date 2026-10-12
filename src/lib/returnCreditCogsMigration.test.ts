@@ -399,10 +399,13 @@ describe('return-credit COGS migration', () => {
     expect(batchPostStart).toBeGreaterThanOrEqual(0);
     expect(batchPrintStart).toBeGreaterThan(batchPostStart);
     const batchPostHandler = invoicesPage.slice(batchPostStart, batchPrintStart);
-    // Bulk post failures go through describeBulkPostFailure, which ends in sanitizeError (bulk Post
-    // review round 1; its own wording is tested in invoiceBulkPostReview.test.ts).
-    expect(batchPostHandler).toContain('failures.push(`${target.label}: ${describeBulkPostFailure(err)}`)');
-    expect(readFileSync('src/lib/invoiceBulkPostReview.ts', 'utf8')).toContain('return describePostInvoiceBlock(err) ?? sanitizeError(err);');
+    // Bulk post failures go through bulkPostFailure -> describeBulkPostFailure, which ends in
+    // sanitizeError (bulk Post review round 1; Luna round 1 review fixes split out the version
+    // refusals for Sentry; the wording is tested in invoiceBulkPostReview.test.ts).
+    expect(batchPostHandler).toContain('failures.push(bulkPostFailure(target.label, err))');
+    const bulkReviewSource = readFileSync('src/lib/invoiceBulkPostReview.ts', 'utf8');
+    expect(bulkReviewSource).toContain('message: `${label}: ${describeBulkPostFailure(err)}`');
+    expect(bulkReviewSource).toContain('return describePostInvoiceBlock(err) ?? sanitizeError(err);');
     expect(invoiceSource).toContain('id: it.id');
     expect(invoiceSource).toContain('order_item_id: it.order_item_id');
   });

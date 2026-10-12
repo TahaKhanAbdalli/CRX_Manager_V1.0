@@ -229,6 +229,8 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     ));
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args.p_invoice_id)).toEqual(['FA-NEW-DRAFT']);
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringMatching(/nothing was posted/));
+    // Review round 2 (LOW): the database's version refusal is an expected outcome, not a fault.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
   it('Post All skips a split group with a prior-season member hidden by a filter, and counts that hidden member', async () => {

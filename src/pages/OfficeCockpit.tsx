@@ -64,7 +64,14 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import { describeBulkPostFailure, failedPostReviewMessage, reviewInvoicePostTargets, useInvoicePostBaseline } from '../lib/invoiceBulkPostReview';
+import {
+  bulkPostFailure,
+  bulkPostOutcomeError,
+  failedPostReviewMessage,
+  reviewInvoicePostTargets,
+  useInvoicePostBaseline,
+  type BulkPostFailure,
+} from '../lib/invoiceBulkPostReview';
 import { postReviewedInvoice } from '../lib/invoicePostVersion';
 import { ExpectedActionRefusal, runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -1056,7 +1063,7 @@ export default function OfficeCockpit() {
         }
 
         let posted = 0;
-        const failures: string[] = [];
+        const failures: BulkPostFailure[] = [];
         // toPost holds only NON-grouped, still-clean drafts, so each posts singly via
         // post_invoice — we never call post_invoice_group here.
         for (const inv of toPost) {
@@ -1078,18 +1085,24 @@ export default function OfficeCockpit() {
             // re-post of it replay this receipt and report success without posting.
             delete postKeysRef.current[inv.id];
           } catch (err: unknown) {
-            failures.push(`${inv.invoice_number}: ${describeBulkPostFailure(err)}`);
+            failures.push(bulkPostFailure(inv.invoice_number, err));
           }
         }
         await fetchAll();
         if (failures.length > 0 || heldBack > 0) {
-          // Honest partial outcome; keep failed keys so a retry reuses them.
+          // Honest partial outcome; keep failed keys so a retry reuses them. A target the database
+          // refused as changed since the load is shown, not sent to Sentry; a held-back invoice is
+          // still reported, as before.
           const heldMsg = heldBack > 0 ? ` ${heldBack} held back (new watchdog flag since load).` : '';
-          throw new Error(
-            `Posted ${posted}/${toPost.length}.${heldMsg}` +
-            (failures.length > 0
-              ? ` Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`
-              : '')
+          throw bulkPostOutcomeError(
+            failures,
+            (messages) =>
+              `Posted ${posted}/${toPost.length}.${heldMsg}` +
+              (messages.length > 0
+                ? ` Failed: ${messages.slice(0, 3).join(' | ')}${messages.length > 3 ? ' …' : ''}`
+                : ''),
+            'cockpit_post_all_clean',
+            heldBack > 0,
           );
         }
         postKeysRef.current = {};

@@ -169,6 +169,33 @@ describe('OfficeCockpit — Post all clean checks what the cockpit showed', () =
     await waitFor(() => expect(postKeys('inv-2')).toHaveLength(2));
     expect(postKeys('inv-1')[1]).not.toBe(postKeys('inv-1')[0]);
     expect(postKeys('inv-2')[1]).toBe(postKeys('inv-2')[0]);
+    // A real failure (not a version refusal) is still reported.
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Posted 1/2. Failed: FA-1002: needs pricing first' }),
+      { tags: { source: 'critical_action', action: 'cockpit_post_all_clean' } },
+    );
+  });
+
+  // Review round 2 (LOW): a per-invoice version refusal from the database went to Sentry here
+  // (folded into the partial-outcome error), unlike the order page.
+  it('a database "changed since review" refusal is shown but not sent to Sentry; the other invoice posts', async () => {
+    state.twoRows = true;
+    mockRpc.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === 'post_invoice' && args.p_invoice_id === 'inv-2') {
+        return rpcResult(null, { message: 'INVOICE_CHANGED_SINCE_REVIEW: invoice FA-1002 changed since it was reviewed' });
+      }
+      return answerRpc(name);
+    });
+
+    render(<OfficeCockpit />);
+    fireEvent.click(await screen.findByRole('button', { name: /Post all clean/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 2 invoice(s)' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Posted 1/2. Failed: FA-1002: changed since this screen loaded, so it was not posted — check it and post again',
+    ));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
   it('posts nothing when an invoice changed since the cockpit loaded, reloads and says so', async () => {

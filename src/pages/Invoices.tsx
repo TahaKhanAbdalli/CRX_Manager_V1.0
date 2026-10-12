@@ -34,11 +34,13 @@ import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
 import {
-  describeBulkPostFailure,
+  bulkPostFailure,
+  bulkPostOutcomeError,
   failedPostReviewMessage,
   reviewInvoicePostTargets,
   shownRowsForTargets,
   useInvoicePostBaseline,
+  type BulkPostFailure,
 } from '../lib/invoiceBulkPostReview';
 import { postReviewedInvoice, postReviewedInvoiceGroup } from '../lib/invoicePostVersion';
 import { applyTableSearchSort } from '../lib/tableSearchSort';
@@ -327,7 +329,7 @@ export default function Invoices() {
           throw new ExpectedActionRefusal(failedPostReviewMessage(review, 'list', shownRows));
         }
         let completedActions = 0;
-        const failures: string[] = [];
+        const failures: BulkPostFailure[] = [];
         const failedIds: string[] = [];
         for (const target of targets) {
           if (!postKeysRef.current[target.key]) {
@@ -359,7 +361,7 @@ export default function Invoices() {
             delete postKeysRef.current[target.key];
           } catch (err: unknown) {
             failedIds.push(...target.selectedIds);
-            failures.push(`${target.label}: ${describeBulkPostFailure(err)}`);
+            failures.push(bulkPostFailure(target.label, err));
           }
         }
 
@@ -368,9 +370,12 @@ export default function Invoices() {
           // Leave only failed invoices selected so the next retry is focused and
           // reuses their existing per-invoice idempotency keys.
           setSelected(new Set(failedIds));
-          const shown = failures.slice(0, 3).join(' | ');
-          const extra = failures.length > 3 ? ` | +${failures.length - 3} more` : '';
-          throw new Error(`Completed ${completedActions}/${targets.length} posting action(s). Failed: ${shown}${extra}`);
+          // A target the database refused as changed since the load is shown, not sent to Sentry.
+          throw bulkPostOutcomeError(failures, (messages) => {
+            const shown = messages.slice(0, 3).join(' | ');
+            const extra = messages.length > 3 ? ` | +${messages.length - 3} more` : '';
+            return `Completed ${completedActions}/${targets.length} posting action(s). Failed: ${shown}${extra}`;
+          }, 'batch_post_invoices_client_loop');
         }
         setSelected(new Set());
       },

@@ -71,6 +71,13 @@ const isPostableOrderInvoice = (invoice: Invoice): boolean =>
   invoice.deleted_at == null && (invoice.status === 'draft' || invoice.status === 'unposted');
 // Only those get a posting version read when the order loads (posted / paid ones get none).
 const selectPostableOrderInvoices = (invoices: Invoice[]): Invoice[] => invoices.filter(isPostableOrderInvoice);
+// The order's linked invoices (AR single source of truth), as the page shows them.
+const queryOrderInvoices = (orderId: string) => supabase
+  .from('invoices')
+  .select('*')
+  .eq('order_id', orderId)
+  .not('status', 'in', '("voided","cancelled")')
+  .order('invoice_number');
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -276,12 +283,7 @@ export default function OrderDetail() {
       );
 
       // Load linked invoices (AR single source of truth)
-      const { data: invoiceData } = await supabase
-        .from('invoices')
-        .select('*')
-        .eq('order_id', id!)
-        .not('status', 'in', '("voided","cancelled")')
-        .order('invoice_number');
+      const { data: invoiceData } = await queryOrderInvoices(id!);
       if (isStale()) return;
       setInvoices((invoiceData || []) as Invoice[]);
 
@@ -331,8 +333,15 @@ export default function OrderDetail() {
 
   // Post all drafts sends the posting version bound to the order's invoices as loaded (admins
   // only), so anything that changes after that, even a line or the customer's terms, refuses the
-  // post. If they changed while the versions were being read, the order reloads once by itself.
-  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, selectPostableOrderInvoices, fetchOrder);
+  // post. If they changed while the versions were being read, the order's invoices reload once by
+  // themselves. Only the invoices (round 2): fetchOrder also resets the line editor and the price
+  // inputs, which would throw away edits the admin has not saved yet.
+  const reloadOrderInvoices = useCallback(async () => {
+    const { data, error } = await queryOrderInvoices(id!);
+    if (activeOrderIdRef.current !== id || error) return;
+    setInvoices((data || []) as Invoice[]);
+  }, [id]);
+  const postBaselineFor = useInvoicePostBaseline(invoices, canManage, selectPostableOrderInvoices, reloadOrderInvoices);
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {

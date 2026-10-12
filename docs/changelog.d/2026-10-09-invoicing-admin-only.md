@@ -496,6 +496,51 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   typecheck`, `npm run lint` and the full `npx vitest run` (393 files: 5615 passed, 123 skipped,
   1 failed: `rpcFixtureLiveDiff.test.ts`, expected until the readers are live) on this change.
 
+### 2026-10-12 - Bulk Post Luna round 1 review fixes (independent review of the round above; no database change)
+
+- **What the reviewer found (and was true):** (MED) a split-group member the screen never showed
+  could still post: the first member list was never compared with the rows the screen loaded, so a
+  member added between the rows query and that read, or one past the row cap, on another order or
+  in a status the screen leaves out, was inside the member list and the version, and the group
+  posted it. (MED) One row changing anywhere while the versions were read voided EVERY version, so
+  Post Selected on an unrelated invoice was refused with a message about an invoice the admin had
+  not selected. (LOW) Only the order page kept a per-target database "changed since review" refusal
+  out of Sentry; Chemical Sales, the Field Invoices tray and the cockpit still reported it. (LOW)
+  The automatic reload had no unmount cleanup, and on the order page it was the whole-page reload,
+  which also resets the line editor and the price inputs. (LOW) One version read per postable
+  target is still the cost (see below). (LOW) Test gaps for the above. (LOW) The previous fixer's
+  test count for the seven touched files was 98; it was 87.
+- **Now (member check):** the load passes every row the screen loaded, and a split group's first
+  member list must hold only those (live) rows; any other member makes that group "changed" (no
+  version; Post refuses it and the screen refreshes). A loaded member in any status (say a posted
+  one on Chemical Sales) counts as loaded and is re-read with the shown rows.
+- **Now (per target):** a change while the versions are read drops only that target's version: a
+  stand-alone invoice whose row changed, or a group whose rows or members changed. At click, Post
+  refuses as "changed" only when a SELECTED target changed, naming only those invoices; the screen
+  still reloads once by itself whenever anything changed.
+- **Now (Sentry):** the three other bulk screens keep a per-target version refusal out of Sentry
+  (`bulkPostFailure` / `bulkPostOutcomeError` in `src/lib/invoiceBulkPostReview.ts`): the toast is
+  unchanged; Sentry gets only the other failures (the cockpit's "held back" outcome is still
+  reported, as before).
+- **Now (reload):** a load replaced by a newer one, or one that finishes after the screen closed,
+  never reloads. The order page's automatic reload re-reads only the order's invoices, so unsaved
+  line and price edits are kept.
+- **Deferred (LOW, version-read cost):** a single many-invoice reader needs its own migration, which
+  this branch cannot add before `20261009120000` is live; named follow-up in KNOWN_ISSUES.
+- **Proof:** each new test failed with the five source files restored to the round above (15
+  failed): `src/lib/invoiceBulkPostReview.test.ts` (member added before the first member read;
+  unloaded member vs a loaded posted member; an unselected row changing; a changed member row
+  dropping only its group; the end-to-end unloaded-member refusal; no reload after unmount;
+  `bulkPostOutcomeError`), `src/pages/Invoices.seasonWindow.test.tsx` (a group with a member the list
+  does not load is not posted; a row being saved during binding does not block another row; the
+  database refusal sends nothing to Sentry), `src/components/field-invoices/FieldInvoicesSeasonWindow.test.tsx`
+  and `src/pages/OfficeCockpit.postAllClean.test.tsx` (the refusal sends nothing to Sentry; a real
+  failure still does), `src/pages/OrderDetail.test.tsx` (the automatic reload re-reads the invoices,
+  not the order). The hook test also covers a clean load re-arming the one automatic reload.
+  `src/lib/returnCreditCogsMigration.test.ts` pins the new failure-helper wording. `npm run
+  typecheck`, `npm run lint` and the full `npx vitest run` (393 files: 5627 passed, 123 skipped,
+  1 failed: `rpcFixtureLiveDiff.test.ts`, expected until the readers are live).
+
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations. Then,
