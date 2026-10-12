@@ -17,7 +17,9 @@ const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), 
 
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
-  return { ...actual, supabase: { from: mockFrom, rpc: mockRpc } };
+  // supabaseUntyped carries the posting-version readers and the versioned post.
+  const client = { from: mockFrom, rpc: mockRpc };
+  return { ...actual, supabase: client, supabaseUntyped: client };
 });
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../contexts/AuthContext', () => ({
@@ -41,6 +43,22 @@ function invoice(overrides: Record<string, unknown>) {
     is_quick_delivery: false,
     ...overrides,
   };
+}
+
+// The posting version the readers return (a 32-character lowercase md5).
+const POST_VERSION = '0123456789abcdef0123456789abcdef';
+
+function rpcResult(data: unknown, error: unknown = null) {
+  const result = Promise.resolve({ data, error });
+  return Object.assign(result, { throwOnError: () => (error ? Promise.reject(error) : result) });
+}
+
+/** Readers return POST_VERSION; every other RPC (the posts) succeeds with no data. */
+function answerRpc(name: string) {
+  if (name === 'get_invoice_post_version' || name === 'get_invoice_group_post_version') {
+    return rpcResult(POST_VERSION);
+  }
+  return rpcResult(null);
 }
 
 // "Today" is 2026-10-09, so the current season is 2027 (Oct 1 2026 – Sep 30 2027).
@@ -111,10 +129,7 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
   });
 
   it('Select All picks only this season, so Select All + Post posts no prior-season draft', async () => {
-    mockRpc.mockImplementation(() => {
-      const result = Promise.resolve({ data: null, error: null });
-      return Object.assign(result, { throwOnError: () => result });
-    });
+    mockRpc.mockImplementation(answerRpc);
     render(<MemoryRouter><Invoices /></MemoryRouter>);
     await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
 
@@ -130,7 +145,82 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(within(dialog).queryByText(/not from this season/)).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'NEW-DRAFT' });
+    // The post carries the posting version read for exactly that invoice, with a key.
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_post_version').map(([, args]) => args))
+      .toEqual([{ p_invoice_ids: ['NEW-DRAFT'] }]);
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toEqual({
+      p_invoice_id: 'NEW-DRAFT',
+      p_idempotency_key: expect.any(String),
+      p_expected_version: POST_VERSION,
+    });
+  });
+
+  it('a ticked split invoice posts its whole group with the group posting version', async () => {
+    const GROUP_VERSION = 'fedcba9876543210fedcba9876543210';
+    mockFrom.mockImplementation((table: string) =>
+      buildInMemoryQuery(table === 'invoices'
+        ? [
+          ...ROWS,
+          invoice({ invoice_number: 'NEW-SPLIT-A', status: 'draft', season: 2027, invoice_group_id: 'grp-1', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+          invoice({ invoice_number: 'NEW-SPLIT-B', status: 'draft', season: 2027, invoice_group_id: 'grp-1', customer_id: 'cust-2', invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+        ]
+        : []));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_invoice_group_post_version') return rpcResult(GROUP_VERSION);
+      if (name === 'post_invoice_group') return rpcResult({ posted: 2 });
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-SPLIT-A').length).toBeGreaterThan(0));
+
+    tickRow('NEW-SPLIT-A');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post selected + full split groups' }));
+
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'get_invoice_group_post_version').map(([, args]) => args))
+      .toEqual([{ p_invoice_group_id: 'grp-1' }]);
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')[0][1]).toEqual({
+      p_invoice_group_id: 'grp-1',
+      p_performed_by: 'user-1',
+      p_idempotency_key: expect.any(String),
+      p_expected_version: GROUP_VERSION,
+    });
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice')).toBe(false);
+  });
+
+  // Codex Luna HIGH (2026-10-12): Post Selected posted whatever the invoice held at click time.
+  // Another admin changes NEW-DRAFT from $100.00 to $70.00 after this list loaded; the list
+  // re-reads the rows after reading the posting versions, sees the change, posts nothing and
+  // reloads.
+  it('an invoice changed since the list loaded is not posted; the list reloads and says so', async () => {
+    let rows = ROWS;
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_invoice_post_version') {
+        rows = ROWS.map((row) => (row.id === 'NEW-DRAFT' ? { ...row, total_amount_cents: 7000, balance_cents: 7000 } : row));
+      }
+      return answerRpc(name);
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    const listLoads = () => mockFrom.mock.calls.filter(([table]) => table === 'invoices').length;
+
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    const loadsBeforePost = listLoads();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      '1 invoice(s) changed since this list loaded — the list was reloaded; check them and post again.',
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'post_invoice_group')).toBe(false);
+    // The re-read, then the reload of the list itself.
+    await waitFor(() => expect(listLoads()).toBeGreaterThanOrEqual(loadsBeforePost + 2));
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
   });
 
   // Regression (2026-10-09 final review): the toggle compared HOW MANY rows were
@@ -148,10 +238,7 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     return within(row).getByRole('checkbox');
   };
   const statusFilter = () => screen.getByRole('combobox', { name: 'Filter by status' });
-  const postSucceeds = () => {
-    const result = Promise.resolve({ data: null, error: null });
-    return Object.assign(result, { throwOnError: () => result });
-  };
+  const postSucceeds = answerRpc;
   const postedIds = () =>
     mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args.p_invoice_id);
 
@@ -255,8 +342,10 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
   it('counts only loaded invoices: a failed post re-selecting a row the reload no longer returns drops it', async () => {
     let rows = ROWS;
     mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
-    mockRpc.mockImplementation(() => {
-      // NEW-DRAFT is deleted elsewhere while this batch runs, and both posts fail.
+    mockRpc.mockImplementation((name: string) => {
+      // The review passes; then NEW-DRAFT is deleted elsewhere while this batch posts, and
+      // both posts fail.
+      if (name !== 'post_invoice') return answerRpc(name);
       rows = ROWS.filter((row) => row.id !== 'NEW-DRAFT');
       const failed = Promise.resolve({ data: null, error: { message: 'post failed' } });
       return Object.assign(failed, { throwOnError: () => Promise.reject(new Error('post failed')) });

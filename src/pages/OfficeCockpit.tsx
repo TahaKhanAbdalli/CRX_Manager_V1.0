@@ -64,6 +64,8 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { supabase, supabaseUntyped, assertRpcResult, describePostInvoiceBlock, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { failedPostReviewMessage, reviewInvoicePostTargets } from '../lib/invoiceBulkPostReview';
+import { postReviewedInvoice } from '../lib/invoicePostVersion';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
@@ -92,6 +94,9 @@ interface PostableInvoiceRow {
   invoice_date: string;
   status: string;
   total_amount_cents: number;
+  // customer_id and updated_at: what "Post all clean" checks has not changed since the load.
+  customer_id: string;
+  updated_at: string | null;
   customer_name: string;
   job_id: string | null;
   invoice_group_id: string | null;
@@ -239,6 +244,8 @@ type RawPostableInvoice = {
   invoice_date: string;
   status: string;
   total_amount_cents: number;
+  customer_id: string;
+  updated_at: string | null;
   job_id: string | null;
   invoice_group_id: string | null;
   pricing_pending: boolean | null;
@@ -495,7 +502,7 @@ export default function OfficeCockpit() {
       // (b) Draft/unposted field-app invoices (§4 auto-populates these)
       supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, customer:customers(farm_name)')
+        .select('id, invoice_number, invoice_date, status, total_amount_cents, customer_id, updated_at, job_id, invoice_group_id, pricing_pending, customer:customers(farm_name)')
         .in('status', ['draft', 'unposted'])
         .eq('invoice_type', 'field_application')
         .is('deleted_at', null)
@@ -746,6 +753,8 @@ export default function OfficeCockpit() {
       invoice_date: r.invoice_date,
       status: r.status,
       total_amount_cents: r.total_amount_cents,
+      customer_id: r.customer_id,
+      updated_at: r.updated_at ?? null,
       customer_name: r.customer?.farm_name ?? 'Unknown',
       job_id: r.job_id,
       invoice_group_id: r.invoice_group_id,
@@ -1016,6 +1025,18 @@ export default function OfficeCockpit() {
           );
         }
 
+        // Post only what the cockpit showed: read each still-clean invoice's posting version,
+        // then re-read those rows. Anything changed since the cockpit loaded posts nothing and
+        // reloads the cockpit.
+        const review = await reviewInvoicePostTargets(
+          toPost.map((inv) => ({ key: inv.id, invoiceId: inv.id })),
+          toPost,
+        );
+        if (!review.ok) {
+          await fetchAll();
+          throw new Error(failedPostReviewMessage(review));
+        }
+
         let posted = 0;
         const failures: string[] = [];
         // toPost holds only NON-grouped, still-clean drafts, so each posts singly via
@@ -1025,13 +1046,14 @@ export default function OfficeCockpit() {
             if (!postKeysRef.current[inv.id]) {
               postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
             }
-            // post_invoice RETURNS void — .throwOnError(), no result to assert.
-            await supabase
-              .rpc('post_invoice', {
-                p_invoice_id: inv.id,
-                p_idempotency_key: postKeysRef.current[inv.id],
-              })
-              .throwOnError();
+            // post_invoice RETURNS void; postReviewedInvoice throws on error. It carries the
+            // reviewed version, which the database checks under its row locks
+            // (INVOICE_CHANGED_SINCE_REVIEW, plain wording via sanitizeError).
+            await postReviewedInvoice({
+              p_invoice_id: inv.id,
+              p_idempotency_key: postKeysRef.current[inv.id],
+              p_expected_version: review.versions.get(inv.id)!,
+            });
             posted += 1;
           } catch (err: unknown) {
             const blocked = describePostInvoiceBlock(err);

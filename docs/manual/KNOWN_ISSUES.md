@@ -88,8 +88,10 @@ they call the new readers, so they ship only after the file is applied (see the 
   sends it (built 2026-10-10; see the editor entry below). All three single-invoice editors send it:
   the regular invoice page, the per-acre field-app editor and the Split Billing editor (the last two
   added in review round 5). The list pages' bulk posts (Post Selected, Post All, Post all clean, Post
-  all drafts) still send no version: old callers, still valid, and they have no single reviewed screen
-  to bind. Owner: whoever next changes those bulk posts.
+  all drafts) send it too since 2026-10-12: each reads every target's version, then re-reads the rows
+  the screen showed, posts nothing and reloads if any changed, and sends the version with each post
+  (`src/lib/invoiceBulkPostReview.ts`; changelog "Bulk Post checks what the list showed"). Closed in
+  code; it takes effect with the migration apply.
 **Proof (container, not live):** `scripts/smoke/prove-invoicing-admin-only-real-schema.mjs`
 (bug reproduced before; every non-admin refused after with nothing written and no number drawn;
 admins byte-identical; reads; completions; the posting race; the hard-guard sweep; one mutation per

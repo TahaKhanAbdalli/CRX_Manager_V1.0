@@ -136,8 +136,9 @@ what), this is what each person can do:
   draft is cancelled with it, as today.
 - **Posting is safer:** posting from an invoice's own page (the regular invoice page, the field-app
   invoice page and Split Billing) sends the version of the invoice the admin looked at, and the
-  database refuses the post if someone changed it in the meantime. The list pages' bulk posts (Post
-  Selected, Post All) do not do this check yet.
+  database refuses the post if someone changed it in the meantime. The bulk posts (Post Selected,
+  Post All, the cockpit's Post all clean and an order's Post all drafts) do the same: if any invoice
+  changed since the list loaded, nothing is posted and the list reloads so you can look again.
 
 **What the screens look like for a sales rep (phase 2, built 2026-10-10 in the same change; goes live
 with it):**

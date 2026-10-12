@@ -35,6 +35,8 @@ import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
+import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../lib/invoiceBulkPostReview';
+import { postReviewedInvoice, postReviewedInvoiceGroup } from '../lib/invoicePostVersion';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
@@ -1018,6 +1020,15 @@ export default function OrderDetail() {
     // each target with a fresh status re-check: if a prior attempt already posted
     // it, skip it (count as done) instead of raising. The idempotency cache is keyed
     // to the exact standalone/group RPC boundary.
+    const describePostError = (err: unknown): string => {
+      const blocked = describePostInvoiceBlock(err);
+      if (blocked) return blocked;
+      const sanitized = sanitizeError(err);
+      return sanitized.includes('RETURN_CREDIT_SOURCE_CONCURRENT')
+        ? 'A related invoice or return credit is being changed elsewhere. Wait a moment and try again.'
+        : sanitized;
+    };
+    const toPost: typeof targets = [];
     for (const target of targets) {
       try {
         const statusQuery = supabase.from('invoices').select('status').is('deleted_at', null);
@@ -1031,38 +1042,53 @@ export default function OrderDetail() {
           alreadyPosted += target.selectedIds.length;
           continue;
         }
+        toPost.push(target);
+      } catch (err) {
+        errors.push(`${target.label}: ${describePostError(err)}`);
+      }
+    }
+    // Post only what this page showed: read each remaining target's posting version, then
+    // re-read the shown rows (every loaded member of a split group). Anything changed since the
+    // page loaded posts nothing and reloads the order.
+    const review = toPost.length > 0
+      ? await reviewInvoicePostTargets(toPost, shownRowsForTargets(toPost, invoices))
+      : null;
+    if (review && !review.ok) {
+      toast('error', failedPostReviewMessage(review));
+      for (const e of errors) toast('error', e);
+      await fetchOrder();
+      setPostingAll(false);
+      return;
+    }
+    for (const target of toPost) {
+      try {
         if (!postDraftKeysRef.current[target.key]) {
           postDraftKeysRef.current[target.key] = generateIdempotencyKey(
             target.operation,
             `${profile.id}:${target.scopeId}`,
           );
         }
+        // Each post carries the version reviewed above; the database refuses with
+        // INVOICE_CHANGED_SINCE_REVIEW (plain wording via sanitizeError) if it moved since.
+        const expectedVersion = review!.versions.get(target.key)!;
         if (target.operation === 'post_invoice_group') {
-          const { data, error } = await supabase.rpc('post_invoice_group', {
+          await postReviewedInvoiceGroup({
             p_invoice_group_id: target.invoiceGroupId!,
             p_performed_by: profile.id,
             p_idempotency_key: postDraftKeysRef.current[target.key],
+            p_expected_version: expectedVersion,
           });
-          if (error) throw error;
-          assertRpcResult(data, 'post_invoice_group');
         } else {
-          await supabase.rpc('post_invoice', {
+          await postReviewedInvoice({
             p_invoice_id: target.invoiceId!,
             p_idempotency_key: postDraftKeysRef.current[target.key],
-          }).throwOnError();
+            p_expected_version: expectedVersion,
+          });
         }
         posted += target.selectedIds.length;
         delete postDraftKeysRef.current[target.key];
       } catch (err) {
-        const blocked = describePostInvoiceBlock(err);
-        if (blocked) errors.push(`${target.label}: ${blocked}`);
-        else {
-          const sanitized = sanitizeError(err);
-          const message = sanitized.includes('RETURN_CREDIT_SOURCE_CONCURRENT')
-            ? 'A related invoice or return credit is being changed elsewhere. Wait a moment and try again.'
-            : sanitized;
-          errors.push(`${target.label}: ${message}`);
-        }
+        errors.push(`${target.label}: ${describePostError(err)}`);
       }
     }
     if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {

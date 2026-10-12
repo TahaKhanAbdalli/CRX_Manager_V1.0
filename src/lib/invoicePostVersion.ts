@@ -18,6 +18,12 @@ const POST_VERSION_PATTERN = /^[0-9a-f]{32}$/;
 
 /** The database (or the screen's own check) found the invoice changed since the screen loaded. */
 export const INVOICE_CHANGED_SINCE_REVIEW_MESSAGE = 'This invoice changed since you reviewed it — it has been reloaded; check it and post again.';
+/**
+ * A bulk Post (list, tray, cockpit, order page) found invoices changed since the screen loaded:
+ * nothing was posted and the screen reloads (src/lib/invoiceBulkPostReview.ts).
+ */
+export const INVOICES_CHANGED_SINCE_LIST_LOADED_MESSAGE = (count: number): string =>
+  `${count} invoice(s) changed since this list loaded — the list was reloaded; check them and post again.`;
 /** The posting version could not be read, so nothing is posted unchecked. */
 export const POST_RECHECK_FAILED_MESSAGE = 'Could not check the saved invoice before posting. Nothing was posted — please try again.';
 

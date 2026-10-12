@@ -286,7 +286,7 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   existing key; a group post passes the signed-in admin as `p_performed_by`, which the group check
   requires); `INVOICE_CHANGED_SINCE_REVIEW` shows the same message and reloads. The 17de50533
   browser-side re-check was used as reference only; the database check is the gate. The list pages'
-  bulk posts stay old callers (no version): they have no single reviewed screen to bind.
+  bulk posts now send a version too (see "Bulk Post checks what the list showed" below).
 - **Types:** `src/types/supabase.ts` is generated from live and does not know the two version readers,
   the names reader or `p_expected_version` yet. Following the repo's typed-wrapper pattern
   (`quoteLifecycleRpc.ts`), `src/lib/invoicePostVersion.ts` and `src/lib/invoiceCustomerNames.ts` call
@@ -359,6 +359,37 @@ updating admin drafts (no UI block, "1.a"); reps still cancel deliveries and rec
   `update_order_items`' unlocked line detach; the completion/post deadlock (one side retries); the
   trigger check not following calls (no live instance); the postflight's comment stripping not being
   literal-aware (no live instance).
+
+### 2026-10-12 - Bulk Post checks what the list showed (Codex Luna HIGH; no database change)
+
+- **The gap:** the four bulk posts (Chemical Sales "Post Selected", the Field Invoices Drafts tab
+  "Post All", the Office Cockpit "Post all clean" and the order page "Post all drafts") called
+  `post_invoice` / `post_invoice_group` with no posting version. If another admin changed an invoice
+  from $50.00 to $70.00 after the list loaded, clicking Post posted the $70.00 nobody on that screen
+  had seen.
+- **Now:** before posting anything, each of the four reads the posting version of every invoice or
+  split group it is about to post (`src/lib/invoiceBulkPostReview.ts`, at most six reads at once),
+  and only then re-reads the rows the screen showed (status, total, customer, invoice date, split
+  group, last-changed time). If any row is gone, deleted or different, nothing is posted, the screen
+  reloads and says "N invoice(s) changed since this list loaded — the list was reloaded; check them
+  and post again." If the check itself cannot run, nothing is posted and the screen says so. When
+  everything matches, each post carries the version just read, so the database still refuses
+  (`INVOICE_CHANGED_SINCE_REVIEW`, shown in plain words in the failures list) a change that lands
+  after the check. A split group's check covers every member the screen holds, including ones a
+  filter hides. The order is the point: a change between the two reads either shows in the re-read
+  rows or changes the version, so a post that succeeds is exactly what the screen showed.
+- **Kept as before:** each target's idempotency key (reused on a retry), partial-success reporting,
+  the Field Invoices this-season skip, the order page's already-posted check (it runs first, so a
+  post that already went through is still counted as done), the cockpit's fresh watchdog re-check
+  (the version check runs after it, on the still-clean invoices only), and the Chemical Sales list
+  keeping failed invoices selected. The cockpit's "Ready to Post" load now also reads each invoice's
+  customer and last-changed time so it has something to compare.
+- **Proof:** the screen tests were written first and run against the unchanged code: 11 failed
+  there (no version read, no `p_expected_version`, and a changed invoice was posted anyway); all
+  pass after. New `src/lib/invoiceBulkPostReview.test.ts` covers the read order, each kind of
+  change, a missing or deleted row, a failed version read (no row read), a failed row read, the
+  six-at-a-time limit and the 100-row chunks. This needs the migration above applied before it can
+  run against the real database; no signed-in browser run was possible here.
 
 ### Not done here (owners)
 

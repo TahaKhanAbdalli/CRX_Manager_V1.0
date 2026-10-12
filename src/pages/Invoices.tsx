@@ -33,6 +33,8 @@ import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib
 import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
+import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../lib/invoiceBulkPostReview';
+import { postReviewedInvoice, postReviewedInvoiceGroup } from '../lib/invoicePostVersion';
 import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
 
@@ -295,8 +297,18 @@ export default function Invoices() {
       toast('error', 'No postable invoices selected');
       return;
     }
+    // What the admin reviewed: the rows exactly as this list showed them (every loaded member of
+    // a split group, since the group post posts them all).
+    const shownRows = shownRowsForTargets(targets, invoices);
     await runCriticalAction({
       action: async () => {
+        // Post only what the list showed: read each target's posting version, then re-read the
+        // shown rows. Anything changed since the list loaded posts nothing and reloads the list.
+        const review = await reviewInvoicePostTargets(targets, shownRows);
+        if (!review.ok) {
+          await fetchInvoices();
+          throw new Error(failedPostReviewMessage(review));
+        }
         let completedActions = 0;
         const failures: string[] = [];
         const failedIds: string[] = [];
@@ -308,21 +320,22 @@ export default function Invoices() {
             );
           }
           try {
+            // Each post carries the version reviewed above; the database refuses with
+            // INVOICE_CHANGED_SINCE_REVIEW (plain wording via sanitizeError) if it moved since.
+            const expectedVersion = review.versions.get(target.key)!;
             if (target.operation === 'post_invoice_group') {
-              const { data, error } = await supabase.rpc('post_invoice_group', {
+              await postReviewedInvoiceGroup({
                 p_invoice_group_id: target.invoiceGroupId!,
                 p_performed_by: profile.id,
                 p_idempotency_key: postKeysRef.current[target.key],
+                p_expected_version: expectedVersion,
               });
-              if (error) throw error;
-              assertRpcResult(data, 'post_invoice_group');
             } else {
-              // post_invoice RETURNS void — the canonical void-RPC pattern is
-              // .throwOnError() with no result capture.
-              await supabase.rpc('post_invoice', {
+              await postReviewedInvoice({
                 p_invoice_id: target.invoiceId!,
                 p_idempotency_key: postKeysRef.current[target.key],
-              }).throwOnError();
+                p_expected_version: expectedVersion,
+              });
             }
             completedActions++;
             delete postKeysRef.current[target.key];

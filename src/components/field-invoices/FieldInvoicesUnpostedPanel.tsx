@@ -7,7 +7,9 @@ import ConfirmModal from '../ui/ConfirmModal';
 import MobileCardList from '../ui/MobileCardList';
 import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
 import { useToast } from '../ui/Toast';
-import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../../lib/db';
+import { supabase, sanitizeError, describePostInvoiceBlock } from '../../lib/db';
+import { failedPostReviewMessage, reviewInvoicePostTargets, shownRowsForTargets } from '../../lib/invoiceBulkPostReview';
+import { postReviewedInvoice, postReviewedInvoiceGroup } from '../../lib/invoicePostVersion';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
@@ -28,7 +30,6 @@ import { formatCents as fmt } from '../../lib/money';
 import SeasonTag from '../invoices/SeasonTag';
 import { isCurrentSeason, otherSeasonLabels } from '../../lib/invoiceSeasonWindow';
 import { SkeletonTable } from '../ui/Skeleton';
-import type { PostInvoiceGroupResult } from '../../types';
 import {
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
@@ -50,6 +51,8 @@ const QUERY_LIMIT = 2000;
 
 type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
   invoice_group_id: string | null;
+  // Kept from the select('*') so Post All can check the row did not change since the tray loaded.
+  updated_at: string | null;
 };
 
 // PostgREST select: the invoice + customer + linked job number + engine-built
@@ -183,6 +186,7 @@ export default function FieldInvoicesUnpostedPanel() {
     setRows(raws.map((raw) => ({
       ...mapFieldInvoiceRow(raw),
       invoice_group_id: raw.invoice_group_id ?? null,
+      updated_at: raw.updated_at ?? null,
     })));
     setLoading(false);
   }, [toast]);
@@ -435,8 +439,22 @@ export default function FieldInvoicesUnpostedPanel() {
     const { individualTargets, groupTargets } = postAllPlan;
     const targetCount = individualTargets.length + groupTargets.length;
     if (targetCount === 0) { toast('error', 'No invoices to post'); return; }
+    // Review targets keyed like postKeysRef (group: `grp:<group id>`, stand-alone: invoice id),
+    // and the rows exactly as the tray showed them (every loaded member of a split group).
+    const reviewTargets = [
+      ...groupTargets.map((group) => ({ key: `grp:${group.group_id}`, invoiceGroupId: group.group_id })),
+      ...individualTargets.map((target) => ({ key: target.id, invoiceId: target.id })),
+    ];
+    const shownRows = shownRowsForTargets(reviewTargets, rows);
     await runCriticalAction({
       action: async () => {
+        // Post only what the tray showed: read each target's posting version, then re-read the
+        // shown rows. Anything changed since the tray loaded posts nothing and reloads the tray.
+        const review = await reviewInvoicePostTargets(reviewTargets, shownRows);
+        if (!review.ok) {
+          await fetchInvoices();
+          throw new Error(failedPostReviewMessage(review));
+        }
         let posted = 0;
         const failures: string[] = [];
         for (const group of groupTargets) {
@@ -445,13 +463,14 @@ export default function FieldInvoicesUnpostedPanel() {
             postKeysRef.current[keyId] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${group.group_id}`);
           }
           try {
-            const { data, error } = await supabase.rpc('post_invoice_group', {
+            // The reviewed version; the database refuses with INVOICE_CHANGED_SINCE_REVIEW
+            // (plain wording via sanitizeError) if the group moved since.
+            await postReviewedInvoiceGroup({
               p_invoice_group_id: group.group_id,
               p_performed_by: profile.id,
               p_idempotency_key: postKeysRef.current[keyId],
+              p_expected_version: review.versions.get(keyId)!,
             });
-            if (error) throw error;
-            assertRpcResult<PostInvoiceGroupResult>(data, 'post_invoice_group');
             posted += 1;
             delete postKeysRef.current[keyId];
           } catch (err: unknown) {
@@ -468,14 +487,13 @@ export default function FieldInvoicesUnpostedPanel() {
             postKeysRef.current[target.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${target.id}`);
           }
           try {
-            // post_invoice RETURNS void — canonical void-RPC pattern is
-            // .throwOnError() with no `=` capture (no result to assert).
-            await supabase
-              .rpc('post_invoice', {
-                p_invoice_id: target.id,
-                p_idempotency_key: postKeysRef.current[target.id],
-              })
-              .throwOnError();
+            // post_invoice RETURNS void; postReviewedInvoice throws on error. It carries the
+            // reviewed version, which the database checks under its row locks.
+            await postReviewedInvoice({
+              p_invoice_id: target.id,
+              p_idempotency_key: postKeysRef.current[target.id],
+              p_expected_version: review.versions.get(target.id)!,
+            });
             posted += 1;
             delete postKeysRef.current[target.id];
           } catch (err: unknown) {
