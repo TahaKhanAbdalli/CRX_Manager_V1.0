@@ -104,14 +104,15 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     }
     const sigEnd = sql.indexOf(') AS t(sig, md5)\n  )');
     const sigs = [...sql.slice(sql.lastIndexOf('(VALUES', sigEnd), sigEnd).matchAll(/\('([a-z_]+)\(([^']*)\)', '([0-9a-f]{32})'\)/g)];
-    let checked = 0;
+    const checked: string[] = [];
     for (const [, name, , pin] of sigs) {
       const defined = definedBody(name);
       if (defined === null) continue;
       expect(pin, `upkeep pin of ${name}`).toBe(md5(defined));
-      checked += 1;
+      checked.push(name);
     }
-    expect(checked).toBeGreaterThanOrEqual(2); // complete_job and create_quick_delivery
+    // Luna, PR #902: the two bodies this file defines must each keep their pin row.
+    expect(checked).toEqual(expect.arrayContaining(['complete_job', 'create_quick_delivery']));
   });
 
   it('runs as one transaction, after PR #889, and reloads PostgREST', () => {
