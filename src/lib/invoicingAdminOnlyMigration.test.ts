@@ -273,6 +273,9 @@ describe('invoicing admin-only migration (20261013160000)', () => {
       .replace("  -- CodeRabbit, PR #902: the shared helper takes the key lock (held to the end of the\n  -- transaction), so a concurrent same-key duplicate waits, then replays this receipt.\n", '')
       .replace("    v_existing := public.check_idempotency(p_idempotency_key, 'complete_job');\n",
         "    SELECT result INTO v_existing\n      FROM idempotency_keys\n     WHERE idempotency_key = p_idempotency_key AND operation = 'complete_job';\n")
+      // Luna, PR #902: a receipt replays only for the job it completed.
+      .replace("    IF v_existing IS NOT NULL THEN\n      -- Luna, PR #902: a receipt replays only for the job it completed.\n      IF v_existing->>'job_id' IS DISTINCT FROM p_job_id::text THEN\n        RAISE EXCEPTION 'IDEMPOTENCY_ARGUMENT_MISMATCH: complete_job key % already completed another job', p_idempotency_key;\n      END IF;\n      RETURN v_existing;\n    END IF;\n",
+        '    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;\n')
       .replace("    PERFORM public.save_idempotency(p_idempotency_key, 'complete_job', v_result);\n",
         "    INSERT INTO idempotency_keys (idempotency_key, operation, result)\n    VALUES (p_idempotency_key, 'complete_job', v_result);\n")
       .replace(notify, '')

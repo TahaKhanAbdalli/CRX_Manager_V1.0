@@ -1247,17 +1247,27 @@ COMMIT;\n`);
     await first.done;
     if (second) await second.done;
   }
+  // Luna, PR #902: the same key on ANOTHER in-progress job must not replay this job's receipt.
+  const otherJob = scalar('SELECT gen_random_uuid();');
+  const reuse = attempt(U.REP, `${jobSql(otherJob, `DUPB-${run}`)}
+    ${claims(U.REP)} SELECT public.start_job('${otherJob}', '${U.REP}', 'prover-ao-dupj-sjb-${run}') IS NOT NULL;`,
+  `public.complete_job('${otherJob}', '{"notes":"[PROVER]"}'::jsonb, '${U.REP}', '${key}')->>'success'`,
+  { after: `SELECT 'OTHERJOB|' || (SELECT status FROM public.jobs WHERE id = '${otherJob}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${otherJob}');` });
   return {
     first: /FIRST\|([^\n]*)/.exec(first.out)?.[1]?.trimEnd() ?? `(no result) ${first.out}`,
     result: /DUPJ\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`,
     facts: scalar(`SELECT (SELECT status FROM public.jobs WHERE id = '${jobId}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${jobId}') || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${key}');`),
+    reuse: reuse.result,
+    otherJob: reuse.lines.find((l) => l.startsWith('OTHERJOB|')) ?? '(no facts)',
   };
 }
 function checkDupKeyCompleteJob(d) {
-  const outcome = `first ${d.first}; duplicate ${d.result}; status|applied_info|receipts ${d.facts}`;
+  const outcome = `first ${d.first}; duplicate ${d.result}; status|applied_info|receipts ${d.facts}; reuse on another job ${d.reuse} (${d.otherJob})`;
   assert.equal(d.first, 'true', `AFTER: the first same-key completion failed: ${outcome}`);
   assert.equal(d.result, 'ok|true', `AFTER: a concurrent same-key complete_job did not replay the first completion: ${outcome}`);
   assert.equal(d.facts, 'completed|1|1', `AFTER: a concurrent same-key complete_job completed the job twice or stored no single receipt: ${outcome}`);
+  assert.match(d.reuse, /^P0001\|IDEMPOTENCY_ARGUMENT_MISMATCH: complete_job key /, `AFTER: another job's receipt replayed for a reused key: ${outcome}`);
+  assert.equal(d.otherJob, 'OTHERJOB|in_progress|0', `AFTER: the refused key reuse changed the other job: ${outcome}`);
   return outcome;
 }
 
@@ -2086,6 +2096,10 @@ async function mutations({ adminBefore, held }) {
     "    SELECT result INTO v_existing\n      FROM idempotency_keys\n     WHERE idempotency_key = p_idempotency_key AND operation = 'complete_job';\n", 'job key'));
   await detectAsync('complete_job receipt lookup without the key lock', async () => checkDupKeyCompleteJob(await dupKeyCompleteJob(`mutant_${process.pid}`)), /did not replay the first completion/);
   applyText('restore-job-key.sql', job);
+  // (5d) Luna, PR #902: a receipt replayed for whatever job the caller names.
+  applyText('mutant-job-key-bind.sql', once(job, "      IF v_existing->>'job_id' IS DISTINCT FROM p_job_id::text THEN\n", '      IF false THEN\n', 'job key binding'));
+  await detectAsync('complete_job replaying another job\'s receipt', async () => checkDupKeyCompleteJob(await dupKeyCompleteJob(`mutant_bind_${process.pid}`)), /another job's receipt replayed for a reused key/);
+  applyText('restore-job-key-bind.sql', job);
   // (6) 1e: quick delivery without the coercion.
   const quick = statementOf('CREATE FUNCTION public.create_quick_delivery(');
   applyText('mutant-quick.sql', once(quick, 'p_skip_invoice => CASE WHEN public.is_admin() THEN p_skip_invoice ELSE true END', 'p_skip_invoice => p_skip_invoice', 'quick'));

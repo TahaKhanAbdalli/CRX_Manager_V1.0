@@ -304,7 +304,11 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   check refuse a concurrent duplicate), but the duplicate got an error; now it waits on the key
   lock and replays the first completion's result. Other differences: a blank key is
   `IDEMPOTENCY_KEY_REQUIRED` (every caller sends a generated key), and a key already used by
-  another operation is refused before any write instead of at the end. The prover runs two
+  another operation is refused before any write instead of at the end. A stored receipt replays
+  only for the job it completed (Luna): the same key on another job is
+  `IDEMPOTENCY_ARGUMENT_MISMATCH` and changes nothing (live would have returned the first job's
+  success). A NULL key still skips the receipt (the `DEFAULT NULL` contract; every app caller
+  sends a key) - not changed. The prover runs two
   concurrent same-key completions (one completion, one receipt, both succeed) and a mutant with
   the old lookup; the shape test undoes this hunk too.
 
