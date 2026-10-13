@@ -198,7 +198,8 @@ function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[]
   const fns: Fn[] = [];
   const unparsed: string[] = [];
   // CodeRabbit, PR #902: a quoted identifier may hold any character (`public."invoice-writer"`).
-  const identifier = String.raw`(?:"(?:[^"]|"")+"|\w+)`;
+  // Luna, PR #902: an unquoted name may also contain `$` after its first character.
+  const identifier = String.raw`(?:"(?:[^"]|"")+"|\w[\w$]*)`;
   const head = new RegExp(String.raw`CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\s+(?:(${identifier})\s*\.\s*)?(${identifier})\s*\(`, 'gi');
   const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value);
   let m: RegExpExecArray | null;
@@ -430,6 +431,7 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
       // CodeRabbit, PR #902: a quoted name with characters outside \w is still scanned.
       expect(names(withNext(fn('"probe-quoted writer"', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n')))).toEqual(['probe-quoted writer']);
       expect(names(withNext(fn('"probe""quote"', '\nBEGIN\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n')))).toEqual(['probe"quote']);
+      expect(names(withNext(fn('probe$dollar', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n')))).toEqual(['probe$dollar']);
       expect(names(withNext(fn('probe_impl_call', "\nBEGIN\n  PERFORM public._post_invoice_public_impl_20260718(p, NULL);\nEND;\n")))).toEqual(['probe_impl_call']);
       const internal = fn('_probe_impl2', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
         'REVOKE ALL ON FUNCTION public._probe_impl2(uuid) FROM PUBLIC, anon, authenticated, service_role;');
