@@ -98,6 +98,9 @@ the file is applied and verified live.
   next lifecycle fix — refuse a `completed` delivery in `cancel_delivery` and
   `batch_cancel_deliveries` (e.g. `DELIVERY_ALREADY_COMPLETED`), then re-pin the upkeep allowlist md5
   in the postflight, the chain's step 8 and `invoiceWriterGuard.test.ts` if it reaches the list.
+  **Mason 2026-10-13 ("keep it"):** raised again by Luna on PR #902; ship `20261013160000` without
+  it and fix it next as its own small change, in which only an admin can cancel a delivery that is
+  already completed.
 - **`cancel_delivery` refuses an admin's quick delivery whose draft invoice is still open**
   (`ORDER_INVOICE_TERMINAL`), for an admin and a rep alike, in the container replay of the live
   schema (seen 2026-10-09 by the admin-only prover, identical before and after the candidate). Not

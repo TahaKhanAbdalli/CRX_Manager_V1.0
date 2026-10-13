@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-13 — completed-delivery cancel is fixed separately, after admin-only invoicing
+
+**Decision (Mason, in chat, 2026-10-13: "keep it").** `20261013160000_invoicing_admin_only.sql` ships without changing `cancel_delivery`; a sales rep can still cancel a delivery that is already completed (which also cancels its unposted invoice) until the next small change, in which only an admin can cancel a completed delivery.
+**Why.** It is today's behaviour, not something the admin-only change introduces, and folding it in would restart that change's reviews.
+**What this implies:** the next lifecycle fix refuses a non-admin's cancel of a `completed` delivery in `cancel_delivery` and `batch_cancel_deliveries`; tracked OPEN in `KNOWN_ISSUES.md`.
+
 ## 2026-10-13 — no database season check on posting, for now
 
 **Decision (Mason, in chat, 2026-10-13: "skip it").** Posting does not get a database check that refuses an invoice from another season. The "this season only" rule for Post All and Select All stays in the screens (PR #895). Posting an older invoice on purpose from its own page stays allowed.

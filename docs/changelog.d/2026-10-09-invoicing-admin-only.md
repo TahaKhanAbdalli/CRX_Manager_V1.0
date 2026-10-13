@@ -249,8 +249,9 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   comment), and a new test checks the file's DO blocks change no data rows (the top-level check
   removes them). Both new tests fail with their fix removed. Not fixed here, with reasons:
   - HIGH, `cancel_delivery` can reverse a COMPLETED delivery and reps can call it: pre-existing,
-    not touched by this file, already OPEN in `KNOWN_ISSUES.md` (deferred in review round 4). Put
-    to Mason as a business decision.
+    not touched by this file, already OPEN in `KNOWN_ISSUES.md` (deferred in review round 4). Mason
+    2026-10-13 ("keep it"): ship without it; the next small change lets only an admin cancel a
+    completed delivery.
   - MED, `update_order_items` can detach a draft line without the invoice lock: pre-existing,
     already OPEN in `KNOWN_ISSUES.md`.
   - MED, a posting receipt is not bound to `p_expected_version`: a same key reused with another
