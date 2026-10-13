@@ -1360,6 +1360,12 @@ async function versionChecks(phase) {
   assert.equal(noKey.result, '22023|IDEMPOTENCY_KEY_REQUIRED: post_invoice', `AFTER: a versioned post without a key: ${noKey.result}`);
   const blankBatch = attempt(U.ADMIN, '', `public.batch_post_invoices(ARRAY['${inv2}'::uuid], E' \\t', '${v2}')`);
   assert.equal(blankBatch.result, '22023|IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices', `AFTER: a versioned batch with a blank key: ${blankBatch.result}`);
+  // Codex, PR #902: a versioned group post without a key is refused too, and posts nothing.
+  const noKeyGroup = attempt(U.ADMIN, `${groupFx}\nSELECT set_config('prover.gv', public.get_invoice_group_post_version(current_setting('prover.group')::uuid), true);`,
+    `public.post_invoice_group(current_setting('prover.group')::uuid, '${U.ADMIN}', NULL, current_setting('prover.gv'))`,
+    { after: "SELECT 'GSTATUS|' || (SELECT string_agg(status, ',') FROM public.invoices WHERE invoice_group_id = current_setting('prover.group')::uuid);" });
+  assert.equal(noKeyGroup.result, '22023|IDEMPOTENCY_KEY_REQUIRED: post_invoice_group', `AFTER: a versioned group post without a key: ${noKeyGroup.result}`);
+  assert.ok(noKeyGroup.lines.includes('GSTATUS|draft,draft'), 'AFTER: the refused keyless group post posted something');
   // The same key reused for a different invoice is refused by the frozen body (the version is
   // not re-checked on a stored receipt, but the receipt's request must match).
   const inv3 = newMisc(`conflict-${run}`);
@@ -2143,6 +2149,10 @@ async function mutations({ adminBefore, held }) {
   applyText('mutant-ver-group-unlocked.sql', once(groupPost, '                 ORDER BY i.id\n                   FOR UPDATE) m;', '                 ORDER BY i.id) m;', 'group unlocked'));
   await detectAsync('post_invoice_group version check without the member row locks', () => versionChecks('after'));
   applyText('restore-ver-group-unlocked.sql', groupPost);
+  // Codex, PR #902: the group key requirement removed.
+  applyText('mutant-ver-group-nokey.sql', once(groupPost, "    IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN\n      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice_group'\n        USING ERRCODE = '22023';\n    END IF;\n", '', 'group key'));
+  await detectAsync('post_invoice_group accepting a versioned post without a key', () => versionChecks('after'), /a versioned group post without a key/);
+  applyText('restore-ver-group-nokey.sql', groupPost);
   const batchPost = statementOf('CREATE FUNCTION public.batch_post_invoices(');
   applyText('mutant-ver-batch-unlocked.sql', once(batchPost, ' ORDER BY i.id FOR UPDATE;', ';', 'batch unlocked'));
   await detectAsync('batch_post_invoices version check without the row locks', () => versionChecks('after'));

@@ -161,8 +161,9 @@ the file is applied and verified live.
 - **Applicators' job completions now notify every admin too.** `complete_job`'s gate became
   `IF is_admin()`, so an applicator's completion (previously a silent `auto_draft_skipped` row) also
   sends `job_needs_invoice` to each active admin while `auto_draft_invoice_on_job_completion` is on
-  (it is on live). Tell Mason; narrow it to reps and drivers only if he asks. With that setting off
-  nobody gets a draft or a notification, admins included (unchanged).
+  (it is on live). Tell Mason; narrow it to reps and drivers only if he asks. With that setting off a
+  non-admin's completion still notifies every active admin (no draft); an admin's completion then
+  gets neither a draft nor a notification (unchanged).
 - **At apply: the actor-forgery invariant sweep must be re-pinned.** Its `complete_job` exception
   pins the live contract digest (`46ca21c7...`), which this file changes, and the new wrappers that
   pass `p_performed_by` to their frozen bodies will show up as suspects. The digests are read from

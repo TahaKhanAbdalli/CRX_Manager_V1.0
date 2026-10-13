@@ -895,11 +895,15 @@ BEGIN
       RAISE EXCEPTION 'INVOICE_EXPECTED_VERSION_INVALID: post_invoice_group expects the version from get_invoice_group_post_version'
         USING ERRCODE = '22023';
     END IF;
+    -- Codex, PR #902: a versioned group post needs a key too, as post_invoice and
+    -- batch_post_invoices do (the frozen body treats it as optional), so a lost reply replays.
+    IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice_group'
+        USING ERRCODE = '22023';
+    END IF;
     IF p_invoice_group_id IS NOT NULL AND p_performed_by IS NOT DISTINCT FROM auth.uid() THEN
-      IF p_idempotency_key IS NOT NULL THEN
-        PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice_group:' || p_idempotency_key, 0));
-        v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice_group');
-      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended('post_invoice_group:' || p_idempotency_key, 0));
+      v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice_group');
       IF v_cached IS NULL THEN
         PERFORM pg_advisory_xact_lock(hashtextextended(p_invoice_group_id::text, 0));
         SELECT array_agg(m.id ORDER BY m.id) INTO v_member_ids

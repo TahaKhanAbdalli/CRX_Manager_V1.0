@@ -244,6 +244,10 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(single).not.toContain("'post_invoice:'");
     const group = body(statement(sql, 'CREATE FUNCTION public.post_invoice_group('));
+    // Codex, PR #902: a versioned group post without a key is refused too, before its key lock.
+    expect(group.indexOf("RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice_group'")).toBeGreaterThan(-1);
+    expect(group.indexOf("RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_invoice_group'")).toBeLessThan(group.indexOf("'post_invoice_group:' || p_idempotency_key"));
+    expect(group).not.toContain('IF p_idempotency_key IS NOT NULL THEN');
     expect(group.indexOf('hashtextextended(p_invoice_group_id::text, 0)')).toBeLessThan(group.indexOf('FOR UPDATE'));
     expect(group.indexOf('FOR UPDATE')).toBeLessThan(group.indexOf('_invoice_review_fingerprint(v_member_ids)'));
     const batch = body(statement(sql, 'CREATE FUNCTION public.batch_post_invoices('));

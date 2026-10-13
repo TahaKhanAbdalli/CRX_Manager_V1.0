@@ -87,7 +87,8 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 - `reverse_write_off` is wrapped too: its own role test let a deactivated admin through.
 - Posting version check: `post_invoice` takes the implementation's key lock before it looks for a
   stored receipt (a same-key duplicate waits and replays; proven in two sessions); a version without a
-  key is `IDEMPOTENCY_KEY_REQUIRED` on `post_invoice` and `batch_post_invoices`; the batch's key-only
+  key is `IDEMPOTENCY_KEY_REQUIRED` on `post_invoice`, `post_invoice_group` (Codex, PR #902) and
+  `batch_post_invoices`; the batch's key-only
   receipt lookup is documented.
 - `complete_job`: a non-admin's completion notifies every active admin (`job_needs_invoice`).
 - The hard-guard sweep covers every invoice table (`invoice_line_share_snapshots`,
@@ -289,6 +290,17 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 - CI scanner fixes from the same reviews: a REVOKE marks a function internal only once both
   `authenticated` and `PUBLIC` lost EXECUTE (in one statement or separate ones);
   `REVOKE GRANT OPTION FOR` does not count. Each has a probe that fails without its fix.
+- **`post_invoice_group`: a versioned post now needs a key (Codex).** Like `post_invoice` and
+  `batch_post_invoices`, a call with `p_expected_version` and a NULL or blank key is
+  `IDEMPOTENCY_KEY_REQUIRED: post_invoice_group` (22023), so a lost reply can be replayed. No
+  client sends a version yet, and every group-post caller already sends a key. The prover runs the
+  case (refused, nothing posted) and a mutant without the check.
+- `KNOWN_ISSUES.md` corrected (Codex): with auto-drafting off, a non-admin's completion still
+  notifies the admins.
+- **Not changed: `complete_job`'s key handling** (a CodeRabbit pre-merge check). It is live's,
+  untouched here: a plain receipt lookup, then `FOR UPDATE` on the job and the `in_progress` check,
+  so a concurrent same-key duplicate waits, then is refused ("Job must be in_progress"), and never
+  completes the job or deducts stock twice. Moving it onto `check_idempotency` is separate work.
 
 ### Not done here (owners)
 
