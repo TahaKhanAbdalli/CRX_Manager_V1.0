@@ -276,7 +276,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'CRITICAL: invoicing (every write) is admin-only; sales reps READ every invoice (Mason 2026-10-09, migration 20261009120000 - the intended state once it is applied)',
+    notes: 'CRITICAL: invoicing (every write) is admin-only; sales reps READ every invoice (Mason 2026-10-09, migration 20261013160000 - the intended state once it is applied)',
   },
   {
     table: 'payments',

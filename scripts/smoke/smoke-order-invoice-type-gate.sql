@@ -12,11 +12,11 @@
 -- Fixtures: an [E2E]-marked product priced through the governed preview/apply path, and a
 -- customer and orders assigned to the rep. One DO block, terminal exception -> nothing commits.
 --
--- Invoicing admin-only (20261009120000, Mason 2026-10-09): once that migration is applied a
+-- Invoicing admin-only (20261013160000, Mason 2026-10-09): once that migration is applied a
 -- sales rep cannot call create_invoice_from_order at all (42501 INVOICING_ADMIN_ONLY, checked
 -- first below), so steps 0-2 run as the admin, whom the CRX-LIFE-001 type gate binds as well.
 -- Before it is applied they run as the rep, exactly as before. The branch keys on the guard
--- helper existing; drop it once 20261009120000 is live.
+-- helper existing; drop it once 20261013160000 is live.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);

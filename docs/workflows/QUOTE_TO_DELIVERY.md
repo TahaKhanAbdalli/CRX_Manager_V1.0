@@ -150,7 +150,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
    - May update order status to `partially_fulfilled` or `fulfilled`
    - Creates `delivery_remainders` rows for any partial deliveries
    - Auto-creates the draft invoice (single customer) or the split drafts (field-allocated order).
-     **Once `20261009120000_invoicing_admin_only` is applied (NOT APPLIED yet; Mason 2026-10-09):
+     **Once `20261013160000_invoicing_admin_only` is applied (NOT APPLIED yet; Mason 2026-10-09):
      only when the completer is an admin.** A sales rep's or driver's completion creates no invoice
      and draws no number; it writes a `delivery_invoice_pending_admin` activity row and notifies every
      active admin, and the delivery waits under "Delivered, not invoiced" until an admin uses
@@ -210,9 +210,9 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - All money is bigint cents: `balance_cents`, `unit_price_cents`, `extended_cents`.
 - Posted invoices are LOCKED — no editing amounts.
 - All changes to invoices are logged in `financial_audit_log` (immutable, append-only).
-- Quick deliveries auto-create a draft invoice (once `20261009120000` is applied: only when an admin
+- Quick deliveries auto-create a draft invoice (once `20261013160000` is applied: only when an admin
   makes the quick delivery — for anyone else the server forces `p_skip_invoice = true`).
-- **Invoicing is admin-only (Mason 2026-10-09; `20261009120000`, NOT APPLIED yet).** Creating,
+- **Invoicing is admin-only (Mason 2026-10-09; `20261013160000`, NOT APPLIED yet).** Creating,
   editing, posting, unposting, voiding, transferring invoices and applying credit memos or prepayments
   refuse any non-admin with 42501 `INVOICING_ADMIN_ONLY`. Sales reps can read every invoice and still
   record payments. Posting can carry the version the admin reviewed
@@ -257,9 +257,9 @@ Skips the entire quote flow. One atomic operation:
 5. Submit -> `create_quick_delivery()` RPC creates:
    - Order (status: confirmed)
    - Delivery (status: scheduled)
-   - Draft invoice (admins only once `20261009120000` is applied; a rep's or driver's quick delivery
+   - Draft invoice (admins only once `20261013160000` is applied; a rep's or driver's quick delivery
      then creates no invoice)
-6. An admin reviews and posts the draft invoice (before `20261009120000`: a sales rep could too)
+6. An admin reviews and posts the draft invoice (before `20261013160000`: a sales rep could too)
 
 ### Source: `create_quick_delivery()` RPC
 

@@ -1,4 +1,4 @@
--- Rollback-only chain for 20261009120000_invoicing_admin_only (Mason 2026-10-09: no sales rep,
+-- Rollback-only chain for 20261013160000_invoicing_admin_only (Mason 2026-10-09: no sales rep,
 -- driver or other non-admin may invoice any customer; reps READ every invoice; posting can bind to
 -- the version an admin reviewed).
 --

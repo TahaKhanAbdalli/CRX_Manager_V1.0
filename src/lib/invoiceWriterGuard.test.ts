@@ -1,9 +1,9 @@
-// HARD guard, run on every PR (review round 1 of 20261009120000_invoicing_admin_only: the
+// HARD guard, run on every PR (review round 1 of 20261013160000_invoicing_admin_only: the
 // migration's postflight sweep only runs when that file is applied, so on its own it cannot stop
 // a LATER migration from adding an unguarded invoice writer).
 //
 // Mason 2026-10-09: invoicing is admin-only. This test applies the postflight's rule to every
-// migration from 20261009120000 on: a public function or procedure such a file creates must call
+// migration from 20261013160000 on: a public function or procedure such a file creates must call
 // public._require_invoicing_admin() FIRST (a DECLARE section before it may only declare: no
 // initializer, no call) and have no exception handler that could catch that refusal, when its
 // body, comments stripped (string literals kept),
@@ -35,7 +35,7 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrationsDir = join(repoRoot, 'supabase', 'migrations');
-const FIRST_GUARDED_MIGRATION = '20261009120000';
+const FIRST_GUARDED_MIGRATION = '20261013160000';
 const md5 = (text: string) => createHash('md5').update(text, 'utf8').digest('hex');
 
 const INVOICE_TABLES = ['invoices', 'invoice_items', 'invoice_shares', 'invoice_line_shares', 'invoice_line_share_snapshots',
@@ -51,7 +51,7 @@ const GUARD_FIRST = /^\s*(DECLARE(\s+(?![Bb][Ee][Gg][Ii][Nn]\b)\w+\s+[\w[\]. %]+
 const SPLIT_KEY_THEN_GUARD = /^\s*BEGIN\s+IF p_idempotency_key IS NULL OR p_idempotency_key !~ '\[\^\[:space:\]\]' THEN\s+RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'\s+USING ERRCODE = '22023';\s+END IF;\s+PERFORM public\._require_invoicing_admin\(\);/;
 
 // Every public function that reaches an invoice write without the guard, read from the container
-// replay of live with 20261009120000 applied (2026-10-09; the postflight's writer and edge rules,
+// replay of live with 20261013160000 applied (2026-10-09; the postflight's writer and edge rules,
 // guarded wrappers excluded). EXPOSED ones authenticated can execute; INTERNAL ones it cannot.
 const REACH_EXPOSED = [
   'allocate_payment', 'apply_remaining_prepayments', 'apply_write_off', 'batch_cancel_deliveries',
@@ -86,12 +86,12 @@ const REACH_INTERNAL = [
 const ALLOWLIST: Record<string, { md5: string; reason: string }> = {
   create_quick_delivery: {
     md5: '1bf67e10cae538b5090b067aa3f665f5',
-    reason: '20261009120000 1e: coerces p_skip_invoice = true for a non-admin instead of refusing; the frozen body then creates no invoice',
+    reason: '20261013160000 1e: coerces p_skip_invoice = true for a non-admin instead of refusing; the frozen body then creates no invoice',
   },
 };
 
 // Review round 2: bodies whose every definition, in every scanned migration, must be one of the
-// reviewed md5s below (the same md5s 20261009120000's postflight pins). A LATER migration that
+// reviewed md5s below (the same md5s 20261013160000's postflight pins). A LATER migration that
 // re-emits any REACH_INTERNAL function must add its reviewed body md5 here as well.
 const REVIEWED_BODIES: Record<string, { md5s: string[]; reason: string }> = {
   _require_invoicing_admin: { md5s: ['629609ce38f7c192abfde5be47848557'], reason: 'the guard every invoicing wrapper relies on (EXISTS on an ACTIVE admin, 42501)' },
@@ -218,8 +218,8 @@ function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[]
 // adds or alters a policy on one, turns its row level security off, or creates a function through
 // dynamic SQL inside a DO block (which the function rule cannot scan). Each of those needs a
 // review: pin its statement's md5 (whitespace collapsed) here. Write grants are checked in every
-// scanned file (20261009120000 only revokes); policies and DO blocks in the files after it
-// (20261009120000's own policies are pinned by its postflight).
+// scanned file (20261013160000 only revokes); policies and DO blocks in the files after it
+// (20261013160000's own policies are pinned by its postflight).
 const INVOICE_TABLE_REF = `(?:"?public"?\\s*\\.\\s*)?"?(${INVOICE_TABLES.join('|')})"?(?![\\w"])`;
 const REVIEWED_TABLE_STATEMENTS: Record<string, string> = {};
 function tableLayerViolations(file: string, sql: string, top: string): Violation[] {
@@ -334,12 +334,12 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
 
 const migrationFiles = readdirSync(migrationsDir).filter((f) => f.endsWith('.sql') && f.slice(0, 14) >= FIRST_GUARDED_MIGRATION).sort();
 
-describe('invoice writers stay admin-only after 20261009120000 (CI companion of its postflight sweep)', () => {
-  it('scans 20261009120000 and every later migration', () => {
-    expect(migrationFiles[0]).toBe('20261009120000_invoicing_admin_only.sql');
+describe('invoice writers stay admin-only after 20261013160000 (CI companion of its postflight sweep)', () => {
+  it('scans 20261013160000 and every later migration', () => {
+    expect(migrationFiles[0]).toBe('20261013160000_invoicing_admin_only.sql');
   });
 
-  it('finds no unguarded invoice writer in any migration from 20261009120000 on', () => {
+  it('finds no unguarded invoice writer in any migration from 20261013160000 on', () => {
     const files = migrationFiles.map((file) => ({ file, sql: readFileSync(join(migrationsDir, file), 'utf8') }));
     expect(scan(files)).toEqual([]);
     // Not vacuous: without the allowlist the scan flags exactly the allowlisted functions, and
@@ -350,8 +350,8 @@ describe('invoice writers stay admin-only after 20261009120000 (CI companion of 
   });
 
   describe('the rule itself (each must fail when it should)', () => {
-    const base = readFileSync(join(migrationsDir, '20261009120000_invoicing_admin_only.sql'), 'utf8');
-    const withNext = (sql: string) => scan([{ file: '20261009120000_invoicing_admin_only.sql', sql: base }, { file: '29990101000000_probe.sql', sql }]);
+    const base = readFileSync(join(migrationsDir, '20261013160000_invoicing_admin_only.sql'), 'utf8');
+    const withNext = (sql: string) => scan([{ file: '20261013160000_invoicing_admin_only.sql', sql: base }, { file: '29990101000000_probe.sql', sql }]);
     const fn = (name: string, body: string, extra = '', args = 'p uuid') => `CREATE OR REPLACE FUNCTION public.${name}(${args}) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$${body}$f$;\n${extra}`;
     const names = (v: Violation[]) => v.map((x) => x.name);
 
@@ -396,7 +396,7 @@ describe('invoice writers stay admin-only after 20261009120000 (CI companion of 
 
     // Review round 2.
     it('flags a later re-emission of the delivery-completion implementation from its pre-candidate body', () => {
-      // The live body before 20261009120000 (no admin-only hunk): reps' and drivers' completions
+      // The live body before 20261013160000 (no admin-only hunk): reps' and drivers' completions
       // auto-invoice again. The implementation is internal, so only the reviewed pin catches it.
       const prior = readFileSync(join(migrationsDir, '20260827041300_align_return_credit_delivery_surfaces.sql'), 'utf8').replace(/\r\n/g, '\n');
       const start = prior.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');

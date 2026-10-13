@@ -83,7 +83,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    -- Once 20261009120000 (invoicing admin-only) is applied, the wrapper's admin guard refuses
+    -- Once 20261013160000 (invoicing admin-only) is applied, the wrapper's admin guard refuses
     -- the deactivated actor first (42501 INVOICING_ADMIN_ONLY), before the frozen body's own
     -- INSUFFICIENT_ROLE check. Exactly one of the two is expected, keyed on the guard existing.
     IF (to_regprocedure('public._require_invoicing_admin()') IS NULL AND v_err NOT LIKE 'INSUFFICIENT_ROLE:%')

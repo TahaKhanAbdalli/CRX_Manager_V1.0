@@ -3,7 +3,7 @@
 **Last verified:** 2026-10-12 (America/Chicago) for the migration ledger only (read-only ledger
 query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-12 ~23:47 UTC, after PR #889's last two
 applies: 1024 rows, `max(version)` `20261012234633`; the read before it, on 2026-10-10 after PR #889's
-first three applies, had 1022 rows, `max(version)` `20261010043006`). The local candidate `20261009120000_invoicing_admin_only`
+first three applies, had 1022 rows, `max(version)` `20261010043006`). The local candidate `20261013160000_invoicing_admin_only`
 (not applied) is described below.
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
@@ -64,7 +64,7 @@ ships or quarterly, whichever comes first.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
   hours. #800 (above) merged 2026-10-02 after its migration applied live.
 - **Invoicing becomes admin-only (Mason 2026-10-09) — database phase written, NOT APPLIED.**
-  `20261009120000_invoicing_admin_only` makes every invoicing RPC refuse non-admins, stops reps' and
+  `20261013160000_invoicing_admin_only` makes every invoicing RPC refuse non-admins, stops reps' and
   drivers' completions and quick deliveries from creating invoices (admins are notified instead),
   lets sales reps read every invoice, and adds a server-side posting version check. Today (until it
   is applied) sales reps can still create and post invoices through the app and the API. Applying it

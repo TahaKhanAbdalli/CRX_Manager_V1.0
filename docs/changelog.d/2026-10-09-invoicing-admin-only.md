@@ -9,7 +9,7 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 
 ### What changed (phase 1 = database only; the screens are phase 2, after PR #892)
 
-- `supabase/migrations/20261009120000_invoicing_admin_only.sql` — **LOCAL CANDIDATE, NOT APPLIED.**
+- `supabase/migrations/20261013160000_invoicing_admin_only.sql` — **LOCAL CANDIDATE, NOT APPLIED.**
   - `_require_invoicing_admin()`: fail-closed EXISTS check for an ACTIVE admin, 42501
     `INVOICING_ADMIN_ONLY`, executable by no API role.
   - Rename-and-wrap of 22 public RPCs (create/edit, post/unpost, batch void, credit memo and prepay
@@ -96,7 +96,7 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   comments stripped left to right; "guard first" no longer accepts a DECLARE initializer or a nested
   block; the key-first form only for the split wrapper. The registered chain runs the same query text.
 - New CI-blocking static test `src/lib/invoiceWriterGuard.test.ts` applies the rule to every
-  migration from `20261009120000` on.
+  migration from `20261013160000` on.
 - `INVOICE_EXPECTED_VERSION_INVALID` is mapped in `db.ts` / `errorSanitizer.ts`.
 - Prover: the reverse-write-off bug and the direct field-app writes reproduced before; another rep's
   customer in the read check (plus a rep-scoped-read mutant); group and batch two-session races; a
@@ -224,6 +224,26 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 - Proof (fresh container, 2026-10-10): `INVOICING_ADMIN_ONLY_PROOF_PASS ... preflight=20_drifts
   postflight=21_mutants ... mutations=87_detected`. `npm run typecheck`, `npm run lint`,
   `npm run test` (5495 passed, 123 skipped) and `check-doc-drift` pass.
+
+### 2026-10-13 - brought up to date with main; renumbered (still NOT APPLIED)
+
+- **Renumbered `20261009120000` → `20261013160000_invoicing_admin_only.sql`.** PR #889's
+  `20261010120000_cap_delivery_invoice_at_delivered` was applied live on 2026-10-12, so the old
+  stamp sorted below the live ordering high-water and the ordering guard would refuse it
+  (`src/lib/rpcContracts.test.ts` caught it). Only the file name and its references changed; the
+  objects it creates keep their `_*_pre_admin_only_20261009` names.
+- **Every function body it pins was re-read live (2026-10-13, read-only) and matched (54 of 54).**
+  PR #889's migrations touch none of them.
+- **Prover replay now matches live after PR #889.** All four #889 migrations are recorded in the
+  container ledger as soon as the replay passes their position (`20261010120000`'s own preflight
+  requires `20261007150200` there), so `20261010120000` is replayed before the candidate, as on
+  live. Its rule (a delivery's invoice cannot be posted before the delivery is completed) can now
+  refuse the post in the completion-race check; that outcome is accepted only when the draft is
+  left byte for byte unchanged.
+- **Owner decision (Mason, 2026-10-13, "skip it"):** no database season check on posting is
+  added here (`DECISION_LOG.md`).
+- Approval wording updated: the Windows Hello step was replaced by an owner chat reply on
+  2026-10-09.
 
 ### Not done here (owners)
 

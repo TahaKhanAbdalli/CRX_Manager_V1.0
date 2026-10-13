@@ -350,8 +350,8 @@ to show was stale: live also pins the actor.
 | team_note_comments | All authenticated | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
-| invoices | Admin / Own created_by / Assigned salesman (pending `20261009120000`: + every Sales Rep) | Admin / Sales Rep (pending `20261009120000`: Admin only) | Admin | Admin |
-| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep (pending `20261009120000`: Admin only) | Admin | Admin |
+| invoices | Admin / Own created_by / Assigned salesman (pending `20261013160000`: + every Sales Rep) | Admin / Sales Rep (pending `20261013160000`: Admin only) | Admin | Admin |
+| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep (pending `20261013160000`: Admin only) | Admin | Admin |
 | financial_audit_log | Admin | Admin / own actor_user_id | - | - |
 | blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
@@ -363,7 +363,7 @@ to show was stale: live also pins the actor.
 
 ---
 
-## Invoicing is admin-only (Mason 2026-10-09) — `20261009120000`, NOT APPLIED yet
+## Invoicing is admin-only (Mason 2026-10-09) — `20261013160000`, NOT APPLIED yet
 
 **Rule.** Only an active admin creates, edits, posts, unposts, voids or transfers an invoice, or
 applies a credit memo or prepayment to one. Sales reps READ every invoice (read-only). Drivers and
@@ -376,7 +376,7 @@ other roles read what they read before. Sales reps still record payments (`alloc
   `IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active = true)`
   raises 42501 `INVOICING_ADMIN_ONLY` — a NULL uid, a missing profile and a deactivated admin all fail.
   Never write a role gate as `(SELECT role ...) <> 'admin'`: that is NULL, not true, for a caller with
-  no active profile, so it lets them through (`reverse_write_off` had this bug; `20261009120000` wraps
+  no active profile, so it lets them through (`reverse_write_off` had this bug; `20261013160000` wraps
   it behind the guard).
 - The old bodies are renamed `_<name>_pre_admin_only_20261009` and closed to every role but postgres;
   the wrapper keeps the public name, arguments, defaults and result.
@@ -422,7 +422,7 @@ other roles read what they read before. Sales reps still record payments (`alloc
   `_require_invoicing_admin()` as its first statement and must not catch exceptions**, or it needs a
   reviewed entry on one of those lists. The same rule runs in `smoke-invoicing-admin-only.sql`, the
   container prover, and on every PR in `src/lib/invoiceWriterGuard.test.ts` (over every migration from
-  `20261009120000` on; keyed by signature, literal-aware, and it pins `_require_invoicing_admin`,
+  `20261013160000` on; keyed by signature, literal-aware, and it pins `_require_invoicing_admin`,
   `_invoice_review_fingerprint`, `complete_job` and `_complete_delivery_authorized_impl`: re-emitting
   any of them, or any pre-existing invoice-reaching internal function, needs a reviewed md5 in
   `REVIEWED_BODIES`).

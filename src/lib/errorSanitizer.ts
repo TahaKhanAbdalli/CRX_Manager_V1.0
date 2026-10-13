@@ -11,7 +11,7 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Create this field invoice from its job, blend ticket, or the Field Application screen'],
   [/^CUSTOMER_SCOPE_DENIED\b/i,
    'You can only work with customers assigned to you'],
-  // Migration 20261009120000 (Mason 2026-10-09): invoicing is admin-only.
+  // Migration 20261013160000 (Mason 2026-10-09): invoicing is admin-only.
   [/^INVOICING_ADMIN_ONLY\b/i,
    'Only an admin can do invoicing'],
   [/^INVOICE_CHANGED_SINCE_REVIEW\b/i,

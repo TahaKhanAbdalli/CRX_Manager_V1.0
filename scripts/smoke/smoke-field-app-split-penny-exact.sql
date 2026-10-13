@@ -228,7 +228,7 @@ BEGIN
   SELECT prosrc INTO v_save_source
   FROM pg_proc
   WHERE oid = 'public.save_field_app_invoice(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)'::regprocedure;
-  -- 20261009120000 (invoicing admin-only) renames the reviewed lock/recheck body to
+  -- 20261013160000 (invoicing admin-only) renames the reviewed lock/recheck body to
   -- _save_field_app_invoice_pre_admin_only_20261009 behind an admin-guard wrapper. Pin the
   -- wrapper's shape (guard first, then that body) and check the lock/recheck in that body.
   IF v_save_source LIKE '%_save_field_app_invoice_pre_admin_only_20261009(%' THEN
@@ -254,7 +254,7 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the save lock wrapper';
   END IF;
-  -- One overload either way: (uuid,uuid,text) before 20261009120000, (uuid,uuid,text,text) after,
+  -- One overload either way: (uuid,uuid,text) before 20261013160000, (uuid,uuid,text,text) after,
   -- whose wrapper guards first and delegates to the renamed reviewed body checked below.
   SELECT prosrc INTO v_post_group_source
   FROM pg_proc

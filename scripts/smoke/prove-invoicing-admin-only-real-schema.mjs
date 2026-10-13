@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for 20261009120000_invoicing_admin_only (Mason 2026-10-09: no sales rep, driver
+ * Full-chain proof for 20261013160000_invoicing_admin_only (Mason 2026-10-09: no sales rep, driver
  * or other non-admin may invoice any customer; reps READ every invoice; posting can bind to the
  * version an admin reviewed).
  *
@@ -83,14 +83,18 @@ const NAME = REUSE ?? `crx-invoicing-admin-only-${process.pid}-${Date.now().toSt
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
-const CANDIDATE = path.join(MIGRATIONS, '20261009120000_invoicing_admin_only.sql');
+const CANDIDATE = path.join(MIGRATIONS, '20261013160000_invoicing_admin_only.sql');
 const SMOKE = path.join(ROOT, 'scripts', 'smoke');
 const CHAIN = path.join(SMOKE, 'smoke-invoicing-admin-only.sql');
 const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1' || Boolean(REUSE);
 
 // PR #889 (20261007150000 and 20261007150050 applied live 2026-10-10 as ledger versions
-// 20261010014555 / 20261010014642; 150100 and 150200 pending). Its two schema migrations are
-// replayed from disk once #889 is on this branch's base, else from its reviewed head.
+// 20261010014555 / 20261010014642; its data migrations 150100 and 150200 applied live 2026-10-10 and
+// 2026-10-12, then 20261010120000 on 2026-10-12). Its two schema migrations are replayed from disk
+// once #889 is on this branch's base, else from its reviewed head. Its two data migrations are not
+// replayed (they rewrite live rows this disposable database does not have) but are recorded in the
+// ledger before any later migration runs, as live has them: 20261010120000's preflight requires
+// 20261007150200 in the ledger.
 const PR889_HEAD = 'a8434b41f7e03051eb5060c3db600aac0d49a4f7';
 const PR889_SCHEMA = ['20261007150000_record_deliveries_billed_outside_crx', '20261007150050_lock_soft_deleted_orders'];
 const PR889_DATA = ['20261007150100_mark_spring_2026_deliveries_billed_in_chem_man', '20261007150200_release_reservations_of_deleted_spring_orders'];
@@ -283,7 +287,18 @@ function replayPr889(replayed) {
     if (a.status !== 0) throw new Error(`PR #889 replay failed at ${stem}:\n${a.output}`);
   }
   psql(`INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES
-    ${[...PR889_SCHEMA, ...PR889_DATA].map((stem, i) => `('2026101000000${i + 1}', '${stem}', ARRAY[]::text[])`).join(',\n    ')};`);
+    ${[...PR889_SCHEMA, ...PR889_DATA].map((stem, i) => `('2026101000000${i + 1}', '${stem}', ARRAY[]::text[])`).join(',\n    ')}
+    ON CONFLICT (version) DO NOTHING;`);
+}
+// Record all four #889 migrations in the ledger (same versions as replayPr889) once the replay has
+// passed their position, so a later migration whose preflight requires them finds them, as on live.
+let pr889DataRecorded = false;
+function recordPr889DataBefore(file) {
+  if (pr889DataRecorded || path.basename(file, '.sql') <= PR889_DATA[PR889_DATA.length - 1]) return;
+  psql(`INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES
+    ${[...PR889_SCHEMA, ...PR889_DATA].map((stem, i) => `('2026101000000${i + 1}', '${stem}', ARRAY[]::text[])`).join(',\n    ')}
+    ON CONFLICT (version) DO NOTHING;`);
+  pr889DataRecorded = true;
 }
 function restoreLiveCrLfCloseRemainder() {
   const source = lf(path.join(MIGRATIONS, '20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql'));
@@ -1241,8 +1256,15 @@ COMMIT;\n`);
 function checkCompletionRace(phase, r) {
   const outcome = `completion ${r.result}; post ${r.post}; ${r.reviewed} -> ${r.final}; delivery ${r.delivery}`;
   assert.ok(r.result === 'ok' || /^40P01\|/.test(r.result), `${phase} completion race: the completion failed for another reason: ${outcome}`);
-  assert.ok(r.post === 'ok' || /deadlock detected/.test(r.post), `${phase} completion race: the post failed for another reason: ${outcome}`);
-  assert.ok(r.result === 'ok' || r.post === 'ok', `${phase} completion race: both sides were aborted: ${outcome}`);
+  // Since 20261010120000 (PR #889, live 2026-10-12) a delivery's invoice cannot be posted before
+  // the delivery is completed, so the post may now be refused outright instead of winning the race.
+  // Then nothing may change: the invoice stays the reviewed draft, byte for byte.
+  const postRefusedUndelivered = /DELIVERY_INVOICE_EXCEEDS_DELIVERED/.test(r.post);
+  assert.ok(r.post === 'ok' || /deadlock detected/.test(r.post) || postRefusedUndelivered, `${phase} completion race: the post failed for another reason: ${outcome}`);
+  assert.ok(r.result === 'ok' || r.post === 'ok' || postRefusedUndelivered, `${phase} completion race: both sides were aborted: ${outcome}`);
+  if (postRefusedUndelivered && r.result !== 'ok') {
+    assert.equal(r.final, r.reviewed, `${phase} completion race: the refused post and aborted completion still changed the draft: ${outcome}`);
+  }
   assert.equal(r.delivery, r.result === 'ok' ? 'completed' : 'in_progress', `${phase} completion race: the delivery's status does not match the completion's outcome: ${outcome}`);
   if (r.post === 'ok') {
     assert.equal(r.final, r.reviewed.replace(/^draft\|/, 'posted|'), `${phase} completion race: a rep's completion changed the lines or totals of an invoice posted under it: ${outcome}`);
@@ -1589,6 +1611,7 @@ function buildContainer() {
   const migrations = selected();
   for (const [i, file] of migrations.entries()) {
     if (path.basename(file) === '20260817120000_carry_allocated_line_cents_through_lifecycle.sql') restoreLiveCrLfCloseRemainder();
+    recordPr889DataBefore(file);
     const name = `m-${i}.sql`; stageText(name, lf(file)); const r = apply(name);
     if (r.status !== 0) throw new Error(`source replay failed at ${path.basename(file)}:\n${r.output}`);
   }

@@ -3,7 +3,7 @@
 **Last verified: 2026-10-12 (America/Chicago) against the live migration ledger** (read-only, after
 PR #889's last two applies; the counts and high-water live only in `docs/reference/migration-history.md`).
 That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
-entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The candidate `20261009120000` (admin-only invoicing) is NOT applied; on 2026-10-13 every
+entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The candidate `20261013160000` (admin-only invoicing) is NOT applied; on 2026-10-13 every
 function body it pins was re-read live and matched. The
 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
@@ -42,12 +42,12 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## FIXED, PENDING APPLY 2026-10-09 — sales reps and drivers could invoice; rep scoping DROPPED; invoicing becomes admin-only (`20261009120000`, NOT APPLIED)
+## FIXED, PENDING APPLY 2026-10-09 — sales reps and drivers could invoice; rep scoping DROPPED; invoicing becomes admin-only (`20261013160000`, NOT APPLIED)
 
 **Owner decision (Mason, 2026-10-09; `DECISION_LOG.md`):** no non-admin may invoice any customer;
 rep scoping is formally dropped (PR #891 and its `20261008120000` are closed and never applied);
 reps read every invoice. The database phase is
-`supabase/migrations/20261009120000_invoicing_admin_only.sql` — **a local candidate, NOT APPLIED.**
+`supabase/migrations/20261013160000_invoicing_admin_only.sql` — **a local candidate, NOT APPLIED.**
 It changes permissions, so applying it needs Mason's explicit yes and his owner-approval chat reply
 (the Windows Hello step was replaced by a chat reply on 2026-10-09, `DECISION_LOG.md`), and it must follow PR #889's migrations (all live since 2026-10-12; its preflight
 refuses otherwise). The screens are phase 2.
@@ -87,13 +87,13 @@ admins byte-identical; reads; completions; the posting race; the hard-guard swee
 gate) and the registered chain `smoke-invoicing-admin-only.sql`. Move this entry to the archive once
 the file is applied and verified live.
 
-## OPEN 2026-10-09 — found while making invoicing admin-only (NOT fixed by `20261009120000`)
+## OPEN 2026-10-09 — found while making invoicing admin-only (NOT fixed by `20261013160000`)
 
 - **`cancel_delivery` can reverse a COMPLETED delivery, and reps can do it** (bug hunt). Mason
   decided 2026-10-09 that reps keep today's cancel behaviour (including cancelling a delivery that has
   an admin's draft), so `cancel_delivery` and `batch_cancel_deliveries` were deliberately not changed
   and sit on the sweep's upkeep allowlist. The completed-delivery reversal itself is a separate bug,
-  still open. **Deferred out of `20261009120000` (review round 4, Luna HIGH; pre-existing, not a
+  still open. **Deferred out of `20261013160000` (review round 4, Luna HIGH; pre-existing, not a
   regression):** the file does not redefine `cancel_delivery` and only pins its live body. Owner: the
   next lifecycle fix — refuse a `completed` delivery in `cancel_delivery` and
   `batch_cancel_deliveries` (e.g. `DELIVERY_ALREADY_COMPLETED`), then re-pin the upkeep allowlist md5
@@ -104,7 +104,7 @@ the file is applied and verified live.
   re-checked on live.
 - **`finance_charges` still grants table writes to `authenticated`** (its policy is admin-only, so
   RLS refuses them; the grant is defence-in-depth debt). TRUNCATE is not reachable through PostgREST.
-  (`write_offs` and the `field_app_billing_*` TRUNCATE grants are revoked by `20261009120000`.)
+  (`write_offs` and the `field_app_billing_*` TRUNCATE grants are revoked by `20261013160000`.)
 - **A delivery completion racing an admin's post can end in a deadlock (one side aborted), never in a
   re-sized posted invoice** (checked in review round 2). `_complete_delivery_authorized_impl`'s
   partial-delivery resize writes `invoice_items` before it locks the `invoices` row, which looked
@@ -121,7 +121,7 @@ the file is applied and verified live.
   cancelled) invoices without locking the `invoices` row, so a rep's order-line edit can change that
   link field after an admin's versioned post compared it. No amount changes. Fix with the next
   upkeep change: lock the affected draft invoices `FOR UPDATE` (ordered by id) first. Deferred out of
-  `20261009120000` (review round 4, Luna MED; pre-existing): fixing it means redefining the live
+  `20261013160000` (review round 4, Luna MED; pre-existing): fixing it means redefining the live
   `_update_order_items_impl`, which this file only pins.
 - **DECIDED 2026-10-10 (Mason, "1.a") — not a defect: reps' order and delivery work (and drivers'
   partial completions) keeps updating an admin's draft or unposted invoice ("upkeep").** A sales
@@ -143,7 +143,7 @@ the file is applied and verified live.
   2026-10-10), and invoice line cost is copied from the order line. Hiding it would need a read RPC or
   view for reps and a change to the order policies too; worth telling Mason, not a blocker.
 - **The posting version does not cover a field invoice's `field_app_locations` acres**, which the
-  post reads from another table; every writer of them is admin-only after `20261009120000`. Since
+  post reads from another table; every writer of them is admin-only after `20261013160000`. Since
   review round 4 it DOES cover the invoice customer's `payment_terms` (the due-date fallback when the
   invoice has none): the assigned sales rep can still edit that customer row (`customers_update`,
   read live 2026-10-10), so a terms change after review now refuses the post (prover: the rep edits
@@ -166,7 +166,7 @@ the file is applied and verified live.
   (each wrapper's frozen body keeps its strict actor refusal).
 - **Reps see every invoice; until phase 2 ships, not every customer's name on the screens.**
   DECIDED 2026-10-10 (Mason, "2:yes"): reps see customer NAMES on invoices, names only. The database
-  side is in `20261009120000`: `get_invoice_customer_names(uuid[])` returns `(id, farm_name)` of
+  side is in `20261013160000`: `get_invoice_customer_names(uuid[])` returns `(id, farm_name)` of
   customers a non-deleted invoice names, to active admins and sales reps only (everyone else gets no
   rows; anon and service_role cannot call it). `customers` itself stays scoped (a rep's direct read
   returns only assigned customers; its policies are pinned before and after the apply). The pages
@@ -187,7 +187,7 @@ the file is applied and verified live.
 - **Two registered chains drive invoicing as a sales rep and need their rep steps rewritten:**
   `smoke-adversarial-money-inventory-closeout.sql` and
   `smoke-financial-scope-and-delivery-aggregate.sql`. Both already failed before this change
-  (`IDEMPOTENCY_ACTOR_MISMATCH` where they expect another scope error); once `20261009120000` is
+  (`IDEMPOTENCY_ACTOR_MISMATCH` where they expect another scope error); once `20261013160000` is
   applied they stop at the rep's first invoicing call with `INVOICING_ADMIN_ONLY`, which is the
   intended rule. The prover checks that this is the only way any related chain changes. Three chains
   that PASS were adjusted in this change so they keep passing before and after the apply:
@@ -197,7 +197,7 @@ the file is applied and verified live.
 - **The catalog sweep itself runs only at apply time and in the container** (the migration's
   postflight, `smoke-invoicing-admin-only.sql`, the prover). Since review round 1 the same rule runs on
   every PR as a static test, `src/lib/invoiceWriterGuard.test.ts`: it scans every migration from
-  `20261009120000` on and fails on a function that reaches an invoice write without the guard first
+  `20261013160000` on and fails on a function that reaches an invoice write without the guard first
   (or a re-emitted allowlisted body). Review round 2 widened both: dynamic SQL (`EXECUTE`) in a body
   that names an invoice table counts as a write; a guard-first body with an exception handler no
   longer counts as guarded; the postflight refuses a trigger that writes an invoice table from a table
@@ -365,7 +365,7 @@ immediately below). Neither the migration filename
 
 ## OPEN 2026-09-20 (fix LIVE 2026-10-07; two post-apply gates await Mason) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
 
-**2026-10-09:** the rep path is closed outright by `20261009120000_invoicing_admin_only` (fixed,
+**2026-10-09:** the rep path is closed outright by `20261013160000_invoicing_admin_only` (fixed,
 pending apply: a sales rep can no longer call either order-invoice RPC). The two post-apply gates below
 are unchanged and stay Mason's.
 
@@ -477,7 +477,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`
   (`20260627120000`) lets dispatched applicators read `cost_per_unit_cents`; (3) `update_field_app_invoice_billing`
   gates admin OR sales_rep with no per-row ownership, so any rep can edit another rep's draft billing fields
-  (FIXED, PENDING APPLY 2026-10-09: admin-only under `20261009120000`);
+  (FIXED, PENDING APPLY 2026-10-09: admin-only under `20261013160000`);
   (4) `buildInvoiceEmailPayload` (`src/lib/emailService.ts`) puts the invoice number/date into email HTML
   unescaped. (Source: `docs/archive/2026-summer/fieldapp-parity/LEDGER.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer/fieldapp-parity/LEDGER.md`).)
 - **Split-acre rounding drift (deferred MED, Track B B1.4).** `derive_customer_shares_from_fields` (latest body
@@ -611,7 +611,7 @@ Each of these was recorded inside an entry that is otherwise fixed or closed and
 archive. They are listed here so the open part of this file shows them. None was re-measured on
 2026-09-26 unless it says so.
 
-- **FIXED, PENDING APPLY (2026-10-09): moot under `20261009120000` — rep scoping was DROPPED by
+- **FIXED, PENDING APPLY (2026-10-09): moot under `20261013160000` — rep scoping was DROPPED by
   Mason; reps can no longer invoice at all (see the entry at the top).** Original text:
   **Order-invoice RPCs are not scoped to the rep (found 2026-10-06 while fixing CRX-LIFE-001;
   pre-existing; read from the live catalog, not exercised live).** Two related gaps in

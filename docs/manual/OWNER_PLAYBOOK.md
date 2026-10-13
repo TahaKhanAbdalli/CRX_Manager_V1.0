@@ -103,7 +103,7 @@ A few other things agents simply never do on their own — overwriting history o
 
 ## Who can do invoicing (your decisions, 2026-10-09 and 2026-10-10)
 
-Only admins invoice. Once the database change `20261009120000` is applied (it is written and tested,
+Only admins invoice. Once the database change `20261013160000` is applied (it is written and tested,
 NOT applied yet — it needs your yes and your approval reply in the chat, because it changes who can
 do what), this is what each person can do:
 

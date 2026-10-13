@@ -1,4 +1,4 @@
-// Static shape checks for 20261009120000_invoicing_admin_only (Mason 2026-10-09: invoicing is
+// Static shape checks for 20261013160000_invoicing_admin_only (Mason 2026-10-09: invoicing is
 // admin-only; sales reps read every invoice; posting can bind to the reviewed version).
 // Supporting evidence only: the real proof is
 // scripts/smoke/prove-invoicing-admin-only-real-schema.mjs, which applies the file to the replayed
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrationsDir = join(repoRoot, 'supabase', 'migrations');
-const rawSql = readFileSync(join(migrationsDir, '20261009120000_invoicing_admin_only.sql'), 'utf8');
+const rawSql = readFileSync(join(migrationsDir, '20261013160000_invoicing_admin_only.sql'), 'utf8');
 const sql = rawSql.replace(/\r\n/g, '\n');
 const read = (file: string) => readFileSync(join(repoRoot, file), 'utf8').replace(/\r\n/g, '\n');
 const md5 = (text: string) => createHash('md5').update(text, 'utf8').digest('hex');
@@ -73,7 +73,7 @@ function topLevel(source: string): string {
   return source.replace(/\$([A-Za-z_]*)\$[\s\S]*?\$\1\$/g, '<body>').split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
 }
 
-describe('invoicing admin-only migration (20261009120000)', () => {
+describe('invoicing admin-only migration (20261013160000)', () => {
   it('is authored with LF line endings and says it is not applied', () => {
     expect(rawSql.includes('\r')).toBe(false);
     expect(sql.slice(0, 200)).toContain('STATUS: NOT APPLIED');

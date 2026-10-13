@@ -166,7 +166,7 @@ export const RpcErrorCodes = {
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
-  // Invoicing is admin-only (Mason 2026-10-09, migration 20261009120000): every
+  // Invoicing is admin-only (Mason 2026-10-09, migration 20261013160000): every
   // invoicing RPC refuses a non-admin with 42501 'INVOICING_ADMIN_ONLY: ...'
   // (create_split_invoices_from_order checks its idempotency key first).
   // create_quick_delivery, complete_job and complete_delivery do NOT refuse: for a

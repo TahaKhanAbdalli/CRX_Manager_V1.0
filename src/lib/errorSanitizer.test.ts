@@ -112,7 +112,7 @@ describe('sanitizeError', () => {
 
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
-    // 20261009120000: the guard's real RAISE text, token plus suffix, and the PostgREST object shape.
+    // 20261013160000: the guard's real RAISE text, token plus suffix, and the PostgREST object shape.
     const adminOnly = 'INVOICING_ADMIN_ONLY: only an admin can create, edit, post, unpost, void or transfer invoices, or apply credits and prepayments to them';
     expect(sanitizeError(adminOnly)).toBe('Only an admin can do invoicing');
     expect(sanitizeError({ code: '42501', message: adminOnly })).toBe('Only an admin can do invoicing');

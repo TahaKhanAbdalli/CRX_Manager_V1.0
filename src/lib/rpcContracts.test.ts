@@ -2431,7 +2431,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   });
 
   it('batch_post_invoices binds replay and forwards a deterministic key to every child post', () => {
-    // 20261009120000 (invoicing admin-only) renames the reviewed body to
+    // 20261013160000 (invoicing admin-only) renames the reviewed body to
     // _batch_post_invoices_pre_admin_only_20261009 and puts a wrapper in front that
     // checks the admin guard (and an optional posting version) and passes the key
     // through unchanged. The replay contract below lives in that frozen body: the
@@ -2440,7 +2440,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(wrapper).toContain('PERFORM public._require_invoicing_admin();');
     expect(wrapper).toContain('public._batch_post_invoices_pre_admin_only_20261009(');
     expect(wrapper).toContain('p_idempotency_key => p_idempotency_key');
-    const frozen = getMigrationFiles().filter(({ name }) => name < '20261009120000');
+    const frozen = getMigrationFiles().filter(({ name }) => name < '20261013160000');
     const sigRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?batch_post_invoices\s*\(/i;
     const source = [...frozen].reverse().find(({ content }) => sigRe.test(content))?.content ?? '';
     const body = /AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/.exec(source.slice(source.search(sigRe)))?.[2] ?? null;
