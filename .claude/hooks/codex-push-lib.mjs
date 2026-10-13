@@ -3448,7 +3448,86 @@ const GATED_VERB_RE = /(?:^|[^\w-])(?:merge|push|api|alias)(?:$|[^\w-])/i;
 const POWERSHELL_ASSIGNED_RE = /^\$\{?[A-Za-z_][\w:]*\}?$/;
 const POWERSHELL_ASSIGN_OP_RE = /^[+\-*/%]?=$/;
 const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
-function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE) {
+//
+// A raw word split cut `x=$(echo "$f")` at its space and offered `"$f")` as a
+// program, refusing an ordinary read loop (Mason's 2026-10-02 cleanup, fixed
+// 2026-10-04). So each `$( … )` is read as one word whose inside is checked on
+// its own: the text is regrouped, never hidden, and a program computed in there
+// is still found. Blanking single-quoted text first was tried and dropped after
+// two Luna rounds on PR #882: shells disagree on where a quote ends (backticks,
+// `$'…'`, here-strings, curly quotes, quotes nested in `"$( )"`), so blanking hid
+// real programs. awk's `'{print $2}'` is therefore still refused, as before.
+//
+// Past NESTED_MAX_DEPTH a substitution is not unwrapped, so one still left there
+// counts as built at run time: reading it as plain words skipped the assignment
+// `x=$($P` and allowed `x=$(x=$(x=$(x=$(x=$($P pr merge 1 --admin)))))`
+// (CodeRabbit, PR #882). An arithmetic `$(( … ))` there is not a command and
+// does not count; a backtick or an unclosed `$(` still does.
+//
+// A `$(` the reader cannot close is read as running to the end of the text,
+// and that tail is checked like any other substitution: a quoted `'$('` opened
+// a quote that never closed, so `echo '$('; x=$($P pr merge 1 --admin)` hid the
+// real substitution after it (CodeRabbit, PR #882). Refusing every unclosed
+// `$(` instead would refuse the everyday `git commit -m "$(cat <<'EOF' … EOF )"`
+// whenever the message holds an apostrophe, since the reader does not know
+// heredocs.
+function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
+  const source = String(text || "");
+  const split = splitSubstitutions(source);
+  if (depth >= NESTED_MAX_DEPTH) {
+    return source.includes("`") || split.inners.length > 0 || /\$\((?![()])/.test(split.outer) ||
+      programWordBuiltAtRuntime(source, runtimeText);
+  }
+  if (split.inners.some((inner) => programBuiltAtRuntime(inner, runtimeText, depth + 1))) return true;
+  if (split.unclosed !== undefined && programBuiltAtRuntime(split.unclosed, runtimeText, depth + 1)) return true;
+  return programWordBuiltAtRuntime(split.outer, runtimeText);
+}
+
+// Replaces each outermost `$( … )` with `$()` and returns the inside texts.
+// A `$(` that never closes, and everything after it, stays in the outer text
+// as it was, and the text after it is returned as `unclosed`; the substitutions
+// before it are still returned, so a quoted `'$('` later in the command cannot
+// hide an earlier one (CodeRabbit, PR #882).
+//
+// An arithmetic `$(( … ))` is not a command: reading `i=$(($i+1))` as one made
+// `$i+1` a run-time program and refused `i=$(($i+1)); git status` (Codex
+// connector, PR #882). Its text stays in place, read as it was before this split
+// existed, and only a `$( … )` nested inside it is taken out and checked.
+function splitSubstitutions(text) {
+  let outer = "";
+  const inners = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\\" || text[index] === "`") {
+      outer += text.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (text[index] !== "$" || text[index + 1] !== "(") { outer += text[index]; continue; }
+    let depth = 0;
+    let quote = "";
+    let end = -1;
+    for (let at = index + 1; at < text.length; at += 1) {
+      const char = text[at];
+      if (quote) { if (char === quote) quote = ""; else if (char === "\\") at += 1; continue; }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === "\\") { at += 1; continue; }
+      if (char === "(") depth += 1;
+      else if (char === ")" && --depth === 0) { end = at; break; }
+    }
+    if (end < 0) return { outer: outer + text.slice(index), inners, unclosed: text.slice(index + 2) };
+    if (text[index + 2] === "(" && text[end - 1] === ")") {
+      outer += "$((";
+      index += 2;
+      continue;
+    }
+    inners.push(text.slice(index + 2, end));
+    outer += "$()";
+    index = end;
+  }
+  return { outer, inners };
+}
+
+function programWordBuiltAtRuntime(text, runtimeText) {
   for (const segment of splitCommandSegments(text)) {
     let words = splitShellWordsRaw(segment);
     if (POWERSHELL_ASSIGNED_RE.test(words[0] ?? "") && POWERSHELL_ASSIGN_OP_RE.test(words[1] ?? "")) {
