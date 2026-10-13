@@ -71,7 +71,7 @@ Compare against the live database (Supabase MCP `list_migrations`). If there are
 ⚠️  You have X new migration(s) not yet applied to production.
     Apply them through /migration-review → scripts/apply-migration-file.mjs
     BEFORE merging (non-destructive: under Mason's 2026-09-26 landing rule
-    once the final reviews are clean; destructive, data-overwriting or access-changing: only after Mason's explicit yes in chat (a procedural requirement the gate cannot verify) AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`; the part the apply gate enforces)), or the
+    once the final reviews are clean; destructive, data-overwriting or access-changing: only after Mason's own `approve <code>` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply)), or the
     app will reference tables/columns/functions that don't exist yet.
     NEVER `supabase db push` — it bypasses the review gate and is blocked.
 ```
@@ -148,11 +148,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    `@coderabbitai resume`, post no other `@coderabbitai` commands, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread.
 5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
-   `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
+   `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26, except a documentation-only
+   change as defined in `docs/reference/sol-exempt-paths.md`, which the merge gates accept without
+   it; run Sol only if a gate refuses saying "documentation-only exemption does not apply",
+   and fix any other refusal's own failing condition), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
-   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+   to that head and GitHub's real base (or the documentation-only exception). `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
    The classic protection's `enforce_admins` is off, but the `protect-main` ruleset has no bypass
    actors, so its required review binds admins too; no agent uses `--admin` either way. **The merge
    is the deploy.**
@@ -162,7 +165,7 @@ pass; report the merge explicitly rather than silently. A direct `vercel --prod`
 merge path or an Edge Function deploy still needs Mason's explicit yes. A non-destructive live
 migration applies under the same rule through migration-apply-guard's full proof gate (hash-bound
 dual-reviewer proof + hash-bound Sol proof, both fresh ≤30 min) in any session; a destructive,
-data-overwriting or access-changing one applies only after Mason's explicit yes in chat (a procedural requirement the gate cannot verify) AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`; the part the apply gate enforces), through `scripts/apply-migration-file.mjs`.
+data-overwriting or access-changing one applies only after Mason's own `approve <code>` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply), through `scripts/apply-migration-file.mjs`.
 If blocked: List every issue that needs fixing first.
 
 ## Rules
@@ -174,4 +177,4 @@ If blocked: List every issue that needs fixing first.
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
 - NEVER merge over a `CHANGES_REQUESTED` verdict, and never without CodeRabbit's APPROVED review bound to the exact candidate commit (Mason's autonomous-landing rule, 2026-09-26)
-- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive, data-overwriting or access-changing migrations apply only after Mason's explicit yes in chat (a procedural requirement the gate cannot verify) AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`; the part the apply gate enforces), through `scripts/apply-migration-file.mjs`
+- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive, data-overwriting or access-changing migrations apply only after Mason's own `approve <code>` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply), through `scripts/apply-migration-file.mjs`

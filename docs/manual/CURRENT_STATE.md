@@ -1,23 +1,20 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-09 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-10 ~03:00 UTC, after PR #889 applied
-`20261007150000` and `20261007150050`: 1021 rows / 1014 distinct names, `max(version)`
-`20261010014642`; the read before it, 2026-10-07 11:47 UTC after PR #885's apply, had 1019 rows /
-1012 names, `max(version)` `20261007114554`). The local candidate `20261009120000_invoicing_admin_only`
+**Last verified:** 2026-10-12 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-12 ~23:47 UTC, after PR #889's last two
+applies: 1024 rows, `max(version)` `20261012234633`; the read before it, on 2026-10-10 after PR #889's
+first three applies, had 1022 rows, `max(version)` `20261010043006`). The local candidate `20261009120000_invoicing_admin_only`
 (not applied) is described below.
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-07)
+## Current state at a glance (2026-10-12)
 
-- **Effective ordering high-water (read 2026-10-09): `20261007150050_lock_soft_deleted_orders`**
-  (ledger version `20261010014642`, applied by PR #889 together with `20261007150000`
-  (`20261010014555`); its data migrations `20261007150100` and `20261007150200` are not applied).
-  Before that it was `20261006200000_refuse_field_invoice_through_order_rpcs`
-  (ledger version `20261007114554`, UTC; applied live 2026-10-07 from PR #885, CRX-LIFE-001), which
-  replaced `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`, PR #800). The effective ordering high-water is the
+- **Effective ordering high-water: `20261010120000_cap_delivery_invoice_at_delivered`**
+  (ledger version `20261012234633`, UTC; applied live 2026-10-12 from PR #889). It replaced
+  `20261007150200_release_reservations_of_deleted_spring_orders` (ledger `20261012234157`, applied
+  minutes before it from the same PR). Nothing from PR #889 is left unapplied. The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -39,7 +36,12 @@ ships or quarterly, whichever comes first.
   `20260914101300_finish_generic_field_invoice_cutover` (`20261002201609`); the last four applied
   from PR #871's checkout. Then `20260921180000_soft_delete_customer_document_rpc`
   (`20261002230949`, PR #800) and `20261006200000_refuse_field_invoice_through_order_rpcs`
-  (`20261007114554`, PR #885).
+  (`20261007114554`, PR #885). Then, from PR #889 (2026-10-10 UTC):
+  `20261007150000_record_deliveries_billed_outside_crx` (`20261010014555`),
+  `20261007150050_lock_soft_deleted_orders` (`20261010014642`) and
+  `20261007150100_mark_spring_2026_deliveries_billed_in_chem_man` (`20261010043006`); then, from PR #889
+  (2026-10-12 UTC), `20261007150200_release_reservations_of_deleted_spring_orders` (`20261012234157`)
+  and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -47,10 +49,9 @@ ships or quarterly, whichever comes first.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-07 by
-  PR #887 (`migrations_high_water` `20261007114554`), so it records every applied name through
-  `20261006200000_refuse_field_invoice_through_order_rpcs` and the new
-  `invoices_field_application_has_no_order` CHECK. Refresh it after the next live apply.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-12 on PR
+  #889's branch (`migrations_high_water` `20261012234633`), after `20261010120000`. Refresh it after
+  the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
@@ -67,7 +68,7 @@ ships or quarterly, whichever comes first.
   drivers' completions and quick deliveries from creating invoices (admins are notified instead),
   lets sales reps read every invoice, and adds a server-side posting version check. Today (until it
   is applied) sales reps can still create and post invoices through the app and the API. Applying it
-  needs Mason's yes and Windows Hello approval, after PR #889's four migrations. Screens are phase 2.
+  needs Mason's yes and his owner-approval chat reply; PR #889's migrations are all live (2026-10-12). Screens are phase 2.
   Rep scoping (PR #891) is dropped. 2026-10-10 (Mason): reps' order/delivery work keeps updating an
   admin's draft or unposted invoice ("1.a", unchanged behaviour), and reps see customer names (only)
   on invoices through the new `get_invoice_customer_names` reader ("2:yes"; pages switch in phase 2).
@@ -419,7 +420,8 @@ PR #875) and was verified on the live site 2026-10-04.
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
   branch, PR, Luna review rounds, required checks, CodeRabbit APPROVED on the
   final head, a fresh exact-SHA Sol review run last (every merge, since
-  2026-09-26), then an exact-head merge. The merge is the deploy; a
+  2026-09-26, except a documentation-only change as defined in
+  `docs/reference/sol-exempt-paths.md`, since 2026-10-07), then an exact-head merge. The merge is the deploy; a
   non-destructive migration (its grants routine, none widening access) is applied through the proof
   gate under the same conditions; one that deletes or overwrites data or widens
   access waits for Mason (`AGENTS.md` › Safety and Protected Delivery).

@@ -242,8 +242,8 @@
 -- 20261007150100, 20261007150200) are applied live: the preflight refuses until all four are in
 -- the ledger by name (PREFLIGHT_PR889_NOT_APPLIED). This file shares no function with #889.
 -- APPLY GATE: this changes who can do what (permissions), so it is an AGENTS.md hard gate: it needs
--- Mason's explicit yes in the current conversation and his Windows Hello approval of this exact
--- file. It is NOT a routine-grant auto-apply.
+-- Mason's explicit yes in the current conversation and his owner-approval chat reply for this exact
+-- file (it replaced Windows Hello on 2026-10-09). It is NOT a routine-grant auto-apply.
 -- ROLLBACK: a new migration drops each wrapper, renames each frozen implementation back and
 -- re-grants it to authenticated and service_role, re-emits the two pinned pre-change bodies
 -- (f8de9f000e40f7bfd8f792012f04fee0, 4e4c38e3e8be66e2d24c434bb54c0521), drops the four helpers

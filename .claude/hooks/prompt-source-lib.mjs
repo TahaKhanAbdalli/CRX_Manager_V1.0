@@ -430,14 +430,13 @@ export function hasAuthoredText(prompt) {
 }
 
 // ── withoutSubagentReports(prompt) ───────────────────────────────────────
-// For the intent REMINDER hooks (dangerous-phrase-warning, ship-intent,
-// autopilot-intent, codex-gauntlet, agent-pair-review, codex-to-claude-handoff).
+// For the intent REMINDER hook (ship-intent).
 // It removes only agent-message blocks (by the line structure above, closed or
 // truncated) and the peer preamble line — not code, blockquotes or
 // cross-session messages, which authoredByMason() strips for the hold latch.
-// The reminders must keep reading those: Mason's own `git push --force` in
-// backticks is exactly what the danger warning is for, and a sibling session's
-// request is still something this session may act on. A subagent's hand-back
+// The reminder must keep reading those: Mason's own words in backticks are
+// still his, and a sibling session's request is still something this session
+// may act on. A subagent's hand-back
 // is neither — it is this session's own child reporting.
 export function withoutSubagentReports(prompt) {
   const text = String(prompt || "");
@@ -449,4 +448,4 @@ export function withoutSubagentReports(prompt) {
 // .claude/commands/ship.md Step 8. A shorter restated list here once told agents
 // only three actions were gated (2026-09-25 guidance review).
 export const PUSH_POLICY =
-  "LANDING POLICY: Mason's autonomous-landing rule (2026-09-26): branch → PR → required checks green → CodeRabbit APPROVED on the exact head (it reviews every push automatically; post @coderabbitai review once only if it skipped the head; fixes stay on the same PR) → exact-SHA Sol proof LAST → apply the change's NON-destructive migration, if any → exact-head merge, all with no in-chat ask, as detailed in .claude/commands/ship.md Step 8; direct pushes to main are impossible. The merge and apply gates enforce it in every session; an ARMED hands-free run passes only a plain branch push and a plain `gh pr merge <n>` on to those gates. HARD GATES — every one in AGENTS.md › Safety and Protected Delivery (force-push, DESTRUCTIVE migration or live-data change outside a reviewed migration, Edge Function or out-of-band production change, data deletion, secrets, authentication, permissions, billing, domains, ownership) — need Mason's explicit OK in the current conversation; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are refused for agents even then, armed or not, until he says yes. Never commit unrelated files.";
+  "LANDING POLICY: Mason's autonomous-landing rule (2026-09-26): branch → PR → required checks green → CodeRabbit APPROVED on the exact head (it reviews every push automatically; post @coderabbitai review once only if it skipped the head; fixes stay on the same PR) → exact-SHA Sol proof LAST (except a documentation-only change as defined in docs/reference/sol-exempt-paths.md) → apply the change's NON-destructive migration, if any → exact-head merge, all with no in-chat ask, as detailed in .claude/commands/ship.md Step 8; direct pushes to main are impossible. The merge and apply gates enforce it in every session; an ARMED hands-free run passes only a plain branch push and a plain `gh pr merge <n>` on to those gates. HARD GATES — every one in AGENTS.md › Safety and Protected Delivery (force-push, DESTRUCTIVE migration or live-data change outside a reviewed migration, Edge Function or out-of-band production change, data deletion, secrets, authentication, permissions, billing, domains, ownership) — need Mason's explicit OK in the current conversation; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are refused for agents even then, armed or not, until he says yes. Never commit unrelated files.";

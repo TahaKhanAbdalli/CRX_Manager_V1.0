@@ -1,12 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-09 (America/Chicago) against the live migration ledger** (read-only,
-2026-10-10 ~03:00 UTC, after PR #889 applied `20261007150000` and `20261007150050`; the counts and
-high-water live only in `docs/reference/migration-history.md`). That read re-certified only the
-applied-migration list in this header and the two 2026-10-09 invoicing entries at the top (the
-candidate `20261009120000` is NOT applied; every body it pins was re-read live that day; on
-2026-10-10 Mason's decisions "1.a" (upkeep) and "2:yes" (names-only customer reads) were recorded
-there and the `customers` policies it pins were read live). The
+**Last verified: 2026-10-12 (America/Chicago) against the live migration ledger** (read-only, after
+PR #889's last two applies; the counts and high-water live only in `docs/reference/migration-history.md`).
+That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
+entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The candidate `20261009120000` (admin-only invoicing) is NOT applied; on 2026-10-13 every
+function body it pins was re-read live and matched. The
 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
@@ -24,10 +22,9 @@ date and was not all re-measured.
   `20260914101000`..`20260914101300` applied live on 2026-10-02, followed the same day by
   `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`), and on 2026-10-07 by
   `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, CRX-LIFE-001),
-  and on 2026-10-10 UTC (evening of 2026-10-09 Chicago) by PR #889's
-  `20261007150000_record_deliveries_billed_outside_crx` (`20261010014555`) and
-  `20261007150050_lock_soft_deleted_orders` (`20261010014642`); its data migrations
-  `20261007150100` and `20261007150200` are not applied.
+  and on 2026-10-10 (UTC) by PR #889's `20261007150000` (ledger `20261010014555`), `20261007150050`
+  (`20261010014642`) and `20261007150100` (`20261010043006`), and on 2026-10-12 by its
+  `20261007150200` (`20261012234157`) and `20261010120000` (`20261012234633`).
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -51,8 +48,9 @@ This file consolidates (does not replace) the source documents it points to. If 
 rep scoping is formally dropped (PR #891 and its `20261008120000` are closed and never applied);
 reps read every invoice. The database phase is
 `supabase/migrations/20261009120000_invoicing_admin_only.sql` — **a local candidate, NOT APPLIED.**
-It changes permissions, so applying it needs Mason's explicit yes and his Windows Hello approval, and
-it must follow PR #889's four migrations (its preflight refuses otherwise). The screens are phase 2.
+It changes permissions, so applying it needs Mason's explicit yes and his owner-approval chat reply
+(the Windows Hello step was replaced by a chat reply on 2026-10-09, `DECISION_LOG.md`), and it must follow PR #889's migrations (all live since 2026-10-12; its preflight
+refuses otherwise). The screens are phase 2.
 **Closed by it once applied (fixed, pending apply):**
 - Reps (and drivers, through completions and quick deliveries) could create, edit, post, unpost,
   consolidate, split, transfer and void-batch invoices and apply credit memos and prepayments. Every
@@ -224,6 +222,89 @@ the file is applied and verified live.
 - **Nine registered chains around the invoicing RPCs fail on main's schema in the container** (the
   prover prints each one's first error; identical before and after this change, so they give no
   evidence either way). Classifying and repairing them is separate work.
+## OPEN 2026-10-07 (owner: Mason) — what the 2026-10-01 integrity-report fixes leave behind
+
+The fixes for PR #861's failing checks (`20261007150000`, `20261007150050`, `20261007150100`,
+`20261007150200`, NOT APPLIED when written; the first three applied live 2026-10-10 UTC and `150200`
+on 2026-10-12 UTC; see `docs/reference/migration-history.md`) deliberately
+leave these open:
+
+- **Check 2 still flags five products until counted** (Mason chose no physical count on 2026-10-07):
+  Black Strap Molasses Sugar Tote (CRX 2,000; the March receipt-reversal bug, fixed 2026-06-10, left
+  ~1,325 on Tote that belongs on Bulk, which reads −1,325), Start Right 2.0 Tote (+530 from an
+  untracked edit made outside the app in March; cause unprovable), and 2,4D Amine 2.5 Gal and Bulk
+  and Start Right 2.5 Gal (early-March opening stock entered with no ledger row). Fixing any of them
+  needs a count; the Black Strap and Start Right Tote fixes would change live stock.
+- **Returns and voids against a delivery billed in Chem Man stay allowed** (Mason, 2026-10-07). A CRX
+  return credit for such a delivery credits a sale that CRX never billed; handle the credit in Chem
+  Man / the books instead. Voiding such a delivery restocks it, and its record stays; a voided
+  recorded delivery still blocks whole-order CRX billing of its order (fail-closed).
+- **The Order page and Orders list still offer whole-order invoicing on those 33 orders.** The server
+  refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
+- **A delivery invoice is capped at what its delivery delivered** (`20261010120000`, Sol HIGH on
+  PR #889, applied live 2026-10-12 UTC); an order is billed either per delivery or whole-order, never
+  both. Still open by design: the quantities on a whole-order invoice are not capped, and unit prices
+  are not capped. A posted delivery invoice now needs a completed delivery, whose items are frozen, so
+  a delivery cannot shrink under a newly posted invoice; the integrity report's delivery-invoice
+  quantity check still flags any older mismatch. A delivery recorded short cannot be billed for more on its own invoice. If a scheduled delivery loses a product
+  after its up-front (quick-delivery) invoice was drafted, the delivery still completes but that draft
+  cannot be posted; void it and re-create the invoice from the delivery. If a scheduled delivery's
+  quantity is lowered after its up-front invoice was drafted, the draft stays over until the office
+  lowers that line on the invoice (lowering is always allowed).
+- **Voiding a delivery whose invoice is already posted leaves that invoice active** (pre-existing;
+  raised by Codex on PR #889, 2026-10-12, and deferred). `void_delivery` cancels only the delivery's
+  draft invoices and shows "posted invoices linked to this order require manual review"; the office
+  then issues a credit memo. The delivery cap does not block the void (voids stay allowed, per the
+  2026-10-07 decision above, and a paid-then-credited invoice stays active), and the integrity
+  report's delivery-invoice quantity check flags any such invoice.
+- **An invoice made from scratch (no order, no delivery) can name any product and quantity**
+  (pre-existing; found in the PR #889 security review, 2026-10-10). The New Invoice page creates
+  `misc_charge` invoices with no order link, so neither the delivery cap nor the order/delivery
+  overlap guard can see them. Owner: Mason — decide whether product lines should be allowed on
+  orderless invoices at all.
+- **The integrity checks page by offset, not by a snapshot.** Their reads (and the
+  `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
+  inserted between two pages can shift the next page by one, so a single run can miss or repeat a
+  row. Accepted: the report is a re-runnable diagnostic, ledger rows are never deleted, and the
+  server still refuses to invoice any recorded delivery. Keyset paging would close it.
+- **Six spring orders remain `partially_fulfilled`** (ORD-2026-0161/0162/0172/0176/0331/0343) with
+  undelivered lines still reserving stock, and three of their deliveries are stuck `scheduled` /
+  `in_progress` since April (DEL-00075, DEL-00077, DEL-00082). Whether that product is still owed is
+  a business call; the data is internally consistent.
+- **Soft-deleted orders are frozen** (`20261007150050`): they cannot be un-deleted, their status,
+  lines and deliveries cannot change, and no delivery can be scheduled on them. So a completed
+  delivery on a deleted order (e.g. ORD-2026-0342, ORD-2026-0345) can no longer be cancelled or
+  voided — doing so would put reservations and stock back for an order that no longer exists. If one
+  ever genuinely needs undoing, do it through a reviewed migration.
+- **The never-posted draft CS-2026-0055** (ORD-2026-0186's May delivery DEL-00074) is left as is; its
+  order's other delivery was recorded as billed in Chem Man.
+
+## OPEN 2026-10-09 — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
+
+**What it is.** On the regular invoice editor (`src/pages/InvoiceDetail.tsx`: chemical sales, misc
+charges, job/blend field invoices) the **Post** button stays clickable while there are unsaved edits on
+screen. `post_invoice` / `post_invoice_group` post what is SAVED, so the invoice posts with the old
+saved amounts, and the page then reloads, dropping the edits. The pre-Post checks run on the on-screen
+copy, not on what is posted: the credit-limit warning (`handlePost`) uses the on-screen customer and
+line total, and for a single invoice the restricted-use (RUP) license warning (`openPostConfirm`) uses
+the on-screen lines. (A split group's RUP check already reads the saved siblings.) The editor also
+has no leave-page warning, so a sidebar link, Back, or closing the tab drops unsaved edits silently.
+Found by the 2026-10-08 overnight bug hunt.
+
+**Why it is still open.** PR #892 first carried an app-side fix (Post greyed out while there are
+unsaved edits, plus a re-read of the saved invoice before the Post confirm). The final Codex Sol review
+of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what is posted, because
+another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
+fix was taken out of PR #892, so the editor's Post behaves exactly as before.
+
+**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" change, in two parts
+that are both required, because neither alone covers the bug:
+1. **In the editor:** Post stays disabled while the form has unsaved edits (the version check below
+   cannot see edits that exist only in the browser), and the credit-limit and restricted-use
+   warnings are computed from the saved invoice, not the on-screen copy.
+2. **In the database:** a server-side posting version check. The editor sends the version of the
+   saved invoice it showed, and `post_invoice` / `post_invoice_group` refuse, inside the same
+   transaction, when the saved invoice (or a group member) no longer matches.
 
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 
@@ -419,6 +500,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   as current on one and 30–59 on the other. (2) `invoice_date` has no future-date bound in the UI or on the
   server, so a typo like 2206 is accepted. (3) Three filters cut the day at UTC midnight rather than Chicago:
   `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
+  (Since 2026-10-09 the `Invoices.tsx` season filter applies only to closed invoices — paid, voided,
+  cancelled; open ones show from every season, see `src/lib/invoiceSeasonWindow.ts` — so the UTC cut can
+  only move a closed invoice on or off the list.)
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
 - **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
   number of rows and filter in the browser.
@@ -897,9 +981,25 @@ cannot see that anything was skipped.
 
 **The cosmetic ones** — report/dialog defaults the user can change in the UI:
 `ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
-`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
+`ReportShell.tsx:20-29`, `ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
 `SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
 pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+**Not user-changeable, but low impact:** `invoiceSeasonWindow.ts` (the invoice lists' season
+window; replaced `FieldInvoices.tsx:44` on 2026-10-09). These lists have no season control, but
+the window applies to CLOSED invoices only (paid, voided, cancelled); open invoices are never
+season-windowed, so for the list itself the browser-clock season can only move a closed invoice on
+or off a list. The same browser-clock season also decides which open invoices count as "this
+season": the "Season N" tag, and which invoices the season-limited bulk actions skip (field Drafts
+Post All, Posted Unpost All in its default scope, Chemical Sales Select All). A browser clock that
+is wrong across October 1 would treat last season's invoices as this season's (no tag, included in
+those bulk actions) or the reverse. An invoice with no season, or a later season (for example from
+an `invoice_date` typo), counts as "not this season" and is left out; a missing season is tagged
+"Season unknown". Separately, paths that rely on the `invoices.season` column default stamp it
+from the UTC date (see "other paths still stamp `invoices.season` from the UTC clock" above), so
+for about five hours on each September 30 evening (Chicago time) such a new invoice is stamped with
+next season while the browser still says this season: it shows a "Season N+1" tag and the
+season-limited bulk actions skip it until the browser date also rolls over.
 
 `FieldApplicationInvoice.tsx:533` (line as of 2026-09-26) is **fine** — it inherits `transactionDate`, which is now the
 Chicago business date.

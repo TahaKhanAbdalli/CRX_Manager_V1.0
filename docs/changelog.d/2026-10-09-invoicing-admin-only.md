@@ -227,7 +227,8 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
 
 ### Not done here (owners)
 
-- Apply: Mason's explicit yes and Windows Hello approval, after PR #889's four migrations.
+- Apply: Mason's explicit yes and his owner-approval chat reply (it replaced Windows Hello on
+  2026-10-09), after PR #889's migrations (all live since 2026-10-12).
 - Phase 2 (screens) after PR #892: hide every mutating invoice control for non-admins, send the
   reviewed version when posting, the rep's customer-name gap on invoice lists, and the
   `src/types/supabase.ts` entries for `p_expected_version` and the two version readers (regenerate
