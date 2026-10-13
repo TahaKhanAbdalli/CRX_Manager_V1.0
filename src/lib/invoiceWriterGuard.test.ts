@@ -297,7 +297,9 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     // authenticated or PUBLIC re-exposes it.
     for (const s of top.split(';')) {
       const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bFROM\b([^;]*)/i.exec(s);
-      if (rv && /\b(authenticated|PUBLIC)\b/i.test(rv[4])) {
+      // REVOKE GRANT OPTION FOR ... removes only the right to re-grant; EXECUTE itself stays
+      // (CodeRabbit, PR #902).
+      if (rv && !/^\s*REVOKE\s+GRANT\s+OPTION\s+FOR\b/i.test(s.slice(rv.index)) && /\b(authenticated|PUBLIC)\b/i.test(rv[4])) {
         const args = balanced(s, rv.index + rv[0].indexOf('(', rv[0].indexOf(rv[2])));
         if (args !== null) {
           const key = signatureKey(rv[2], args);
@@ -391,6 +393,10 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
     it('treats a writer revoked from authenticated alone as still exposed (PUBLIC keeps EXECUTE)', () => {
       expect(names(withNext(fn('_probe_half_revoked', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
         'REVOKE ALL ON FUNCTION public._probe_half_revoked(uuid) FROM anon, authenticated, service_role;')))).toEqual(['_probe_half_revoked']);
+    });
+    it('does not treat REVOKE GRANT OPTION FOR EXECUTE as revoking EXECUTE', () => {
+      expect(names(withNext(fn('_probe_grant_option', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+        'REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION public._probe_grant_option(uuid) FROM PUBLIC, anon, authenticated, service_role;')))).toEqual(['_probe_grant_option']);
     });
     it('accepts a writer revoked from authenticated and PUBLIC in two separate statements', () => {
       expect(withNext(fn('_probe_two_revokes', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
