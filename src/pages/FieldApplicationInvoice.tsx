@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import {
   Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
   Printer, Bell, Lock, X, CornerUpLeft, RotateCcw, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
@@ -15,10 +15,12 @@ import { assertInvoiceLifecycleSendable, assertInvoiceSendable } from '../lib/in
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import { createdInvoiceAddressSearch, createdInvoiceIdFromAddress } from '../lib/fieldAppNewInvoiceAddress';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
+import { DISCOUNT_EARNED_INPUT_MESSAGE, parseDiscountEarnedCents } from '../lib/parseCents';
 import { todayInBusinessTz } from '../lib/dateUtils';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -139,6 +141,66 @@ interface FieldLocation {
 
 type TabKey = 'locations' | 'chemicals' | 'customers' | 'applied_info' | 'notifications';
 
+/** What the created-invoice check reads about the invoice named in the address. */
+interface CreatedInvoiceCheckRow {
+  invoice_number: string | null;
+  invoice_type: string;
+  status: string;
+  created_by: string;
+  deleted_at: string | null;
+}
+
+/**
+ * The page was opened at /new?created=<id> (a refresh or Back after a Save, or a link): the
+ * check of that invoice before anything can be saved here. 'opening' = this user's own field
+ * invoice, being opened (whatever its status, posted included). 'unavailable' = deleted, or
+ * not one this page can open; Save waits until the user chooses to start a new invoice.
+ */
+type CreatedInvoiceCheck =
+  | { state: 'none' }
+  | { state: 'checking' }
+  | { state: 'failed' }
+  | { state: 'opening'; id: string; invoiceNumber: string | null }
+  | { state: 'unavailable'; invoiceNumber: string | null; deleted: boolean };
+
+/**
+ * True when the server answered with an error: PostgREST/PostgreSQL ran the call (or refused it)
+ * and rolled it back, so nothing was saved under its key. An error with no code (a network
+ * failure, a lost reply) is NOT definitive: the call may have committed.
+ */
+function isDefinitiveRpcError(error: { code?: string | null } | null | undefined): boolean {
+  return !!error?.code;
+}
+
+/** Every set of values sent under one idempotency key whose answer has not arrived. */
+interface UnansweredKey {
+  key: string;
+  fingerprints: string[];
+}
+
+/**
+ * Record one more send under `key`. The server keeps whichever send under a key committed
+ * first and answers every later one with that result, so when ANY earlier send under it carried
+ * different values, this answer may not be these values (Luna, PR #893).
+ */
+function recordSend(entry: UnansweredKey | null | undefined, key: string, fingerprint: string) {
+  if (!entry || entry.key !== key) {
+    return { entry: { key, fingerprints: [fingerprint] }, mayReplayOtherValues: false };
+  }
+  return {
+    entry: { key, fingerprints: [...entry.fingerprints, fingerprint] },
+    mayReplayOtherValues: entry.fingerprints.some((sent) => sent !== fingerprint),
+  };
+}
+
+/** The server refused one send (it stored nothing), so it no longer counts. Null when none is left. */
+function forgetRefusedSend(entry: UnansweredKey | null | undefined, fingerprint: string): UnansweredKey | null {
+  if (!entry) return null;
+  const at = entry.fingerprints.lastIndexOf(fingerprint);
+  const fingerprints = at < 0 ? entry.fingerprints : [...entry.fingerprints.slice(0, at), ...entry.fingerprints.slice(at + 1)];
+  return fingerprints.length > 0 ? { key: entry.key, fingerprints } : null;
+}
+
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'locations', label: 'Locations', icon: <MapPin className="w-4 h-4" /> },
   { key: 'chemicals', label: 'Chemicals/Charges', icon: <FlaskConical className="w-4 h-4" /> },
@@ -178,8 +240,11 @@ export default function FieldApplicationInvoice() {
   // #33: per-invoice key cache for the billing-details RPC (PO/terms/due/footer/memo
   // + per-invoice Discount Earned). Keyed by the editor's invoice id (or '__new__'
   // before the first save) so a retry after a timeout reuses the SAME idempotency key
-  // and the server dedup never double-applies.
-  const billingKeysRef = useRef<Record<string, string>>({});
+  // and the server dedup never double-applies. The server answers a repeated key with its
+  // first result without applying anything, so when a retry's values CHANGED it is followed
+  // by one more write under a new key (Codex Sol and CodeRabbit, PR #893; see the billing
+  // step in performSave).
+  const billingKeysRef = useRef<Record<string, UnansweredKey>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
   // Keep receipt ownership scoped by invoice id even though the route wrapper now
   // remounts per record. Reset only after assertRpcResult confirms success.
@@ -432,7 +497,22 @@ export default function FieldApplicationInvoice() {
   // the engine always splits by acres-weighted per-location share.
   const [sharesBasis, setSharesBasis] = useState<CustomerSharesBasis>('location');
 
-  const blocker = useUnsavedChanges(dirty);
+  // Lets the navigation that follows a fully successful save through the leave-page
+  // guard. setDirty(false) has not reached the router's block check yet when navigate()
+  // runs in the same tick, which showed a false "Unsaved Changes" prompt (2026-10-09).
+  const skipUnsavedPromptRef = useRef(false);
+  const blocker = useUnsavedChanges(dirty, skipUnsavedPromptRef);
+  // Id of the invoice the FIRST Save on /invoices/field-app/new created. While the page
+  // is still on /new (e.g. the user chose Stay on the leave-page prompt after a partial
+  // save failure), a repeat Save must update THIS invoice — sending p_invoice_id = null
+  // again would create a duplicate invoice for the same application.
+  const createdInvoiceIdRef = useRef<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const createdIdInAddress = createdInvoiceIdFromAddress(searchParams);
+  // Opened at /new?created=<id>: Save waits for the created-invoice check below.
+  const [createdCheck, setCreatedCheck] = useState<CreatedInvoiceCheck>(() => (
+    !id && createdIdInAddress ? { state: 'checking' } : { state: 'none' }
+  ));
 
   const isNew = !id;
   const transactionSeason = useMemo(() => {
@@ -492,6 +572,91 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     if (isNew && profile?.id) setConsultantId((prev) => prev || profile.id);
   }, [isNew, profile?.id]);
+
+  // The address names a created invoice that THIS page's Save did not create: a refresh,
+  // Back/Forward, or a link to /new?created=<id>. The typed values are gone, and saving a
+  // re-typed form here would create a SECOND invoice. If it is this user's own field invoice,
+  // whatever its status (a posted one included), open it; this page never saves onto it: its
+  // form was not loaded here, and an update replaces the invoice's lines (Codex Sol, PR #893).
+  // Anything else (deleted, someone else's, not found) does NOT quietly turn the page back into
+  // a new invoice: Save waits until the user chooses "Start a new invoice instead" (Codex Sol
+  // 6.1, PR #893). If the check cannot run, Save refuses until a reload. The opening move goes
+  // through the leave-page prompt, so anything typed while the check ran is not silently lost.
+  const settledCreatedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isNew || !createdIdInAddress || !profile?.id) return;
+    // This page's own Save wrote it, or the check already settled it.
+    if (createdIdInAddress === createdInvoiceIdRef.current || createdIdInAddress === settledCreatedIdRef.current) return;
+    const createdId = createdIdInAddress;
+    const userId = profile.id;
+    let cancelled = false;
+    setCreatedCheck({ state: 'checking' });
+    (async () => {
+      let row: CreatedInvoiceCheckRow | null;
+      try {
+        const { data, error } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, invoice_type, status, created_by, deleted_at')
+          .eq('id', createdId)
+          .maybeSingle();
+        if (error) throw error;
+        row = data as CreatedInvoiceCheckRow | null;
+      } catch (err) {
+        if (cancelled) return;
+        Sentry.captureException(err, { tags: { context: 'field_app_created_invoice_check' } });
+        setCreatedCheck({ state: 'failed' });
+        toast('error', 'Could not check the invoice your last Save created. Reload the page to try again; nothing will be saved until then.');
+        return;
+      }
+      if (cancelled) return;
+      settledCreatedIdRef.current = createdId;
+      const ownFieldInvoice = !!row && row.invoice_type === 'field_application' && row.created_by === userId;
+      if (!ownFieldInvoice || row?.deleted_at) {
+        setCreatedCheck({ state: 'unavailable', invoiceNumber: ownFieldInvoice ? row?.invoice_number ?? null : null, deleted: ownFieldInvoice });
+        return;
+      }
+      setCreatedCheck({ state: 'opening', id: createdId, invoiceNumber: row?.invoice_number ?? null });
+      toast('info', 'Your last Save already created this invoice, so it is opening. Re-enter anything that did not save there.');
+      navigate(`/invoices/field-app/${createdId}`, { replace: true });
+    })();
+    return () => { cancelled = true; };
+  }, [isNew, createdIdInAddress, profile?.id, toast, navigate]);
+
+  // The user's own choice after an 'unavailable' check: drop the id from the address (same
+  // page, typed values kept) and let Save create a new invoice.
+  const startNewInvoiceInstead = () => {
+    setCreatedCheck({ state: 'none' });
+    skipUnsavedPromptRef.current = true;
+    navigate({ search: '' }, { replace: true });
+  };
+
+  // A typed Discount Earned that is not a plain dollar amount. Save, Print and Email all refuse
+  // while one is on screen, so a refused amount never becomes a silent $0 on a saved invoice or
+  // on a PDF sent to the customer (Codex review, PR #893).
+  const discountInputRefused = (): boolean => {
+    if (!Object.values(discountByCustomer).some((entry) => parseDiscountEarnedCents(entry.dollars) === null)) return false;
+    toast('error', DISCOUNT_EARNED_INPUT_MESSAGE);
+    return true;
+  };
+
+  // True from the moment a Save starts until it has finished, set before anything awaits, so
+  // a double click or a queued handler can never send a second save alongside the first.
+  const saveInFlightRef = useRef(false);
+  // The key, and every set of values sent under it, of save_field_app_invoice calls whose answer
+  // did not arrive. The server answers a repeated key with its first committed result without
+  // reading the new values, so a retry with changed values must not rely on that key alone
+  // (Luna, PR #893).
+  const unansweredSaveRef = useRef<UnansweredKey | null>(null);
+
+  // False once this page has been left (unmounted). A Save still running then finishes its
+  // writes but must not move the user, who is already on another page (e.g. pressed New).
+  // A layout effect: its cleanup runs in the same commit that removes the page, so there is
+  // no moment after the new page appears when the old Save still sees itself as active.
+  const pageActiveRef = useRef(true);
+  useLayoutEffect(() => {
+    pageActiveRef.current = true;
+    return () => { pageActiveRef.current = false; };
+  }, []);
 
   // §5: load the label-rate guardrail policy once. A failed/absent read falls back to
   // the safe default ('warn') — we never silently switch to 'block'.
@@ -773,8 +938,8 @@ export default function FieldApplicationInvoice() {
   // Used to print the THIS-invoice Discount Earned line on the PDF.
   const discountCentsForCustomer = useCallback((custId: string | null): number => {
     if (!custId) return 0;
-    const dollars = parseFloat(discountByCustomer[custId]?.dollars ?? '');
-    return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+    // Display only (the PDF line): Save refuses an over-precise amount by name before any write.
+    return parseDiscountEarnedCents(discountByCustomer[custId]?.dollars ?? '') ?? 0;
   }, [discountByCustomer]);
 
   // #33: editor edit handler — writes the per-customer draft DIRECTLY (no invoice id
@@ -1532,6 +1697,18 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    // Opened at /new?created=<id>: nothing is saved here until the check has settled and the
+    // page is a plain new invoice again (see the created-invoice check).
+    if (isNew && createdCheck.state !== 'none') {
+      toast('info', createdCheck.state === 'checking'
+        ? 'One moment — checking the invoice your last Save created.'
+        : createdCheck.state === 'failed'
+          ? 'Could not check the invoice your last Save created, so nothing was saved. Reload the page to try again.'
+          : createdCheck.state === 'opening'
+            ? 'Your last Save already created this invoice. Open it from the link at the top to make changes.'
+            : 'Your last Save created an invoice that cannot be opened here. Choose “Start a new invoice instead” at the top to enter a new one.');
+      return;
+    }
     if (crossSeasonDateEdit) {
       toast('error', filedSeasonDateMessage);
       return;
@@ -1649,13 +1826,16 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Enter a valid diluent / carrier-water rate (a number 0 or greater, gal/acre), or leave it blank.');
       return;
     }
+    if (discountInputRefused()) return;
+    // The invoice this save writes to: the routed one, or the one an earlier Save on this
+    // still-/new page already created. Only when neither exists does the save CREATE.
+    const targetInvoiceId = id || createdInvoiceIdRef.current;
+    const creating = !targetInvoiceId;
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
     setSaving(true);
     try {
-      const key = saveIdem.getKey();
-      const { data, error } = await supabase.rpc('save_field_app_invoice', {
-        // save_field_app_invoice accepts NULL p_invoice_id to create a new
-        // invoice (live signature is nullable; generated type narrows to string).
-        p_invoice_id: (id || null) as string,
+      const saveArgs = {
         p_invoice: {
           invoice_number: invoiceNumber || null,
           invoice_date: transactionDate,
@@ -1699,13 +1879,68 @@ export default function FieldApplicationInvoice() {
         })),
         p_performed_by: profile.id,
         p_application_service_id: (appServiceId || null) as string,
+      };
+      const fingerprint = JSON.stringify(saveArgs);
+      const unanswered = unansweredSaveRef.current;
+      // A retry keeps the unanswered save's key: the database runs saves with one key one at a
+      // time (check_idempotency's advisory lock), so the first attempt has certainly finished
+      // when this one answers, and a create can never be made twice. A new key instead could
+      // create a second invoice, or let a still-running older update land AFTER this one and
+      // put the old values back (CodeRabbit, PR #893). But if the values changed since that
+      // save, its answer may be the first attempt's result with the OLD values: the current
+      // ones are written over it right after, under a new key.
+      const key = saveIdem.getKey();
+      const send = recordSend(unanswered, key, fingerprint);
+      unansweredSaveRef.current = send.entry;
+      const retryMayReplayOldValues = send.mayReplayOtherValues;
+      const { data, error } = await supabase.rpc('save_field_app_invoice', {
+        // save_field_app_invoice accepts NULL p_invoice_id to create a new
+        // invoice (live signature is nullable; generated type narrows to string).
+        p_invoice_id: (targetInvoiceId || null) as string,
+        ...saveArgs,
         p_idempotency_key: key,
       });
 
-      if (error) throw error;
-      const result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
+      if (error) {
+        // The server refused it (rolled back, no receipt): a retry under this key is a fresh
+        // save, not a replay, so it needs no follow-up write (Codex review, PR #893).
+        if (isDefinitiveRpcError(error)) unansweredSaveRef.current = forgetRefusedSend(unansweredSaveRef.current, fingerprint);
+        throw error;
+      }
+      let result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
       saveIdem.resetKey();
-      const ids = result.invoice_ids || [];
+      unansweredSaveRef.current = null;
+      let ids = result.invoice_ids || [];
+      // Record the created invoice before any later step can fail, so every repeat
+      // Save from this page updates it instead of creating a duplicate.
+      if (creating && ids[0]) {
+        createdInvoiceIdRef.current = ids[0];
+        // The id goes into the address too (same page, typed values kept), so a refresh or
+        // Back of this page opens the created invoice. The form is still dirty here, so let
+        // this one move past the leave-page guard. Not once the page has been left.
+        if (pageActiveRef.current) {
+          skipUnsavedPromptRef.current = true;
+          navigate({ search: createdInvoiceAddressSearch(ids[0]) }, { replace: true });
+        }
+      }
+      const replayedInvoiceId = targetInvoiceId || ids[0];
+      if (retryMayReplayOldValues && replayedInvoiceId) {
+        const followUpKey = saveIdem.getKey();
+        unansweredSaveRef.current = { key: followUpKey, fingerprints: [fingerprint] };
+        const followUp = await supabase.rpc('save_field_app_invoice', {
+          p_invoice_id: replayedInvoiceId,
+          ...saveArgs,
+          p_idempotency_key: followUpKey,
+        });
+        if (followUp.error) {
+          if (isDefinitiveRpcError(followUp.error)) unansweredSaveRef.current = forgetRefusedSend(unansweredSaveRef.current, fingerprint);
+          throw followUp.error;
+        }
+        result = assertRpcResult<FieldAppInvoiceResult>(followUp.data, 'save_field_app_invoice');
+        saveIdem.resetKey();
+        unansweredSaveRef.current = null;
+        ids = result.invoice_ids || [];
+      }
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
 
       // §5: the save RPC committed the invoice atomically — NOW (and only now) write the
@@ -1785,26 +2020,40 @@ export default function FieldApplicationInvoice() {
         // (where siblings/customerToInvoiceId are still empty at save time), a split
         // (each id → its own customer), and an un-split invoice (single id → single
         // customer). A blank/0 dollars entry resolves to amount 0 (off, bigint cents).
-        const { data: idRows } = await supabase
+        const { data: idRows, error: idRowsError } = await supabase
           .from('invoices')
           .select('id, customer_id')
           .in('id', ids);
         const customerByInvoiceId = new Map<string, string>(
-          ((idRows as Array<{ id: string; customer_id: string }> | null) ?? [])
+          ((idRows as Array<{ id: string; customer_id: string | null }> | null) ?? [])
+            .filter((r): r is { id: string; customer_id: string } => !!r.customer_id)
             .map((r) => [r.id, r.customer_id]),
         );
+        // Every saved invoice must resolve to its customer before the billing write: an
+        // unresolved one would be sent a zero Discount Earned, erasing what the user typed
+        // while the save reports success (Codex Sol 6.1, PR #893). Treat it as a billing
+        // failure instead, so the form stays dirty and the user is told to save again.
+        const unresolvedIds = ids.filter((invId) => !customerByInvoiceId.has(invId));
+        if (idRowsError || unresolvedIds.length > 0) {
+          billingOk = false;
+          Sentry.captureException(idRowsError ?? new Error('Saved invoices did not resolve to customers'), {
+            level: 'error',
+            extra: { context: 'field_app_invoice_billing_customer_map', invoice_ids: ids, unresolved_ids: unresolvedIds },
+          });
+        }
         const discounts: Record<string, { amount_cents: number; date: string | null }> = {};
         for (const invId of ids) {
           const custId = customerByInvoiceId.get(invId);
           const entry = custId ? discountByCustomer[custId] : undefined;
-          const dollars = entry ? parseFloat(entry.dollars) : NaN;
-          const cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+          const cents = entry ? parseDiscountEarnedCents(entry.dollars) : 0;
+          // Refused before the save started; never sent as a zero if it got here anyway.
+          if (cents === null) {
+            billingOk = false;
+            continue;
+          }
           discounts[invId] = { amount_cents: cents, date: (entry?.date || null) };
         }
-        const billingKey =
-          billingKeysRef.current[id || '__new__'] ||
-          (billingKeysRef.current[id || '__new__'] = generateIdempotencyKey('update_field_app_invoice_billing', profile.id));
-        const billingResult = await supabase.rpc('update_field_app_invoice_billing', {
+        const billingArgs = {
           p_invoice_ids: ids,
           // Omit (undefined) when blank → the RPC's NULL default clears the column,
           // matching the Applied-Info "blank intentionally clears" behavior.
@@ -1818,18 +2067,51 @@ export default function FieldApplicationInvoice() {
           p_internal_notes: internalMemo || undefined,
           p_discounts: discounts,
           p_performed_by: profile.id,
-          p_idempotency_key: billingKey,
-        });
-        if (billingResult.error) {
-          billingOk = false;
-          Sentry.captureException(billingResult.error, {
-            level: 'error',
-            extra: { context: 'field_app_invoice_billing_persist', invoice_ids: ids },
-          });
-        } else {
-          assertRpcResult(billingResult.data, 'update_field_app_invoice_billing');
+        };
+        if (billingOk) {
+          // A retry keeps the unanswered write's key. The billing RPC saves that key in the same
+          // transaction as the update, and the key is unique (live, 2026-10-13), so only one
+          // write per key can ever commit: an older one still running can no longer land after
+          // this one. If the values changed since that write, its answer may be the old
+          // result, so the current values follow under a new key (CodeRabbit, PR #893).
+          const billingKeyId = id || '__new__';
+          const billingFingerprint = JSON.stringify(billingArgs);
+          const unansweredBilling = billingKeysRef.current[billingKeyId];
+          const billingKey = unansweredBilling?.key
+            ?? generateIdempotencyKey('update_field_app_invoice_billing', profile.id);
+          const billingSend = recordSend(unansweredBilling, billingKey, billingFingerprint);
+          billingKeysRef.current[billingKeyId] = billingSend.entry;
+          const billingMayReplayOldValues = billingSend.mayReplayOtherValues;
+          const writeBilling = async (key: string) => {
+            const billingResult = await supabase.rpc('update_field_app_invoice_billing', {
+              ...billingArgs,
+              p_idempotency_key: key,
+            });
+            if (billingResult.error) {
+              Sentry.captureException(billingResult.error, {
+                level: 'error',
+                extra: { context: 'field_app_invoice_billing_persist', invoice_ids: ids },
+              });
+              // Refused by the server: nothing was stored under this key, so the next retry is a
+              // fresh write and needs no follow-up.
+              if (isDefinitiveRpcError(billingResult.error)) {
+                const remaining = forgetRefusedSend(billingKeysRef.current[billingKeyId], billingFingerprint);
+                if (remaining) billingKeysRef.current[billingKeyId] = remaining;
+                else delete billingKeysRef.current[billingKeyId];
+              }
+              return false;
+            }
+            assertRpcResult(billingResult.data, 'update_field_app_invoice_billing');
+            return true;
+          };
+          billingOk = await writeBilling(billingKey);
+          if (billingOk && billingMayReplayOldValues) {
+            const followUpKey = generateIdempotencyKey('update_field_app_invoice_billing', profile.id);
+            billingKeysRef.current[billingKeyId] = { key: followUpKey, fingerprints: [billingFingerprint] };
+            billingOk = await writeBilling(followUpKey);
+          }
           // Clear the per-id key only on success so a retry after a failure reuses it.
-          delete billingKeysRef.current[id || '__new__'];
+          if (billingOk) delete billingKeysRef.current[billingKeyId];
         }
       }
 
@@ -1841,21 +2123,32 @@ export default function FieldApplicationInvoice() {
       }
 
       if (appliedInfoOk && billingOk) {
-        toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
+        toast('success', creating ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
       } else if (!appliedInfoOk) {
         toast('error',
-          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          (creating ? 'Invoice created' : 'Invoice saved') + groupNote +
           ', but Applied Info (wind/temp/applicator) did NOT persist. Re-enter and save again.'
         );
       } else {
         toast('error',
-          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          (creating ? 'Invoice created' : 'Invoice saved') + groupNote +
           ', but the billing details (PO / terms / due date / notes / discount) did NOT persist. Re-enter and save again.'
         );
       }
 
-      if (isNew && ids[0]) {
-        navigate(`/invoices/field-app/${ids[0]}`, { replace: true });
+      // The page was left while this Save ran (e.g. New was pressed): the writes are done,
+      // and the user is already elsewhere, so do not move them back to this invoice.
+      if (!pageActiveRef.current) return;
+
+      // Still on /invoices/field-app/new: move to the saved invoice's own page.
+      const savedInvoiceId = ids[0] ?? createdInvoiceIdRef.current;
+      if (isNew && savedInvoiceId) {
+        // Everything saved, so nothing is unsaved: let this navigation past the
+        // leave-page guard. After a PARTIAL failure the form stays dirty and the guard
+        // still asks; "Stay" keeps the typed values, and Save again updates the same
+        // invoice (createdInvoiceIdRef), never a new one.
+        if (appliedInfoOk && billingOk) skipUnsavedPromptRef.current = true;
+        navigate(`/invoices/field-app/${savedInvoiceId}`, { replace: true });
       } else {
         // Keep the form frozen until the server copy has finished hydrating.
         // Otherwise a quick edit after the RPC but before this reload resolves
@@ -1866,6 +2159,7 @@ export default function FieldApplicationInvoice() {
       Sentry.captureException(err, { tags: { rpc: 'save_field_app_invoice' } });
       toast('error', `Save failed: ${fieldAppError(err)}`);
     } finally {
+      saveInFlightRef.current = false;
       setSaving(false);
     }
   };
@@ -2113,6 +2407,9 @@ export default function FieldApplicationInvoice() {
       });
 
       toast('success', 'Invoice deleted');
+      // The invoice is gone, so any unsaved edits are moot: let this navigation
+      // through without the "Unsaved Changes" prompt (see useUnsavedChanges).
+      skipUnsavedPromptRef.current = true;
       navigate('/field-invoices');
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'delete_field_app_invoice' } });
@@ -2217,6 +2514,7 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Save the invoice before printing.');
       return;
     }
+    if (discountInputRefused()) return;
     setPrinting(true);
     try {
       const pdfData = await buildEditorPdfData(format);
@@ -2249,6 +2547,7 @@ export default function FieldApplicationInvoice() {
       toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
       return;
     }
+    if (discountInputRefused()) return;
     await runCriticalAction({
       action: async () => {
         const { data: cust } = await supabase
@@ -2516,8 +2815,11 @@ export default function FieldApplicationInvoice() {
       transferToSchedulingIdem.resetKey();
       // The invoice is now cancelled and the form holds stale, deleted contents —
       // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
+      // setDirty(false) alone is not seen by the router's block check before this
+      // navigate(), so the one-shot skip ref lets the navigation through.
       setDirty(false);
       toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
+      skipUnsavedPromptRef.current = true;
       navigate(`/jobs/${result.job_id}`);
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'transfer_invoice_to_job' } });
@@ -2552,6 +2854,38 @@ export default function FieldApplicationInvoice() {
           { label: isNew ? 'New Field Application' : `Invoice ${invoiceNumber || id?.slice(0, 8)}` },
         ]}
       />
+
+      {isNew && createdCheck.state === 'opening' && (
+        <div role="alert" className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-800">
+            <p>
+              Your last Save already created invoice{' '}
+              <Link className="font-medium underline" to={`/invoices/field-app/${createdCheck.id}`}>
+                {createdCheck.invoiceNumber || createdCheck.id.slice(0, 8)}
+              </Link>
+              . This page will not save over it or create another one; open it to review or change it.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isNew && createdCheck.state === 'unavailable' && (
+        <div role="alert" className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-800 space-y-2">
+            <p>
+              {!createdCheck.deleted
+                ? 'This page was opened for an invoice an earlier Save created, but that invoice cannot be opened here.'
+                : createdCheck.invoiceNumber
+                  ? `Your last Save created invoice ${createdCheck.invoiceNumber}, and it has since been deleted.`
+                  : 'Your last Save created an invoice that has since been deleted.'}
+              {' '}Nothing will be saved from this page unless you start a new invoice.
+            </p>
+            <Button size="sm" variant="secondary" onClick={startNewInvoiceInstead}>Start a new invoice instead</Button>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

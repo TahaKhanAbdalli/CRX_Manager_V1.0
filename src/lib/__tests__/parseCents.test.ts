@@ -4,6 +4,7 @@ import {
   isWholeCentDollarInput,
   parseDollarsToCents,
   parseDollarsToCentsSigned,
+  parseDiscountEarnedCents,
 } from '../parseCents';
 
 describe('isWholeCentDollarInput', () => {
@@ -160,5 +161,16 @@ describe('parseDollarsToCentsSigned (negative-capable variant)', () => {
       expect(parseDollarsToCentsSigned('5-0.50')).toBe(0));
     it('still accepts a valid leading-minus value "-1234.56"', () =>
       expect(parseDollarsToCentsSigned('-1234.56')).toBe(-123456));
+  });
+});
+
+describe('parseDiscountEarnedCents', () => {
+  it.each([
+    ['25.00', 2500], ['4.35', 435], ['1.01', 101], ['', 0], ['  ', 0], ['0', 0], ['-5', 0], [' 7.5 ', 750],
+  ])('%s is %i cents (blank or negative is no discount)', (input, cents) => {
+    expect(parseDiscountEarnedCents(input as string)).toBe(cents);
+  });
+  it.each(['1.005', '1e2', '1E2', 'abc', '$25', '1,000', '12-34'])('refuses %s instead of reading it as some other amount', (input) => {
+    expect(parseDiscountEarnedCents(input)).toBeNull();
   });
 });
