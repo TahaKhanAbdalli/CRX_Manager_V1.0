@@ -1,5 +1,6 @@
 import type { CustomerShareResult, PreviewFieldAppSplitResult } from '../../types';
 import { formatCents } from '../../lib/money';
+import { parseDiscountEarnedCents } from '../../lib/parseCents';
 import {
   deriveSplitRef,
   reconcileSplit,
@@ -69,8 +70,8 @@ export default function CustomerSharesTable({
   // #33: parse a typed dollars string to bigint cents (0 when blank/invalid). Used
   // only to SUM the Discount Earned column footer — never to alter Invoice Total.
   const discountCents = (custId: string): number => {
-    const dollars = parseFloat(discountByCustomer?.[custId]?.dollars ?? '');
-    return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+    // Display only: the page's Save refuses an over-precise amount by name before any write.
+    return parseDiscountEarnedCents(discountByCustomer?.[custId]?.dollars ?? '') ?? 0;
   };
   // Server-computed preview path (Phase 1 split-aware): show real per-customer
   // amounts including grower-share lines, chemical lines, and service fees.

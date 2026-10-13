@@ -89,6 +89,9 @@ vi.mock('../hooks/useUnsavedChanges', () => ({
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useParams: () => mockUseParams(),
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  useNavigationType: () => 'POP',
+  useLocation: () => ({ key: 'default', pathname: '/', search: '', hash: '', state: null }),
   Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string } & Record<string, unknown>) => (
     <a href={to} {...rest}>{children}</a>
   ),
@@ -329,6 +332,10 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
       data: { invoice_ids: ['inv-a', 'inv-b'], invoice_group_id: 'grp-1' },
       error: null,
     });
+    // The billing step resolves each saved invoice to its customer first.
+    mockFrom.mockImplementation(makeFromMock({
+      invoices: { data: [{ id: 'inv-a', customer_id: 'cust-A' }, { id: 'inv-b', customer_id: 'cust-B' }] },
+    }));
     await renderPage();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
@@ -430,6 +437,76 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
       expect(discounts['new-inv-1']).toBeDefined();
       expect(discounts['new-inv-1'].amount_cents).toBe(2500);
     });
+  });
+
+  it.each([
+    ['1.005', null],
+    ['1e2', null],
+    ['1.01', 101],
+    ['-5', 0],
+  ])('a typed discount of %s is sent in exact cents, or refused before anything is saved', async (typed, cents) => {
+    // A binary-float parse turned "$1.005" into 100 cents (Luna, PR #893); more than two
+    // decimal places is now refused like every other money input.
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    fireEvent.change(await screen.findByTitle(/Early-pay discount earned/i), { target: { value: typed } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    if (cents === null) {
+      expect(mockToast).toHaveBeenCalledWith('error', 'Discount Earned must be a plain dollar amount such as 25.00, with no more than two decimal places.');
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'save_field_app_invoice')).toBe(false);
+      return;
+    }
+    await waitFor(() => {
+      const billingCall = mockRpc.mock.calls.find((c) => c[0] === 'update_field_app_invoice_billing');
+      expect(billingCall).toBeDefined();
+      const discounts = (billingCall![1] as { p_discounts: Record<string, { amount_cents: number }> }).p_discounts;
+      expect(discounts['new-inv-1'].amount_cents).toBe(cents);
+    });
+  });
+
+  it.each(['Print', 'Email'])('%s refuses a typed discount that is not a plain dollar amount instead of putting a zero discount on the PDF', async (button) => {
+    // Print and Email build the PDF from the form as typed, before any Save; a refused amount
+    // must not be printed or sent to the customer as $0 (Codex review, PR #893).
+    mockUseParams.mockReturnValue({ id: 'inv-saved' });
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: {
+          data: [{
+            id: 'inv-saved', invoice_number: 'INV-2001', invoice_type: 'field_application', invoice_date: '2026-09-15',
+            season: 2026, header_notes: '', status: 'draft', application_service_id: null, invoice_group_id: null,
+            customer_id: 'cust-A', total_amount_cents: 100000, discount_earned_cents: null,
+          }],
+        },
+        field_app_locations: { data: [] },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+    await renderPage();
+    await screen.findByText(/Field Application INV-2001/);
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    fireEvent.change(await screen.findByTitle(/Early-pay discount earned/i), { target: { value: '1e2' } });
+
+    const fromCallsBefore = mockFrom.mock.calls.length;
+    const rpcCallsBefore = mockRpc.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${button}$`) }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Discount Earned must be a plain dollar amount such as 25.00, with no more than two decimal places.');
+    // Nothing was built or sent: no read of the customer's email, no send, no PDF download.
+    await act(async () => { await Promise.resolve(); });
+    expect(mockFrom.mock.calls.length).toBe(fromCallsBefore);
+    expect(mockRpc.mock.calls.length).toBe(rpcCallsBefore);
+    expect(screen.getByRole('button', { name: new RegExp(`^${button}$`) })).not.toBeDisabled();
   });
 
   // The transaction date decides the SEASON, and the season selects the
