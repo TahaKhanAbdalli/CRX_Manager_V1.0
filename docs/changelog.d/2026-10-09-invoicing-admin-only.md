@@ -244,6 +244,32 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   added here (`DECISION_LOG.md`).
 - Approval wording updated: the Windows Hello step was replaced by an owner chat reply on
   2026-10-09.
+- **Luna review of the whole PR (2026-10-13), 11 findings.** Fixed: the CI writer scanner now reads
+  `E'...'` strings with backslash escapes (a `--` after `\'` hid the rest of the line as a
+  comment), and a new test checks the file's DO blocks change no data rows (the top-level check
+  removes them). Both new tests fail with their fix removed. Not fixed here, with reasons:
+  - HIGH, `cancel_delivery` can reverse a COMPLETED delivery and reps can call it: pre-existing,
+    not touched by this file, already OPEN in `KNOWN_ISSUES.md` (deferred in review round 4). Put
+    to Mason as a business decision.
+  - MED, `update_order_items` can detach a draft line without the invoice lock: pre-existing,
+    already OPEN in `KNOWN_ISSUES.md`.
+  - MED, a posting receipt is not bound to `p_expected_version`: a same key reused with another
+    version replays the first success. The screens mint a new posting key after every success,
+    so only a client that reuses a key reaches it.
+  - MED, the review fingerprint does not hash `field_app_locations` acres: those rows are
+    written only through `save_field_app_invoice` (admin-only), which rewrites the hashed lines
+    whenever acres change the money; a change that alters no line changes no amount.
+  - MED, a customer's `payment_terms` are hashed but not locked: a terms change committed between
+    the version check and the post can move only the due-date fallback, not an amount.
+  - MED, `create_quick_delivery` forces `p_skip_invoice` for non-admins, so a rep's retry of a
+    request sent before the apply can get `IDEMPOTENCY_INTENT_MISMATCH` instead of a replay: only
+    across the apply moment, and nothing is written twice.
+  - MED, the postflight sweep strips comments without reading string literals, and its trigger
+    check does not follow calls into helpers: both are limits of a regex sweep over SQL text,
+    stated in the guard's header; the CI scanner reads string literals.
+  - LOW, `complete_job`'s exception handler also covers the new admin notification, so a failed
+    notification leaves only an `auto_draft_failed` activity row: the completion itself is
+    correct and the delivery or job still waits for an admin.
 
 ### Not done here (owners)
 

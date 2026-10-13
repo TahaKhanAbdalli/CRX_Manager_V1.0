@@ -95,6 +95,15 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     expect(topLevel(sql)).not.toMatch(/\b(INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|TRUNCATE\s+(TABLE\s+)?public\.)/i);
   });
 
+  it('changes no data rows inside its DO blocks either (Luna, PR A: topLevel removes them)', () => {
+    const blocks = [...sql.matchAll(/\bDO\s+\$(\w*)\$([\s\S]*?)\$\1\$/g)];
+    expect(blocks.map((b) => b[1]).sort()).toEqual(['postflight', 'preflight']);
+    for (const [, tag, body] of blocks) {
+      expect({ tag, dml: body.match(/\b(INSERT\s+INTO|UPDATE\s+(ONLY\s+)?public\.|DELETE\s+FROM|TRUNCATE\s+(TABLE\s+)?public\.|MERGE\s+INTO)/i)?.[0] ?? null })
+        .toEqual({ tag, dml: null });
+    }
+  });
+
   it('pins every renamed RPC in the preflight: one overload, body md5, signature, result, owner and ACL', () => {
     const preflight = sql.slice(sql.indexOf('DO $preflight$'), sql.indexOf('$preflight$;'));
     for (const w of WRAPPED) {

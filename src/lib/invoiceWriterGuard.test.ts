@@ -126,8 +126,12 @@ function stripComments(text: string): string {
       continue;
     }
     if (text[i] === "'") {
+      // An E'...' string takes backslash escapes, so \' does not end it (Luna, PR A): reading it as
+      // the end would let a "--" inside the string hide the rest of the line as a comment.
+      const escapes = /[Ee]/.test(text[i - 1] ?? '') && !/\w/.test(text[i - 2] ?? '');
       let j = i + 1;
       while (j < text.length) {
+        if (escapes && text[j] === '\\') { j += 2; continue; }
         if (text[j] === "'" && text[j + 1] === "'") { j += 2; continue; }
         if (text[j] === "'") break;
         j += 1;
@@ -337,6 +341,16 @@ const migrationFiles = readdirSync(migrationsDir).filter((f) => f.endsWith('.sql
 describe('invoice writers stay admin-only after 20261013160000 (CI companion of its postflight sweep)', () => {
   it('scans 20261013160000 and every later migration', () => {
     expect(migrationFiles[0]).toBe('20261013160000_invoicing_admin_only.sql');
+  });
+
+  it('reads a "--" inside a string as text, not a comment, in plain and E\'...\' strings', () => {
+    // Luna, PR A: an escaped quote in an E-string ended the string early, so a "--" after it hid
+    // the rest of the line (an invoice write included) as a comment.
+    expect(stripComments("v := E'it\\'s -- not a comment'; DELETE FROM public.invoices;")).toContain('DELETE FROM public.invoices');
+    expect(stripComments("v := 'a '' -- b'; DELETE FROM public.invoices;")).toContain('DELETE FROM public.invoices');
+    expect(stripComments("x := 1; -- DELETE FROM public.invoices;")).not.toContain('DELETE');
+    // A plain string ending in a backslash is not an E-string: its quote still ends it.
+    expect(stripComments("v := 'C:\\'; -- DELETE FROM public.invoices;")).not.toContain('DELETE');
   });
 
   it('finds no unguarded invoice writer in any migration from 20261013160000 on', () => {
