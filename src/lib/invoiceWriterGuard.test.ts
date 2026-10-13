@@ -197,7 +197,8 @@ function signatureKey(name: string, args: string): string {
 // CodeRabbit, PR #902: a quoted identifier may hold any character (`public."invoice-writer"`).
 // Luna, PR #902: an unquoted name may also contain `$` after its first character.
 const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|\w[\w$]*)`;
-const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value);
+// Luna, PR #902: as PostgreSQL does, an unquoted name folds to lower case; a quoted one is exact.
+const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value.toLowerCase());
 
 function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[] } {
   const fns: Fn[] = [];
@@ -340,7 +341,8 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
   const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const calls = (code: string, name: string) => {
     const quoted = new RegExp(`${escapeRe(`"${name.replace(/"/g, '""')}"`)}\\s*\\(`).test(code);
-    const plain = /^[A-Za-z_][\w$]*$/.test(name) && new RegExp(`(?<![\\w$"])${escapeRe(name)}(?![\\w$"])\\s*\\(`, 'i').test(code);
+    // An unquoted call folds to lower case, so it reaches only a name that is already lower case.
+    const plain = /^[a-z_][a-z0-9_$]*$/.test(name) && new RegExp(`(?<![\\w$"])${escapeRe(name)}(?![\\w$"])\\s*\\(`, 'i').test(code);
     return quoted || plain;
   };
   // Writers among the scanned functions (to a fixed point): direct writes, dynamic SQL naming an
@@ -446,11 +448,17 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
         'REVOKE ALL ON FUNCTION public._probe_impl2(uuid) FROM PUBLIC, anon, authenticated, service_role;');
       expect(names(withNext(`${internal}\n${fn('probe_caller', '\nBEGIN\n  PERFORM public._probe_impl2(p);\nEND;\n')}`))).toEqual(['probe_caller']);
       // CodeRabbit, PR #902: the caller-to-writer step follows quoted and `$` names too.
-      for (const [def, call] of [['"_probe inner"', 'public."_probe inner"(p)'], ['_probe$inner', 'public._probe$inner(p)'], ['"_probe""q"', 'public."_probe""q"(p)']]) {
+      // Luna, PR #902: an unquoted definition folds to lower case, so a quoted lower-case call reaches it.
+      for (const [def, call] of [['"_probe inner"', 'public."_probe inner"(p)'], ['_probe$inner', 'public._probe$inner(p)'], ['"_probe""q"', 'public."_probe""q"(p)'],
+        ['_Probe_Fold', 'public."_probe_fold"(p)'], ['_probe_fold2', 'public._PROBE_FOLD2(p)']]) {
         const inner = fn(def, '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
           `REVOKE ALL ON FUNCTION public.${def}(uuid) FROM PUBLIC, anon, authenticated, service_role;`);
         expect(names(withNext(`${inner}\n${fn('probe_odd_caller', `\nBEGIN\n  PERFORM ${call};\nEND;\n`)}`)), def).toEqual(['probe_odd_caller']);
       }
+      // ...and an unquoted call does not reach a quoted mixed-case name (a different function).
+      const mixed = fn('"_Probe_Mixed"', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+        'REVOKE ALL ON FUNCTION public."_Probe_Mixed"(uuid) FROM PUBLIC, anon, authenticated, service_role;');
+      expect(withNext(`${mixed}\n${fn('probe_other_caller', '\nBEGIN\n  PERFORM public._probe_mixed(p);\nEND;\n')}`)).toEqual([]);
       // Calling a guarded public wrapper is fine.
       expect(withNext(fn('probe_wrapper_call', "\nBEGIN\n  PERFORM public.post_invoice(p, 'k');\nEND;\n"))).toEqual([]);
     });
