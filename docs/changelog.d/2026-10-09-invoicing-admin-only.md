@@ -281,7 +281,6 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   `src/types/supabase.ts` entries for `p_expected_version` and the two version readers (regenerate
   from live after the apply; the renamed `_*_pre_admin_only_20261009` names may then need
   classifying in `rpcContracts.test.ts` / `rpcFixtureLiveDiff.test.ts`).
-- `package.json` proof script line (ask-listed file): `"proof:invoicing-admin-only": "node scripts/smoke/prove-invoicing-admin-only-real-schema.mjs"`.
 - CI does not run the container prover or the chain; `src/lib/invoiceWriterGuard.test.ts` is the
   PR-time guard.
 - At apply: re-pin `scripts/db-invariant-sweeps/allowlist.json` (`complete_job`'s contract digest

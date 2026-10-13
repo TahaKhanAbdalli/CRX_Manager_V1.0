@@ -288,11 +288,13 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     // A plain CREATE starts from the default privileges (authenticated can execute); CREATE OR
     // REPLACE keeps whatever ACL the function already had.
     for (const f of fns) { latest.set(f.key, f); if (!f.replace) revoked.delete(f.key); }
-    // Statement order inside one file does not matter here: a REVOKE from authenticated in the
-    // same or a later file marks the signature internal; a later GRANT to authenticated re-exposes it.
+    // Statement order inside one file does not matter here: a REVOKE from authenticated AND PUBLIC in
+    // the same or a later file marks the signature internal (PUBLIC keeps EXECUTE by default, so a
+    // revoke from authenticated alone still leaves authenticated able to call it: CodeRabbit, PR
+    // #902); a later GRANT to authenticated or PUBLIC re-exposes it.
     for (const s of top.split(';')) {
       const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bFROM\b([^;]*)/i.exec(s);
-      if (rv && /\bauthenticated\b/i.test(rv[4])) {
+      if (rv && /\bauthenticated\b/i.test(rv[4]) && /\bPUBLIC\b/i.test(rv[4])) {
         const args = balanced(s, rv.index + rv[0].indexOf('(', rv[0].indexOf(rv[2])));
         if (args !== null) revoked.set(signatureKey(rv[2], args), true);
       }
@@ -369,6 +371,10 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
     const fn = (name: string, body: string, extra = '', args = 'p uuid') => `CREATE OR REPLACE FUNCTION public.${name}(${args}) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$${body}$f$;\n${extra}`;
     const names = (v: Violation[]) => v.map((x) => x.name);
 
+    it('treats a writer revoked from authenticated alone as still exposed (PUBLIC keeps EXECUTE)', () => {
+      expect(names(withNext(fn('_probe_half_revoked', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+        'REVOKE ALL ON FUNCTION public._probe_half_revoked(uuid) FROM anon, authenticated, service_role;')))).toEqual(['_probe_half_revoked']);
+    });
     it('accepts the guard first, and an internal (revoked) writer', () => {
       expect(withNext(fn('probe_ok', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  DELETE FROM public.invoice_items WHERE invoice_id = p;\nEND;\n'))).toEqual([]);
       expect(withNext(fn('_probe_impl', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
