@@ -106,6 +106,7 @@ describe('invoicing admin-only migration (20261013160000)', () => {
       ['CREATE FUNCTION public.batch_post_invoices(', 'PERFORM 1 FROM public.invoices i WHERE i.id = ANY (p_invoice_ids) ORDER BY i.id FOR UPDATE;'],
     ]) {
       const b = body(statement(sql, head));
+      expect(b.indexOf(lockAfter), `${head} keeps its invoice row lock`).toBeGreaterThan(-1);
       const customers = b.indexOf('FOR UPDATE OF c;');
       expect(customers, `${head} customer lock`).toBeGreaterThan(b.indexOf(lockAfter));
       expect(b.indexOf('PERFORM 1 FROM public.customers c')).toBeGreaterThan(b.indexOf(lockAfter));

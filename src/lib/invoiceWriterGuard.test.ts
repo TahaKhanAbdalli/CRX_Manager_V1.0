@@ -194,14 +194,16 @@ function signatureKey(name: string, args: string): string {
   return `${name}(${types.join(',')})`;
 }
 
+// CodeRabbit, PR #902: a quoted identifier may hold any character (`public."invoice-writer"`).
+// Luna, PR #902: an unquoted name may also contain `$` after its first character.
+const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|\w[\w$]*)`;
+const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value);
+
 function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[] } {
   const fns: Fn[] = [];
   const unparsed: string[] = [];
-  // CodeRabbit, PR #902: a quoted identifier may hold any character (`public."invoice-writer"`).
-  // Luna, PR #902: an unquoted name may also contain `$` after its first character.
-  const identifier = String.raw`(?:"(?:[^"]|"")+"|\w[\w$]*)`;
+  const identifier = IDENTIFIER;
   const head = new RegExp(String.raw`CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\s+(?:(${identifier})\s*\.\s*)?(${identifier})\s*\(`, 'gi');
-  const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value);
   let m: RegExpExecArray | null;
   while ((m = head.exec(sql))) {
     if (m[3] && identifierValue(m[3]).toLowerCase() !== 'public') continue;
@@ -300,13 +302,13 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     // still leaves authenticated able to call it (CodeRabbit, PR #902). A later GRANT to
     // authenticated or PUBLIC re-exposes it.
     for (const s of top.split(';')) {
-      const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bFROM\b([^;]*)/i.exec(s);
+      const rv = new RegExp(String.raw`REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)?(${IDENTIFIER})\s*(\()[^;]*\bFROM\b([^;]*)`, 'i').exec(s);
       // REVOKE GRANT OPTION FOR ... removes only the right to re-grant; EXECUTE itself stays
       // (CodeRabbit, PR #902).
       if (rv && !/^\s*REVOKE\s+GRANT\s+OPTION\s+FOR\b/i.test(s.slice(rv.index)) && /\b(authenticated|PUBLIC)\b/i.test(rv[4])) {
         const args = balanced(s, rv.index + rv[0].indexOf('(', rv[0].indexOf(rv[2])));
         if (args !== null) {
-          const key = signatureKey(rv[2], args);
+          const key = signatureKey(identifierValue(rv[2]), args);
           const state = revokedFrom.get(key) ?? { auth: false, pub: false };
           if (/\bauthenticated\b/i.test(rv[4])) state.auth = true;
           if (/\bPUBLIC\b/i.test(rv[4])) state.pub = true;
@@ -314,11 +316,11 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
           if (state.auth && state.pub) revoked.set(key, true);
         }
       }
-      const gr = /GRANT\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bTO\b([^;]*)/i.exec(s);
+      const gr = new RegExp(String.raw`GRANT\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)?(${IDENTIFIER})\s*(\()[^;]*\bTO\b([^;]*)`, 'i').exec(s);
       if (gr && /\b(authenticated|PUBLIC)\b/i.test(gr[4])) {
         const args = balanced(s, gr.index + gr[0].indexOf('(', gr[0].indexOf(gr[2])));
         if (args !== null) {
-          const key = signatureKey(gr[2], args);
+          const key = signatureKey(identifierValue(gr[2]), args);
           const state = revokedFrom.get(key) ?? { auth: false, pub: false };
           if (/\bauthenticated\b/i.test(gr[4])) state.auth = false;
           if (/\bPUBLIC\b/i.test(gr[4])) state.pub = false;
@@ -333,7 +335,14 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
   // Guard first, and no exception handler anywhere in the body that could catch its refusal.
   const guarded = (f: Fn) => !EXCEPTION_HANDLER.test(f.code)
     && (GUARD_FIRST.test(f.body) || (f.name === 'create_split_invoices_from_order' && SPLIT_KEY_THEN_GUARD.test(f.body)));
-  const calls = (code: string, name: string) => new RegExp(`\\b${name}\\s*\\(`).test(code);
+  // CodeRabbit, PR #902: a name may be called quoted (`"probe-x"(`, `""` doubled) or, when it is a
+  // plain identifier (letters, digits, `_`, `$`), unquoted; the name is escaped before matching.
+  const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const calls = (code: string, name: string) => {
+    const quoted = new RegExp(`${escapeRe(`"${name.replace(/"/g, '""')}"`)}\\s*\\(`).test(code);
+    const plain = /^[A-Za-z_][\w$]*$/.test(name) && new RegExp(`(?<![\\w$"])${escapeRe(name)}(?![\\w$"])\\s*\\(`, 'i').test(code);
+    return quoted || plain;
+  };
   // Writers among the scanned functions (to a fixed point): direct writes, dynamic SQL naming an
   // invoice table, frozen calls, calls to a pre-existing unguarded reacher, or calls to another
   // scanned writer that is not guarded (by name: any overload of it counts).
@@ -436,6 +445,12 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
       const internal = fn('_probe_impl2', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
         'REVOKE ALL ON FUNCTION public._probe_impl2(uuid) FROM PUBLIC, anon, authenticated, service_role;');
       expect(names(withNext(`${internal}\n${fn('probe_caller', '\nBEGIN\n  PERFORM public._probe_impl2(p);\nEND;\n')}`))).toEqual(['probe_caller']);
+      // CodeRabbit, PR #902: the caller-to-writer step follows quoted and `$` names too.
+      for (const [def, call] of [['"_probe inner"', 'public."_probe inner"(p)'], ['_probe$inner', 'public._probe$inner(p)'], ['"_probe""q"', 'public."_probe""q"(p)']]) {
+        const inner = fn(def, '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+          `REVOKE ALL ON FUNCTION public.${def}(uuid) FROM PUBLIC, anon, authenticated, service_role;`);
+        expect(names(withNext(`${inner}\n${fn('probe_odd_caller', `\nBEGIN\n  PERFORM ${call};\nEND;\n`)}`)), def).toEqual(['probe_odd_caller']);
+      }
       // Calling a guarded public wrapper is fine.
       expect(withNext(fn('probe_wrapper_call', "\nBEGIN\n  PERFORM public.post_invoice(p, 'k');\nEND;\n"))).toEqual([]);
     });
