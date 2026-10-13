@@ -68,6 +68,10 @@ function priorBody(file: string, head: string): string {
   const bodyStart = start + (tag?.index ?? 0) + (tag?.[0].length ?? 0);
   return src.slice(bodyStart, src.indexOf(tag?.[1] ?? '', bodyStart));
 }
+/** A string as a literal regular-expression pattern: every special character escaped. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 /** SQL with function bodies and DO blocks removed: only the file's own top-level statements. */
 function topLevel(source: string): string {
   return source.replace(/\$([A-Za-z_]*)\$[\s\S]*?\$\1\$/g, '<body>').split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
@@ -107,7 +111,7 @@ describe('invoicing admin-only migration (20261013160000)', () => {
   it('pins every renamed RPC in the preflight: one overload, body md5, signature, result, owner and ACL', () => {
     const preflight = sql.slice(sql.indexOf('DO $preflight$'), sql.indexOf('$preflight$;'));
     for (const w of WRAPPED) {
-      expect(preflight).toMatch(new RegExp(`\\('${w.name}', '${w.ident.replace(/[[\]()]/g, '\\$&')}', '[^']*(''[^']*)*', '${w.ret.replace(/[[\]]/g, '\\$&')}', '${w.md5}'\\)`));
+      expect(preflight).toMatch(new RegExp(`\\('${escapeRegExp(w.name)}', '${escapeRegExp(w.ident)}', '[^']*(''[^']*)*', '${escapeRegExp(w.ret)}', '${w.md5}'\\)`));
     }
     expect(preflight).toContain("p.proname = r.name) <> 1");
     expect(preflight).toContain("pg_get_function_arguments(p.oid) = r.args");
