@@ -197,11 +197,14 @@ function signatureKey(name: string, args: string): string {
 function functionsIn(file: string, sql: string): { fns: Fn[]; unparsed: string[] } {
   const fns: Fn[] = [];
   const unparsed: string[] = [];
-  const head = /CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\s+(?:"?(\w+)"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
+  // CodeRabbit, PR #902: a quoted identifier may hold any character (`public."invoice-writer"`).
+  const identifier = String.raw`(?:"(?:[^"]|"")+"|\w+)`;
+  const head = new RegExp(String.raw`CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\s+(?:(${identifier})\s*\.\s*)?(${identifier})\s*\(`, 'gi');
+  const identifierValue = (value: string) => (value.startsWith('"') ? value.slice(1, -1).replace(/""/g, '"') : value);
   let m: RegExpExecArray | null;
   while ((m = head.exec(sql))) {
-    if (m[3] && m[3].toLowerCase() !== 'public') continue;
-    const name = m[4];
+    if (m[3] && identifierValue(m[3]).toLowerCase() !== 'public') continue;
+    const name = identifierValue(m[4]);
     const rest = sql.slice(m.index);
     const args = balanced(rest, m[0].length - 1);
     const tag = /\bAS\s+(\$\w*\$)/i.exec(rest);
@@ -424,6 +427,9 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
     });
     it('flags a call to a frozen implementation, a pre-existing unguarded reacher, or a new internal writer', () => {
       expect(names(withNext(fn('probe_frozen', "\nBEGIN\n  PERFORM public._post_invoice_pre_admin_only_20261009(p, 'k');\nEND;\n")))).toEqual(['probe_frozen']);
+      // CodeRabbit, PR #902: a quoted name with characters outside \w is still scanned.
+      expect(names(withNext(fn('"probe-quoted writer"', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n')))).toEqual(['probe-quoted writer']);
+      expect(names(withNext(fn('"probe""quote"', '\nBEGIN\n  DELETE FROM public.invoices WHERE id = p;\nEND;\n')))).toEqual(['probe"quote']);
       expect(names(withNext(fn('probe_impl_call', "\nBEGIN\n  PERFORM public._post_invoice_public_impl_20260718(p, NULL);\nEND;\n")))).toEqual(['probe_impl_call']);
       const internal = fn('_probe_impl2', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
         'REVOKE ALL ON FUNCTION public._probe_impl2(uuid) FROM PUBLIC, anon, authenticated, service_role;');

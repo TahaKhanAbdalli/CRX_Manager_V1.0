@@ -1144,12 +1144,18 @@ EXCEPTION WHEN OTHERS THEN
 END
 $race$;
 COMMIT;\n`);
-  await until(() => scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'crx_ao_race_poster_${label}' AND wait_event_type = 'Lock' AND ${holderPid} = ANY (pg_blocking_pids(pid));`) === '1' || poster.err.includes('RACE|'),
-    `${label}: the post blocked behind the uncommitted save`);
-  assert.doesNotMatch(poster.err, /RACE\|/, `${label}: the post finished before the save committed (it did not wait on the row lock):\n${poster.err}`);
-  holder.child.stdin.end('COMMIT;\n');
-  assert.equal(await holder.done, 0, `${label}: the second admin's save did not commit:\n${holder.err}`);
-  await poster.done;
+  try {
+    await until(() => scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'crx_ao_race_poster_${label}' AND wait_event_type = 'Lock' AND ${holderPid} = ANY (pg_blocking_pids(pid));`) === '1' || poster.err.includes('RACE|'),
+      `${label}: the post blocked behind the uncommitted save`);
+    assert.doesNotMatch(poster.err, /RACE\|/, `${label}: the post finished before the save committed (it did not wait on the row lock):\n${poster.err}`);
+    holder.child.stdin.end('COMMIT;\n');
+    assert.equal(await holder.done, 0, `${label}: the second admin's save did not commit:\n${holder.err}`);
+  } finally {
+    // A failed check (a mutant) must not leave the second admin's locks held for later cases.
+    if (!holder.child.stdin.writableEnded) holder.child.stdin.end('ROLLBACK;\n');
+    await holder.done;
+    await poster.done;
+  }
   return { result: /RACE\|([^\n]*)/.exec(poster.err)?.[1]?.trimEnd() ?? `(no result) ${poster.err}`, status: invoiceStatus(invoiceId) };
 }
 
@@ -1269,6 +1275,62 @@ function checkDupKeyCompleteJob(d) {
   assert.match(d.reuse, /^P0001\|IDEMPOTENCY_ARGUMENT_MISMATCH: complete_job key /, `AFTER: another job's receipt replayed for a reused key: ${outcome}`);
   // start_job writes the job's start row; a completion would add its notes.
   assert.equal(d.otherJob, 'OTHERJOB|in_progress|1|0', `AFTER: the refused key reuse changed the other job: ${outcome}`);
+  return outcome;
+}
+
+let dupUnpostRun = 0;
+/**
+ * CodeRabbit, PR #902: two un-posts of one posted group with the same key at the same moment. The
+ * wrapper takes the shared key lock before its implementation's receipt lookup, so the duplicate
+ * waits for the first to commit and then replays its receipt instead of failing on the un-posted group.
+ */
+async function dupKeyUnpostGroup(label) {
+  dupUnpostRun += 1;
+  const run = `${label}_${dupUnpostRun}`;
+  const group = newGroup(`dupu-${run}`);
+  scalar(`BEGIN; ${claims(U.ADMIN)} SELECT public.post_invoice_group('${group}', '${U.ADMIN}', 'prover-ao-dupu-post-${run}') IS NOT NULL; COMMIT; SELECT 1;`);
+  const key = `prover-ao-dupu-${run}`;
+  const call = `public.unpost_invoice_group('${group}', '${U.ADMIN}', '${key}')`;
+  const first = session(`crx_ao_dupu_first_${run}`);
+  first.child.stdin.write(`BEGIN;\n${claims(U.ADMIN)}\nSELECT 'FIRST_PID=' || pg_backend_pid();\nSELECT 'FIRST|' || (${call} IS NOT NULL);\n\\echo FIRST_DONE\n`);
+  let second;
+  try {
+    await until(() => first.out.includes('FIRST_DONE') || first.err.includes('ERROR'), `${run}: the first un-post`);
+    assert.doesNotMatch(first.err, /ERROR/, `${run}: the first un-post failed:\n${first.err}`);
+    const firstPid = /FIRST_PID=(\d+)/.exec(first.out)?.[1];
+    second = session(`crx_ao_dupu_second_${run}`);
+    second.child.stdin.end(`BEGIN;\n${asUser(U.ADMIN)}\nDO $dupu$
+DECLARE v jsonb;
+BEGIN
+  v := ${call};
+  RAISE NOTICE 'DUPU|ok|%', v IS NOT NULL;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'DUPU|%|%', SQLSTATE, SQLERRM;
+END
+$dupu$;
+COMMIT;\n`);
+    await until(() => scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'crx_ao_dupu_second_${run}' AND wait_event_type = 'Lock' AND ${firstPid} = ANY (pg_blocking_pids(pid));`) === '1' || second.err.includes('DUPU|'),
+      `${run}: the duplicate un-post blocked behind the first`);
+    assert.doesNotMatch(second.err, /DUPU\|/, `${run}: the duplicate finished before the first committed:\n${second.err}`);
+    first.child.stdin.end('COMMIT;\n');
+    assert.equal(await first.done, 0, `${run}: the first un-post did not commit:\n${first.err}`);
+    await second.done;
+  } finally {
+    if (!first.child.stdin.writableEnded) first.child.stdin.end('ROLLBACK;\n');
+    await first.done;
+    if (second) await second.done;
+  }
+  return {
+    first: /FIRST\|([^\n]*)/.exec(first.out)?.[1]?.trimEnd() ?? `(no result) ${first.out}`,
+    result: /DUPU\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`,
+    facts: scalar(`SELECT (SELECT string_agg(DISTINCT status, ',') FROM public.invoices WHERE invoice_group_id = '${group}' AND deleted_at IS NULL) || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${key}');`),
+  };
+}
+function checkDupKeyUnpostGroup(d) {
+  const outcome = `first ${d.first}; duplicate ${d.result}; statuses|receipts ${d.facts}`;
+  assert.equal(d.first, 't', `AFTER: the first same-key un-post failed: ${outcome}`);
+  assert.equal(d.result, 'ok|t', `AFTER: a concurrent same-key unpost_invoice_group did not replay the first un-post: ${outcome}`);
+  assert.equal(d.facts, 'draft|1', `AFTER: a concurrent same-key unpost_invoice_group left the group posted or stored no single receipt: ${outcome}`);
   return outcome;
 }
 
@@ -1460,6 +1522,18 @@ async function versionChecks(phase) {
       END IF;
     END $terms_fx$;`, `public.post_invoice('${inv2}', 'prover-ao-ver-terms', '${v2}')`);
   assert.match(termsStale.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a customer payment-terms change did not change the version: ${termsStale.result}`);
+  // CodeRabbit, PR #902: a terms edit still uncommitted when the post arrives. The post holds the
+  // customer row, so it waits (observed), then sees the committed terms and refuses.
+  const termsBefore = scalar(`SELECT COALESCE(to_jsonb(payment_terms)::text, 'null') FROM public.customers WHERE id = '${C1}';`);
+  const termsInv = newMisc(`terms-race-${run}`);
+  const termsRace = await racePost(`terms_${run.replaceAll('-', '_')}`, {
+    invoiceId: termsInv,
+    holdSql: `UPDATE public.customers SET payment_terms = '[PROVER] Net 60 race ${run}' WHERE id = '${C1}';`,
+    postSql: `PERFORM public.post_invoice('${termsInv}', 'prover-ao-race-terms-${run}', '${versionOf([termsInv])}')`,
+  });
+  scalar(`UPDATE public.customers SET payment_terms = (('${termsBefore.replaceAll("'", "''")}')::jsonb #>> '{}') WHERE id = '${C1}'; SELECT 1;`);
+  assert.match(termsRace.result, /^P0001\|INVOICE_CHANGED_SINCE_REVIEW: /, `AFTER: a post went through a concurrent payment-terms edit: ${termsRace.result}`);
+  assert.equal(termsRace.status, 'draft', 'AFTER: the post refused over a terms edit left the invoice posted');
   // Review round 4 (Luna LOW): a batch key whose stored receipt belongs to ANOTHER operation does
   // not skip the version re-check (a stale batch is refused as changed), and an unchanged batch
   // under that key is still refused by the frozen body; nothing posts either way.
@@ -1947,6 +2021,7 @@ REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[], boolean) FROM P
   assert.equal(completionsAfter.quickDraftResize, completionsBefore.quickDraftResize, 'AFTER: the partial-delivery resize of an admin\'s draft changed');
   const jobsAfter = jobsAndQuick('after');
   console.log(`[prover] DUPLICATE KEY (complete_job): ${checkDupKeyCompleteJob(await dupKeyCompleteJob(`after_${process.pid}`))}`);
+  console.log(`[prover] DUPLICATE KEY (unpost_invoice_group): ${checkDupKeyUnpostGroup(await dupKeyUnpostGroup(`after_${process.pid}`))}`);
   assert.equal(jobsAfter.admin, jobsBefore.admin, 'AFTER: an admin\'s job completion changed');
   assert.equal(jobsAfter.applicator, jobsBefore.applicator.replace('completed by an applicator — automatic draft invoice skipped (auto-draft only runs for office completions).', 'completed by a non-admin — automatic draft invoice skipped (invoicing is admin-only).'), 'AFTER: an applicator\'s job completion changed beyond the skip text');
   assert.equal(jobsAfter.qd_admin, jobsBefore.qd_admin, 'AFTER: an admin\'s quick delivery changed');
@@ -2101,6 +2176,11 @@ async function mutations({ adminBefore, held }) {
   applyText('mutant-job-key-bind.sql', once(job, "      IF v_existing->>'job_id' IS DISTINCT FROM p_job_id::text THEN\n", '      IF false THEN\n', 'job key binding'));
   await detectAsync('complete_job replaying another job\'s receipt', async () => checkDupKeyCompleteJob(await dupKeyCompleteJob(`mutant_bind_${process.pid}`)), /another job's receipt replayed for a reused key/);
   applyText('restore-job-key-bind.sql', job);
+  // CodeRabbit, PR #902: unpost_invoice_group without the wrapper's key lock.
+  const unpostGroup = statementOf('CREATE FUNCTION public.unpost_invoice_group(');
+  applyText('mutant-unpost-group-nokeylock.sql', once(unpostGroup, "  IF p_idempotency_key IS NOT NULL THEN\n    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));\n  END IF;\n", '', 'unpost group key lock'));
+  await detectAsync('unpost_invoice_group without its key lock', async () => checkDupKeyUnpostGroup(await dupKeyUnpostGroup(`mutant_${process.pid}`)), /did not replay the first un-post/);
+  applyText('restore-unpost-group-nokeylock.sql', unpostGroup);
   // (6) 1e: quick delivery without the coercion.
   const quick = statementOf('CREATE FUNCTION public.create_quick_delivery(');
   applyText('mutant-quick.sql', once(quick, 'p_skip_invoice => CASE WHEN public.is_admin() THEN p_skip_invoice ELSE true END', 'p_skip_invoice => p_skip_invoice', 'quick'));
@@ -2224,9 +2304,17 @@ async function mutations({ adminBefore, held }) {
   const lockLine = '      PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;\n';
   const compareStart = post.indexOf('      IF public._invoice_review_fingerprint');
   const compare = post.slice(compareStart, post.indexOf('      END IF;\n', compareStart) + '      END IF;\n'.length);
-  applyText('mutant-ver-unlocked.sql', once(post, `${lockLine}${compare}`, `${compare}${lockLine}`, 'unlocked'));
+  // The invoice row lock and (CodeRabbit, PR #902) the customer row lock both move after the check.
+  const lockBlock = post.slice(post.indexOf(lockLine), compareStart);
+  assert.ok(lockBlock.startsWith(lockLine) && lockBlock.includes('FOR UPDATE OF c;'), 'mutation: post_invoice has no invoice-then-customer lock block');
+  applyText('mutant-ver-unlocked.sql', once(post, `${lockBlock}${compare}`, `${compare}${lockBlock}`, 'unlocked'));
   await detectAsync('post_invoice version check before the row lock', () => versionChecks('after'));
   applyText('restore-ver-unlocked.sql', post);
+  // CodeRabbit, PR #902: post_invoice without the customer row lock (a terms edit slips past).
+  const custLock = "      PERFORM 1 FROM public.customers c\n       WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = p_invoice_id)\n       ORDER BY c.id FOR UPDATE OF c;\n";
+  applyText('mutant-ver-nocustlock.sql', once(post, custLock, '', 'customer lock'));
+  await detectAsync('post_invoice version check without the customer row lock', () => versionChecks('after'), /did not wait on the row lock/);
+  applyText('restore-ver-nocustlock.sql', post);
   // The group and batch checks without their row locks: the two-session races must catch it.
   const groupPost = statementOf('CREATE FUNCTION public.post_invoice_group(');
   applyText('mutant-ver-group-unlocked.sql', once(groupPost, '                 ORDER BY i.id\n                   FOR UPDATE) m;', '                 ORDER BY i.id) m;', 'group unlocked'));

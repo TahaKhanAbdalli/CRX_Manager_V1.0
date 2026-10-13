@@ -83,6 +83,36 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     expect(sql.slice(0, 200)).toContain('STATUS: NOT APPLIED');
   });
 
+  it('takes the shared key lock before delegating where the implementation looks its receipt up unlocked', () => {
+    // CodeRabbit, PR #902 (pre-merge check): these implementations SELECT the receipt, write, then
+    // store it; the key lock (check_idempotency's) right after the guard serializes same-key calls.
+    const lock = "  IF p_idempotency_key IS NOT NULL THEN\n    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));\n  END IF;\n";
+    for (const name of ['update_field_app_applied_info', 'update_field_app_invoice_billing', 'unpost_invoice_group', 'reverse_write_off']) {
+      const b = body(statement(sql, `CREATE FUNCTION public.${name}(`));
+      const guard = b.indexOf(GUARD);
+      const at = b.indexOf(lock);
+      const delegate = b.indexOf(`RETURN public._${name}_pre_admin_only_20261009(`);
+      expect(guard, name).toBeGreaterThan(-1);
+      expect(at, `${name} key lock`).toBeGreaterThan(guard);
+      expect(delegate, `${name} delegates after its key lock`).toBeGreaterThan(at);
+    }
+  });
+
+  it('holds the customer rows before comparing the reviewed version (payment terms)', () => {
+    // CodeRabbit, PR #902: the fingerprint hashes customers.payment_terms.
+    for (const [head, lockAfter] of [
+      ['CREATE FUNCTION public.post_invoice(', 'PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;'],
+      ['CREATE FUNCTION public.post_invoice_group(', 'FOR UPDATE) m;'],
+      ['CREATE FUNCTION public.batch_post_invoices(', 'PERFORM 1 FROM public.invoices i WHERE i.id = ANY (p_invoice_ids) ORDER BY i.id FOR UPDATE;'],
+    ]) {
+      const b = body(statement(sql, head));
+      const customers = b.indexOf('FOR UPDATE OF c;');
+      expect(customers, `${head} customer lock`).toBeGreaterThan(b.indexOf(lockAfter));
+      expect(b.indexOf('PERFORM 1 FROM public.customers c')).toBeGreaterThan(b.indexOf(lockAfter));
+      expect(customers, `${head} locks customers before the comparison`).toBeLessThan(b.indexOf('IS DISTINCT FROM p_expected_version'));
+    }
+  });
+
   it('pins, in its postflight, the md5 of every body this file defines', () => {
     // PR #902: a wrapper edited without its postflight pin only failed 15 minutes into the
     // container prover; this catches it at PR time. md5 matches md5(replace(prosrc, chr(13), '')).

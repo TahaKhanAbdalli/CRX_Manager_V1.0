@@ -779,6 +779,12 @@ CREATE FUNCTION public.update_field_app_applied_info(p_invoice_ids uuid[], p_win
 AS $function$
 BEGIN
   PERFORM public._require_invoicing_admin();
+  -- CodeRabbit, PR #902: the implementation looks its receipt up before it writes and stores it
+  -- after, so take the shared key lock first (the one check_idempotency holds to the end of the
+  -- transaction): a concurrent same-key duplicate waits for the first to commit, then replays.
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
+  END IF;
   RETURN public._update_field_app_applied_info_pre_admin_only_20261009(
     p_invoice_ids => p_invoice_ids,
     p_wind_direction => p_wind_direction,
@@ -818,6 +824,12 @@ CREATE FUNCTION public.update_field_app_invoice_billing(p_invoice_ids uuid[], p_
 AS $function$
 BEGIN
   PERFORM public._require_invoicing_admin();
+  -- CodeRabbit, PR #902: the implementation looks its receipt up before it writes and stores it
+  -- after, so take the shared key lock first (the one check_idempotency holds to the end of the
+  -- transaction): a concurrent same-key duplicate waits for the first to commit, then replays.
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
+  END IF;
   RETURN public._update_field_app_invoice_billing_pre_admin_only_20261009(
     p_invoice_ids => p_invoice_ids,
     p_purchase_order_ref => p_purchase_order_ref,
@@ -863,6 +875,12 @@ BEGIN
     v_cached := public.check_idempotency(p_idempotency_key, 'post_invoice');
     IF v_cached IS NULL THEN
       PERFORM 1 FROM public.invoices WHERE id = p_invoice_id FOR UPDATE;
+      -- CodeRabbit, PR #902: the fingerprint hashes the customer's payment terms (the post's due-date
+      -- fallback), so hold the customer row too: a terms edit cannot commit between this check and
+      -- the post's own read.
+      PERFORM 1 FROM public.customers c
+       WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = p_invoice_id)
+       ORDER BY c.id FOR UPDATE OF c;
       IF public._invoice_review_fingerprint(ARRAY[p_invoice_id]) IS DISTINCT FROM p_expected_version THEN
         RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: the invoice changed after it was reviewed; reload and review it again before posting';
       END IF;
@@ -913,6 +931,12 @@ BEGIN
                    AND i.deleted_at IS NULL
                  ORDER BY i.id
                    FOR UPDATE) m;
+        -- CodeRabbit, PR #902: the fingerprint hashes the customer's payment terms (the post's due-date
+        -- fallback), so hold the customer row too: a terms edit cannot commit between this check and
+        -- the post's own read.
+        PERFORM 1 FROM public.customers c
+         WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = ANY (v_member_ids))
+         ORDER BY c.id FOR UPDATE OF c;
         IF public._invoice_review_fingerprint(v_member_ids) IS DISTINCT FROM p_expected_version THEN
           RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: an invoice in this group changed after it was reviewed; reload and review it again before posting';
         END IF;
@@ -963,6 +987,12 @@ BEGIN
            AND (k.expires_at IS NULL OR k.expires_at >= now())
       ) THEN
         PERFORM 1 FROM public.invoices i WHERE i.id = ANY (p_invoice_ids) ORDER BY i.id FOR UPDATE;
+        -- CodeRabbit, PR #902: the fingerprint hashes the customer's payment terms (the post's due-date
+        -- fallback), so hold the customer row too: a terms edit cannot commit between this check and
+        -- the post's own read.
+        PERFORM 1 FROM public.customers c
+         WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = ANY (p_invoice_ids))
+         ORDER BY c.id FOR UPDATE OF c;
         IF public._invoice_review_fingerprint(p_invoice_ids) IS DISTINCT FROM p_expected_version THEN
           RAISE EXCEPTION 'INVOICE_CHANGED_SINCE_REVIEW: an invoice in this batch changed after it was reviewed; reload and review it again before posting';
         END IF;
@@ -1008,6 +1038,12 @@ CREATE FUNCTION public.unpost_invoice_group(p_invoice_group_id uuid, p_performed
 AS $function$
 BEGIN
   PERFORM public._require_invoicing_admin();
+  -- CodeRabbit, PR #902: the implementation looks its receipt up before it writes and stores it
+  -- after, so take the shared key lock first (the one check_idempotency holds to the end of the
+  -- transaction): a concurrent same-key duplicate waits for the first to commit, then replays.
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
+  END IF;
   RETURN public._unpost_invoice_group_pre_admin_only_20261009(
     p_invoice_group_id => p_invoice_group_id,
     p_performed_by => p_performed_by,
@@ -1135,6 +1171,12 @@ CREATE FUNCTION public.reverse_write_off(p_write_off_id uuid, p_reason text, p_p
 AS $function$
 BEGIN
   PERFORM public._require_invoicing_admin();
+  -- CodeRabbit, PR #902: the implementation looks its receipt up before it writes and stores it
+  -- after, so take the shared key lock first (the one check_idempotency holds to the end of the
+  -- transaction): a concurrent same-key duplicate waits for the first to commit, then replays.
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_idempotency_key, 0));
+  END IF;
   RETURN public._reverse_write_off_pre_admin_only_20261009(
     p_write_off_id => p_write_off_id,
     p_reason => p_reason,
@@ -2489,19 +2531,19 @@ BEGIN
     ('transfer_job_to_invoice', 'uuid,uuid,text', 'p_job_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '8aabe711f2174d4a0f6be3d806bd2389', '_transfer_job_to_invoice_pre_admin_only_20261009', 'uuid,uuid,text', 'b083dd371b091d7b70bb4cdc015c9bc8', 'guard'),
     ('transfer_invoice_to_job', 'uuid,uuid,text', 'p_invoice_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'bf8109c7a0e12a89e0e7aafd8867864f', '_transfer_invoice_to_job_pre_admin_only_20261009', 'uuid,uuid,text', '7394bd0343c19e98bf746576a56bf6e4', 'guard'),
     ('consolidate_draft_invoices', 'uuid,uuid,text', 'p_order_id uuid, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'b8a4dfc983776fd78632da1d43e7469d', '_consolidate_draft_invoices_pre_admin_only_20261009', 'uuid,uuid,text', '0c8394691ef461ba780fd4ba0e770c51', 'guard'),
-    ('update_field_app_applied_info', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'p_invoice_ids uuid[], p_wind_direction text DEFAULT NULL::text, p_temperature_text text DEFAULT NULL::text, p_applicator_name text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_start_temp_f numeric DEFAULT NULL::numeric, p_start_wind_mph numeric DEFAULT NULL::numeric, p_start_wind_direction text DEFAULT NULL::text, p_start_humidity_pct numeric DEFAULT NULL::numeric, p_start_weather_time time without time zone DEFAULT NULL::time without time zone, p_start_weather_source text DEFAULT NULL::text, p_end_temp_f numeric DEFAULT NULL::numeric, p_end_wind_mph numeric DEFAULT NULL::numeric, p_end_wind_direction text DEFAULT NULL::text, p_end_humidity_pct numeric DEFAULT NULL::numeric, p_end_weather_time time without time zone DEFAULT NULL::time without time zone, p_end_weather_source text DEFAULT NULL::text, p_weather_manual_override boolean DEFAULT NULL::boolean, p_update_weather boolean DEFAULT false, p_diluent_rate_gpa numeric DEFAULT NULL::numeric, p_update_diluent boolean DEFAULT false', 'jsonb', '5941af2185db68b79304dec3e91e3b1c', '_update_field_app_applied_info_pre_admin_only_20261009', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'e6d5f41411e96cd4453d2209c846645d', 'guard'),
-    ('update_field_app_invoice_billing', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', 'p_invoice_ids uuid[], p_purchase_order_ref text DEFAULT NULL::text, p_payment_terms text DEFAULT NULL::text, p_header_notes text DEFAULT NULL::text, p_due_date date DEFAULT NULL::date, p_footer_notes text DEFAULT NULL::text, p_internal_notes text DEFAULT NULL::text, p_discounts jsonb DEFAULT ''{}''::jsonb, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'b1d361da2cb271ee9fa71bd972339d92', '_update_field_app_invoice_billing_pre_admin_only_20261009', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', '34695e4be9724bf46dc5e962f8f0e478', 'guard'),
-    ('post_invoice', 'uuid,text,text', 'p_invoice_id uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'void', 'c7f467aac765b1d2f0cc897b27eca832', '_post_invoice_pre_admin_only_20261009', 'uuid,text', '6a5e3ab75bc63936f23eab85383ff6ad', 'guard'),
-    ('post_invoice_group', 'uuid,uuid,text,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '9d6e9472e4a93fd8631bf3db457c36de', '_post_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'd9e36f0dfb055e3cc68c18793e70dbfc', 'guard'),
-    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '23f5dde223ef83fb14281393bc8cdd3d', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
+    ('update_field_app_applied_info', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'p_invoice_ids uuid[], p_wind_direction text DEFAULT NULL::text, p_temperature_text text DEFAULT NULL::text, p_applicator_name text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_start_temp_f numeric DEFAULT NULL::numeric, p_start_wind_mph numeric DEFAULT NULL::numeric, p_start_wind_direction text DEFAULT NULL::text, p_start_humidity_pct numeric DEFAULT NULL::numeric, p_start_weather_time time without time zone DEFAULT NULL::time without time zone, p_start_weather_source text DEFAULT NULL::text, p_end_temp_f numeric DEFAULT NULL::numeric, p_end_wind_mph numeric DEFAULT NULL::numeric, p_end_wind_direction text DEFAULT NULL::text, p_end_humidity_pct numeric DEFAULT NULL::numeric, p_end_weather_time time without time zone DEFAULT NULL::time without time zone, p_end_weather_source text DEFAULT NULL::text, p_weather_manual_override boolean DEFAULT NULL::boolean, p_update_weather boolean DEFAULT false, p_diluent_rate_gpa numeric DEFAULT NULL::numeric, p_update_diluent boolean DEFAULT false', 'jsonb', '0075f6c7b902ad12f3a095ace0a16035', '_update_field_app_applied_info_pre_admin_only_20261009', 'uuid[],text,text,text,uuid,text,numeric,numeric,text,numeric,time without time zone,text,numeric,numeric,text,numeric,time without time zone,text,boolean,boolean,numeric,boolean', 'e6d5f41411e96cd4453d2209c846645d', 'guard'),
+    ('update_field_app_invoice_billing', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', 'p_invoice_ids uuid[], p_purchase_order_ref text DEFAULT NULL::text, p_payment_terms text DEFAULT NULL::text, p_header_notes text DEFAULT NULL::text, p_due_date date DEFAULT NULL::date, p_footer_notes text DEFAULT NULL::text, p_internal_notes text DEFAULT NULL::text, p_discounts jsonb DEFAULT ''{}''::jsonb, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '8110dcc79303d8d17c142642bf834d21', '_update_field_app_invoice_billing_pre_admin_only_20261009', 'uuid[],text,text,text,date,text,text,jsonb,uuid,text', '34695e4be9724bf46dc5e962f8f0e478', 'guard'),
+    ('post_invoice', 'uuid,text,text', 'p_invoice_id uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'void', '88e2c33f54013693ba4bf585bc54ff8f', '_post_invoice_pre_admin_only_20261009', 'uuid,text', '6a5e3ab75bc63936f23eab85383ff6ad', 'guard'),
+    ('post_invoice_group', 'uuid,uuid,text,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', '36bb250dc9960981da4ac6ca988001b4', '_post_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'd9e36f0dfb055e3cc68c18793e70dbfc', 'guard'),
+    ('batch_post_invoices', 'uuid[],text,text', 'p_invoice_ids uuid[], p_idempotency_key text DEFAULT NULL::text, p_expected_version text DEFAULT NULL::text', 'jsonb', 'fc273cb4017c54b6d5b5e5bec05bb566', '_batch_post_invoices_pre_admin_only_20261009', 'uuid[],text', '482bd8cd15728ffc51f83900eaf89b3c', 'guard'),
     ('unpost_invoice', 'uuid,uuid,text', 'p_invoice_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '7f6bc25acd00ce5731dea00012fb8b82', '_unpost_invoice_pre_admin_only_20261009', 'uuid,uuid,text', '161f18c3ccd6126a6fb683c5160f82dc', 'guard'),
-    ('unpost_invoice_group', 'uuid,uuid,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '4d4fc94b5893849b1799329992075c8f', '_unpost_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'dc476e07621c4c7dc86595442ed1a9f0', 'guard'),
+    ('unpost_invoice_group', 'uuid,uuid,text', 'p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '5bd7da069b1135d345c78ac735c0ea82', '_unpost_invoice_group_pre_admin_only_20261009', 'uuid,uuid,text', 'dc476e07621c4c7dc86595442ed1a9f0', 'guard'),
     ('batch_void_invoices', 'uuid[],text,uuid,text', 'p_invoice_ids uuid[], p_void_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'integer', '922e078236eb524367d54addec6c6d42', '_batch_void_invoices_pre_admin_only_20261009', 'uuid[],text,uuid,text', '32fa9718f29e18c8eff4539e36ac84b3', 'guard'),
     ('apply_credit_memo_to_invoice', 'uuid,uuid,bigint,uuid,text', 'p_credit_memo_id uuid, p_target_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'uuid', 'e98f494783df19014587a01614675191', '_apply_credit_memo_to_invoice_pre_admin_only_20261009', 'uuid,uuid,bigint,uuid,text', 'bcc242c8715aaed81b9455fbc905237f', 'guard'),
     ('reverse_credit_memo_application', 'uuid,text,uuid,text', 'p_application_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '19cec1a2c82c983e79d68f25b92deef2', '_reverse_credit_memo_application_pre_admin_only_20261009', 'uuid,text,uuid,text', '38cea043fc7dae4e65bc8593c95bddfb', 'guard'),
     ('apply_prepay_to_invoice', 'uuid,uuid,bigint,uuid,text', 'p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'uuid', '6a653820c14a0b250fc13f1e0ca55678', '_apply_prepay_to_invoice_pre_admin_only_20261009', 'uuid,uuid,bigint,uuid,text', 'c9377dab8f2534a03af2c27a6e1d510c', 'guard'),
     ('batch_apply_all_prepayments', 'uuid,text', 'p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '532ca41ae42e4b0fabe026b3b1f59641', '_batch_apply_all_prepayments_pre_admin_only_20261009', 'uuid,text', '1d76228210c474da37c9a3cd91b97b7d', 'guard'),
-    ('reverse_write_off', 'uuid,text,uuid,text', 'p_write_off_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', '619599f68aa5e6cfd9a339e831e2516f', '_reverse_write_off_pre_admin_only_20261009', 'uuid,text,uuid,text', '70ef11ccad193eb6ef5ee88dcba6f8cd', 'guard'),
+    ('reverse_write_off', 'uuid,text,uuid,text', 'p_write_off_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text', 'jsonb', 'bf948733b4d7ae4309c78ce5a9da78c9', '_reverse_write_off_pre_admin_only_20261009', 'uuid,text,uuid,text', '70ef11ccad193eb6ef5ee88dcba6f8cd', 'guard'),
     ('create_quick_delivery', 'uuid,jsonb,uuid,date,text,uuid,text,boolean', 'p_customer_id uuid, p_items jsonb, p_driver_id uuid DEFAULT NULL::uuid, p_scheduled_date date DEFAULT CURRENT_DATE, p_delivery_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_skip_invoice boolean DEFAULT false', 'jsonb', '1bf67e10cae538b5090b067aa3f665f5', '_create_quick_delivery_pre_admin_only_20261009', 'uuid,jsonb,uuid,date,text,uuid,text,boolean', '69c1d569fb2e9eb913502d59e41a76fe', 'coerce')
   ) AS t(name, ident, args, ret, md5, impl, impl_ident, impl_md5, shape) LOOP
     v_oid := to_regprocedure('public.' || r.name || '(' || r.ident || ')');

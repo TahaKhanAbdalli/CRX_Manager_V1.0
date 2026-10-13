@@ -189,7 +189,7 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   sales rep can edit `customers.payment_terms` under `customers_update`, and the post falls back to
   it for the due date). `_invoice_review_fingerprint` now also hashes the invoice customer's
   `payment_terms`; body pin `658f42b2...` -> `d5645406...` in the postflight and
-  `invoiceWriterGuard.test.ts`. Residual (KNOWN_ISSUES): the customer row is read, not locked.
+  `invoiceWriterGuard.test.ts`. (The customer row is now held too: see the PR #902 CodeRabbit entry.)
 - **`batch_post_invoices`' receipt lookup is scoped to its operation** (`k.operation =
   'batch_post_invoices'`, the name its frozen body claims under, read live), so the version re-check
   no longer relies on the frozen body's cross-operation refusal. Wrapper pin `83ebbc30...` ->
@@ -314,6 +314,24 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   payload (`check_idempotency_intent`) is separate work. The prover runs two
   concurrent same-key completions (one completion, one receipt, both succeed) and a mutant with
   the old lookup; the shape test undoes this hunk too.
+
+### 2026-10-13 - CodeRabbit round on head 87808cc23 (still NOT APPLIED)
+
+- **Same-key serialization for four wrapped writers** (pre-merge check "Mutating RPC without
+  idempotency key"): `update_field_app_applied_info`, `update_field_app_invoice_billing`,
+  `unpost_invoice_group` and `reverse_write_off` delegate to implementations that look their
+  receipt up unlocked, write, then store it. Each wrapper now takes the shared key lock
+  (`check_idempotency`'s, held to the end of the transaction) right after the guard, so a
+  concurrent same-key duplicate waits for the first to commit and replays its receipt. The
+  frozen bodies are unchanged. Prover: two concurrent same-key un-posts of one group (both
+  succeed, one receipt) and a mutant without the lock; a PR-time test checks all four.
+- **Posting holds the customer rows** (Major): the reviewed version hashes
+  `customers.payment_terms`, so `post_invoice`, `post_invoice_group` and `batch_post_invoices`
+  now lock the invoice customers (`FOR UPDATE`, id order, after the invoice rows) before comparing.
+  `save_customer` writes no invoice, so the order adds no deadlock cycle. Prover: a versioned post
+  waits behind an uncommitted terms edit, then refuses; a mutant without the lock is detected.
+- **CI scanner reads quoted function names** (Major): `public."invoice-writer"(...)` and names
+  with doubled quotes are now scanned (two probes; mutation-checked against the old pattern).
 
 ### Not done here (owners)
 

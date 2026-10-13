@@ -152,9 +152,10 @@ the file is applied and verified live.
   invoice has none): the assigned sales rep can still edit that customer row (`customers_update`,
   read live 2026-10-10), so a terms change after review now refuses the post (prover: the rep edits
   the terms through RLS, the versioned post is `INVOICE_CHANGED_SINCE_REVIEW`; on the round-3 body
-  it posted). Residual: the customer row is read, not locked, so a terms edit committing in the
-  milliseconds between the wrapper's check and the post's own terms read can still move the due date
-  (never the amount). A rep editing a customer's terms also makes an admin reload an invoice whose own
+  it posted). Since PR #902's CodeRabbit round the wrapper also holds the invoice customers' rows
+  (`FOR UPDATE`, in id order, after the invoice rows) before it compares, so a terms edit cannot
+  commit between the check and the post's own terms read (prover: a post waits behind an
+  uncommitted terms edit, then refuses). A rep editing a customer's terms also makes an admin reload an invoice whose own
   terms are set (a refusal, never a wrong post). The fingerprint hashes every `invoices` column, so a
   background change to the row (for example `updated_at`) also refuses a post until the admin
   reloads; no test covers a benign background touch yet.
