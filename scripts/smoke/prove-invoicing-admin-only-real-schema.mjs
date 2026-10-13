@@ -1252,7 +1252,7 @@ COMMIT;\n`);
   const reuse = attempt(U.REP, `${jobSql(otherJob, `DUPB-${run}`)}
     ${claims(U.REP)} SELECT public.start_job('${otherJob}', '${U.REP}', 'prover-ao-dupj-sjb-${run}') IS NOT NULL;`,
   `public.complete_job('${otherJob}', '{"notes":"[PROVER]"}'::jsonb, '${U.REP}', '${key}')->>'success'`,
-  { after: `SELECT 'OTHERJOB|' || (SELECT status FROM public.jobs WHERE id = '${otherJob}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${otherJob}');` });
+  { after: `SELECT 'OTHERJOB|' || (SELECT status FROM public.jobs WHERE id = '${otherJob}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${otherJob}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${otherJob}' AND notes IS NOT NULL);` });
   return {
     first: /FIRST\|([^\n]*)/.exec(first.out)?.[1]?.trimEnd() ?? `(no result) ${first.out}`,
     result: /DUPJ\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`,
@@ -1267,7 +1267,8 @@ function checkDupKeyCompleteJob(d) {
   assert.equal(d.result, 'ok|true', `AFTER: a concurrent same-key complete_job did not replay the first completion: ${outcome}`);
   assert.equal(d.facts, 'completed|1|1', `AFTER: a concurrent same-key complete_job completed the job twice or stored no single receipt: ${outcome}`);
   assert.match(d.reuse, /^P0001\|IDEMPOTENCY_ARGUMENT_MISMATCH: complete_job key /, `AFTER: another job's receipt replayed for a reused key: ${outcome}`);
-  assert.equal(d.otherJob, 'OTHERJOB|in_progress|0', `AFTER: the refused key reuse changed the other job: ${outcome}`);
+  // start_job writes the job's start row; a completion would add its notes.
+  assert.equal(d.otherJob, 'OTHERJOB|in_progress|1|0', `AFTER: the refused key reuse changed the other job: ${outcome}`);
   return outcome;
 }
 
