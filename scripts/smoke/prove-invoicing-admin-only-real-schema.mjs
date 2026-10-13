@@ -2330,7 +2330,10 @@ async function mutations({ adminBefore, held }) {
   await detectAsync('post_invoice_group requiring a key on an unversioned post', () => versionChecks('after'), /an old group caller with no version and no key could not post/);
   applyText('restore-ver-group-key-hoisted.sql', groupPost);
   const batchPost = statementOf('CREATE FUNCTION public.batch_post_invoices(');
-  applyText('mutant-ver-batch-unlocked.sql', once(batchPost, ' ORDER BY i.id FOR UPDATE;', ';', 'batch unlocked'));
+  // Both the invoice and (CodeRabbit, PR #902) the customer row locks: the second admin's save
+  // holds the customer row too, so dropping only the invoice locks still serializes this race.
+  const batchCustLock = '        PERFORM 1 FROM public.customers c\n         WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = ANY (p_invoice_ids))\n         ORDER BY c.id FOR UPDATE OF c;\n';
+  applyText('mutant-ver-batch-unlocked.sql', once(once(batchPost, ' ORDER BY i.id FOR UPDATE;', ';', 'batch unlocked'), batchCustLock, '', 'batch customer lock'));
   await detectAsync('batch_post_invoices version check without the row locks', () => versionChecks('after'));
   applyText('restore-ver-batch-unlocked.sql', batchPost);
   // Review round 4: the batch receipt lookup without its operation scope.
