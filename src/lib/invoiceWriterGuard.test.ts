@@ -97,7 +97,7 @@ const REVIEWED_BODIES: Record<string, { md5s: string[]; reason: string }> = {
   _require_invoicing_admin: { md5s: ['629609ce38f7c192abfde5be47848557'], reason: 'the guard every invoicing wrapper relies on (EXISTS on an ACTIVE admin, 42501)' },
   _invoice_review_fingerprint: { md5s: ['d56454064dc8f78063a2afd2bada9697'], reason: 'the posting version check binds to it' },
   _complete_delivery_authorized_impl: { md5s: ['b9b314f56adeba3a58ebe38a48d839b1'], reason: 'its ELSIF v_actor_role = \'admin\' hunk is all that stops a rep\'s or driver\'s completion from auto-invoicing' },
-  complete_job: { md5s: ['9196da7ce6337bd0176a67b37be950f2'], reason: 'its IF is_admin() gate is all that stops a rep\'s job completion from auto-drafting' },
+  complete_job: { md5s: ['726c96af2fa6d5709291cc3b77083745'], reason: 'its IF is_admin() gate is all that stops a rep\'s job completion from auto-drafting' },
 };
 
 type Fn = { key: string; name: string; file: string; body: string; code: string; replace: boolean };

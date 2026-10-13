@@ -272,6 +272,24 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
     notification leaves only an `auto_draft_failed` activity row: the completion itself is
     correct and the delivery or job still waits for an admin.
 
+### 2026-10-13 - CodeRabbit on PR #902 (still NOT APPLIED)
+
+- **`complete_job`: a non-admin's completion now tells the admins even with auto-drafting
+  switched off.** The non-admin branch sat inside the auto-draft setting's `IF`, so with the
+  setting off a rep's completion wrote nothing and notified no one. It is now outside it: a
+  non-admin never drafts and always gets the skip row and one `job_needs_invoice` notification
+  per active admin; an admin's completion is unchanged (drafts when the setting is on, silent
+  when it is off). Live has the setting on (read 2026-10-13). The prover now runs the setting-off
+  case for a rep and an admin; the shape test still proves the body differs from live only by the
+  admin-only hunks; the `complete_job` pins (postflight, chain, CI scanner) are re-pinned.
+- **Not changed: a notification when a non-admin creates a quick delivery.** A quick delivery
+  starts `scheduled`, not delivered: when a non-admin completes it the admins are notified, and
+  when an admin completes it the delivery (which has no invoice) gets the automatic draft. So no
+  delivered work is left unbilled and unflagged.
+- CI scanner fixes from the same reviews: a REVOKE marks a function internal only once both
+  `authenticated` and `PUBLIC` lost EXECUTE (in one statement or separate ones);
+  `REVOKE GRANT OPTION FOR` does not count. Each has a probe that fails without its fix.
+
 ### Not done here (owners)
 
 - Apply: Mason's explicit yes and his owner-approval chat reply (it replaced Windows Hello on

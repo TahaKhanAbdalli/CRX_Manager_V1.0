@@ -2180,8 +2180,10 @@ BEGIN
     -- silence indistinguishable from success. Now each writes an
     -- 'auto_draft_skipped' activity row. The POLICY (should applicator
     -- completions auto-draft?) is unchanged and stays an owner decision (#107).
-    IF v_auto_draft_on THEN
-      IF is_admin() THEN
+    -- A non-admin's completion never drafts and always tells the admins, whether or not the
+    -- auto-draft setting is on (CodeRabbit, PR #902): invoicing is admin-only.
+    IF is_admin() THEN
+      IF v_auto_draft_on THEN
         SELECT i.id INTO v_existing_invoice
           FROM invoices i
          WHERE i.job_id = p_job_id
@@ -2203,7 +2205,8 @@ BEGIN
             p_performed_by, 'job', p_job_id, v_job.customer_id
           );
         END IF;
-      ELSE
+      END IF;
+    ELSE
         INSERT INTO activity_feed (
           event_type, description, performed_by,
           related_entity_type, related_entity_id, customer_id
@@ -2224,7 +2227,6 @@ BEGIN
                'job_needs_invoice', 'job', p_job_id
           FROM profiles p
          WHERE p.role = 'admin' AND p.is_active = true;
-      END IF;
     END IF;
     -- >>>#117
   EXCEPTION WHEN OTHERS THEN
@@ -2592,7 +2594,7 @@ BEGIN
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
        IS DISTINCT FROM true
-     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '9196da7ce6337bd0176a67b37be950f2' AND p.prosecdef
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '726c96af2fa6d5709291cc3b77083745' AND p.prosecdef
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
              AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
                          FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
@@ -2720,7 +2722,7 @@ BEGIN
       ('update_order_items(uuid,jsonb,uuid,text)', 'e35fce6708edee32fb1876fa60d7da4b'),
       ('create_rush_order(uuid,jsonb,text,text,uuid,text)', '9027a97ab42a109f5e81188736f52f9c'),
       ('allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text)', '6a945a2510d8e788d4e6f03c0c6d7563'),
-      ('complete_job(uuid,jsonb,uuid,text)', '9196da7ce6337bd0176a67b37be950f2'),
+      ('complete_job(uuid,jsonb,uuid,text)', '726c96af2fa6d5709291cc3b77083745'),
       ('create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', '1bf67e10cae538b5090b067aa3f665f5')
     ) AS t(sig, md5)
   )

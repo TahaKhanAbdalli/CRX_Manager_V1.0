@@ -1050,6 +1050,27 @@ function jobsAndQuick(phase) {
     }
     out[who] = `${invoices}|${activity.replace(/Job PROVER-AO-JOB-[\w-]+/, 'Job <n>')}`;
   }
+  if (fixed) {
+    // CodeRabbit, PR #902: with auto-drafting switched OFF a non-admin's completion still drafts
+    // nothing and tells every active admin; an admin's completion stays silent, as before.
+    for (const [who, uid] of [['rep', U.REP], ['admin', U.ADMIN]]) {
+      const fixture = `${jobSql(job, `JOB-off-${who}`)} UPDATE public.jobs SET applicator_id = '${U.APPLICATOR}' WHERE id = '${job}';
+      ${setAutoDraft(false)}
+      ${claims(uid)} SELECT public.start_job('${job}', '${uid}', 'prover-ao-sj-off-${who}') IS NOT NULL;`;
+      const a = attempt(uid, fixture, `public.complete_job('${job}', '{"notes":"[PROVER]"}'::jsonb, '${uid}', 'prover-ao-cj-off-${who}')->>'success'`, { after: jobFacts });
+      assert.equal(a.result, 'ok|true', `AFTER complete_job with auto-draft off (${who}) failed: ${a.result}`);
+      const [, , invoices, activity, notes, recipients] = a.lines.find((l) => l.startsWith('JOB|')).split('|');
+      assert.equal(invoices, '0', `AFTER complete_job with auto-draft off (${who}): a draft was created`);
+      if (who === 'rep') {
+        assert.match(activity, /completed by a non-admin — automatic draft invoice skipped \(invoicing is admin-only\)/, `AFTER complete_job with auto-draft off (rep): no skip row: ${activity}`);
+        assert.equal(notes, String(admins), `AFTER complete_job with auto-draft off (rep): expected one job_needs_invoice notification per active admin (${admins})`);
+        assert.equal(recipients, activeAdminIds(), 'AFTER complete_job with auto-draft off (rep): the notifications did not go to exactly the active admins');
+      } else {
+        assert.equal(activity, '', `AFTER complete_job with auto-draft off (admin): unexpected activity: ${activity}`);
+        assert.equal(notes, '0', 'AFTER complete_job with auto-draft off (admin): unexpected job_needs_invoice notifications');
+      }
+    }
+  }
   // Quick delivery with p_skip_invoice = false (an old cached client).
   for (const [who, uid, driver] of [['rep', U.REP, null], ['driver', U.DRIVER, U.DRIVER], ['admin', U.ADMIN, null]]) {
     const a = attempt(uid, '', `${QUICK_CALL(uid, `prover-ao-qd-${who}`, false, driver)}->>'invoice_id'`, { replay: true });
@@ -1981,7 +2002,7 @@ async function mutations({ adminBefore, held }) {
   applyText('restore-cdai.sql', cdai);
   // (5) 1d: complete_job drafts for reps again.
   const job = statementOf('CREATE OR REPLACE FUNCTION public.complete_job(');
-  applyText('mutant-job.sql', once(job, '      IF is_admin() THEN\n', '      IF (is_admin() OR is_sales_rep()) THEN\n', 'job'));
+  applyText('mutant-job.sql', once(job, '    IF is_admin() THEN\n', '    IF (is_admin() OR is_sales_rep()) THEN\n', 'job'));
   detect('complete_job auto-draft for reps', () => jobsAndQuick('after'));
   applyText('restore-job.sql', job);
   // (5b) 1d: no admin notification when a non-admin's completion skips the draft.

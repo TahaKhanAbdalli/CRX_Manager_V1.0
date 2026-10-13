@@ -214,9 +214,14 @@ describe('invoicing admin-only migration (20261013160000)', () => {
 `;
     expect(next.split(notify).length - 1).toBe(1);
     expect(next.indexOf(notify)).toBeGreaterThan(next.indexOf("invoice skipped (invoicing is admin-only). '"));
+    // CodeRabbit, PR #902: the non-admin branch sits outside the auto-draft setting, so a non-admin's
+    // completion tells the admins even when auto-drafting is off. Undo that restructure too.
     const undone = next
       .replace(notify, '')
-      .replace('      IF is_admin() THEN\n        SELECT i.id INTO v_existing_invoice', '      IF (is_admin() OR is_sales_rep()) THEN\n        SELECT i.id INTO v_existing_invoice')
+      .replace("    -- A non-admin's completion never drafts and always tells the admins, whether or not the\n    -- auto-draft setting is on (CodeRabbit, PR #902): invoicing is admin-only.\n", '')
+      .replace('    IF is_admin() THEN\n      IF v_auto_draft_on THEN\n        SELECT i.id INTO v_existing_invoice', '    IF v_auto_draft_on THEN\n      IF (is_admin() OR is_sales_rep()) THEN\n        SELECT i.id INTO v_existing_invoice')
+      .replace('        END IF;\n      END IF;\n    ELSE\n        INSERT INTO activity_feed (', '        END IF;\n      ELSE\n        INSERT INTO activity_feed (')
+      .replace('        );\n    END IF;\n    -- >>>#117', '        );\n      END IF;\n    END IF;\n    -- >>>#117')
       .replace("completed by a non-admin — automatic draft '\n            || 'invoice skipped (invoicing is admin-only). '",
         "completed by an applicator — automatic draft '\n            || 'invoice skipped (auto-draft only runs for office completions). '");
     expect(undone).not.toBe(next);
