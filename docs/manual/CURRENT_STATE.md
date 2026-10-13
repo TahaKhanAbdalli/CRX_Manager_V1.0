@@ -1,8 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-12 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-12 ~23:47 UTC, after PR #889's last two
-applies: 1024 rows, `max(version)` `20261012234633`; the read before it, on 2026-10-10 after PR #889's
+**Last verified:** 2026-10-13 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-13 ~17:05 UTC: unchanged since PR #889's last
+two applies, 1024 rows / 1017 names, `max(version)` `20261012234633`, newest
+`20261010120000_cap_delivery_invoice_at_delivered`, `20261013160000_invoicing_admin_only` not
+applied; the read on 2026-10-12 ~23:47 UTC after those applies showed the same 1024 rows; the read before it, on 2026-10-10 after PR #889's
 first three applies, had 1022 rows, `max(version)` `20261010043006`). The local candidate `20261013160000_invoicing_admin_only`
 (not applied) is described below.
 Every other section keeps its own date; nothing below was re-certified by that read.

@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-12 (America/Chicago) against the live migration ledger** (read-only, after
-PR #889's last two applies; the counts and high-water live only in `docs/reference/migration-history.md`).
+**Last verified: 2026-10-13 (America/Chicago) against the live migration ledger** (read-only,
+2026-10-13 ~17:05 UTC, unchanged since PR #889's last two applies on 2026-10-12; the counts and
+high-water live only in `docs/reference/migration-history.md`).
 That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
 entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The candidate `20261013160000` (admin-only invoicing) is NOT applied; on 2026-10-13 every
 function body it pins was re-read live and matched. The
