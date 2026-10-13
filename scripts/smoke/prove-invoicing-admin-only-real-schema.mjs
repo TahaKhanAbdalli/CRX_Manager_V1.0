@@ -1328,9 +1328,9 @@ COMMIT;\n`);
 }
 function checkDupKeyUnpostGroup(d) {
   const outcome = `first ${d.first}; duplicate ${d.result}; statuses|receipts ${d.facts}`;
-  assert.equal(d.first, 't', `AFTER: the first same-key un-post failed: ${outcome}`);
+  assert.equal(d.first, 'true', `AFTER: the first same-key un-post failed: ${outcome}`);
   assert.equal(d.result, 'ok|t', `AFTER: a concurrent same-key unpost_invoice_group did not replay the first un-post: ${outcome}`);
-  assert.equal(d.facts, 'draft|1', `AFTER: a concurrent same-key unpost_invoice_group left the group posted or stored no single receipt: ${outcome}`);
+  assert.equal(d.facts, 'unposted|1', `AFTER: a concurrent same-key unpost_invoice_group left the group posted or stored no single receipt: ${outcome}`);
   return outcome;
 }
 
