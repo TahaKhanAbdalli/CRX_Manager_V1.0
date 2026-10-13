@@ -83,6 +83,37 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     expect(sql.slice(0, 200)).toContain('STATUS: NOT APPLIED');
   });
 
+  it('pins, in its postflight, the md5 of every body this file defines', () => {
+    // PR #902: a wrapper edited without its postflight pin only failed 15 minutes into the
+    // container prover; this catches it at PR time. md5 matches md5(replace(prosrc, chr(13), '')).
+    const definedBody = (name: string): string | null => {
+      for (const head of [`CREATE FUNCTION public.${name}(`, `CREATE OR REPLACE FUNCTION public.${name}(`]) {
+        if (sql.includes(head)) return body(statement(sql, head));
+      }
+      return null;
+    };
+    const tableEnd = sql.indexOf(') AS t(name, ident, args, ret, md5, impl, impl_ident, impl_md5, shape) LOOP');
+    const table = sql.slice(sql.lastIndexOf('FOR r IN SELECT * FROM (VALUES', tableEnd), tableEnd);
+    const rows = table.split('\n').filter((l) => l.trimStart().startsWith("('"));
+    expect(rows.length).toBe(WRAPPED.length);
+    for (const row of rows) {
+      const fields = [...row.matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1]);
+      const wrapper = definedBody(fields[0]);
+      expect(wrapper, `${fields[0]} wrapper`).not.toBeNull();
+      expect(fields[4], `postflight pin of ${fields[0]}`).toBe(md5(wrapper ?? ''));
+    }
+    const sigEnd = sql.indexOf(') AS t(sig, md5)\n  )');
+    const sigs = [...sql.slice(sql.lastIndexOf('(VALUES', sigEnd), sigEnd).matchAll(/\('([a-z_]+)\(([^']*)\)', '([0-9a-f]{32})'\)/g)];
+    let checked = 0;
+    for (const [, name, , pin] of sigs) {
+      const defined = definedBody(name);
+      if (defined === null) continue;
+      expect(pin, `upkeep pin of ${name}`).toBe(md5(defined));
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThanOrEqual(2); // complete_job and create_quick_delivery
+  });
+
   it('runs as one transaction, after PR #889, and reloads PostgREST', () => {
     expect(sql).toContain('CREATE TEMP TABLE crx_invoicing_admin_only_tx ON COMMIT DROP');
     expect(sql).toContain('CRX_INVOICING_ADMIN_ONLY_NOT_IN_TRANSACTION');
