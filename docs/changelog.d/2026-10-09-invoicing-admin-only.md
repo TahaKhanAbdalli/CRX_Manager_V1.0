@@ -308,7 +308,10 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   only for the job it completed (Luna): the same key on another job is
   `IDEMPOTENCY_ARGUMENT_MISMATCH` and changes nothing (live would have returned the first job's
   success). A NULL key still skips the receipt (the `DEFAULT NULL` contract; every app caller
-  sends a key) - not changed. The prover runs two
+  sends a key) - not changed. The receipt is bound to the job, not to the notes (Luna): a reused
+  key on the same job is a retry and replays the first result, as live does; the job is already
+  completed, so a second completion with other notes would be refused anyway. Binding the whole
+  payload (`check_idempotency_intent`) is separate work. The prover runs two
   concurrent same-key completions (one completion, one receipt, both succeed) and a mutant with
   the old lookup; the shape test undoes this hunk too.
 
