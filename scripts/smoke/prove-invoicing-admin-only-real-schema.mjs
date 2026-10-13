@@ -1203,6 +1203,64 @@ COMMIT;\n`);
   return { result: /DUP\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`, status: invoiceStatus(inv) };
 }
 
+let dupJobRun = 0;
+/**
+ * CodeRabbit, PR #902: two completions of one job with the same key at the same moment. The key is
+ * claimed through check_idempotency (key lock held to the end of the transaction), so the duplicate
+ * waits for the first to commit and then replays its receipt; the job is completed once.
+ */
+async function dupKeyCompleteJob(label) {
+  dupJobRun += 1;
+  const run = `${label}_${dupJobRun}`;
+  const jobId = scalar('SELECT gen_random_uuid();');
+  scalar(`BEGIN; ${jobSql(jobId, `DUP-${run}`)}
+    ${claims(U.REP)} SELECT public.start_job('${jobId}', '${U.REP}', 'prover-ao-dupj-sj-${run}') IS NOT NULL;
+    COMMIT; SELECT 1;`);
+  const key = `prover-ao-dupj-${run}`;
+  const call = `public.complete_job('${jobId}', '{"notes":"[PROVER]"}'::jsonb, '${U.REP}', '${key}')`;
+  const first = session(`crx_ao_dupj_first_${run}`);
+  first.child.stdin.write(`BEGIN;\n${claims(U.REP)}\nSELECT 'FIRST_PID=' || pg_backend_pid();\nSELECT 'FIRST|' || (${call}->>'success');\n\\echo FIRST_DONE\n`);
+  let second;
+  try {
+    await until(() => first.out.includes('FIRST_DONE') || first.err.includes('ERROR'), `${run}: the first completion`);
+    assert.doesNotMatch(first.err, /ERROR/, `${run}: the first completion failed:\n${first.err}`);
+    const firstPid = /FIRST_PID=(\d+)/.exec(first.out)?.[1];
+    second = session(`crx_ao_dupj_second_${run}`);
+    second.child.stdin.end(`BEGIN;\n${asUser(U.REP)}\nDO $dupj$
+DECLARE v jsonb;
+BEGIN
+  v := ${call};
+  RAISE NOTICE 'DUPJ|ok|%', v->>'success';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'DUPJ|%|%', SQLSTATE, SQLERRM;
+END
+$dupj$;
+COMMIT;\n`);
+    await until(() => scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'crx_ao_dupj_second_${run}' AND wait_event_type = 'Lock' AND ${firstPid} = ANY (pg_blocking_pids(pid));`) === '1' || second.err.includes('DUPJ|'),
+      `${run}: the duplicate completion blocked behind the first`);
+    assert.doesNotMatch(second.err, /DUPJ\|/, `${run}: the duplicate finished before the first committed:\n${second.err}`);
+    first.child.stdin.end('COMMIT;\n');
+    assert.equal(await first.done, 0, `${run}: the first completion did not commit:\n${first.err}`);
+    await second.done;
+  } finally {
+    if (!first.child.stdin.writableEnded) first.child.stdin.end('ROLLBACK;\n');
+    await first.done;
+    if (second) await second.done;
+  }
+  return {
+    first: /FIRST\|([^\n]*)/.exec(first.out)?.[1]?.trimEnd() ?? `(no result) ${first.out}`,
+    result: /DUPJ\|([^\n]*)/.exec(second.err)?.[1]?.trimEnd() ?? `(no result) ${second.err}`,
+    facts: scalar(`SELECT (SELECT status FROM public.jobs WHERE id = '${jobId}') || '|' || (SELECT count(*) FROM public.job_applied_info WHERE job_id = '${jobId}') || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${key}');`),
+  };
+}
+function checkDupKeyCompleteJob(d) {
+  const outcome = `first ${d.first}; duplicate ${d.result}; status|applied_info|receipts ${d.facts}`;
+  assert.equal(d.first, 'true', `AFTER: the first same-key completion failed: ${outcome}`);
+  assert.equal(d.result, 'ok|true', `AFTER: a concurrent same-key complete_job did not replay the first completion: ${outcome}`);
+  assert.equal(d.facts, 'completed|1|1', `AFTER: a concurrent same-key complete_job completed the job twice or stored no single receipt: ${outcome}`);
+  return outcome;
+}
+
 let completionRaceRun = 0;
 /**
  * Review round 2: a rep's partial completion racing an admin's post of the draft that completion
@@ -1877,6 +1935,7 @@ REVOKE ALL ON FUNCTION public.get_invoice_customer_names(uuid[], boolean) FROM P
   assert.deepEqual(completionsAfter.admin, completionsBefore.admin, 'AFTER: an admin\'s completion changed');
   assert.equal(completionsAfter.quickDraftResize, completionsBefore.quickDraftResize, 'AFTER: the partial-delivery resize of an admin\'s draft changed');
   const jobsAfter = jobsAndQuick('after');
+  console.log(`[prover] DUPLICATE KEY (complete_job): ${checkDupKeyCompleteJob(await dupKeyCompleteJob(`after_${process.pid}`))}`);
   assert.equal(jobsAfter.admin, jobsBefore.admin, 'AFTER: an admin\'s job completion changed');
   assert.equal(jobsAfter.applicator, jobsBefore.applicator.replace('completed by an applicator — automatic draft invoice skipped (auto-draft only runs for office completions).', 'completed by a non-admin — automatic draft invoice skipped (invoicing is admin-only).'), 'AFTER: an applicator\'s job completion changed beyond the skip text');
   assert.equal(jobsAfter.qd_admin, jobsBefore.qd_admin, 'AFTER: an admin\'s quick delivery changed');
@@ -2022,6 +2081,11 @@ async function mutations({ adminBefore, held }) {
   applyText('mutant-job-notify.sql', job.slice(0, notifyStart) + job.slice(notifyEnd));
   detect('complete_job without the admin notification', () => jobsAndQuick('after'));
   applyText('restore-job-notify.sql', job);
+  // (5c) CodeRabbit, PR #902: the old hand-rolled receipt lookup (no key lock) instead of check_idempotency.
+  applyText('mutant-job-key.sql', once(job, "    v_existing := public.check_idempotency(p_idempotency_key, 'complete_job');\n",
+    "    SELECT result INTO v_existing\n      FROM idempotency_keys\n     WHERE idempotency_key = p_idempotency_key AND operation = 'complete_job';\n", 'job key'));
+  await detectAsync('complete_job receipt lookup without the key lock', async () => checkDupKeyCompleteJob(await dupKeyCompleteJob(`mutant_${process.pid}`)), /did not replay the first completion/);
+  applyText('restore-job-key.sql', job);
   // (6) 1e: quick delivery without the coercion.
   const quick = statementOf('CREATE FUNCTION public.create_quick_delivery(');
   applyText('mutant-quick.sql', once(quick, 'p_skip_invoice => CASE WHEN public.is_admin() THEN p_skip_invoice ELSE true END', 'p_skip_invoice => p_skip_invoice', 'quick'));

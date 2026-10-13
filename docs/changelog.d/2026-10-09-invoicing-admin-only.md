@@ -297,10 +297,16 @@ close. The server-side posting version check moves in from PR #892 (Mason chose 
   case (refused, nothing posted) and a mutant without the check.
 - `KNOWN_ISSUES.md` corrected (Codex): with auto-drafting off, a non-admin's completion still
   notifies the admins.
-- **Not changed: `complete_job`'s key handling** (a CodeRabbit pre-merge check). It is live's,
-  untouched here: a plain receipt lookup, then `FOR UPDATE` on the job and the `in_progress` check,
-  so a concurrent same-key duplicate waits, then is refused ("Job must be in_progress"), and never
-  completes the job or deducts stock twice. Moving it onto `check_idempotency` is separate work.
+- **`complete_job` claims its key through the shared helpers** (CodeRabbit pre-merge check
+  "Mutating RPC without idempotency key", which blocks approval). Live's hand-rolled receipt
+  lookup and `INSERT` become `check_idempotency` / `save_idempotency` (same operation key, cached
+  result returned). Live was already duplicate-safe (the job's `FOR UPDATE` and the `in_progress`
+  check refuse a concurrent duplicate), but the duplicate got an error; now it waits on the key
+  lock and replays the first completion's result. Other differences: a blank key is
+  `IDEMPOTENCY_KEY_REQUIRED` (every caller sends a generated key), and a key already used by
+  another operation is refused before any write instead of at the end. The prover runs two
+  concurrent same-key completions (one completion, one receipt, both succeed) and a mutant with
+  the old lookup; the shape test undoes this hunk too.
 
 ### Not done here (owners)
 

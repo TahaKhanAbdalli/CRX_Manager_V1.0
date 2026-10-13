@@ -1773,10 +1773,10 @@ BEGIN
     RAISE EXCEPTION 'p_performed_by does not match authenticated user';
   END IF;
 
+  -- CodeRabbit, PR #902: the shared helper takes the key lock (held to the end of the
+  -- transaction), so a concurrent same-key duplicate waits, then replays this receipt.
   IF p_idempotency_key IS NOT NULL THEN
-    SELECT result INTO v_existing
-      FROM idempotency_keys
-     WHERE idempotency_key = p_idempotency_key AND operation = 'complete_job';
+    v_existing := public.check_idempotency(p_idempotency_key, 'complete_job');
     IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
   END IF;
 
@@ -2250,8 +2250,7 @@ BEGIN
   END;
 
   IF p_idempotency_key IS NOT NULL THEN
-    INSERT INTO idempotency_keys (idempotency_key, operation, result)
-    VALUES (p_idempotency_key, 'complete_job', v_result);
+    PERFORM public.save_idempotency(p_idempotency_key, 'complete_job', v_result);
   END IF;
 
   RETURN v_result;
@@ -2598,7 +2597,7 @@ BEGIN
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
        IS DISTINCT FROM true
-     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '726c96af2fa6d5709291cc3b77083745' AND p.prosecdef
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = '2da9be2887458de133b6627d94b11b5e' AND p.prosecdef
              AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
              AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
                          FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
@@ -2726,7 +2725,7 @@ BEGIN
       ('update_order_items(uuid,jsonb,uuid,text)', 'e35fce6708edee32fb1876fa60d7da4b'),
       ('create_rush_order(uuid,jsonb,text,text,uuid,text)', '9027a97ab42a109f5e81188736f52f9c'),
       ('allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text)', '6a945a2510d8e788d4e6f03c0c6d7563'),
-      ('complete_job(uuid,jsonb,uuid,text)', '726c96af2fa6d5709291cc3b77083745'),
+      ('complete_job(uuid,jsonb,uuid,text)', '2da9be2887458de133b6627d94b11b5e'),
       ('create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', '1bf67e10cae538b5090b067aa3f665f5')
     ) AS t(sig, md5)
   )

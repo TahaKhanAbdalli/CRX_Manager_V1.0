@@ -317,7 +317,7 @@ BEGIN
       ('update_order_items(uuid,jsonb,uuid,text)', 'e35fce6708edee32fb1876fa60d7da4b'),
       ('create_rush_order(uuid,jsonb,text,text,uuid,text)', '9027a97ab42a109f5e81188736f52f9c'),
       ('allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text)', '6a945a2510d8e788d4e6f03c0c6d7563'),
-      ('complete_job(uuid,jsonb,uuid,text)', '726c96af2fa6d5709291cc3b77083745'),
+      ('complete_job(uuid,jsonb,uuid,text)', '2da9be2887458de133b6627d94b11b5e'),
       ('create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', '1bf67e10cae538b5090b067aa3f665f5')
     ) AS t(sig, md5)
   )

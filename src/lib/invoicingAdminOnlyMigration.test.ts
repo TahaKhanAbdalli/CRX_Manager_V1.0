@@ -264,7 +264,17 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     expect(next.indexOf(notify)).toBeGreaterThan(next.indexOf("invoice skipped (invoicing is admin-only). '"));
     // CodeRabbit, PR #902: the non-admin branch sits outside the auto-draft setting, so a non-admin's
     // completion tells the admins even when auto-drafting is off. Undo that restructure too.
+    // CodeRabbit, PR #902: the key is claimed through the shared helpers (key lock held to the
+    // end of the transaction), so a concurrent same-key duplicate replays. Undo that too.
+    expect(next).toContain("v_existing := public.check_idempotency(p_idempotency_key, 'complete_job');");
+    expect(next).toContain("PERFORM public.save_idempotency(p_idempotency_key, 'complete_job', v_result);");
+    expect(next).not.toContain('FROM idempotency_keys');
     const undone = next
+      .replace("  -- CodeRabbit, PR #902: the shared helper takes the key lock (held to the end of the\n  -- transaction), so a concurrent same-key duplicate waits, then replays this receipt.\n", '')
+      .replace("    v_existing := public.check_idempotency(p_idempotency_key, 'complete_job');\n",
+        "    SELECT result INTO v_existing\n      FROM idempotency_keys\n     WHERE idempotency_key = p_idempotency_key AND operation = 'complete_job';\n")
+      .replace("    PERFORM public.save_idempotency(p_idempotency_key, 'complete_job', v_result);\n",
+        "    INSERT INTO idempotency_keys (idempotency_key, operation, result)\n    VALUES (p_idempotency_key, 'complete_job', v_result);\n")
       .replace(notify, '')
       .replace("    -- A non-admin's completion never drafts and always tells the admins, whether or not the\n    -- auto-draft setting is on (CodeRabbit, PR #902): invoicing is admin-only.\n", '')
       .replace('    IF is_admin() THEN\n      IF v_auto_draft_on THEN\n        SELECT i.id INTO v_existing_invoice', '    IF v_auto_draft_on THEN\n      IF (is_admin() OR is_sales_rep()) THEN\n        SELECT i.id INTO v_existing_invoice')
