@@ -96,23 +96,39 @@ describe('invoicing admin-only migration (20261013160000)', () => {
     const table = sql.slice(sql.lastIndexOf('FOR r IN SELECT * FROM (VALUES', tableEnd), tableEnd);
     const rows = table.split('\n').filter((l) => l.trimStart().startsWith("('"));
     expect(rows.length).toBe(WRAPPED.length);
+    const pinned = new Set<string>();
     for (const row of rows) {
       const fields = [...row.matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1]);
       const wrapper = definedBody(fields[0]);
       expect(wrapper, `${fields[0]} wrapper`).not.toBeNull();
       expect(fields[4], `postflight pin of ${fields[0]}`).toBe(md5(wrapper ?? ''));
+      pinned.add(fields[0]);
     }
+    // The helpers, the names reader and the re-emitted bodies are pinned one by one:
+    // `md5(replace(p.prosrc, chr(13), '')) = '<pin>' ... to_regprocedure('public.<name>(`.
+    const postflight = sql.slice(sql.indexOf('DO $postflight$'));
+    for (const [, pin, name] of postflight.matchAll(/md5\(replace\(p\.prosrc, chr\(13\), ''\)\) = '([0-9a-f]{32})'[^;]*?to_regprocedure\('public\.([a-z_0-9]+)\(/g)) {
+      const defined = definedBody(name);
+      expect(defined, `postflight pins ${name}, which this file no longer defines`).not.toBeNull();
+      expect(pin, `postflight pin of ${name}`).toBe(md5(defined ?? ''));
+      pinned.add(name);
+    }
+    // CodeRabbit, PR #902: every body this file defines has a postflight pin.
+    const definedHere = [...sql.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION public\.([a-z_0-9]+)\(/gm)].map((m) => m[1]);
+    expect(definedHere.length).toBe(WRAPPED.length + 7);
+    for (const name of definedHere) expect(pinned.has(name), `${name} has no postflight body pin`).toBe(true);
+    // The upkeep allowlist pins the two bodies this file defines, at their current md5.
     const sigEnd = sql.indexOf(') AS t(sig, md5)\n  )');
     const sigs = [...sql.slice(sql.lastIndexOf('(VALUES', sigEnd), sigEnd).matchAll(/\('([a-z_]+)\(([^']*)\)', '([0-9a-f]{32})'\)/g)];
     const checked: string[] = [];
     for (const [, name, , pin] of sigs) {
       const defined = definedBody(name);
-      if (defined === null) continue;
+      if (defined === null) continue; // a live body this file does not change
       expect(pin, `upkeep pin of ${name}`).toBe(md5(defined));
       checked.push(name);
     }
     // Luna, PR #902: the two bodies this file defines must each keep their pin row.
-    expect(checked).toEqual(expect.arrayContaining(['complete_job', 'create_quick_delivery']));
+    expect(checked.sort()).toEqual(['complete_job', 'create_quick_delivery']);
   });
 
   it('runs as one transaction, after PR #889, and reloads PostgREST', () => {
