@@ -266,6 +266,8 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
   const violations: Violation[] = [];
   const latest = new Map<string, Fn>();
   const revoked = new Map<string, boolean>();
+  // Which of the two roles that can carry EXECUTE to authenticated have been revoked, per signature.
+  const revokedFrom = new Map<string, { auth: boolean; pub: boolean }>();
   const reachInternal = new Set(REACH_INTERNAL);
   for (const { file, sql: raw } of files) {
     const sql = raw.replace(/\r\n/g, '\n');
@@ -287,21 +289,36 @@ function scan(files: Array<{ file: string; sql: string }>, allowlist: typeof ALL
     }
     // A plain CREATE starts from the default privileges (authenticated can execute); CREATE OR
     // REPLACE keeps whatever ACL the function already had.
-    for (const f of fns) { latest.set(f.key, f); if (!f.replace) revoked.delete(f.key); }
-    // Statement order inside one file does not matter here: a REVOKE from authenticated AND PUBLIC in
-    // the same or a later file marks the signature internal (PUBLIC keeps EXECUTE by default, so a
-    // revoke from authenticated alone still leaves authenticated able to call it: CodeRabbit, PR
-    // #902); a later GRANT to authenticated or PUBLIC re-exposes it.
+    for (const f of fns) { latest.set(f.key, f); if (!f.replace) { revoked.delete(f.key); revokedFrom.delete(f.key); } }
+    // Statement order inside one file does not matter here: once EXECUTE has been revoked from both
+    // authenticated AND PUBLIC (in one statement or separate ones, in the same or a later file) the
+    // signature is internal. PUBLIC keeps EXECUTE by default, so a revoke from authenticated alone
+    // still leaves authenticated able to call it (CodeRabbit, PR #902). A later GRANT to
+    // authenticated or PUBLIC re-exposes it.
     for (const s of top.split(';')) {
       const rv = /REVOKE\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bFROM\b([^;]*)/i.exec(s);
-      if (rv && /\bauthenticated\b/i.test(rv[4]) && /\bPUBLIC\b/i.test(rv[4])) {
+      if (rv && /\b(authenticated|PUBLIC)\b/i.test(rv[4])) {
         const args = balanced(s, rv.index + rv[0].indexOf('(', rv[0].indexOf(rv[2])));
-        if (args !== null) revoked.set(signatureKey(rv[2], args), true);
+        if (args !== null) {
+          const key = signatureKey(rv[2], args);
+          const state = revokedFrom.get(key) ?? { auth: false, pub: false };
+          if (/\bauthenticated\b/i.test(rv[4])) state.auth = true;
+          if (/\bPUBLIC\b/i.test(rv[4])) state.pub = true;
+          revokedFrom.set(key, state);
+          if (state.auth && state.pub) revoked.set(key, true);
+        }
       }
       const gr = /GRANT\s+[^;]*\bON\s+(FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?"?(\w+)"?\s*(\()[^;]*\bTO\b([^;]*)/i.exec(s);
       if (gr && /\b(authenticated|PUBLIC)\b/i.test(gr[4])) {
         const args = balanced(s, gr.index + gr[0].indexOf('(', gr[0].indexOf(gr[2])));
-        if (args !== null) revoked.set(signatureKey(gr[2], args), false);
+        if (args !== null) {
+          const key = signatureKey(gr[2], args);
+          const state = revokedFrom.get(key) ?? { auth: false, pub: false };
+          if (/\bauthenticated\b/i.test(gr[4])) state.auth = false;
+          if (/\bPUBLIC\b/i.test(gr[4])) state.pub = false;
+          revokedFrom.set(key, state);
+          revoked.set(key, false);
+        }
       }
     }
   }
@@ -374,6 +391,13 @@ describe('invoice writers stay admin-only after 20261013160000 (CI companion of 
     it('treats a writer revoked from authenticated alone as still exposed (PUBLIC keeps EXECUTE)', () => {
       expect(names(withNext(fn('_probe_half_revoked', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
         'REVOKE ALL ON FUNCTION public._probe_half_revoked(uuid) FROM anon, authenticated, service_role;')))).toEqual(['_probe_half_revoked']);
+    });
+    it('accepts a writer revoked from authenticated and PUBLIC in two separate statements', () => {
+      expect(withNext(fn('_probe_two_revokes', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+        'REVOKE ALL ON FUNCTION public._probe_two_revokes(uuid) FROM PUBLIC;\nREVOKE ALL ON FUNCTION public._probe_two_revokes(uuid) FROM anon, authenticated, service_role;'))).toEqual([]);
+      // ...and re-exposes it when PUBLIC is granted back.
+      expect(names(withNext(fn('_probe_two_revokes_regrant', '\nBEGIN\n  UPDATE public.invoices SET header_notes = NULL WHERE id = p;\nEND;\n',
+        'REVOKE ALL ON FUNCTION public._probe_two_revokes_regrant(uuid) FROM PUBLIC;\nREVOKE ALL ON FUNCTION public._probe_two_revokes_regrant(uuid) FROM authenticated;\nGRANT EXECUTE ON FUNCTION public._probe_two_revokes_regrant(uuid) TO PUBLIC;')))).toEqual(['_probe_two_revokes_regrant']);
     });
     it('accepts the guard first, and an internal (revoked) writer', () => {
       expect(withNext(fn('probe_ok', '\nBEGIN\n  PERFORM public._require_invoicing_admin();\n  DELETE FROM public.invoice_items WHERE invoice_id = p;\nEND;\n'))).toEqual([]);
