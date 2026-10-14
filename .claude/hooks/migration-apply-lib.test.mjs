@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +30,7 @@ import {
   OWNER_REQUEST_MAX_AGE_MS,
   buildApprovalPayload,
   parkedCategories,
+  replyMark,
 } from "./owner-approval-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1692,6 +1693,19 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "overwrites-data": "UPDATE public.invoices SET total_amount_cents = 0;\n",
     "changes-access": "GRANT SELECT ON public.customers TO anon;\n",
   };
+  // His reply as Claude Code writes it, just after the reply hook marked where it lands.
+  const replyDir = mkdtempSync(path.join(os.tmpdir(), "crx-apply-reply-"));
+  roots.push(replyDir);
+  let replies = 0;
+  const markFor = (content) => {
+    const f = path.join(replyDir, `t${replies++}.jsonl`);
+    const said = (id, text) => JSON.stringify({ type: "assistant", message: { id, role: "assistant", content: [{ type: "text", text }] } });
+    writeFileSync(f, `${said("m1", "Approve this ONE change ...")}\n`);
+    const mark = replyMark(f, "approve 482913");
+    appendFileSync(f, `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n${said("m2", "Applying.")}\n`);
+    return mark;
+  };
+  const WORDS_ALONE = markFor("approve 482913");
   const approvalFor = (sql, over = {}, approval = {}) => {
     const issued = Date.now() - 60 * 60_000;
     const payload = buildApprovalPayload({
@@ -1708,7 +1722,9 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       sessionId: "sess-mason-chat-0001",
       ...over,
     });
-    return { payload, approvedAt: new Date(Date.now() - 60_000).toISOString(), via: OWNER_APPROVAL_VIA, reply: "approve 482913", ...approval };
+    return {
+      payload, approvedAt: new Date(Date.now() - 60_000).toISOString(), via: OWNER_APPROVAL_VIA, reply: "approve 482913", replyMark: WORDS_ALONE, ...approval,
+    };
   };
   const ownerFixture = (sql, { approval, proofs = true, used = null } = {}) => {
     const h = createHash("sha256").update(sql).digest("hex");
@@ -1747,6 +1763,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   "CodeRabbit has not APPROVED", "an approval never skips the pull-request landing gate");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { via: undefined }) }), ACCESS),
     "malformed", "an approval file not written by the reply hook's shape is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, {
+    replyMark: markFor([{ type: "text", text: "approve 482913" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } }]),
+  }) }), ACCESS), "picture or file", "an approval whose reply came with a picture is refused at the apply (Codex P1, PR #900)");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { replyMark: undefined }) }), ACCESS),
+    "does not say where his reply is", "an approval that does not say where his reply is is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { approvedAt: new Date(Date.now() - OWNER_APPROVAL_MAX_AGE_MS - 60_000).toISOString() }) }), ACCESS),
     "30 minutes after Mason replied", "an approval more than 30 minutes after his reply is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS, { ownerSessionId: "sess-other-chat-0002" }),

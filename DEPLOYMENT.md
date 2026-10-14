@@ -23,9 +23,10 @@ page summarises it and does not replace it.
   the final head, a clean exact-SHA Sol review and green required checks. A destructive migration
   (one that deletes rows or drops data), one that overwrites existing rows, and one that changes
   access are refused by the apply gate in every session. Such a migration applies only after
-  Mason approves that exact file by replying `approve <code>` in the conversation
-  (`scripts/owner-approve-migration.mjs` builds the request; 2026-09-29, by chat reply instead of
-  Windows Hello since 2026-10-09). The gate checks the approval the reply hook recorded. Every
+  Mason approves that exact file by replying `I approve` in the conversation, right after the
+  agent shows him the request (`scripts/owner-approve-migration.mjs` builds it; 2026-09-29, by
+  chat reply instead of Windows Hello since 2026-10-09, a plain "I approve" since 2026-10-13).
+  The gate checks the approval the reply hook recorded. Every
   Edge Function deploy still needs Mason's explicit approval in the current conversation.
 
 ## Before you open the pull request

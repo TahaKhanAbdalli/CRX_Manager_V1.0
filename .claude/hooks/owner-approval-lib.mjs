@@ -14,11 +14,17 @@
 //      pull request and its exact head, what the safety check flagged, the Claude
 //      Code session it was built in, and a 6-digit code. It is saved beside the
 //      checkout's other proofs.
-//   2. The agent shows Mason the plain-English summary and the exact reply.
-//   3. He replies `approve <code>` from anywhere, in THAT conversation.
+//   2. The agent shows Mason the plain-English summary, which ends with the code
+//      as a reference number.
+//   3. He replies `I approve` from anywhere, in THAT conversation, as his next
+//      message (Mason, 2026-10-13: "I just want to say I approve and that's good
+//      enough"). `approve <code>` still works and names the request outright.
 //      owner-approval-prompt.mjs, which Claude Code runs as a UserPromptSubmit hook
 //      on each message sent into a session, turns the request into an APPROVAL good
-//      for 30 minutes only when the reply arrives in the session that built it.
+//      for 30 minutes only when the reply arrives in the session that built it. A
+//      plain `I approve` counts only when the agent's message just before it showed
+//      that request's reference number, so an "I approve" about something else
+//      never approves a request still waiting from earlier.
 //   4. scripts/apply-migration-file.mjs checks it LAST, after the reviewer proofs,
 //      the Sol proof and the landing gate, refuses it in any other session, and
 //      uses it up once.
@@ -40,7 +46,9 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash, randomInt } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -115,7 +123,8 @@ export function ownerApprovalSummary(p) {
       "This is a TEST of approving by chat reply.",
       "It approves nothing and changes nothing.",
       "",
-      `To answer it, reply exactly: approve ${p.code}`,
+      "To answer it, reply: I approve",
+      `(Reference ${p.code}. You don't need to type it.)`,
     ];
   }
   return [
@@ -128,9 +137,10 @@ export function ownerApprovalSummary(p) {
     "The safety check stopped it for you because it:",
     ...(p.categories || []).map((c) => `- ${PARKED_LABELS[c.category] || c.category}: ${c.reason}`),
     "",
-    `To approve, reply exactly: approve ${p.code} (before ${centralTime(p.expiresAt)}).`,
+    `To approve, reply: I approve (before ${centralTime(p.expiresAt)}).`,
     "It then works once, for 30 minutes, only for this exact file and version.",
     "Every other safety check still has to pass before it runs.",
+    `(Reference ${p.code}. You don't need to type it.)`,
   ];
 }
 
@@ -188,6 +198,299 @@ export function approvalCodeFromReply(prompt) {
   return m ? m[1] : null;
 }
 
+// The plain reply (Mason, 2026-10-13): "I approve", "approve", "approved",
+// "yes I approve", "I approve it", again only as the WHOLE message, and only those
+// forms (CodeRabbit, PR #900). A bare "yes" or "go" is not one: he says those
+// about everything.
+const PLAIN_REPLY_RE = /^\s*(?:i\s+approve(?:\s+it)?|approve|approved|yes\s*[,.!]?\s+i\s+approve)\s*[.!]*\s*$/i;
+
+/** True when the whole message is a plain approval with no code. */
+export const isPlainApprovalReply = (prompt) => PLAIN_REPLY_RE.test(String(prompt ?? ""));
+
+const textOf = (content) => (typeof content === "string" ? content
+  : Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => String(b.text ?? "")).join("\n") : "");
+const isTextOnly = (content) => typeof content === "string" || (Array.isArray(content) && content.every((b) => b?.type === "text"));
+// A whole <system-reminder> block that Claude Code puts in front of one of Mason's
+// messages (a background task started, a worktree note) is not his words. Measured
+// on every multi-block message on this machine (57, 2026-10-13): such a block came
+// first and whole, and his own text was the last block.
+const REMINDER_BLOCK_RE = /^\s*<system-reminder>[\s\S]*<\/system-reminder>\s*$/;
+const masonText = (content) => (typeof content === "string" ? content
+  : Array.isArray(content) ? content.filter((b) => b?.type === "text" && !REMINDER_BLOCK_RE.test(String(b.text ?? "")))
+    .map((b) => String(b.text ?? "")).join("\n") : "");
+// "I approve" sent with a picture or file could be about something else (Codex P1, PR #900).
+const assertWordsAlone = (content) => {
+  if (!isTextOnly(content)) throw new Error("his reply carried a picture or file as well as the words, so it was not those words alone");
+};
+// The bookkeeping records Claude Code writes after every turn and around each
+// message (measured on a real session transcript, 2026-10-13). Nothing in them is
+// shown to Mason as something to answer. Any OTHER entry between the agent's
+// message and his reply (a message of his, image-only included; text Claude Code
+// injects such as a Stop hook's feedback; a notification; a compaction; an error
+// or synthetic message; a record type not listed here) ends the scan, so "I
+// approve" is never carried past it (Luna rounds 1 and 3). A queue record that
+// carries a message (one waiting to be delivered, or withdrawn) is not
+// bookkeeping either, unless it is Mason's current message itself (Luna round 4).
+const BOOKKEEPING_TYPES = new Set([
+  "attachment", "last-prompt", "custom-title", "agent-name", "atis-latch", "pr-link",
+  "bridge-session", "file-history-snapshot", "file-history-delta",
+]);
+const isBookkeeping = (e, currentPrompt) => BOOKKEEPING_TYPES.has(e?.type) ||
+  (e?.type === "system" && e.subtype === "stop_hook_summary") ||
+  (e?.type === "queue-operation" &&
+    (e.content == null || String(e.content).trim() === String(currentPrompt ?? "").trim()));
+const isToolResult = (e) => e?.type === "user" && Array.isArray(e.message?.content) && e.message.content.length > 0 &&
+  e.message.content.every((b) => b?.type === "tool_result");
+// A message the model wrote, not one Claude Code made up (an API error, an
+// interruption notice) or marked as metadata (Luna HIGH, round 3).
+const isAgentMessage = (e) => e?.type === "assistant" && !e.isMeta && !e.isApiErrorMessage && e.message?.model !== "<synthetic>";
+// A message sent into the conversation: Mason's, or one Claude Code delivers like his (a notification).
+const isMasonMessage = (e) => e?.type === "user" && !e.isMeta && !e.isSidechain && !isToolResult(e);
+const DAMAGED = Symbol("damaged transcript line");
+
+/** The transcript's size and the whole lines in its last `maxBytes` (a damaged line is DAMAGED). */
+function readTranscriptTail(transcriptPath, maxBytes) {
+  const fd = openSync(transcriptPath, "r");
+  let raw;
+  let size;
+  try {
+    size = fstatSync(fd).size;
+    // Read from one byte before the window, so a window that starts exactly at a
+    // line keeps that line: everything through the first newline is dropped, and
+    // that newline is the byte before the line (Luna LOW, round 4).
+    const start = size > maxBytes ? size - maxBytes - 1 : 0;
+    const buf = Buffer.alloc(size - start);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, start + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    raw = buf.subarray(0, got).toString("utf8");
+    if (start > 0) raw = raw.slice(raw.indexOf("\n") + 1); // drop the partial first line
+  } finally {
+    closeSync(fd);
+  }
+  // Every line is either a whole entry or damage: a half-written line could be
+  // one of Mason's messages, so it is never skipped (Luna HIGH, round 2).
+  const entries = raw.split("\n").filter((l) => l.trim()).map((line) => {
+    try { return JSON.parse(line); } catch { return DAMAGED; }
+  });
+  return { size, entries };
+}
+
+/**
+ * What the agent said to Mason last: the text of the final main-thread assistant
+ * message before his reply (Claude Code stores one message as several entries
+ * sharing its message id), read from the session transcript Claude Code hands the
+ * hook. Only that message counts, so a request shown earlier in the same turn,
+ * before a later question, is not what "I approve" answers (Luna HIGH, round 2).
+ * If any message reached the session after the agent's last message (another of
+ * Mason's, or a notification), the result is empty. His current message may or
+ * may not be written yet; when it is, it is skipped.
+ *
+ * Throws, so a plain reply then approves nothing, when the transcript cannot be
+ * read, when a damaged line lies in what is scanned, or when the start of that
+ * message cannot be found in the part read (Luna rounds 1-2).
+ */
+export function lastAgentMessageText(transcriptPath, currentPrompt, { maxBytes = 32 * 1024 * 1024 } = {}) {
+  if (typeof transcriptPath !== "string" || !transcriptPath) throw new Error("the message carried no transcript");
+  const { entries } = readTranscriptTail(transcriptPath, maxBytes);
+  const said = [];
+  let messageId;
+  let sawAgent = false;
+  let skippedCurrent = false;
+  let found = false; // the scan stopped on a real boundary, not the edge of what was read
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e === DAMAGED) throw new Error("a damaged transcript line lies in what had to be read");
+    if (isBookkeeping(e, currentPrompt) || e?.isSidechain) continue; // a subagent's entries are not the conversation with Mason
+    // A tool call or its result after the agent's last words means it went on
+    // working, or asked him something through a tool, after them: "I approve" may
+    // answer that instead, so nothing it said counts (Sol HIGH, PR #900). Before
+    // its last words, it is where that message begins.
+    if (isToolResult(e)) { found = true; break; }
+    if (isAgentMessage(e)) {
+      sawAgent = true;
+      const t = textOf(e.message?.content);
+      if (!said.length) {
+        if (Array.isArray(e.message?.content) && e.message.content.some((b) => b?.type === "tool_use")) { found = true; break; }
+        if (!t) continue;
+        said.unshift(t);
+        messageId = e.message?.id;
+        // Claude Code gives every assistant message an id; without one, where the
+        // message starts cannot be told, so nothing is concluded.
+        if (!messageId) throw new Error("the agent's last message carries no message id");
+        continue;
+      }
+      if (e.message?.id !== messageId) { found = true; break; }
+      if (t) said.unshift(t);
+      continue;
+    }
+    // Mason's current message, when it is already written, is the one entry skipped,
+    // and only when it is those words alone (Codex P1, PR #900).
+    if (!sawAgent && !skippedCurrent && e?.type === "user" && !e.isMeta &&
+      masonText(e.message?.content).trim() === String(currentPrompt ?? "").trim()) {
+      assertWordsAlone(e.message?.content);
+      skippedCurrent = true;
+      continue;
+    }
+    // Anything else ends the scan: after the agent's message it means nothing it
+    // said counts; before it, it is where that message begins.
+    found = true;
+    break;
+  }
+  // Running off the start of what was read proves nothing: the message, or a
+  // message of Mason's after it, could lie before it (Luna HIGH, rounds 1-2).
+  if (!found) throw new Error("the start of the agent's last message is not in the part of the transcript read");
+  return said.join("\n");
+}
+
+/**
+ * Where Mason's reply is in the session transcript, kept with his approval so the
+ * apply can read that message back (assertReplyAlone). The hook's input holds only
+ * his words, and Claude Code normally writes his message just AFTER the hook runs
+ * (measured on a real transcript, 2026-10-13), so whether he sent a picture or file
+ * with it can only be seen once it is written (Codex P1 twice, PR #900).
+ *   from     the transcript's size now: a message not yet written lands after it.
+ *   written  his message is already the last one written; it is checked here.
+ *   words    his reply, trimmed.
+ * Throws when there is no readable transcript, so nothing is approved.
+ */
+export function replyMark(transcriptPath, reply, { maxBytes = 1024 * 1024 } = {}) {
+  if (typeof transcriptPath !== "string" || !transcriptPath) throw new Error("the message carried no transcript");
+  const words = String(reply ?? "").trim();
+  const { size, entries } = readTranscriptTail(transcriptPath, maxBytes);
+  let written = false;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e === DAMAGED) throw new Error("a damaged transcript line lies at its end");
+    if (isBookkeeping(e, words) || e?.isSidechain) continue;
+    if (isMasonMessage(e) && masonText(e.message?.content).trim() === words) {
+      assertWordsAlone(e.message?.content);
+      written = true;
+    }
+    break;
+  }
+  return { transcript: path.resolve(transcriptPath), from: size, written, words };
+}
+
+/**
+ * At the apply: Mason's reply, read back from the transcript now that Claude Code
+ * has written it, must be his words alone, with no picture or file (Codex P1, PR
+ * #900). The first message after `from` is his reply; if the agent's answer comes
+ * first, his reply was already written, and checked, when he sent it. Throws
+ * otherwise, so the approval is refused.
+ */
+export function assertReplyAlone(mark, { maxBytes = 8 * 1024 * 1024 } = {}) {
+  if (!mark || typeof mark.transcript !== "string" || !mark.transcript || !Number.isSafeInteger(mark.from) || mark.from < 0 ||
+    typeof mark.written !== "boolean" || typeof mark.words !== "string" || !mark.words) {
+    throw new Error("the approval does not say where his reply is in the conversation");
+  }
+  const fd = openSync(mark.transcript, "r");
+  let raw;
+  try {
+    const size = fstatSync(fd).size;
+    if (size < mark.from) throw new Error("the conversation's transcript is shorter than when he replied");
+    const buf = Buffer.alloc(Math.min(size - mark.from, maxBytes));
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, mark.from + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    raw = buf.subarray(0, got).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    // A damaged line, or the last one cut by the read or still being written.
+    try { e = JSON.parse(line); } catch { throw new Error("a damaged or unfinished transcript line lies where his reply should be"); }
+    if (isMasonMessage(e)) {
+      if (masonText(e.message?.content).trim() !== mark.words) throw new Error("the message written where his reply should be is not his reply");
+      assertWordsAlone(e.message?.content);
+      return;
+    }
+    if (isAgentMessage(e) && !e.isSidechain) {
+      if (mark.written) return;
+      throw new Error("his reply is not where the approval says it is");
+    }
+  }
+  throw new Error("his reply is not in the transcript");
+}
+
+/**
+ * True when the text IS this request's summary (ownerApprovalSummary), word for
+ * word, and nothing else. So he is always shown what it is, the pull request and
+ * version, the fingerprint, every reason the safety check stopped it, the reply
+ * it asks for and its Reference line, and "I approve" can only answer that: a
+ * question, a note or anything else in the same message means it does not count
+ * (CodeRabbit, PR #900); the agent explains the change in an earlier message.
+ * Nor does a message that only cites an old reference, says "Do not reply: I
+ * approve", or puts the summary's words inside other prose (Luna BLOCKER round 4;
+ * Codex P1 and CodeRabbit, PR #900).
+ * The words are compared exactly as the script printed them: only spacing,
+ * blank lines, where lines wrap, and a code fence around the whole summary may
+ * differ. No markdown is interpreted, so no character in a name, fingerprint or
+ * reason can be dropped or reinterpreted (drop_a_b is never drop_ab or
+ * drop_a__b__; Codex P1 and CodeRabbit, PR #900). The agent copies the summary
+ * as printed; anything else (bold, code marks, quote marks, an HTML comment)
+ * means it does not count, and he is asked again.
+ */
+export function requestShownIn(text, p) {
+  if (!/^\d{6}$/.test(String(p?.code ?? ""))) return false;
+  const words = (lines) => lines.filter((l) => !/^\s*```[\w-]*\s*$/.test(l)).join(" ").replace(/\s+/g, " ").trim();
+  const summary = words(ownerApprovalSummary(p));
+  return summary !== "" && words(String(text ?? "").split(/\r?\n/)) === summary;
+}
+
+/**
+ * Which request a plain `I approve` is for. The live requests this session built
+ * (pending, unexpired, code not retired) are matched against the agent's last message:
+ * exactly one of them must be shown there (requestShownIn).
+ *
+ * @param {object} args
+ * @param {string[]} args.dirs  this session's session-state folders (ownerRequestDirs)
+ * @param {string} args.sessionId
+ * @param {() => string} args.readShown  the agent's last message (lastAgentMessageText); may throw
+ * @returns {{silent: true}|{ok: false, reason: string}|{ok: true, code: string}}
+ *   silent: nothing is waiting in this conversation, so the message is ordinary chat.
+ */
+export function resolvePlainReply({ dirs, sessionId, readShown, now = Date.now() }) {
+  if (!usableSessionId(sessionId)) return { silent: true };
+  const live = new Map();
+  // Silence must mean "nothing is waiting", never "could not tell" (Luna LOW, round 2).
+  for (const dir of new Set(dirs || [])) {
+    let names;
+    try { names = readdirSync(dir); }
+    catch (e) {
+      if (e?.code === "ENOENT") continue;
+      return { ok: false, reason: `the approval folder ${dir} could not be read (${errText(e)})` };
+    }
+    for (const name of names) {
+      const m = /^owner-approval-request-(\d{6})\.json$/.exec(name);
+      if (!m || existsSync(path.join(dir, usedCodeMarkerName(m[1])))) continue;
+      let p;
+      try { p = JSON.parse(JSON.parse(readFileSync(path.join(dir, name), "utf8")).payload); }
+      catch (e) { return { ok: false, reason: `the request file ${name} could not be read (${errText(e)})` }; }
+      const deadline = Date.parse(p?.expiresAt);
+      if (p?.sessionId === sessionId && String(p?.code) === m[1] && Number.isFinite(deadline) && now <= deadline) live.set(m[1], p);
+    }
+  }
+  if (!live.size) return { silent: true };
+  let shownText;
+  try { shownText = String(readShown() ?? ""); }
+  catch (e) { return { ok: false, reason: `what the agent last showed him could not be read (${errText(e)})` }; }
+  const shown = [...live].filter(([, p]) => requestShownIn(shownText, p)).map(([c]) => c);
+  if (!shown.length) {
+    return { ok: false, reason: "the agent's message just before it did not show the approval request's summary alone (word for word, nothing else), so it may have been about something else" };
+  }
+  if (shown.length > 1) return { ok: false, reason: `the agent's last message showed ${shown.length} requests (${shown.join(", ")}), so it is ambiguous` };
+  return { ok: true, code: shown[0] };
+}
+
 /**
  * The session-state directories a request may be in: ONLY the folders of the
  * session Mason is replying in. A request another session built in another
@@ -220,7 +523,7 @@ export function ownerRequestDirs(sessionFolders) {
  *
  * @returns {{ok: true, kind: "migration"|"selftest", payload: object, file: string, requestLeft: boolean}|{ok: false, reason: string}}
  */
-export function recordReplyApproval({ code, dirs, reply, sessionId, now = Date.now(), removeRequest = (f) => rmSync(f, { force: true }) }) {
+export function recordReplyApproval({ code, dirs, reply, sessionId, readMark, now = Date.now(), removeRequest = (f) => rmSync(f, { force: true }) }) {
   const no = (reason) => ({ ok: false, reason });
   if (!usableSessionId(sessionId)) return no("the message carried no usable session id");
   const hits = [];
@@ -249,7 +552,14 @@ export function recordReplyApproval({ code, dirs, reply, sessionId, now = Date.n
   if (p.sessionId !== sessionId) return no(`the request for code ${code} was built in a different conversation; Mason must reply in the one that asked him`);
   const deadline = Date.parse(p.expiresAt);
   if (!Number.isFinite(deadline) || now > deadline) return no(`the request for code ${code} expired at ${p.expiresAt}`);
-  const approval = { payload: payloadText, approvedAt: new Date(now).toISOString(), via: OWNER_APPROVAL_VIA, reply: clip(String(reply ?? "").trim(), 40) };
+  // Where his reply is (replyMark), so the apply can check it was his words alone.
+  let mark;
+  try { mark = readMark?.(); }
+  catch (e) { return no(`where his reply is in the conversation could not be read (${errText(e)})`); }
+  if (!mark || typeof mark !== "object") return no("where his reply is in the conversation is unknown");
+  const approval = {
+    payload: payloadText, approvedAt: new Date(now).toISOString(), via: OWNER_APPROVAL_VIA, reply: clip(String(reply ?? "").trim(), 40), replyMark: mark,
+  };
   const out = path.join(dir, selftest ? selfTestResultName(code) : approvalFileName(safeMigrationName(p.migration)));
   // Retire the code FIRST, exclusively: if it cannot be retired, nothing is
   // approved, so a code is never live without its retirement on disk. If the
@@ -417,9 +727,10 @@ export function findOwnerApprovals(dirs, safeName) {
  *   sessionId (the Claude Code session running the apply)
  * @param {string[]|null} [args.appliedNames]  the live ledger snapshot; null skips that check
  * @param {Set<string>} [args.usedNonces]
+ * @param {(mark: object) => void} [args.checkReply]  throws unless his reply was his words alone (assertReplyAlone)
  * @returns {{ok: true, payload: object, expiresAt: string}|{ok: false, reason: string}}
  */
-export function verifyOwnerApproval({ approval, expect, appliedNames = null, usedNonces = new Set(), now = Date.now() }) {
+export function verifyOwnerApproval({ approval, expect, appliedNames = null, usedNonces = new Set(), now = Date.now(), checkReply = assertReplyAlone }) {
   const no = (reason) => ({ ok: false, reason });
   const payloadText = approval?.payload;
   if (typeof payloadText !== "string" || approval?.via !== OWNER_APPROVAL_VIA) return no("the approval file is malformed");
@@ -470,5 +781,8 @@ export function verifyOwnerApproval({ approval, expect, appliedNames = null, use
   if (Array.isArray(appliedNames) && appliedNames.includes(expect.migration)) {
     return no(`${expect.migration} is already in the live ledger; an approval covers one install`);
   }
+  // His reply, read back now that it is written, was his words alone (Codex P1, PR #900).
+  try { checkReply(approval.replyMark); }
+  catch (e) { return no(`his reply could not be confirmed as the approval words alone (${errText(e)})`); }
   return { ok: true, payload: p, expiresAt: new Date(expires).toISOString() };
 }

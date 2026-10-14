@@ -1,12 +1,18 @@
 # Decision Log
 
-Last verified: 2026-10-13 (two entries added: reps invoice any customer under their own name, superseding the 2026-10-06 rep-scoping entry; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-13 (three entries added: a plain "I approve" replaces typing the approval code; reps invoice any customer under their own name, superseding the 2026-10-06 rep-scoping entry; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-13 — A plain "I approve" is enough; no code to type
+
+**Decision (Mason, in chat: "can we make it even simpler than that? … I just want to say I approve and that's good enough").** For a parked migration, Mason's whole-message reply `I approve` (also `approve`, `approved`, `yes I approve`) is his approval; he no longer types the 6-digit code, which is now shown only as a reference number. `approve <code>` still works.
+**Why.** He wants fewer hoops. The code's one real job was to tie his reply to a specific request, so an "I approve" meant for a plan or a merge could not approve a database change still waiting from earlier. That job moved to the reply hook: a plain `I approve` counts only when the agent's message just before it was that request's summary, exactly as printed and nothing else, and with nothing waiting it is ordinary chat.
+**What this forbids/implies:** agents explain the change first, then send the summary alone as its own message; if they say anything else first, they show it again. A bare "yes" or "go" is still not this approval. Everything else in the 2026-10-09 entry below stands, including the accepted residual (an agent that deliberately fakes the approval is not stopped). Detail: `docs/changelog.d/2026-10-13-owner-approval-plain-reply.md`.
 
 ## 2026-10-13 — Sales reps invoice and email any customer, under their own name only
 

@@ -6,10 +6,13 @@
 // access what is refused by .claude/hooks/migration-apply-lib.mjs until Mason
 // approves it. This script builds the REQUEST he approves — computed here from the
 // file itself, never from text an agent supplies — saves it in this checkout's
-// .claude/session-state/, and prints the plain-English summary and a 6-digit code.
-// Show him the summary and ask him to reply exactly `approve <code>`. His reply is
-// recorded by .claude/hooks/owner-approval-prompt.mjs and is good for ONE install
-// of this exact file, from this exact pull-request head, for 30 minutes.
+// .claude/session-state/, and prints the plain-English summary, which ends with a
+// 6-digit reference number. Show him the summary and ask him to reply `I approve`
+// (Mason, 2026-10-13). A plain `I approve` counts only when your message just before
+// it showed the reference number, so if you talk about anything else first, show
+// the request again. (`approve <code>` also works.) His reply is recorded by
+// .claude/hooks/owner-approval-prompt.mjs and is good for ONE install of this exact
+// file, from this exact pull-request head, for 30 minutes.
 //
 // Never send the reply yourself, in any session: only a message Mason sends counts.
 //
@@ -77,9 +80,9 @@ if (argv.length === 1 && argv[0] === "--selftest") {
     code: c,
     sessionId,
   }));
-  console.log("Show Mason this, word for word:\n");
+  console.log("Your reply now must be only this, exactly as printed (say anything else BEFORE running this script):\n");
   for (const line of ownerApprovalSummary(JSON.parse(payload))) console.log(`  ${line}`);
-  console.log(`\nWhen he replies "approve ${code}", the approval hook confirms in the next turn that the reply path works.`);
+  console.log(`\nMake this, exactly as printed (no bold, code or quote marks) and with nothing else in that reply, the last message of your turn: text you add after this output joins the same message. When he replies "I approve", the approval hook confirms in the next turn that the reply path works.`);
   process.exit(0);
 }
 
@@ -165,7 +168,8 @@ const { code, payload } = saveRequest((c) => buildApprovalPayload({
 
 console.log(`Approval request saved for ${migName} (PR #${pr.number}, head ${head.slice(0, 12)}):`);
 for (const c of categories) console.log(`  - ${PARKED_LABELS[c.category]}`);
-console.log("\nShow Mason this, word for word, with a one-line plain-English note on what the change does:\n");
+console.log("\nExplain the change to Mason in plain English BEFORE running this script (or in an earlier turn): text you write after this output joins the same message as the summary, and then a plain \"I approve\" is refused. Your reply now must be only this, exactly as printed:\n");
 for (const line of ownerApprovalSummary(JSON.parse(payload))) console.log(`  ${line}`);
-console.log(`\nThen wait for HIS reply "approve ${code}" in this session — never send or relay it for him. The approval hook confirms it in the next turn.`);
+console.log(`\nThen wait for HIS reply "I approve" in this session — never send or relay it for him. The approval hook confirms it in the next turn.`);
+console.log(`A plain "I approve" only counts when your LAST message before it is this summary, exactly as printed (no bold, code or quote marks), and NOTHING else (no note, no question): end your turn with that message, and if you say anything else after it, show the request again.`);
 console.log(`After that: node scripts/apply-migration-file.mjs ${rel} (dry run), then again with --confirm, within 30 minutes.`);

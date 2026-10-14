@@ -46,9 +46,33 @@
 > since 2026-10-09 by chat reply instead of a Windows Hello signature so he can approve from his phone
 > (`owner-approval-lib.mjs`; request command `scripts/owner-approve-migration.mjs`; reply hook
 > `owner-approval-prompt.mjs`, wired in `prompt-router.mjs`). The request binds the migration's sha256, the PR number
-> and exact head, the flagged categories, a nonce and a 6-digit code, with a 24-hour reply deadline. Only a WHOLE
-> message of exactly `approve <code>` (a trailing `.` or `!` is accepted) turns it into an approval, valid 30 minutes
-> from the reply; the code is retired in that folder first (exclusively, before the approval is written; if it cannot be
+> and exact head, the flagged categories, a nonce and a 6-digit code (shown to Mason as a reference number), with a
+> 24-hour reply deadline. Only a WHOLE message turns it into an approval, valid 30 minutes from the reply: since
+> 2026-10-13 (Mason: "I just want to say I approve") a plain `I approve` (also `approve`, `approved`, `yes I
+> approve`, `I approve it`, trailing `.`/`!` accepted, and no other form such as "approve this" or "yes approved"; never a
+> bare "yes" or "go"), which counts only when exactly one live request of
+> that session is SHOWN by the agent's LAST message before the reply: that message is its summary, exactly as printed,
+> and nothing else (what it is, the pull request and version, the fingerprint, every reason the safety check stopped it,
+> the `reply: I approve` line and the `Reference <code>` line; the agent explains the change before running the script,
+> because text in the same reply joins the summary's message), so
+> he is always told why it waited for him, and a message that adds a question or note, only cites an old reference, or
+> puts those words inside other prose does not count. Only spacing, blank lines, wrapping and a code fence around the
+> whole summary may differ; no markdown is interpreted, so bold, code or quote marks mean it does not count. That
+> message is read from the session transcript the hook is
+> given (`transcript_path`: the final main-thread assistant message the model wrote, its entries grouped by message id;
+> only the bookkeeping records Claude Code writes after every turn are skipped, so any other entry after it, such as a
+> message of Mason's (image-only included), injected text like a Stop hook's feedback, a notification, a queued
+> message waiting to be delivered, a compaction, an error or synthetic message, an unknown record type, or a tool call
+> or its result (the agent kept working, or asked him something through a tool), means nothing counts; tool output and
+> subagent text
+> never count). His reply itself must be those words alone: one sent with a picture or file approves nothing. Claude
+> Code normally writes his message just after the hook runs, so the hook records where it will land (`replyMark`: the
+> transcript's size, or that it is already written and was checked then), and the apply reads it back there
+> (`assertReplyAlone`, the last check in `verifyOwnerApproval`): the first message after that point must be his reply,
+> its words alone apart from a whole `<system-reminder>` block Claude Code puts in front, or the apply is refused. This
+> holds for `approve <code>` too. An unreadable transcript or approval folder, a damaged or half-written line in what is scanned, an assistant
+> entry without a message id, or a message whose start is not in the 32 MB tail read approves nothing. With no request waiting in the session the hook stays silent, so an
+> "I approve" about anything else does nothing. `approve <code>` still works. The code is retired in that folder first (exclusively, before the approval is written; if it cannot be
 > retired nothing is approved), so no later request reuses it. The request records the Claude Code session that built it (`CLAUDE_CODE_SESSION_ID`); the hook
 > records the reply only when it arrives in that session (`session_id`; the session's folders are compared by their
 > canonical path, case-insensitively on Windows), and the gate refuses the approval in any
@@ -141,7 +165,7 @@ Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Wi
 ### UserPromptSubmit Hooks (`.claude/hooks/`)
 These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording or nudged toward the right workflow.
 
-`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes only `ship-intent-reminder.mjs`, `hold-latch-prompt.mjs` and (since 2026-10-09) `owner-approval-prompt.mjs` on both Claude and Codex; the last records Mason's `approve <code>` reply for a parked migration and does nothing on any other message. On 2026-10-02 (Mason) five other reminder modules were unwired, and PR #882 deleted them (2026-10-06): `dangerous-phrase-warning`, `codex-gauntlet-reminder`, `agent-pair-review-reminder`, `codex-to-claude-handoff-reminder` and `autopilot-intent-reminder`. They duplicated the user-level risky-phrase nudge or the ship reminder and fired on agent reports as often as on Mason's words.
+`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes only `ship-intent-reminder.mjs`, `hold-latch-prompt.mjs` and (since 2026-10-09) `owner-approval-prompt.mjs` on both Claude and Codex; the last records Mason's `I approve` (or `approve <code>`) reply for a parked migration and does nothing on any other message. On 2026-10-02 (Mason) five other reminder modules were unwired, and PR #882 deleted them (2026-10-06): `dangerous-phrase-warning`, `codex-gauntlet-reminder`, `agent-pair-review-reminder`, `codex-to-claude-handoff-reminder` and `autopilot-intent-reminder`. They duplicated the user-level risky-phrase nudge or the ship reminder and fired on agent reports as often as on Mason's words.
 
 | Hook | What it warns on / reminds | Why |
 |------|------------------|-----|

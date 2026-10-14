@@ -16,7 +16,7 @@ export const PROMPT_DEDUPE_BLOCKS = [
 // codex-to-claude-handoff-reminder, autopilot-intent-reminder). They duplicated
 // the user-level risky-phrase nudge or the ship reminder, and fired on agent
 // reports as often as on Mason's words. The overnight handshake they fed is gone.
-// owner-approval-prompt (Mason, 2026-10-09) records his `approve <code>` reply
+// owner-approval-prompt (Mason, 2026-10-09) records his `I approve` reply
 // for a parked migration; it replaced the Windows Hello signature.
 export const SHARED_PROMPT_MODULES = [
   "./ship-intent-reminder.mjs",

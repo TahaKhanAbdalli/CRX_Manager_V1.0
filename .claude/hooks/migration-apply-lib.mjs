@@ -331,7 +331,7 @@ export function evaluateMigrationApply({
   requireExactProofName = true,
   // (No approval FLAG exists, deliberately: an agent-run command cannot assert
   // Mason approved an exact migration — Sol HIGH, 2026-09-26. What counts is his
-  // own `approve <code>` reply, recorded by the owner-approval-prompt hook —
+  // own `I approve` (or `approve <code>`) reply, recorded by the owner-approval-prompt hook —
   // owner-approval-lib.mjs; Windows Hello until Mason 2026-10-09.)
   // `ownerApprovalDoor` only says which door is asking: scripts/apply-migration-file.mjs
   // sets it, so a parked migration may go on to look for that approval; the MCP
@@ -872,7 +872,7 @@ export function evaluateMigrationApply({
   // ask. That is what Mason confirmed; the proof checks below are unchanged, they
   // simply stopped being optional outside autopilot. A DESTRUCTIVE migration is
   // still Mason's: refused for agents in every session unless Mason approved THIS
-  // exact migration by replying `approve <code>` in the chat (owner-approval-lib.mjs;
+  // exact migration by replying `I approve` in the chat (owner-approval-lib.mjs;
   // Mason 2026-09-29, by reply instead of Windows Hello since 2026-10-09). An
   // approval flag, label, comment or review an agent could produce is not
   // approval. The same holds for the two other parked kinds below.
@@ -894,8 +894,11 @@ export function evaluateMigrationApply({
     const OWNER_ROUTE =
       `\n\nTHE ONE WAY THROUGH (Mason, 2026-09-29; by chat reply since 2026-10-09): once every other proof for ` +
       `this exact file is fresh, run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName || "<file>"}.sql\` ` +
-      `from the PR's checkout, show Mason the plain-English summary it prints and ask him to reply exactly ` +
-      `\`approve <code>\` (he can do it from his phone), then apply within 30 minutes of his reply through ` +
+      `from the PR's checkout, show Mason the plain-English summary it prints, word for word and alone, as the last ` +
+      `message of your turn (explain the change BEFORE running the script: text in the same reply joins the summary and his ` +
+      `plain reply is refused), and ask him to reply \`I approve\` (he can do it from his ` +
+      `phone; \`approve <code>\` also works), then ` +
+      `apply within 30 minutes of his reply through ` +
       `\`node scripts/apply-migration-file.mjs\` (the MCP apply tool never accepts it). Do NOT write, copy or ` +
       `edit an approval or request file yourself, and never send the reply on his behalf; only his own message counts.`;
     const refusals = {
@@ -1135,7 +1138,7 @@ export function evaluateMigrationApply({
     if (!landing || landing.ok !== true) {
       return block(landing?.reason || "MIGRATION LANDING GATE: the pull-request landing check did not pass (fail closed).");
     }
-    // LAST OF ALL, for a parked migration: Mason's `approve <code>` reply, bound
+    // LAST OF ALL, for a parked migration: Mason's `I approve` reply, bound
     // to this exact SQL and to the PR and head the landing gate just confirmed.
     if (ownerApprovalCandidates) {
       // The reply hook and the code that checks the approval are read from this
@@ -1182,8 +1185,8 @@ export function evaluateMigrationApply({
       }
       return block(
         `OWNER APPROVAL GUARD: "${migName}" needs Mason's approval of this exact file, pull request and ` +
-        `head (his \`approve <code>\` reply), and none found is valid:\n${reasons.map((r) => `  - ${r}\n`).join("")}` +
-        `Ask Mason again: run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\` for a fresh code. ` +
+        `head (his \`I approve\` reply), and none found is valid:\n${reasons.map((r) => `  - ${r}\n`).join("")}` +
+        `Ask Mason again: run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\` for a fresh request. ` +
         `Do NOT edit or copy an approval file; only his own reply counts.`);
     }
     return allow();

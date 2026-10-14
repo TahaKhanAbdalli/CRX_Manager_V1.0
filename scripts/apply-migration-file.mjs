@@ -49,7 +49,7 @@
 //   A migration that DELETES data, OVERWRITES existing rows or CHANGES WHO CAN
 //   ACCESS WHAT stays Mason's. There is deliberately no override flag — a flag the
 //   agent can pass itself cannot prove Mason approved that exact migration (Sol
-//   HIGH, 2026-09-26). What counts is his own `approve <code>` chat reply to a request
+//   HIGH, 2026-09-26). What counts is his own `I approve` chat reply to a request
 //   for this exact file, pull request and head (scripts/owner-approve-migration.mjs;
 //   Mason, 2026-09-29; by reply instead of Windows Hello since 2026-10-09).
 //   This script is the only door that accepts it: the rule book checks it LAST,
@@ -347,7 +347,7 @@ if (verdict?.decision !== "allow") {
 console.log("APPLY GATE PASSED — ordering, autopilot state, destructive-content, reviewer proof and Codex gate all satisfied.");
 const ownerApproval = verdict.ownerApproval || null;
 if (ownerApproval) {
-  console.log(`OWNER APPROVAL: an approval recorded from an \`approve <code>\` reply in this session covers this exact file, pull request and head (valid until ${ownerApproval.expiresAt}; one use).`);
+  console.log(`OWNER APPROVAL: an approval recorded from Mason's reply in this session covers this exact file, pull request and head (valid until ${ownerApproval.expiresAt}; one use).`);
 }
 
 if (!confirm) {

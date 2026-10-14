@@ -161,9 +161,13 @@ The only sanctioned way to apply a migration to the live database:
    chat reply (Mason, 2026-09-29; by reply instead of Windows Hello since 2026-10-09); the apply
    gate refuses them without it: once every proof above is fresh, run
    `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql` from the PR's
-   checkout, in the session that will apply it. Show Mason the plain-English summary it prints and
-   wait for his reply in that same session (the hook looks only in the replying session's folders), exactly
-   `approve <code>` as a whole message, a trailing `.` or `!` allowed (he can send it from his phone, through that same conversation). The
+   checkout, in the session that will apply it. Show Mason the plain-English summary it prints
+   (with its Reference line) as the last message of your turn, ask him nothing else in that
+   message, and wait for his reply in that same session (the hook looks only in the replying
+   session's folders): `I approve` as a whole message (since 2026-10-13; `approve <code>` also
+   works; he can send it from his phone, through that same conversation). If you say anything else
+   first, show the request again: a plain `I approve` only counts when your last message before it
+   shows the Reference line. The
    `owner-approval-prompt.mjs` hook records it; the approval covers that file, PR and head, once,
    for 30 minutes after he replies, and every other check in this list still applies. Never send
    the reply yourself or relay it from another session; a GitHub approval, label or comment is
