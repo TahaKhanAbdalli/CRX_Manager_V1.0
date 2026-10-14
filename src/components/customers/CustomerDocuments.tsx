@@ -78,7 +78,6 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
   const [documents, setDocuments] = useState<CustomerDocumentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [assignedSalesRep, setAssignedSalesRep] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [documentType, setDocumentType] = useState<DocumentType>('other');
   const [effectiveDate, setEffectiveDate] = useState('');
@@ -100,27 +99,18 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
     setLoading(true);
     setLoadError(false);
     try {
-      const [documentResult, customerResult] = await Promise.all([
-        supabase
-          .from('customer_documents')
-          .select('id, customer_id, document_type, storage_path, filename, mime_type, size_bytes, effective_date, expiration_date, notes, created_at')
-          .eq('customer_id', customerId)
-          .is('deleted_at', null)
-          .order('expiration_date', { ascending: true, nullsFirst: false })
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('customers')
-          .select('assigned_sales_rep')
-          .eq('id', customerId)
-          .maybeSingle(),
-      ]);
+      const documentResult = await supabase
+        .from('customer_documents')
+        .select('id, customer_id, document_type, storage_path, filename, mime_type, size_bytes, effective_date, expiration_date, notes, created_at')
+        .eq('customer_id', customerId)
+        .is('deleted_at', null)
+        .order('expiration_date', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: false });
 
       if (seq !== requestSeq.current) return;
       if (documentResult.error) throw documentResult.error;
-      if (customerResult.error) throw customerResult.error;
 
       setDocuments((documentResult.data ?? []) as CustomerDocumentRow[]);
-      setAssignedSalesRep(customerResult.data?.assigned_sales_rep ?? null);
     } catch (error: unknown) {
       if (seq !== requestSeq.current) return;
       setDocuments([]);
@@ -136,12 +126,12 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
 
   useEffect(() => {
     setDocuments([]);
-    setAssignedSalesRep(null);
     void loadDocuments();
   }, [loadDocuments]);
 
-  const canDelete = profile?.role === 'admin'
-    || (profile?.role === 'sales_rep' && assignedSalesRep === profile.id);
+  // Admins and sales reps remove documents of ANY customer (Mason, 2026-10-13;
+  // soft_delete_customer_document enforces the same rule since 20261013220000).
+  const canDelete = profile?.role === 'admin' || profile?.role === 'sales_rep';
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;

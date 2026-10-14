@@ -122,13 +122,12 @@ Deno.serve(async (req: Request) => {
     const authorizeCustomer = async (customerId: string): Promise<boolean> => {
       const { data, error } = await adminClient
         .from("customers")
-        .select("id, assigned_sales_rep")
+        .select("id")
         .eq("id", customerId)
         .maybeSingle();
       if (error) throw new Error(`Customer lookup failed: ${error.message}`);
       if (!data) return false;
-      const customer = data as { id: string; assigned_sales_rep: string | null };
-      return canAccessCustomerDocuments(role, caller.id, customer.assigned_sales_rep);
+      return canAccessCustomerDocuments(role);
     };
 
     phase = "request-body";

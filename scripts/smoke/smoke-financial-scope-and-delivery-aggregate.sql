@@ -118,24 +118,38 @@ BEGIN
       CURRENT_DATE + 1
     );
 
-  BEGIN
-    PERFORM *
-      FROM public.get_customer_statement(
-        v_other_customer,
-        CURRENT_DATE - 1,
-        CURRENT_DATE + 1
-      );
-    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep read an unassigned customer statement';
-  EXCEPTION WHEN OTHERS THEN
-    v_err := SQLERRM;
-    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong statement scope error: %', v_err;
-    END IF;
-  END;
+  -- Since 20261013220000 (Mason, 2026-10-13) a sales rep reads ANY customer's statement
+  -- and invoices ANY customer, always under the rep's own name.
+  PERFORM *
+    FROM public.get_customer_statement(
+      v_other_customer,
+      CURRENT_DATE - 1,
+      CURRENT_DATE + 1
+    );
+  v_result := to_jsonb(public.save_invoice(
+    jsonb_build_object(
+      'customer_id', v_other_customer,
+      'invoice_type', 'misc_charge',
+      'status', 'draft',
+      'salesman_id', NULL,
+      'invoice_date', CURRENT_DATE,
+      'header_notes', '[SMOKE] rep invoices an unassigned customer'
+    ),
+    '[]'::jsonb,
+    'smk-fin-scope-rep-any-' || v_suffix
+  ));
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE id = (v_result #>> '{}')::uuid
+       AND customer_id = v_other_customer
+       AND salesman_id = v_sales
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep could not invoice an unassigned customer under their own name';
+  END IF;
 
-  -- This call reuses a committed key. Scope must fail before the internal
-  -- implementation can return the admin's cached invoice ID.
+  -- This call reuses the admin's committed key. The rep must be refused without the
+  -- admin's cached invoice ID being returned (an actor-bound receipt, or since
+  -- 20261013220000 the own-name check, refuses it).
   BEGIN
     PERFORM public.save_invoice(
       jsonb_build_object(
@@ -148,12 +162,12 @@ BEGIN
       '[]'::jsonb,
       v_other_key
     );
-    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep replayed an unassigned invoice result';
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep replayed the admin''s invoice result';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice replay scope error: %', v_err;
+    IF v_err NOT IN ('IDEMPOTENCY_ACTOR_MISMATCH', 'INVOICE_SCOPE_DENIED') THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice replay refusal: %', v_err;
     END IF;
   END;
 
@@ -170,17 +184,17 @@ BEGIN
       '[]'::jsonb,
       'smk-fin-scope-edit-' || v_suffix
     );
-    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep edited an unassigned invoice';
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep edited an admin''s invoice that is not under the rep''s name';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice edit scope error: %', v_err;
+    IF v_err <> 'INVOICE_SCOPE_DENIED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice edit refusal: %', v_err;
     END IF;
   END;
 
-  -- A sales rep must not bypass the stored-customer check by asking the
-  -- writer to move another customer's invoice onto an assigned customer.
+  -- A sales rep must not take over someone else's invoice by moving it onto a
+  -- customer the rep owns.
   BEGIN
     PERFORM public.save_invoice(
       jsonb_build_object(
@@ -195,12 +209,12 @@ BEGIN
       '[]'::jsonb,
       'smk-fin-scope-reassign-' || v_suffix
     );
-    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep reassigned an unassigned invoice';
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep moved an admin''s invoice onto their customer';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice reassignment scope error: %', v_err;
+    IF v_err <> 'INVOICE_SCOPE_DENIED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice move refusal: %', v_err;
     END IF;
   END;
 

@@ -17,14 +17,14 @@ function assertEquals(actual: unknown, expected: unknown, message?: string): voi
 const CUSTOMER = "11111111-2222-4333-8444-555555555555";
 const OTHER_CUSTOMER = "99999999-2222-4333-8444-555555555555";
 const DOCUMENT = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-const REP = "rep-user-id";
 
-Deno.test("admins reach every customer; reps only their assigned customers", () => {
-  assertEquals(canAccessCustomerDocuments("admin", "admin-id", null), true);
-  assertEquals(canAccessCustomerDocuments("sales_rep", REP, REP), true);
-  assertEquals(canAccessCustomerDocuments("sales_rep", REP, "someone-else"), false);
-  assertEquals(canAccessCustomerDocuments("sales_rep", REP, null), false);
-  assertEquals(canAccessCustomerDocuments("driver", REP, REP), false);
+Deno.test("admins and sales reps reach every customer; other roles none", () => {
+  assertEquals(canAccessCustomerDocuments("admin"), true);
+  assertEquals(canAccessCustomerDocuments("sales_rep"), true);
+  assertEquals(canAccessCustomerDocuments("driver"), false);
+  assertEquals(canAccessCustomerDocuments("applicator"), false);
+  assertEquals(canAccessCustomerDocuments("entity_recipient"), false);
+  assertEquals(canAccessCustomerDocuments(""), false);
 });
 
 Deno.test("server-built paths stay inside the customer folder and pass the shape check", () => {

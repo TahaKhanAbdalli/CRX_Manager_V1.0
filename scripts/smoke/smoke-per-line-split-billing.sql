@@ -35,7 +35,7 @@
 --   G5  — regression probe (bug FIXED live 2026-07-21 by migration
 --          20260721180000): a chemical-only save (no service line) must succeed;
 --          the pre-fix impl crashed on the unassigned v_app_service record.
---   G4  — RESOLVER_NOT_AUTHORIZED raises for a NON-ADMIN sales_rep directly
+--   G4  — a NON-ADMIN sales_rep resolves the split of customers with no assigned rep (20261013220000)
 --          resolving a split vector for customers not assigned to them (probed
 --          as a real active sales_rep, per the "admin-only proof misses
 --          non-admin guards" gotcha; skipped with a NOTICE only if the live DB
@@ -307,11 +307,11 @@ BEGIN
     END IF;
   END;
 
-  -- ---- G4: resolver auth gate probed as a NON-ADMIN ---------------------------
+  -- ---- G4: resolver allowed for a NON-ADMIN sales rep (unassigned customers) ---
   -- The earlier save set crx.split_writer='on' transaction-locally (it survives
-  -- to the end of this DO block), which would exempt the resolver's ownership
-  -- gate — force it back off before probing. The smoke customers have no
-  -- assigned_sales_rep, so ANY real sales_rep must be refused.
+  -- to the end of this DO block); force it back off so the direct-call path runs.
+  -- The smoke customers have no assigned_sales_rep. Since 20261013220000 (Mason,
+  -- 2026-10-13: reps work with any customer) a sales rep resolves them too.
   SELECT id INTO v_rep FROM profiles
    WHERE role = 'sales_rep' AND is_active = true AND id <> v_admin
    ORDER BY created_at LIMIT 1;
@@ -320,20 +320,20 @@ BEGIN
   ELSE
     PERFORM set_config('crx.split_writer', 'off', true);
     PERFORM set_config('request.jwt.claims', json_build_object('sub', v_rep, 'role','authenticated')::text, true);
+    DECLARE
+      v_vec jsonb := resolve_line_split_vector(ARRAY[v_field], NULL, jsonb_build_object(v_field::text, 100));
     BEGIN
-      PERFORM resolve_line_split_vector(ARRAY[v_field], NULL,
-        jsonb_build_object(v_field::text, 100));
-      RAISE EXCEPTION 'SMOKE_FAIL(G4): non-admin resolved another rep''s customers'' split vector';
-    EXCEPTION WHEN OTHERS THEN
-      v_err := SQLERRM;
-      IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-      IF v_err NOT LIKE 'RESOLVER_NOT_AUTHORIZED%' THEN
-        RAISE EXCEPTION 'SMOKE_FAIL(G4): wrong resolver auth error: %', v_err;
+      IF jsonb_array_length(v_vec) <> 2
+         OR (SELECT count(*) FROM jsonb_array_elements(v_vec) e
+              WHERE (e->>'customer_id')::uuid IN (v_cust_a, v_cust_b)
+                AND (e->>'micro_pct')::bigint = 50000000) <> 2
+         OR (SELECT sum((e->>'micro_pct')::bigint) FROM jsonb_array_elements(v_vec) e) <> 100000000 THEN
+        RAISE EXCEPTION 'SMOKE_FAIL(G4): sales rep got the wrong split vector for unassigned customers: %', v_vec;
       END IF;
     END;
     PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
   END IF;
 
-  RAISE NOTICE 'SMOKE OK: flag gate, 751/750 of 1501c penny-exact, stored invariants tie, idempotent replay, {34,33,33} 3-way, dup-product/off-job-field/job-immutable/resolver-auth guards fired';
+  RAISE NOTICE 'SMOKE OK: flag gate, 751/750 of 1501c penny-exact, stored invariants tie, idempotent replay, {34,33,33} 3-way, dup-product/off-job-field/job-immutable guards fired, rep resolver allowed';
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

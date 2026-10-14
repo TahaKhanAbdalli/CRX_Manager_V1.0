@@ -119,8 +119,11 @@ const SQL_FUNCTION_GUARDS: Record<string, { pattern: RegExp; bug: string }[]> = 
     { pattern: /SPLIT_FIELD_NOT_ON_JOB/, bug: 'r4 — billing fields not on the source job' },
     { pattern: /SPLIT_SERVICE_ACRES_NONPOSITIVE/, bug: 'Fable adversarial — service acres ≤ 0 minted negative/credit invoices' },
   ],
+  // r12's assigned-rep boundary (RESOLVER_NOT_AUTHORIZED) was removed on purpose by 20261013220000:
+  // reps work with ANY customer (Mason, 2026-10-13). The role gate that closes the SECDEF read to
+  // every other role must survive.
   resolve_line_split_vector: [
-    { pattern: /RESOLVER_NOT_AUTHORIZED/, bug: 'r12 — SECDEF resolver let a sales_rep read other customers’ ownership splits via arbitrary UUIDs' },
+    { pattern: /role IN \('admin', 'sales_rep'\)/, bug: 'r12/M1 — SECDEF resolver must stay closed to drivers, applicators and inactive users' },
   ],
   restore_cancelled_order: [
     { pattern: /ORDER_RESTORE_NOT_SUPPORTED/, bug: 'gauntlet H4 — restore flipped cancelled→confirmed without re-applying reservations/commissions' },

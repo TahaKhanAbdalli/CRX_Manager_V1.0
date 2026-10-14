@@ -379,13 +379,13 @@ describe('return-credit COGS migration', () => {
     expect(recognizedInvoiceCustomers).toContain(".order('id', { ascending: true })");
     expect(recognizedInvoiceCustomers).toContain('.range(from, to)');
     expect(recognizedInvoiceCustomers).toContain('from += rows.length');
-    expect(recognizedInvoiceCustomers).toContain('getAssignedRecognizedInvoiceCustomerIds');
     for (const source of [reportsPage, monthEndPage]) {
       expect(source).toContain('getRecognizedInvoiceCustomerIds(season)');
     }
     expect(reportsPage).toContain("toast('error', sanitizeError(err))");
-    expect(reportsPage).toContain('getAssignedRecognizedInvoiceCustomerIds(discoveredIds, profile.id)');
-    expect(recognizedInvoiceCustomers).toContain(".eq('assigned_sales_rep', salesRepId)");
+    // Reps get every customer's summary (Mason, 2026-10-13); the assigned-customer filter is gone.
+    expect(reportsPage).not.toContain('getAssignedRecognizedInvoiceCustomerIds');
+    expect(recognizedInvoiceCustomers).not.toContain('assigned_sales_rep');
     expect(recognizedInvoiceCustomers).not.toContain(".eq('is_active', true)");
     expect(reportsPage).toContain("toast('error', sanitizeError(batchError))");
     expect(monthEndPage).toContain("toast('error', sanitizeError(batchError))");
@@ -417,9 +417,11 @@ describe('return-credit COGS migration', () => {
     }
   });
 
-  it('gives sales reps one clear empty-assignment message', () => {
-    expect(reportsPage).toContain('if (skippedCount > 0 && uniqueIds.length > 0)');
-    expect(reportsPage).toContain('No assigned customers have invoices for season');
+  it('uses unfiltered batch selection and the all-customer empty-season message', () => {
+    // Batch selection has no assigned-rep filter. Generate All remains admin-only.
+    expect(reportsPage).not.toContain('skippedCount');
+    expect(reportsPage).not.toContain('No assigned customers have invoices for season');
+    expect(reportsPage).toContain('No customers have invoices for season');
   });
 
   it('measures report behavior as a fixture delta instead of company-wide absolutes', () => {

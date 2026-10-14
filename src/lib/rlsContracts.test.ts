@@ -102,10 +102,10 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
     table: 'customers',
     access: {
       admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
-      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'own', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'all', DELETE: 'none' },
       driver:    { SELECT: 'scoped', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Sales reps see all customers but only modify their assigned ones. Drivers see customers for their deliveries only.',
+    notes: 'Sales reps see and edit every customer (2026-10-13, 20261013220000); a new customer must be assigned to the rep creating it. customers_guard_rep_edit_20261013 keeps reassignment admin-only, the commission split admin-or-assigned-rep, open-invoice deactivation and direct prepay edits refused for reps. Drivers see customers for their deliveries only.',
   },
   {
     table: 'customer_addresses',
@@ -614,10 +614,10 @@ describe('RLS Contracts: Sales Rep Restrictions', () => {
     expect(quotes.access.sales_rep.DELETE).toBe('none'); // Cannot delete quotes
   });
 
-  it('sales reps can only modify their own customers', () => {
+  it('sales reps edit any customer but create only their own', () => {
     const customers = RLS_ACCESS_MATRIX.find(c => c.table === 'customers')!;
     expect(customers.access.sales_rep.INSERT).toBe('own');
-    expect(customers.access.sales_rep.UPDATE).toBe('own');
+    expect(customers.access.sales_rep.UPDATE).toBe('all');
     expect(customers.access.sales_rep.DELETE).toBe('none');
   });
 

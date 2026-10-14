@@ -117,15 +117,11 @@ export function parseDocumentFileRequest(body: unknown): ParseResult {
   return { ok: false, error: "Unsupported action." };
 }
 
-// Same rule as the retired Storage policies: admins may reach every customer's
-// documents; a sales rep only the customers assigned to them.
-export function canAccessCustomerDocuments(
-  role: string,
-  callerId: string,
-  assignedSalesRep: string | null,
-): boolean {
-  if (role === "admin") return true;
-  return role === "sales_rep" && assignedSalesRep === callerId;
+// Admins and sales reps reach every customer's documents (Mason, 2026-10-13:
+// reps work with any customer; migration 20261013220000 opens the
+// customer_documents rows the same way). Every other role is refused.
+export function canAccessCustomerDocuments(role: string): boolean {
+  return role === "admin" || role === "sales_rep";
 }
 
 export function sanitizeFilename(filename: string): string {

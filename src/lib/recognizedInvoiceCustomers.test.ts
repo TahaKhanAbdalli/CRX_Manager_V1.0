@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  collectAssignedCustomerIds,
   collectRecognizedInvoiceCustomerIds,
   type RecognizedInvoiceCustomerRow,
 } from './recognizedInvoiceCustomers';
@@ -47,19 +46,5 @@ describe('collectRecognizedInvoiceCustomerIds', () => {
     ]);
     expect(fetchPage).toHaveBeenNthCalledWith(2, 2, 1001);
     expect(fetchPage).toHaveBeenNthCalledWith(3, 3, 1002);
-  });
-
-  it('chunks large assignment filters and pages every chunk without URL or row-cap loss', async () => {
-    const customerIds = Array.from({ length: 205 }, (_, index) => `customer-${index}`);
-    const fetchPage = vi.fn(async (chunk: string[], from: number) => {
-      if (from > 0) return [];
-      return chunk.filter((id) => Number(id.split('-')[1]) % 2 === 0);
-    });
-
-    const assigned = await collectAssignedCustomerIds(customerIds, fetchPage);
-    expect(assigned).toHaveLength(103);
-    expect(assigned).toContain('customer-0');
-    expect(assigned).toContain('customer-204');
-    expect(fetchPage.mock.calls.map(([chunk]) => chunk.length)).toEqual([100, 100, 100, 100, 5, 5]);
   });
 });

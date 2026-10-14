@@ -384,9 +384,9 @@ export const RpcErrorCodes = {
   ASSIGNMENT_SALES_REP_INACTIVE: 'ASSIGNMENT_SALES_REP_INACTIVE',
   ASSIGNMENT_CUSTOMER_SET_CHANGED: 'ASSIGNMENT_CUSTOMER_SET_CHANGED',
   ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH: 'ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH',
-  // soft_delete_customer_document (20260921180000). One token for "missing,
-  // already removed, or a customer not assigned to this rep" — deliberately
-  // indistinguishable so a rep cannot probe for documents they cannot see.
+  // soft_delete_customer_document (20260921180000). One token for "missing or
+  // already removed" (before 20261013220000 also "a customer not assigned to
+  // this rep"; reps may now remove documents of any customer).
   CUSTOMER_DOCUMENT_NOT_FOUND: 'CUSTOMER_DOCUMENT_NOT_FOUND',
 } as const;
 

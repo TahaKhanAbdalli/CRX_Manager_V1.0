@@ -1,8 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-12 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-12 ~23:47 UTC, after PR #889's last two
-applies: 1024 rows, `max(version)` `20261012234633`; the read before it, on 2026-10-10 after PR #889's
+**Last verified:** 2026-10-13 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-13 22:02 UTC, while building
+`20261013220000_reps_work_any_customer` (NOT applied): 1024 rows / 1017 names, `max(version)`
+`20261012234633`, no 2026-10-13 file applied; unchanged since the 2026-10-12 ~23:47 UTC read after
+PR #889's last two applies; the read before that, on 2026-10-10 after PR #889's
 first three applies, had 1022 rows, `max(version)` `20261010043006`).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
@@ -57,7 +59,7 @@ ships or quarterly, whichever comes first.
   `20260914100700` (which removes every browser Storage policy on the bucket) applied 2026-09-26.
   Its preflight refuses to run if the bucket holds any object, so no stored document could be served
   by a link minted under the old policies. It does not rule out a signed upload token minted just
-  before the apply, which would stay valid until it expired. Sales reps can remove documents on their own customers: the database fix
+  before the apply, which would stay valid until it expired. Sales reps can remove documents (on any customer since `20261013220000_reps_work_any_customer`; before it, on their own customers): the database fix
   `20260921180000_soft_delete_customer_document_rpc` applied live 2026-10-02 (PR #800), the page
   change shipped in PR #875, and a test rep's Remove was verified on the live site 2026-10-04.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within

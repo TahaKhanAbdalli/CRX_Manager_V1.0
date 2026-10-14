@@ -1,7 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-12 (America/Chicago) against the live migration ledger** (read-only, after
-PR #889's last two applies; the counts and high-water live only in `docs/reference/migration-history.md`).
+**Last verified: 2026-10-13 (America/Chicago) against the live migration ledger** (read-only,
+2026-10-13 22:02 UTC, while building `20261013220000_reps_work_any_customer`, which is NOT applied;
+the ledger was unchanged since the 2026-10-12 read after PR #889's last two applies; the counts and
+high-water live only in `docs/reference/migration-history.md`). That read also re-checked the
+order-invoice rep-scope entry below against Mason's 2026-10-13 decision.
 That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
 entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The
 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
@@ -424,25 +427,50 @@ Each of these was recorded inside an entry that is otherwise fixed or closed and
 archive. They are listed here so the open part of this file shows them. None was re-measured on
 2026-09-26 unless it says so.
 
-- **Order-invoice RPCs are not scoped to the rep (found 2026-10-06 while fixing CRX-LIFE-001;
-  pre-existing; read from the live catalog, not exercised live).** Two related gaps in
+- **Follow-ups left by the reps-work-any-customer change (`20261013220000`, 2026-10-13; review
+  findings, read from code, not exercised live).**
+  - **NEXT CHANGE: reps read every invoice (Mason, 2026-10-13: "Reps see all invoices", read-only
+    for other reps' invoices).** Not in `20261013220000`. It must widen the read policies of
+    `invoices` and its child tables AND add the same own-name check (`INVOICE_SCOPE_DENIED`) to the
+    other invoice functions any active rep can already call on any invoice id, which the wider read
+    would make easy to reach: `unpost_invoice`, `unpost_invoice_group`, `transfer_invoice_to_job`,
+    `consolidate_draft_invoices`, `update_field_app_applied_info`, `update_field_app_invoice_billing`,
+    `save_field_app_invoice` (existing invoice), and the `invoice_shares_insert` policy (read live
+    2026-10-13: all executable by authenticated with no ownership test; pre-existing). Screens must
+    hide Edit/Post on other reps' invoices and keep "Post All" to the rep's own. Payments and
+    prepay/credit application stay open to reps (collecting money is not editing an invoice).
+  - **Commission splits outside the customer default.** `jobs_update` is `is_admin() OR
+    is_sales_rep()` and nothing guards `jobs.commission_split`; quote and order splits are likewise
+    editable by any rep on any customer (`save_quote`, order functions; pre-existing). The 2026-10-13
+    rule protects only `customers.default_commission_split`. Confirm with Mason whether job, quote
+    and order splits should follow the same admin-or-assigned-rep rule.
+  - **`customer-document-files` deploy.** The repo code opens documents to every rep; until that
+    function is redeployed (Mason's OK required), reps see other customers' document rows but the
+    live function still refuses their uploads and downloads. Deploy right after the migration
+    applies, never before it.
+
+- **Order-invoice RPCs let a rep name another salesperson (found 2026-10-06 while fixing
+  CRX-LIFE-001; pre-existing; read from the live catalog, not exercised live).** **Updated
+  2026-10-13 (Mason: reps work with ANY customer, `DECISION_LOG.md`):** the customer-scope half
+  below is no longer a gap: a rep may bill any customer, and `20261013220000_reps_work_any_customer`
+  removes the matching `CUSTOMER_SCOPE_DENIED` from `save_invoice`, `post_invoice` and
+  `post_invoice_group` instead. The **salesperson half stays OPEN** and is the next change (reps
+  bill only under their own name, admins unrestricted). Original record, in
   `create_invoice_from_order` and `create_split_invoices_from_order`, whose only gate is
   `is_admin() OR is_sales_rep()`:
-  - **Customer scope.** They never check that the order's customer is assigned to the calling rep,
-    so any active rep holding an order's id can create a draft invoice on another rep's customer
-    and then read it (`created_by` = the rep). `save_invoice` refuses the same case
-    (`CUSTOMER_SCOPE_DENIED`); the CRX-LIFE-001 container run showed a rep invoicing an unassigned
-    customer's order.
+  - **Customer scope (intended since 2026-10-13, not a gap).** They never check that the order's
+    customer is assigned to the calling rep, so any active rep can invoice any customer's order;
+    that is now the rule everywhere (`save_invoice` no longer refuses it either). Do not add a
+    customer-assignment check back.
   - **Salesperson.** They store `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's
     `salesman_id` with no check that a rep may only name themselves. `invoices.salesman_id` is a
     read-access key (the `invoices` SELECT policy and the policies on its line, share and
     field-billing child tables, plus `get_customer_balance_listing` and `get_field_profitability`),
     so naming another profile grants that profile read access to the invoice. Sales reports and
     commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
-  **Mason, 2026-10-06: the next change after CRX-LIFE-001** (`DECISION_LOG.md`). Intended rule:
-  reps bill only their own customers and only under their own name; admins unrestricted. Fix in a
-  separate reviewed migration: refuse a non-admin caller whose customer is not assigned to them or
-  whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
+  **Next change (Mason, 2026-10-06, narrowed 2026-10-13).** Intended rule: reps bill any customer,
+  but only under their own name; admins unrestricted. Fix in a separate reviewed migration: refuse
+  a non-admin caller whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
   the split RPC. That change re-emits the split wrapper, so it also adds the CRX-LIFE-001 type
   allow-list there, before any claim or insert: today a refused `field_application` split on an
   allocated order fails on the table CHECK only after its first INSERT has drawn an invoice number

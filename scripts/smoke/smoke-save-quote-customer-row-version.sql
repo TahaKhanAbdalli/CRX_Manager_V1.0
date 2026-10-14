@@ -474,8 +474,23 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'AUTH_REQUIRED' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer auth gate %', SQLERRM; END IF; END;
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
-  BEGIN PERFORM public.save_customer(v_customer, jsonb_build_object('farm_name', 'REP-MUST-NOT-OWN', 'row_version_expected', v_customer_after), '[]'::jsonb, v_rep, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep customer save succeeded';
-  EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'NOT_CUSTOMER_OWNER' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer ownership gate %', SQLERRM; END IF; END;
+  -- Since 20261013220000 any sales rep edits any customer, but only an admin reassigns one.
+  BEGIN PERFORM public.save_customer(v_customer, jsonb_build_object('farm_name', 'REP-MUST-NOT-REASSIGN', 'assigned_sales_rep', v_rep, 'row_version_expected', v_customer_after), '[]'::jsonb, v_rep, NULL); RAISE EXCEPTION 'SMOKE_FAIL: sales rep reassigned a customer';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'REP_CANNOT_REASSIGN' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer reassignment gate %', SQLERRM; END IF; END;
+  -- ...and the same rep's ordinary edit of that admin-assigned customer succeeds (addresses sent back unchanged).
+  v_c := public.save_customer(v_customer,
+    jsonb_build_object('farm_name', '[SMOKE] RVC rep edit ' || v_suffix,
+                       'row_version_expected', (SELECT row_version FROM public.customers WHERE id = v_customer)),
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('id', a.id, 'label', a.label, 'address_line', a.address_line,
+                                                  'city', a.city, 'state', a.state, 'zip', a.zip,
+                                                  'delivery_notes', a.delivery_notes, 'is_default', a.is_default))
+                FROM public.customer_addresses a WHERE a.customer_id = v_customer), '[]'::jsonb),
+    v_rep, 'rv-customer-rep-edit-' || v_suffix);
+  IF v_c->>'status' <> 'saved'
+     OR (SELECT farm_name FROM public.customers WHERE id = v_customer) <> '[SMOKE] RVC rep edit ' || v_suffix
+     OR (SELECT assigned_sales_rep FROM public.customers WHERE id = v_customer) IS DISTINCT FROM v_admin THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a sales rep could not edit an admin-assigned customer: %', v_c;
+  END IF;
   BEGIN
     PERFORM public.save_quote(
       v_quote,

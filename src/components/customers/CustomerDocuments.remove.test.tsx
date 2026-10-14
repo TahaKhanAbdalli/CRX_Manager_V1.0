@@ -35,9 +35,10 @@ function makeChain(table: string) {
   for (const method of ['select', 'update', 'insert', 'eq', 'is', 'order', 'maybeSingle', 'single']) {
     chain[method] = (...args: unknown[]) => { entry.recorded.push({ method, args }); return chain; };
   }
+  // The customer belongs to ANOTHER rep: since 2026-10-13 any rep may remove its documents.
   chain.then = (resolve: (v: unknown) => unknown) => resolve(
     table === 'customers'
-      ? { data: { assigned_sales_rep: 'rep-1' }, error: null }
+      ? { data: { assigned_sales_rep: 'rep-2' }, error: null }
       : { data: documentRows, error: null },
   );
   return chain;
@@ -74,6 +75,12 @@ describe('CustomerDocuments Remove', () => {
     logActivityMock.mockClear();
   });
   afterEach(cleanup);
+
+  it('offers Remove to a rep on a customer assigned to someone else, without reading the assignment', async () => {
+    render(<CustomerDocuments customerId="customer-1" userId="rep-1" />);
+    expect(await screen.findByLabelText('Remove License.pdf')).toBeTruthy();
+    expect(fromCalls.map((c) => c.table)).not.toContain('customers');
+  });
 
   it('removes through soft_delete_customer_document, never a direct UPDATE', async () => {
     rpcMock.mockResolvedValueOnce(success);

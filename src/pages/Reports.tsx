@@ -21,10 +21,7 @@ import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
-import {
-  getAssignedRecognizedInvoiceCustomerIds,
-  getRecognizedInvoiceCustomerIds,
-} from '../lib/recognizedInvoiceCustomers';
+import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
@@ -546,23 +543,11 @@ export default function Reports() {
       if (yeBatchMode) {
         // Batch: page through every recognized invoice so the API row cap cannot
         // silently omit customers as the season grows.
-        const discoveredIds = await getRecognizedInvoiceCustomerIds(season);
-        if (discoveredIds.length === 0) {
-          toast('info', `No customers have invoices for season ${season}`);
-          setYeLoading(false);
-          return;
-        }
-        let uniqueIds = discoveredIds;
-        if (!isAdmin) {
-          if (!profile) throw new Error('Your profile is still loading — try again in a moment.');
-          uniqueIds = await getAssignedRecognizedInvoiceCustomerIds(discoveredIds, profile.id);
-          const skippedCount = discoveredIds.length - uniqueIds.length;
-          if (skippedCount > 0 && uniqueIds.length > 0) {
-            toast('warning', `Skipped ${skippedCount} customer${skippedCount === 1 ? '' : 's'} not assigned to you.`);
-          }
-        }
+        // No assigned-rep filter (the 2026-10-13 change removed the dead non-admin branch).
+        // Generate All is admin-only; reps open any customer's summary in single-customer mode.
+        const uniqueIds = await getRecognizedInvoiceCustomerIds(season);
         if (uniqueIds.length === 0) {
-          toast('info', `No assigned customers have invoices for season ${season}`);
+          toast('info', `No customers have invoices for season ${season}`);
           setYeLoading(false);
           return;
         }

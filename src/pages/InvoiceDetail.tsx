@@ -311,7 +311,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   useEffect(() => {
     const fetchRef = async () => {
       const [custRes, salesRes] = await Promise.all([
-        supabase.from('customers').select('id, farm_name, payment_terms').eq('is_active', true).order('farm_name').limit(500),
+        // email + billing address feed Email and the printed invoice (buildInvoicePdfData, handleEmail).
+        supabase.from('customers').select('id, farm_name, payment_terms, email, billing_address, city, state, zip, account_number').eq('is_active', true).order('farm_name').limit(500),
         // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);

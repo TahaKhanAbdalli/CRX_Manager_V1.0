@@ -152,8 +152,14 @@ describe('historical AR report migration', () => {
     expect(latestCustomerBalanceListingMigration).toContain(
       'public.statement_invoice_was_posted_as_of',
     );
+    // Reps list ANY customer since 20261013220000 (Mason, 2026-10-13), but still count only the
+    // invoices and credits they created or are the salesperson on.
+    expect(latestCustomerBalanceListingMigration).not.toContain('assigned_sales_rep = v_actor');
     expect(latestCustomerBalanceListingMigration).toContain(
-      'scoped_customer.assigned_sales_rep = v_actor',
+      'AND (v_is_admin OR ci.created_by = v_actor OR ci.salesman_id = v_actor)',
+    );
+    expect(latestCustomerBalanceListingMigration).toContain(
+      'AND (v_is_admin OR i.created_by = v_actor OR i.salesman_id = v_actor)',
     );
   });
 });

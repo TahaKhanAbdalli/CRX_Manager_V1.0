@@ -246,6 +246,14 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // exact inventory reversal. Both layers deliberately share the one public
   // cancel_return cache namespace so retries cannot create divergent receipts.
   _cancel_return_intent_impl_20260812: ['cancel_return'],
+  // Direct EXECUTE is revoked (proacl postgres-only, live 2026-10-13). These are the private
+  // layers behind the public save_invoice and post_invoice wrappers, created by ALTER FUNCTION
+  // ... RENAME TO, so their bodies kept the public operation literal and every layer shares that
+  // one receipt namespace. 20261013220000 re-emits the live bodies under their own names (only
+  // removing the assigned-rep checks); changing the literal would orphan existing receipts.
+  _save_invoice_split_provenance_impl_20260719: ['save_invoice'],
+  _save_invoice_below_cost_impl_20260810: ['save_invoice'],
+  _post_invoice_public_impl_20260718: ['post_invoice'],
   // Direct EXECUTE is revoked. This private implementation remains behind the
   // public create_invoice_from_order wrapper and deliberately shares that
   // wrapper's cache namespace so a retry through either layer finds the same

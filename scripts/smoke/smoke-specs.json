@@ -1068,6 +1068,26 @@
         "idempotency",
         "regression"
       ]
+    },
+    "reps_work_any_customer": {
+      "chain": "smoke-reps-work-any-customer.sql",
+      "description": "20261013220000 (Mason, 2026-10-13: sales reps work with ANY customer). On a [SMOKE] customer with no assigned rep, an active sales rep logs, reviews and supersedes a fact, logs an interaction, and reads the prep card, lapsed products, purchase summary and dispatch board; a non-office profile is still refused the prep card (PURCHASE_INTELLIGENCE_ACCESS_DENIED); the rep cannot reassign the customer through save_customer or a table update (REP_CANNOT_REASSIGN, customers_guard_rep_edit_20261013). Invoice save/post, statement, split billing and the other widened paths are covered by the updated financial_scope_and_delivery_aggregate, adversarial_money_inventory_closeout, save_field_app_split_invoice and save_quote_customer_row_version chains; the full before/after matrix (70 cases, admins identical, the prepay and deactivation guards that need a browser role) is the container prover prove-reps-work-any-customer-real-schema.mjs. Terminal rollback.",
+      "covers": [
+        "log_customer_fact",
+        "review_customer_fact",
+        "supersede_customer_fact",
+        "log_customer_interaction",
+        "get_customer_prep_card",
+        "get_customer_lapsed_products",
+        "get_customer_purchase_summary",
+        "get_dispatch_board_jobs",
+        "save_customer",
+        "guard_customer_rep_edit_20261013"
+      ],
+      "area": [
+        "security",
+        "billing"
+      ]
     }
   }
 }

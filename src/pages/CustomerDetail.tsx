@@ -132,6 +132,11 @@ export default function CustomerDetail() {
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
+  // Reps edit any customer (2026-10-13), but only an admin or the customer's own rep changes its
+  // default commission split (customers_guard_rep_edit_20261013 refuses anyone else).
+  const canEditDefaultSplit = isNew
+    || profile?.role === 'admin'
+    || (profile?.role === 'sales_rep' && customer.assigned_sales_rep === profile.id);
   // Read by the route-change reset, which must not re-run when the profile
   // resolves — that would clobber an already-loaded customer.
   const salesRepIdRef = useRef(profile?.id);
@@ -892,7 +897,7 @@ export default function CustomerDetail() {
           staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
         } else {
-          toast('error', error.message);
+          toast('error', sanitizeError(error));
         }
       } else {
         // F1: verify the reply before retiring the key. An empty payload with no
@@ -1356,14 +1361,31 @@ export default function CustomerDetail() {
 
           <Card>
             <CardHeader title="Default" accent="Commission Split" />
-            <CommissionSplitEditor
-              value={(customer.default_commission_split as CommissionSplit) || { splits: [{ recipient: '', percentage: 100 }] }}
-              onChange={(val) => {
-                defaultSplitTouchedRef.current = true;
-                update('default_commission_split', val);
-              }}
-              label=""
-            />
+            {canEditDefaultSplit ? (
+              <CommissionSplitEditor
+                value={(customer.default_commission_split as CommissionSplit) || { splits: [{ recipient: '', percentage: 100 }] }}
+                onChange={(val) => {
+                  defaultSplitTouchedRef.current = true;
+                  update('default_commission_split', val);
+                }}
+                label=""
+              />
+            ) : (
+              <div className="space-y-1 text-sm">
+                {(customer.default_commission_split?.splits ?? []).length === 0 ? (
+                  <p className="text-secondary">No default split set.</p>
+                ) : (
+                  (customer.default_commission_split?.splits ?? []).map((split, index) => (
+                    <p key={`${split.recipient_user_id ?? split.recipient}-${index}`}>
+                      {split.recipient || 'Unnamed recipient'}: {split.percentage}%
+                    </p>
+                  ))
+                )}
+                <p className="text-xs text-secondary">
+                  Only an admin or this customer&apos;s assigned sales rep can change its default commission split.
+                </p>
+              </div>
+            )}
             <p className="text-xs text-secondary mt-2">
               This default split is applied to new quotes for this customer.
             </p>

@@ -25,7 +25,7 @@ All five, with the four **app roles** — the ones every policy below branches o
 | Role | Who | Access level |
 |------|-----|-------------|
 | `admin` | Mason and other administrators | Full access to everything |
-| `sales_rep` | Sales representatives | Access to own customers, quotes, orders. No access to month-end or settings; reads only their own commission rows (`comm_select`: `recipient_user_id = (SELECT auth.uid())`). |
+| `sales_rep` | Sales representatives | Access to every customer and its records (contacts, documents, facts, interactions; since 2026-10-13), and to quotes and orders. Cannot reassign a customer, or change the commission split of a customer not assigned to them (trigger `customers_guard_rep_edit_20261013`). No access to month-end or settings; reads only their own commission rows (`comm_select`: `recipient_user_id = (SELECT auth.uid())`). |
 | `driver` | Delivery drivers | Access to own assigned deliveries. Can confirm, complete, upload photos, report issues. |
 | `applicator` | Chemical applicators | Access to own assigned jobs. Can record applied info. |
 | `entity_recipient` | 2 live rows | **Permitted by the CHECK constraint but referenced by no policy.** Such a profile is treated as none of the four above: it fails `is_admin()`, `is_sales_rep()`, `is_driver()` and `is_applicator()`, so it sees only what a plain active profile sees. |
@@ -326,8 +326,8 @@ to show was stale: live also pins the actor.
 | profiles | Own/Admin | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
 | cost_history | Admin | - (no INSERT policy) | - | - |
-| customers | Admin / Sales Rep (assigned) / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned) | Admin / Sales Rep (assigned) | Admin |
-| customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
+| customers | Admin / Sales Rep / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned to themselves) | Admin / Sales Rep (any customer; reassignment admin-only and the commission split admin-or-assigned-rep, enforced by `customers_guard_rep_edit_20261013`) | Admin |
+| customer_addresses | All authenticated | Admin / Sales Rep by policy, but `authenticated` holds no INSERT grant (`save_customer` writes addresses) | Admin / Sales Rep by policy, but no UPDATE grant either | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |

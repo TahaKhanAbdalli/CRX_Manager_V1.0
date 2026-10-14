@@ -104,7 +104,10 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'IDEMPOTENCY_PAYLOAD_CONFLICT' THEN
+    -- Since the save_invoice receipts were bound to their actor (20260802/20260810), another
+    -- caller's key is refused as IDEMPOTENCY_ACTOR_MISMATCH before any customer comparison;
+    -- either refusal keeps the other invoice id hidden.
+    IF v_err NOT IN ('IDEMPOTENCY_PAYLOAD_CONFLICT', 'IDEMPOTENCY_ACTOR_MISMATCH') THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong decoy replay error: %', v_err;
     END IF;
   END;
@@ -114,11 +117,12 @@ BEGIN
       v_other_invoice,
       'smk-post-other-' || v_suffix
     );
-    RAISE EXCEPTION 'SMOKE_FAIL: sales rep posted another customer invoice';
+    RAISE EXCEPTION 'SMOKE_FAIL: sales rep posted an invoice not under their own name';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
+    -- Since 20261013220000 reps post for any customer, but only invoices under their own name.
+    IF v_err <> 'INVOICE_SCOPE_DENIED' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong post scope error: %', v_err;
     END IF;
   END;
