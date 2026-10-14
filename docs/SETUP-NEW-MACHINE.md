@@ -158,7 +158,7 @@ In Claude Code (open in the CRX Manager directory):
 ### 7a. SessionStart hooks fire
 Start a new session. You should immediately see (silently, in Claude's context):
 - A git porcelain snapshot
-- A staleness check report (if schema-registry is old, CLAUDE.md counts drift, etc.)
+- A staleness check report (schema-registry behind the migrations, uncommitted files from a prior session, a missing or stale weekly DB backup)
 
 If Claude can describe what's in `git status` without you telling it, the hooks are working.
 
@@ -265,6 +265,6 @@ These should run periodically on whichever machine you're working from:
 
 ## When you're stuck
 
-Most things in CRX Manager have a corresponding skill that knows the right pattern. When in doubt, describe the problem in plain English to Claude — the task table in `AGENTS.md` and the "Claude Workflows" table in `CLAUDE.md` route requests to the right guidance and workflow.
+Most things in CRX Manager have a corresponding skill that knows the right pattern. When in doubt, describe the problem in plain English to Claude — the task table in `AGENTS.md` and the "Workflows" table in `CLAUDE.md` route requests to the right guidance and workflow.
 
 If a workflow should fire and doesn't, tell Claude "this phrase should have triggered X". Claude can add the routing row, and updates the affected manual or reference doc in the same change.

@@ -111,8 +111,8 @@ checkout if the files differ:
 - `docs/reference/gotchas.md`
 - `docs/manual/DECISION_LOG.md`
 - `docs/manual/KNOWN_ISSUES.md`
-- `docs/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
-- `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`
+- `docs/archive/2026-autumn-cleanup/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
+- `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md` (historical path, no longer on `origin/main`: removed in #839, `a16925315`; recover with `git show a16925315^:docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`)
 - `docs/audits/2026-07-22-supplier-pricing-phase3-classification-review.md`
 - `docs/reference/database-schema.md`
 - `docs/reference/migration-history.md`

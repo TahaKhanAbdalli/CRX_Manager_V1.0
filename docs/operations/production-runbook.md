@@ -1,6 +1,6 @@
 # CRX Manager — Production Runbook
 
-**Last updated:** 2026-07-16 (backup/recovery section rewritten to FREE-plan reality; revert path updated to the PR-only landing flow)
+**Last updated:** 2026-10-14 (deploy section now points at the current landing, migration and Edge Function procedures; stale counts and paths corrected). Earlier: 2026-07-16 (backup/recovery section rewritten to FREE-plan reality; revert path updated to the PR-only landing flow)
 **Audience:** Mason (owner) and any future on-call admin.
 **Scope:** day-to-day operations, deploys, rollbacks, incident response, and recurring maintenance for the production system.
 
@@ -13,9 +13,9 @@
 | Frontend | Vercel (production) | https://vercel.com/dashboard |
 | Live URL | https://croprxsolutions.app | — |
 | Database | Supabase project `rhyzpcqhnizqbxphqdkr` | https://supabase.com/dashboard/project/rhyzpcqhnizqbxphqdkr |
-| Edge Functions | Supabase (7 functions) | Supabase → Edge Functions tab |
+| Edge Functions | Supabase (one per folder in `supabase/functions/`, excluding `_shared`) | Supabase → Edge Functions tab |
 | Email | Resend (via `send-email` Edge Function) | https://resend.com/dashboard |
-| OCR | Google Vision API (via `process-blend-ticket`) | https://console.cloud.google.com |
+| OCR | Google Vision API (via `process-blend-ticket` and `process-document`) | https://console.cloud.google.com |
 | Repo | GitHub `masonwells1/CRX_Manager_V1.0` | https://github.com/masonwells1/CRX_Manager_V1.0 |
 | CI | GitHub Actions (`.github/workflows/ci.yml`) | Repo → Actions tab |
 | Error tracking | Sentry | https://sentry.io |
@@ -26,66 +26,51 @@
 
 ## 2. Deploy
 
+The step-by-step procedures live in `DEPLOYMENT.md` and `.claude/commands/ship.md` (the file
+`AGENTS.md` routes pushes, merges and releases to); this section only summarizes them.
+
 ### 2.1 Normal deploy (frontend)
 
-Vercel auto-deploys every push to `main` and every PR (preview).
+Vercel builds a preview for every PR and deploys production when a PR merges into `main`.
+Nobody pushes to `main` directly — the `protect-main` ruleset rejects it.
 
-1. Run `npm run build` locally to confirm a clean build.
-2. Open a PR → Vercel posts a preview URL on the PR.
-3. Smoke-test the preview against your test customer / test orders.
-4. Squash-merge to `main` → Vercel promotes to production.
-5. Watch [Vercel deployments](https://vercel.com/dashboard) until the new build is "Ready."
-6. Hit https://croprxsolutions.app → hard refresh → confirm the new build (look for the new feature or check Vercel build hash).
+1. Open a PR. CodeRabbit reviews it automatically and CI runs the required checks.
+2. The PR merges only through the protected path in `.claude/commands/ship.md` Step 8:
+   CodeRabbit APPROVED on the exact head, every check green, a fresh exact-SHA Sol review
+   (except a documentation-only change, `docs/reference/sol-exempt-paths.md`), then
+   `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`.
+3. Watch [Vercel deployments](https://vercel.com/dashboard) until the new build is "Ready."
+4. Hit https://croprxsolutions.app → hard refresh → confirm the new build.
+
+A preview deployment talks to the live database (there is no staging project yet), so do
+not create or change records while checking one.
 
 ### 2.2 Database migration deploy
 
-Migrations are SQL files in `supabase/migrations/`. They are applied to production via the Supabase MCP (`mcp__supabase__apply_migration`) — **NOT** by `npx supabase db push`.
-
-Order of operations:
-
-1. Write the migration file under `supabase/migrations/<timestamp>_<name>.sql`.
-2. Run `npm run typecheck && npm run build && npm run test` to confirm the codebase still compiles against the planned schema.
-3. Update `src/types/index.ts` if columns/tables changed.
-4. Apply via Supabase MCP (or the Supabase CLI dashboard SQL editor as a fallback).
-5. Verify via `mcp__supabase__get_advisors --type security` — expect zero new advisor errors.
-6. Update `docs/reference/migration-history.md`, `docs/CHANGELOG.md`, `CLAUDE.md` migration count.
-7. Commit the migration file + the doc updates together.
+Migrations are SQL files in `supabase/migrations/`. An agent applies them through
+`scripts/apply-migration-file.mjs` (dry run first, then `--confirm`) after the PR's reviews
+pass — not by `npx supabase db push`, and not through the MCP `apply_migration` tool, which
+cannot pass the apply guard. The full sequence, including which migrations wait for Mason's
+own approval, is in `DEPLOYMENT.md` and `.claude/commands/ship.md` Step 5. Record each
+change in a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry and in
+`docs/reference/migration-history.md`.
 
 ### 2.3 Edge Function deploy
 
-Edge Functions live in `supabase/functions/<function-name>/`. Each has its own `index.ts` and runs on Deno.
-
-Deploy a single function:
-```bash
-npx supabase functions deploy <function-name> --project-ref rhyzpcqhnizqbxphqdkr
-```
-
-Deploy all:
-```bash
-for fn in supabase/functions/*/; do
-  name=$(basename "$fn")
-  npx supabase functions deploy "$name" --project-ref rhyzpcqhnizqbxphqdkr
-done
-```
-
-After deploy, smoke-test by triggering the function from the live app (or via `curl` with a valid JWT).
+Edge Functions live in `supabase/functions/<function-name>/` (`_shared/` is shared code, not
+a function). Each has its own `index.ts` and runs on Deno. **Every Edge Function deploy
+needs Mason's explicit approval in the current conversation** (`AGENTS.md`). Agents use the
+`deploy-edge-function` skill, which runs the pre-flight checks and a post-deploy smoke test.
 
 ### 2.4 Required environment variables
 
-**Vercel project:**
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-- `VITE_MAPBOX_TOKEN`
-- `VITE_SENTRY_DSN`
+**Vercel project:** `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are required;
+`VITE_MAPBOX_TOKEN` and `VITE_SENTRY_DSN` are optional (`.env.example`).
 
-**Supabase Edge Functions (per-function secrets):**
-- `ALLOWED_ORIGIN` — must be set on every function for CORS
-- `RESEND_API_KEY` — `send-email` only
-- `GOOGLE_VISION_API_KEY` — `process-blend-ticket` only
-- `SUPABASE_SERVICE_ROLE_KEY` — present automatically; never expose to frontend
-- `SENTRY_DSN` — required to enable Edge Function error alerting (Sprint F #7).
-  When unset, captureEdgeException is a no-op. Set via:
-  `npx supabase secrets set SENTRY_DSN=https://... --project-ref rhyzpcqhnizqbxphqdkr`
+**Supabase Edge Function secrets:** see the "Edge Function secrets" table in `DEPLOYMENT.md`,
+which is the single list. `SUPABASE_SERVICE_ROLE_KEY` is present automatically; never expose
+it to the frontend. When `SENTRY_DSN` is unset, `captureEdgeException` logs a
+`SENTRY_MISCONFIG` warning instead of reporting.
 
 ---
 
@@ -105,9 +90,10 @@ After deploy, smoke-test by triggering the function from the live app (or via `c
 git checkout -b revert/<short-name> origin/main
 git revert <bad-commit-sha>
 git push -u origin revert/<short-name>
-gh pr create --fill && gh pr merge --squash --auto
+gh pr create --fill
 ```
-The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
+The revert PR then lands through the normal protected path (`.claude/commands/ship.md`
+Step 8; `--auto` is refused by the merge gates). The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
 rollback above is faster — prefer it mid-incident.)
 
 ### 3.2 Rolling back a database migration
@@ -116,14 +102,16 @@ rollback above is faster — prefer it mid-incident.)
 
 1. **DO NOT** delete or modify the bad migration file in git history.
 2. Write a NEW migration that reverses the bad changes (drop columns added, restore prior function definitions, etc.).
-3. Apply via `mcp__supabase__apply_migration`.
+3. Apply it through the normal migration path (§2.2).
 4. Confirm app works against the reversed state.
 
-**Worst-case (data corruption):** restore from a Supabase point-in-time backup (see §4).
+**Worst-case (data corruption):** restore from the `CRX_Backups` dump or the in-database
+`backup_snapshots` (see §4.2). There is no Supabase point-in-time recovery on the FREE plan.
 
 ### 3.3 Rolling back an Edge Function
 
-Edge Functions are versioned by deploy. To roll back, redeploy the prior version's source code:
+Edge Functions are versioned by deploy. To roll back, redeploy the prior version's source code
+(a redeploy is an Edge Function deploy, so it needs Mason's explicit approval first):
 
 ```bash
 git checkout <good-sha> -- supabase/functions/<fn-name>/
@@ -168,7 +156,7 @@ project first — never overwrite production directly.
 project, verify representative rows (`customers`, `invoices`, recent
 `inventory_transactions`), document the time it took here.
 
-**Last drill:** _none yet — schedule for 2026-08-01_
+**Last drill:** _none yet (still open as item 8 in `TODO.md`)_
 
 ### 4.3 What's NOT in the backup
 
@@ -193,7 +181,7 @@ Keep an offline copy of:
 1. **Confirm all deliveries are completed or cancelled** for the closing month. Open `Deliveries` page → filter status = `in_progress` or `scheduled` with delivery date in the closing month → resolve each.
 2. **Confirm all invoices are posted or voided** for the closing month. `Invoices` page → filter status = `unposted` or `draft` with invoice date in the closing month → post or void.
 3. **Generate finance charges** for overdue customers (Customers → Statements → Generate Finance Charges).
-4. **Run the period close:** Settings → Accounting Periods → close the month. The `close_accounting_period()` RPC checks for any blocking open transactions and refuses if anything is incomplete.
+4. **Run the period close:** Month-End Close page (`/month-end`, admin only) → close the month. The `close_accounting_period()` RPC checks for any blocking open transactions and refuses if anything is incomplete.
 5. **Generate statements** (Customers → Statements → Generate Batch Statements) and review/email.
 6. **Apply remaining prepayments:** Customers → Prepay → Apply Remaining → confirm balances.
 7. **Reconcile commissions:** Commissions page → review the prior month → mark paid where applicable.
@@ -224,12 +212,14 @@ If Vercel is fine but the app errors:
 3. Verify `RESEND_API_KEY` in Supabase Edge Function secrets (rotated keys are the most common cause).
 4. Manually call `send-email` from the live app with a test recipient; the response includes any error body.
 
-### 6.3 "The pre-commit hook is taking too long"
+### 6.3 "A git hook is taking too long"
 
-It runs lint + build + 1,841 tests = 90–120 seconds on a healthy machine. If it's longer:
+The pre-commit hook is fast: it checks the ledger requirement, private-artifact containment
+and the staged high-risk files only. The pre-push hook runs typecheck and build, so it is the
+slow one. Full lint, unit/guard tests and coverage run in GitHub CI on the PR. If a hook is slow:
 - `npm ci` to ensure clean dependencies
-- Restart your terminal (long-running test workers can lock up)
-- As a last resort: `git commit --no-verify` is BANNED by hard rule, but if absolutely needed, the CI sql-validation + lint-typecheck-test jobs (added in Sprint F #5) will still catch most issues at PR time.
+- Restart your terminal
+- `--no-verify` is never allowed (`AGENTS.md`); fix the slow step instead.
 
 ### 6.4 "I broke a migration that's already applied"
 
@@ -257,7 +247,7 @@ See §3.2 — write a forward-fix migration, never edit history.
 
 ---
 
-## 8. Hard rules (from CLAUDE.md, repeated here for ops)
+## 8. Hard rules (from `AGENTS.md`, repeated here for ops)
 
 - **NEVER** modify or delete an existing migration file. Only add new ones.
 - **NEVER** drop RLS from a table. Every table must have RLS.
@@ -267,8 +257,8 @@ See §3.2 — write a forward-fix migration, never edit history.
   Legacy PostgreSQL numeric-dollar storage is not an approved exception until exact
   `numeric` arithmetic, clean finite whole-cent values, and an active finite whole-cent
   CHECK are verified. Dirty or unconstrained columns remain tracked findings.
-- **NEVER** commit with `--no-verify` (bypasses lint+build+test gate).
-- **NEVER** push to `main` directly with destructive force flags.
+- **NEVER** commit or push with `--no-verify` (bypasses the git hooks).
+- **NEVER** push to `main` directly; every change lands through a PR.
 
 ---
 
@@ -276,10 +266,12 @@ See §3.2 — write a forward-fix migration, never edit history.
 
 | Doc | Purpose |
 |---|---|
-| `CLAUDE.md` | Project rules, current state, conventions |
-| `SAFE_DEVELOPMENT_RULES.md` | Mandatory pre-commit safety checklist |
-| `DATABASE_CHANGE_CHECKLIST.md` | Step-by-step for schema changes |
-| `docs/CHANGELOG.md` | Sprint-by-sprint development history |
+| `AGENTS.md` | Project rules shared by every agent (`CLAUDE.md` adds Claude-only routing) |
+| `docs/manual/CURRENT_STATE.md` / `KNOWN_ISSUES.md` | What is live now / what is known broken |
+| `DEPLOYMENT.md` | How changes reach production; Edge Function secrets |
+| `docs/workflows/SAFE_DEVELOPMENT_RULES.md` | Mandatory pre-commit safety checklist |
+| `docs/workflows/DATABASE_CHANGE_CHECKLIST.md` | Step-by-step for schema changes |
+| `docs/changelog.d/` | One file per change (new entries); `docs/CHANGELOG.md` is the history up to 2026-08-26 |
 | `docs/reference/migration-history.md` | Every migration with description |
 | `docs/reference/rpc-functions.md` | All RPCs + signatures |
 | `docs/reference/database-schema.md` | All tables + RLS matrix |

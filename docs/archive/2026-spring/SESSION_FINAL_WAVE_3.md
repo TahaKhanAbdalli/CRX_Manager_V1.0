@@ -22,7 +22,7 @@ Both pre-commit hooks ran cleanly: SQL validation passed, frontend validation pa
 
 ### Item 1 — `test(e2e): add holds-cleanup-paths verification (P4-9)` — `347f1f0`
 
-New file: [tests/e2e/holds-cleanup-paths.spec.ts](tests/e2e/holds-cleanup-paths.spec.ts). The spec directly addresses the P4-9 audit item — *"verify that two different quote-cancellation paths leave `inventory.quantity_available` in the same end-state."* The audit's stance was "verify-only, no code change suspected"; this commit creates the verification.
+New file: [tests/e2e/holds-cleanup-paths.spec.ts](../../../tests/e2e/holds-cleanup-paths.spec.ts). The spec directly addresses the P4-9 audit item — *"verify that two different quote-cancellation paths leave `inventory.quantity_available` in the same end-state."* The audit's stance was "verify-only, no code change suspected"; this commit creates the verification.
 
 The spec uses the existing fixture customer `[E2E] Farm Alpha` and product `[E2E] Herbicide Alpha` (already seeded by `tests/e2e/fixtures/setup-fixtures.ts`), creates two scoped quotes per run via `runId()` to avoid concurrency clashes, seeds holds via the production `create_planned_holds` RPC, and asserts that `inventory.quantity_available` ends at the starting value in both paths:
 
@@ -41,7 +41,7 @@ If the test fails when actually run, that is itself a useful finding — it woul
 
 ### Item 2 — `feat(deliveries): WARN-only backdated check on complete_delivery + void_delivery (P4-10)` — `ee054ed`
 
-New migration: [supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql](supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql). Implements Mason's Q3 audit policy — **WARN, do not block, no admin override**.
+New migration: [supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql](../../../supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql). Implements Mason's Q3 audit policy — **WARN, do not block, no admin override**.
 
 Both function bodies are copied **verbatim** from their most recent definitive migrations (per the wave 3 prompt rule "Do NOT rewrite logic that isn't related to the period check"):
 
@@ -100,7 +100,7 @@ The activity_feed schema is `(event_type, description, performed_by, related_ent
 
 ## Migrations awaiting Mason's apply
 
-**Path:** [supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql](supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql)
+**Path:** [supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql](../../../supabase/migrations/20260507160000_warn_backdated_delivery_completion.sql)
 
 This migration was NOT applied to live in this session — per the wave rules. Mason should apply it via Supabase Studio or `supabase db push`.
 

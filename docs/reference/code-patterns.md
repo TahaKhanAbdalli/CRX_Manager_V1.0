@@ -16,7 +16,7 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 - Bulk imports use a 3-state modal pattern: file selection -> validation/review -> results
 - Bulk import components live in `src/components/{domain}/Bulk*.tsx`
 - Modal component accepts `size="large"` prop
-- Tab-based page layout used in: ARaging (3 tabs), Compliance (2 tabs), Rebates (2 tabs), InventoryPage, BlendRecipes
+- Tab-based page layout used in: ARaging (3 tabs), Compliance (4 tabs), Rebates (2 tabs), InventoryPage (2 tabs: inventory, forecast), BlendRecipes
 - Commission split editor: `src/components/ui/CommissionSplitEditor.tsx`
 - Combobox component: `src/components/ui/Combobox.tsx` — dropdown with type-to-filter + accept new values. Used for Vendor, Manufacturer, Category on ProductDetail. Props: `value`, `onChange(string)`, `options: string[]`, `label`, `disabled`, `placeholder`
 
@@ -83,9 +83,9 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 
 ## Operational Metrics Pattern (Sprint 5a)
 - Fire-and-forget Sentry wrappers in `src/lib/metrics.ts`
-- `setUserContext(user)` / `clearUserContext()` — called from `AuthContext` on login/logout
-- `trackNavigation(from, to)` — called from `NavigationTracker` component in `App.tsx` (headless, uses `useLocation` + `useRef` to skip initial mount)
-- `trackBusinessEvent(name, data)` — called after key business actions (order_created, quote_created, quote_converted_to_order)
+- `setUserContext(userId, role)` / `clearUserContext()` — called from `AuthContext` on login/logout
+- `trackNavigation(route)` — called from `NavigationTracker` component in `App.tsx` with the current pathname (headless, uses `useLocation` + `useRef` to skip initial mount)
+- `trackBusinessEvent(name, { message, level?, data? })` — records a Sentry breadcrumb (not an issue) after key business actions (e.g. order_created, order_placed, quote_created, quote_drawn_down, quote_converted_to_order, credit_limit_exceeded)
 - All functions are no-op safe (catch and log errors internally, never throw)
 
 ## Reconciliation Checks Pattern (Sprint 5b)
@@ -97,10 +97,10 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 - Money always in cents (bigint-safe integers), display divides by 100
 
 ## Critical Action Pattern (Sprint 4a)
-- `runCriticalAction({ action, successMessage, errorPrefix })` from shared helper
+- `runCriticalAction({ action, toast, successMessage?, setLoading?, onSuccess?, sentryTag? })` from `src/lib/criticalAction.ts`
 - Replaces scattered try/catch/toast patterns across pages
-- Consistent error handling: logs error, shows toast with `errorPrefix + error.message`
-- Returns `{ success: boolean, data?, error? }`
+- Consistent error handling: shows a toast with `sanitizeError(err)` and reports the failure to Sentry
+- Returns the action's result on success, or `undefined` on failure
 
 ## Idempotency Pattern (Sprint 1a + Security Audit)
 - `useIdempotencyKey(operation, userId, intentScope?)` in `src/hooks/useIdempotencyKey.ts` returns `{ getKey, resetKey, getKeyFor, resetKeyFor, ... }`. It keeps ONE key per intent scope for the lifetime of the mounted component (the keys live in memory, so a remount or page reload clears them — use `useUncertainMutationIntent` below when an unresolved request must survive a reload): the key is minted lazily on the first `getKey()` and stays the same across retries until `resetKey()` after a confirmed success (or an authoritative reload). Switching scope mints a fresh key; returning to a scope with an unresolved outcome reuses its original key. Do not retire a key on `IDEMPOTENCY_PAYLOAD_CONFLICT` — see the hook's header comment.
@@ -141,7 +141,7 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 - **Pages using email**:
   - `InvoiceDetail.tsx` — "Email Invoice" button (admin, posted invoices only) with PDF attachment
   - `QuoteBuilder.tsx` — auto-emails quote PDF on send (if customer has email)
-  - `OrderDetail.tsx` — auto-emails customer when order status → confirmed
+  - `NewOrder.tsx`, `Quotes.tsx`, `QuoteBuilder.tsx` — send the "Order Confirmed" email when the order is created (`src/lib/orderConfirmedEmail.ts`); `OrderDetail.tsx` no longer sends it
   - `DeliveryDetail.tsx` — auto-emails customer on delivery completion (includes delivered items, signature, photos)
   - `ARaging.tsx` — "Send AR Reminders" button (admin) with dedup via `ar_reminder_tracking`, "Email Statements" button with PDF attachment per selected customer
 - **AR reminder dedup**: `ar_reminder_tracking` table has UNIQUE constraint on `(customer_id, reminder_level, sent_date)` — max one reminder per customer per level per day
@@ -195,7 +195,7 @@ const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 ```
 
 ## Build Notes
-- `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
+- `db.ts` throws at import if `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY` is missing, so CI and tests must set them
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`
 - JSX `&&` chains with `unknown` values: use ternary `cond ? <JSX/> : null`
 - Known warning: vendor-mapbox chunk ~1,680KB (>500KB limit) — expected

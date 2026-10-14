@@ -9,7 +9,7 @@ Complete reference for inventory management, calculations, and transaction handl
 | Table | Purpose |
 |-------|---------|
 | `inventory` | Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery) |
-| `inventory_transactions` | Audit trail of every stock change (transaction_type, quantity, reference) |
+| `inventory_transactions` | Audit trail of every stock change (transaction_type, quantity, plus the order_id / purchase_order_id / delivery_id / job_id it came from and notes) |
 | `inventory_holds` | Reserved inventory (quantity, hold_type, expires_at, is_active) |
 | `purchase_orders` | Supplier POs (po_number, vendor, status, total_cost) |
 | `purchase_order_items` | PO line items (quantity_ordered, quantity_received, unit_cost) |

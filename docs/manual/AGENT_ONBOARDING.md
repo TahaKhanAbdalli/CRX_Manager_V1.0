@@ -1,6 +1,6 @@
 # Agent Onboarding — How Not to Fail Here
 
-**Last verified: 2026-10-09**
+**Last verified: 2026-10-14**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
 You are a new coding agent starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
@@ -15,7 +15,7 @@ CRX Manager is a **live production app** for a real agricultural chemical distri
 2. **This file** — the failure modes that got past agents before you, and how to not repeat them.
 3. **Follow the task table in `AGENTS.md`** — on the first coding session, skim `docs/reference/gotchas.md` once so you know what it covers. For each code change, read `docs/reference/coding-guidelines.md` and revisit only the relevant gotchas section. Add only the relevant sections of `docs/workflows/SAFE_DEVELOPMENT_RULES.md` when the task is multi-file or touches data, money, security, permissions, production, migrations, or customers; do not load the full rulebook for unrelated work.
 4. **The `docs/workflows/` file routed for your task area** — e.g. `QUOTE_TO_DELIVERY.md` for the billing pipeline, `INVENTORY_RULES.md` for inventory, `DATABASE_CHANGE_CHECKLIST.md` before any migration, `RLS_SECURITY_GUIDE.md` before touching policies.
-5. **`docs/manual/ARCHITECTURE.md`** — orientation on how the app fits together. If it's missing, don't invent claims about structure — read the code directly instead.
+5. **`docs/manual/ARCHITECTURE.md`** — orientation on how the app fits together. Where it is silent, don't invent claims about structure — read the code directly instead.
 
 Do not skip the routing decision because the task "looks simple." Start with the contract and this file, then load only the guidance the task actually needs.
 
@@ -75,7 +75,7 @@ These are not code bugs — they're *how an agent convinced itself something was
 
 ## The guard net will stop you — that's normal
 
-This project has a real, enforced safety net: PreToolUse hooks that refuse a Write/Edit that matches a known bug pattern, a migration-apply-guard that requires a fresh review proof before `apply_migration` runs, a push-guard that requires a Codex verdict before a risky push, a pre-commit ledger guard that blocks agent-surface commits with no ledger update staged alongside, and Stop/PostToolUse hooks that force verification and flag loose ends. Full behavior is documented in `docs/reference/agent-guardrails.md` — read it, don't re-derive it here.
+This project has a real, enforced safety net: PreToolUse hooks that refuse a Write/Edit that matches a known bug pattern, a migration-apply-guard that requires a fresh review proof before `apply_migration` runs, a push-guard that requires a fresh, HEAD-bound Codex Sol proof before a risky push to `main`, a pre-commit ledger guard that blocks agent-surface commits with no ledger update staged alongside, and Stop/PostToolUse hooks that force verification and flag loose ends. Full behavior is documented in `docs/reference/agent-guardrails.md` — read it, don't re-derive it here.
 
 If a guard blocks you, the correct response is to **fix the underlying problem the guard is pointing at** — never to look for a way around it, disable it, edit the hook, or add an exemption comment you're not sure is warranted. If you genuinely believe a guard is wrong (a false positive on legitimate code), say so to Mason in plain English and let him decide — don't silently bypass it and don't unilaterally change guard config.
 
@@ -92,7 +92,7 @@ If a guard blocks you, the correct response is to **fix the underlying problem t
 | Broad **foundation safety** sweep | `codex-gauntlet` (foundation mode) / `review-workflow` | Wide and read-only; not scoped to your one change, so still run a focused review on what you actually touched |
 | **Two-model reconciliation** (Claude vs Codex disagree, or you want both) | `agent-pair-review` | Compares notes between models; doesn't apply fixes itself |
 
-Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the authorization `AGENTS.md` requires. Under Mason's autonomous-landing rule (2026-09-26) an eligible NON-destructive migration (its grants routine, none widening access) applies in any session with no in-chat ask once the required review, check and migration-apply-guard gates pass. A destructive migration is refused for agents and Mason applies it himself; a migration that overwrites existing rows or widens access, an Edge Function deploy, data deletion, and changes to secrets, authentication, permissions (beyond a migration's routine grants), billing, domains or ownership always need his explicit go-ahead in this conversation.
+Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the authorization `AGENTS.md` requires. Under Mason's autonomous-landing rule (2026-09-26) an eligible NON-destructive migration (its grants routine, none widening access) applies in any session with no in-chat ask once the required review, check and migration-apply-guard gates pass. A destructive migration is refused for agents until Mason approves that exact file by his `I approve` reply in this conversation (`scripts/owner-approve-migration.mjs` builds the request), after which the agent applies it through `scripts/apply-migration-file.mjs`; a migration that overwrites existing rows or widens access, an Edge Function deploy, data deletion, and changes to secrets, authentication, permissions (beyond a migration's routine grants), billing, domains or ownership always need his explicit go-ahead in this conversation.
 
 ---
 

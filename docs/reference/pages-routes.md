@@ -18,7 +18,7 @@
 | `/quotes/:id` | QuoteBuilder | Edit existing quote |
 | `/orders` | Orders | Order list with status badges |
 | `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
-| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice, auto-emails customer on order confirmed |
+| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice (the "Order Confirmed" email is sent when the order is created, from NewOrder, Quotes or QuoteBuilder, not from this page) |
 | `/inventory` | InventoryPage | Inventory levels, vendor-grouped reorder alerts, transaction ledger, batch adjust, cost valuation columns |
 | `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery + load sheet PDF. Roles: admin/sales_rep/driver |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
@@ -56,7 +56,7 @@
 | `/accounts-payable/bills/:id` | VendorBillDetail | Admin-only. Bill detail, payment history, record payment, void bill |
 | `/vendors` | Vendors | Admin-only. Vendor master-data CRUD (name, contact, payment terms). Save/delete via `save_vendor` / `delete_vendor` RPCs. Added 2026-05-10 in AP polish bundle (PR #59). |
 | `/sales-reports` | SalesReports | Comprehensive sales & chemical history. 5 tabs (Detail, By Product, By Customer, By Month, By Sales Rep), 6 filters, multi-customer select with farm group support, Customer View toggle (hides cost/margin), CSV/PDF export |
-| `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
+| `/reports` | Reports | Five categories: profitability (4 tabs), application logbook, financial (4 tabs), operational (4 tabs) and year-end summaries. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
 | `/field-profitability` | FieldProfitability | Field-level profitability report (X4/E4/T10): margin per acre by field/customer/season from posted field-app invoices via read-only RPC `get_field_profitability`; "(unassigned field)" bucket for job-transferred invoices without location rows. Roles: admin/sales_rep. Added 2026-07-21 |
 | `/fields/:id` | FieldSetup | Field CRUD with two-panel layout and satellite map with polygon drawing |
@@ -92,7 +92,7 @@
 | `/field-invoices/posted` | Redirect -> `/field-invoices?tab=posted` | Admin/sales. Old bookmark |
 | `/field-invoices/summary` | Redirect -> `/field-invoices?tab=customer` | Admin/sales. Old bookmark |
 | `/field-invoices/unbilled` | Redirect -> `/field-invoices?tab=unbilled` | Admin/sales. Old bookmark |
-| `/office-cockpit` | OfficeCockpit | Admin/sales. §3 Beyond-Parity exception dashboard: 7 live tiles (unbilled jobs, ready-to-post field-app invoices, watchdog flags, upcoming jobs 7-day, expiring licenses/certs 30-day, overdue field-app AR, deferred inventory shortfalls). One screen replaces the run-seven-reports ritual. |
+| `/office-cockpit` | OfficeCockpit | Admin/sales. §3 Beyond-Parity exception dashboard: 11 live tiles (unbilled jobs, needs dispatch, planned bookings needing attention, ready-to-post field-app invoices, chemical drafts to post, delivered not invoiced, watchdog flags, upcoming jobs 7-day, expiring licenses/certs, overdue field-app AR, inventory shortfalls). One screen replaces running each report separately. |
 | `/watchdog` | WatchdogExceptions | Admin/sales. Standing list of active (non-dismissed) watchdog flags across jobs/invoices, grouped by type, with a one-tap dismiss and a "Refresh flags" button that re-runs the server-side detection sweep. Advisory only |
 | `/label-review` | LabelReview | Admin-only. Label-data backfill review queue: create label drafts, accept/edit/reject each per product, and view a label coverage report. Nothing is applied to a product without an explicit accept/edit |
 | `/label-data-quality` | LabelDataQuality | Admin-only. In-app EPA registration-number check with inline fixes, plus bulk EPA signal-word apply (shipped 2026-07-10) |

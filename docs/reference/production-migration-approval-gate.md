@@ -203,10 +203,17 @@ automated gate; safety takes priority over coverage.
 
 ## One-time ledger-guard bootstrap
 
-The workflow remains inert until
-`20260827223000_enforce_global_migration_ledger_order.sql` is applied through the existing reviewed
-manual path. Resolve or apply every older approved pending migration first; installing the guard
-intentionally makes any later attempt to insert an older authored timestamp fail and roll back.
+> **Historical — do not follow (noted 2026-10-14).** Like the rest of this retired page, this
+> section describes a design that never shipped. The migration it names was rejected on 2026-08-31
+> and must never be applied; it is parked as
+> `scripts/.staging-migrations/20260827223000_enforce_global_migration_ledger_order.sql.REJECTED`,
+> and the workflow was removed. Nothing below is an instruction.
+
+As designed, the workflow was to stay inert until
+`20260827223000_enforce_global_migration_ledger_order.sql` had been applied through the reviewed
+manual path, after every older approved pending migration had been resolved; installing the guard
+would have made any later attempt to insert an older authored timestamp fail and roll back. None of
+this happened.
 
 The guard runs for every ledger insert, regardless of whether it came from GitHub, Supabase MCP, or
 another client. Its trigger is enabled in PostgreSQL `ALWAYS` mode, so a privileged client cannot

@@ -157,10 +157,12 @@ only its unit shrank from "the PR" to "the candidate epoch".
   the current head, still refuses. The merge gates still deny while the aggregate
   `reviewDecision` is `CHANGES_REQUESTED`.
 
-The loop for a fix is therefore: fix, push to the same PR, wait for checks, run
+The legacy loop for a fix was therefore: fix, push to the same PR, wait for checks, run
 the exact-SHA Sol proof (not needed for a documentation-only change), apply
 `ready-for-coderabbit`, and merge once CodeRabbit
-approves the new head. Never post `@coderabbitai` commands by hand and never use
+approved the new head. Today CodeRabbit re-reviews every push automatically (see the banner
+above). Never post `@coderabbitai` commands by hand, except the single `@coderabbitai review`
+for a skipped or rate-limited head that the banner describes (Mason, 2026-09-27), and never use
 `@coderabbitai resume`.
 
 The run API's `head_sha` can expose either the PR head or the execution base.
