@@ -117,6 +117,7 @@ export default function OrderDetail() {
   const [allocations, setAllocations] = useState<OrderItemFieldAllocation[]>([]);
   const [allocFields, setAllocFields] = useState<AllocField[]>([]);
   const [custNames, setCustNames] = useState<Record<string, string>>({});
+  const [allocLoadFailed, setAllocLoadFailed] = useState(false);
   const [allocEditorItemId, setAllocEditorItemId] = useState<string | null>(null);
   const [newAllocFieldId, setNewAllocFieldId] = useState('');
   const [newAllocAcres, setNewAllocAcres] = useState('');
@@ -285,12 +286,27 @@ export default function OrderDetail() {
       setAllocations(((allocData || []) as unknown as (OrderItemFieldAllocation & { order_items?: unknown })[])
         .map(({ order_items: _oi, ...a }) => a as OrderItemFieldAllocation));
 
-      const [fieldsRes, fbdRes, custRes] = await Promise.all([
+      const [fieldsRes, fbdRes] = await Promise.all([
         supabase.from('fields').select('id, field_name, total_acres, customer_id').eq('is_active', true).order('field_name'),
         supabase.from('field_billing_defaults').select('field_id, customer_id, split_pct'),
-        supabase.from('customers').select('id, farm_name').is('deleted_at', null).limit(2000),
       ]);
       if (isStale()) return;
+      // Names for just the customers the preview can show (this order's customer + field owners).
+      // No active filter: an inactive field owner still shows by name. (customers has no
+      // deleted_at column; filtering on it made this query 400.)
+      const nameIds = [...new Set([
+        orderData.customer_id,
+        ...(fieldsRes.data || []).map((f) => f.customer_id),
+        ...(fbdRes.data || []).map((r) => r.customer_id),
+      ].filter(Boolean))];
+      const custRes = await supabase.from('customers').select('id, farm_name').in('id', nameIds);
+      if (isStale()) return;
+      const allocLoadErrors = [fieldsRes.error, fbdRes.error, custRes.error].filter((e) => e != null);
+      for (const err of allocLoadErrors) {
+        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_field_split_lookups_for_order' } });
+      }
+      if (allocLoadErrors.length > 0) toast('error', 'Failed to load field split details. Please refresh.');
+      setAllocLoadFailed(allocLoadErrors.length > 0);
       const ownersByField: Record<string, { customer_id: string; split_pct: number }[]> = {};
       for (const r of fbdRes.data || []) {
         (ownersByField[r.field_id] ||= []).push({ customer_id: r.customer_id, split_pct: Number(r.split_pct) });
@@ -303,7 +319,7 @@ export default function OrderDetail() {
     }
     if (isStale()) return;
     setLoading(false);
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => {
     activeOrderIdRef.current = id;
@@ -766,13 +782,18 @@ export default function OrderDetail() {
 
   // ── Share management ──────────────────────────────────────────────────
   const openShareEditor = async () => {
-    // Load customers for dropdown
-    const { data } = await supabase
+    // Load active customers for the dropdown (customers soft-delete via is_active, not deleted_at)
+    const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
-      .is('deleted_at', null)
+      .eq('is_active', true)
       .order('farm_name')
       .limit(500);
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_customers_for_bill_split' } });
+      toast('error', 'Failed to load customers. Please try again.');
+      return;
+    }
     setShareCustomers((data || []) as { id: string; farm_name: string }[]);
     setNewShareCustomerId('');
     setNewSharePct('');
@@ -1951,7 +1972,9 @@ export default function OrderDetail() {
           </div>
           <p className="text-xs text-secondary mb-3">
             Optional. Assign fields + acres to a line to split its invoice across the fields' owners by acres.
-            {allocFields.length === 0 && <span className="text-amber-600"> No active fields are set up yet.</span>}
+            {allocLoadFailed
+              ? <span className="text-red-600"> Field details failed to load — refresh to try again.</span>
+              : allocFields.length === 0 && <span className="text-amber-600"> No active fields are set up yet.</span>}
           </p>
 
           <div className="space-y-3">
