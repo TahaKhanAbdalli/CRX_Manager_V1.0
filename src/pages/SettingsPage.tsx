@@ -214,15 +214,6 @@ export default function SettingsPage() {
   const [settingPassword, setSettingPassword] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
 
-  useEffect(() => {
-    if (role !== 'admin') {
-      navigate('/');
-      return;
-    }
-    Promise.all([fetchSettings(), fetchUsers()]).finally(() => setPageLoading(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, navigate]);
-
   const fetchSettings = async () => {
     const { data, error } = await supabase.from('app_settings').select('*');
     if (error) {
@@ -270,6 +261,15 @@ export default function SettingsPage() {
     }
     setUsers((data || []) as Profile[]);
   };
+
+  useEffect(() => {
+    if (role !== 'admin') {
+      navigate('/');
+      return;
+    }
+    Promise.all([fetchSettings(), fetchUsers()]).finally(() => setPageLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, navigate]);
 
   const saveSetting = async (key: string, value: string) => {
     const result = await supabase

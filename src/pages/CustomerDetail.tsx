@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useLatestRef } from '../hooks/useLatestRef';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -139,8 +140,8 @@ export default function CustomerDetail() {
     || (profile?.role === 'sales_rep' && customer.assigned_sales_rep === profile.id);
   // Read by the route-change reset, which must not re-run when the profile
   // resolves — that would clobber an already-loaded customer.
-  const salesRepIdRef = useRef(profile?.id);
-  salesRepIdRef.current = profile?.id;
+  // Committed value; the reset is a passive effect, so it runs after this layout-effect update.
+  const salesRepIdRef = useLatestRef(profile?.id);
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   // Lost-update guard: split as loaded from the DB, and whether the user has
   // changed it this session (see src/lib/commissionSplitConcurrency.ts).
@@ -474,7 +475,7 @@ export default function CustomerDetail() {
     initialLoadDone.current = false;
     setIsDirty(false);
     setLoading(!isNew);
-  }, [id, isNew]);
+  }, [id, isNew, salesRepIdRef]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
     // `id` is closed over per route, so it names the customer this load was

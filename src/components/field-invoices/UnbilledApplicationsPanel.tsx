@@ -310,6 +310,7 @@ export default function UnbilledApplicationsPanel() {
 
   const daysWaiting = (d: string | null): string => {
     if (!d) return '—';
+    // eslint-disable-next-line react-hooks/purity -- display-only "days waiting" label
     const days = Math.floor((Date.now() - new Date(d + 'T00:00:00').getTime()) / 86400000);
     return days <= 0 ? 'today' : `${days}d`;
   };

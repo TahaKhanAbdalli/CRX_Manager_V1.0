@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useCallback, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -34,7 +34,9 @@ export default function Modal({
         ? 'md:max-w-4xl'
         : 'md:max-w-lg'} md:mx-4 md:h-auto md:max-h-[90vh] md:rounded-xl`;
   const dialogRef = useRef<HTMLDivElement>(null);
-  const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current;
+  // useId gives every open modal a unique, render-stable id (a random id read from a ref is
+  // impure during render and can collide).
+  const titleId = `modal-title-${useId()}`;
 
   // Escape key handler
   const handleKeyDown = useCallback(

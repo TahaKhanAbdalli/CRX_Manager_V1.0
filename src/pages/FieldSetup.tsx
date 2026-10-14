@@ -130,7 +130,10 @@ export default function FieldSetup() {
   const [drawnPolygons, setDrawnPolygons] = useState<DrawnPolygon[]>([]);
   const [geometryDirty, setGeometryDirty] = useState(false);                 // boundary drawn/changed this session?
   const loadedOverrideRef = useRef<number | null>(null);                     // override_acres at load (to detect changes)
-  const loadedHadBoundaryRef = useRef(false);                                // did the loaded field have a saved boundary?
+  const loadedHadBoundaryRef = useRef(false);                                // did the loaded field have a saved boundary? (read by the async save)
+  // Render-side mirror of loadedHadBoundaryRef, so the map's "remove the only part" control
+  // re-renders when it changes instead of relying on an unrelated state update.
+  const [hasSavedBoundary, setHasSavedBoundary] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number] | undefined>(undefined);
   const [mapZoom, setMapZoom] = useState<number | undefined>(undefined);
   const [overlayMapCenter, setOverlayMapCenter] = useState<[number, number]>([-89, 40]);
@@ -277,6 +280,7 @@ export default function FieldSetup() {
       setField(fieldRow as Partial<Field>);
       loadedOverrideRef.current = (fieldRow as Partial<Field>).override_acres ?? null;
       loadedHadBoundaryRef.current = (fieldRow as Partial<Field>).measured_acres != null; // A1 backfilled measured for every boundaried field
+      setHasSavedBoundary(loadedHadBoundaryRef.current);
 
       const cust = data.customer as { farm_name: string } | null;
       setOwnerName(cust?.farm_name || '');
@@ -595,6 +599,7 @@ export default function FieldSetup() {
               assertRpcResult(bData, 'set_field_boundary');
               saveFieldBoundaryIdem.resetKey();
               loadedHadBoundaryRef.current = true; // a newly persisted boundary cannot be removed in this editor
+              setHasSavedBoundary(true);
               setGeometryDirty(false);   // boundary persisted — don't re-measure on a later attribute-only save
             } catch (geoError) {
               Sentry.captureException(geoError instanceof Error ? geoError : new Error(String(geoError)), { tags: { source: 'critical_action', action: 'set_field_boundary' } });
@@ -1464,7 +1469,7 @@ export default function FieldSetup() {
               <DrawLayer
                 initialPolygons={drawnPolygons}
                 onPolygonsChange={handlePolygonsChange}
-                allowRemoveSinglePart={canRemoveSingleBoundary(loadedHadBoundaryRef.current)}
+                allowRemoveSinglePart={canRemoveSingleBoundary(hasSavedBoundary)}
                 disabled={addObstacleMode || adoptCsbMode}
                 onDrawingStateChange={setIsBoundaryDrawing}
               />

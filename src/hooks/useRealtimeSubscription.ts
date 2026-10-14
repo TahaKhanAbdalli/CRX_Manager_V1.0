@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { supabase } from '../lib/db';
+import { useLatestRef } from './useLatestRef';
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
 type RealtimePayload = RealtimePostgresChangesPayload<Record<string, unknown>>;
@@ -17,16 +18,12 @@ interface SubscriptionConfig {
 }
 
 export function useRealtimeSubscription(config: SubscriptionConfig) {
-  // Store callbacks in refs to avoid stale closures
-  const onChangeRef = useRef(config.onChange);
-  const onInsertRef = useRef(config.onInsert);
-  const onUpdateRef = useRef(config.onUpdate);
-  const onDeleteRef = useRef(config.onDelete);
-
-  onChangeRef.current = config.onChange;
-  onInsertRef.current = config.onInsert;
-  onUpdateRef.current = config.onUpdate;
-  onDeleteRef.current = config.onDelete;
+  // Latest committed callbacks, read only inside the channel's postgres_changes listener, so the
+  // subscription is not torn down and re-created every time a parent passes a new inline callback.
+  const onChangeRef = useLatestRef(config.onChange);
+  const onInsertRef = useLatestRef(config.onInsert);
+  const onUpdateRef = useLatestRef(config.onUpdate);
+  const onDeleteRef = useLatestRef(config.onDelete);
 
   useEffect(() => {
     if (config.disabled) return;
@@ -70,7 +67,7 @@ export function useRealtimeSubscription(config: SubscriptionConfig) {
         supabase.removeChannel(channel);
       }
     };
-  }, [config.table, config.event, config.filter, config.disabled]);
+  }, [config.table, config.event, config.filter, config.disabled, onChangeRef, onInsertRef, onUpdateRef, onDeleteRef]);
 }
 
 export function useRealtimeNotes(onNotesChange: () => void) {

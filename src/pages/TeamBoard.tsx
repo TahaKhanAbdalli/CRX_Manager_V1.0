@@ -108,10 +108,6 @@ export default function TeamBoard() {
   const completeIdem = useIdempotencyKey('complete_team_note', profile?.id || '');
   const [completingNote, setCompletingNote] = useState<string | null>(null);
 
-  useRealtimeNotes(() => {
-    fetchNotes();
-  });
-
   const fetchProfiles = useCallback(async () => {
     // PR-07 follow-up: team picker only uses p.id + p.full_name; safe via view.
     // Codex P2 (2026-05-16): exclude entity_recipient service profiles
@@ -206,6 +202,10 @@ export default function TeamBoard() {
     }
     setLoading(false);
   }, [toast]);
+
+  useRealtimeNotes(() => {
+    fetchNotes();
+  });
 
   const fetchGlobalActivity = useCallback(async () => {
     setActivityLoading(true);

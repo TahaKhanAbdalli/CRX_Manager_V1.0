@@ -80,3 +80,26 @@ describe('Jobs mobile cards', () => {
     expect(screen.getByTestId('current-path')).toHaveTextContent('/jobs/job-1');
   });
 });
+
+describe('Jobs Clear All', () => {
+  it('stays enabled when "Needs Dispatch only" is the only active filter, and resets it', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
+    render(
+      <MemoryRouter initialEntries={['/jobs']}>
+        <Jobs />
+      </MemoryRouter>,
+    );
+
+    const quickFilter = await screen.findByRole('button', { name: /Needs Dispatch only/ });
+    const clearAll = screen.getByRole('button', { name: 'Clear All' });
+    expect(clearAll).toBeDisabled();
+
+    fireEvent.click(quickFilter);
+    expect(screen.getByRole('button', { name: /Needs Dispatch only/ })).toHaveClass('bg-amber-50');
+    expect(clearAll).toBeEnabled();
+
+    fireEvent.click(clearAll);
+    expect(screen.getByRole('button', { name: /Needs Dispatch only/ })).not.toHaveClass('bg-amber-50');
+    expect(clearAll).toBeDisabled();
+  });
+});

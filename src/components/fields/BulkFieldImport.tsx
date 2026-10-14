@@ -161,14 +161,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // results screen needs it to tell the operator which rows are safe to retry.
   const [results, setResults] = useState<{ success: number; failed: number; created: number; unknownOutcome: number; errors: string[]; warnings: string[] } | null>(null);
 
-  // Fetch customers for step 4
-  useEffect(() => {
-    if (open) {
-      fetchCustomers();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
   const fetchCustomers = async () => {
     const { data, error } = await supabase
       .from('customers')
@@ -182,6 +174,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     }
     setCustomers((data || []) as Customer[]);
   };
+
+  // Fetch customers for step 4
+  useEffect(() => {
+    if (open) {
+      fetchCustomers();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleClose = () => {
     // The import pipeline is intentionally not cancellable once it starts:

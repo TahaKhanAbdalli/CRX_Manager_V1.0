@@ -932,6 +932,11 @@ export default function QuoteBuilder() {
     return true;
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
+  // U13 (#111): quote_section.id -> the job already scheduled from it (if any).
+  // Populated by fetchQuote + updated locally right after a successful schedule
+  // so the badge/hide-button logic never needs a full page reload.
+  const [sectionJobs, setSectionJobs] = useState<Record<string, { id: string; job_number: string; status: JobStatus }>>({});
+
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
     // Refuse at the door, BEFORE taking a serial. A load for a quote the operator
     // has already left is doomed either way — it would reject itself below — but
@@ -2708,10 +2713,6 @@ export default function QuoteBuilder() {
     window.location.reload();
   };
   const [schedulingJobSectionKey, setSchedulingJobSectionKey] = useState<string | null>(null);
-  // U13 (#111): quote_section.id -> the job already scheduled from it (if any).
-  // Populated by fetchQuote + updated locally right after a successful schedule
-  // so the badge/hide-button logic never needs a full page reload.
-  const [sectionJobs, setSectionJobs] = useState<Record<string, { id: string; job_number: string; status: JobStatus }>>({});
 
   const handleScheduleJob = async (sectionKey: string) => {
     const sec = sections.find((s) => s._key === sectionKey);
@@ -2989,6 +2990,7 @@ export default function QuoteBuilder() {
           .limit(1);
         if (recentOrders && recentOrders.length > 0) {
           const recent = recentOrders[0];
+          // eslint-disable-next-line react-hooks/purity -- runs inside the async handleConvertToOrder handler after an await, not during render
           const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
           setDuplicateOrderMsg(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
           setDuplicateOrderConfirmOpen(true);

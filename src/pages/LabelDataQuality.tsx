@@ -359,7 +359,7 @@ export default function LabelDataQuality() {
   usePageMeta();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const initialCache = useMemo(readCachedRun, []);
+  const initialCache = useMemo(() => readCachedRun(), []);
   const [products, setProducts] = useState<EpaDataQualityProduct[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [coverage, setCoverage] = useState<LabelCoverageReport | null>(null);

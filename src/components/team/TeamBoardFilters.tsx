@@ -33,11 +33,6 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showFilters, setShowFilters] = useState(false);
 
-  useEffect(() => {
-    fetchTags();
-    fetchProfiles();
-  }, []);
-
   const fetchTags = async () => {
     try {
       const { data, error } = await supabase
@@ -76,6 +71,11 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
     }
   };
+
+  useEffect(() => {
+    fetchTags();
+    fetchProfiles();
+  }, []);
 
   const updateFilter = (key: keyof FilterState, value: string | string[] | boolean) => {
     onChange({ ...filters, [key]: value });

@@ -1,9 +1,10 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useControl } from 'react-map-gl/mapbox';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import type { GeoJSON } from 'geojson';
 import DrawingHud from './DrawingHud';
+import { useLatestRef } from '../../hooks/useLatestRef';
 import { drawingRingMetrics } from '../../lib/fieldGeometry';
 import { shouldSyncInitialDrawFeatures } from '../../lib/fieldBoundaryState';
 
@@ -51,17 +52,15 @@ export default function DrawControl({
   const hudRef = useRef<HudState>(EMPTY_HUD);
   // Stable references for the draw.* listeners so onRemove can actually detach them.
   const listenersRef = useRef<Record<string, (e: unknown) => void>>({});
-  // The control is registered once, so its map event listeners must read the current disabled
-  // state rather than the value from their initial render.
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+  // The control is registered once, so its map event listeners must read the current (committed)
+  // disabled state rather than the value from their initial render.
+  const disabledRef = useLatestRef(disabled);
   // react-map-gl registers the useControl onAdd ONCE (its effect has [] deps), so the draw.*
   // listeners would otherwise close over the FIRST render's parent callbacks. DrawLayer rebuilds
   // its handlers as the polygon list grows (multi-part fields), so route through a ref kept current
-  // every render — without this, committing a 2nd/3rd part fires a stale handler that overwrites
+  // on every commit — without this, committing a 2nd/3rd part fires a stale handler that overwrites
   // the earlier parts (the geometry that bills). Single-boundary callbacks are stable, so unaffected.
-  const cbRef = useRef({ onDrawCreate, onDrawUpdate, onDrawDelete, onDrawingStateChange });
-  cbRef.current = { onDrawCreate, onDrawUpdate, onDrawDelete, onDrawingStateChange };
+  const cbRef = useLatestRef({ onDrawCreate, onDrawUpdate, onDrawDelete, onDrawingStateChange });
 
   // Read the current draw state straight off the mapbox-gl-draw instance and push it to the
   // HUD. Driven by draw.render (fires on every mouse move while drawing) so the acreage forms
@@ -109,7 +108,7 @@ export default function DrawControl({
     hudRef.current = next;
     setHud(next);
     cbRef.current.onDrawingStateChange?.(drawing);
-  }, []);
+  }, [cbRef]);
 
   const draw = useControl<MapboxDraw>(
     () =>
@@ -228,7 +227,10 @@ export default function DrawControl({
     },
     { position: 'top-left' }
   );
-  drawRef.current = draw;
+  // Published on commit (before react-map-gl's passive effect adds the control), never during render.
+  useLayoutEffect(() => {
+    drawRef.current = draw;
+  }, [draw]);
 
   // Mapbox Draw's built-in polygon button lives outside React. Disable that button and the
   // React HUD together so obstacle-placement clicks cannot accidentally add a boundary vertex.
@@ -309,7 +311,7 @@ export default function DrawControl({
     d.deleteAll();
     if (ids.length > 0) cbRef.current.onDrawDelete?.(ids);
     d.changeMode('draw_polygon');
-  }, []);
+  }, [cbRef]);
 
   const handleRemoveSinglePart = useCallback(() => {
     const d = drawRef.current;
@@ -320,7 +322,7 @@ export default function DrawControl({
     d.deleteAll();
     cbRef.current.onDrawDelete?.(ids);
     recompute();
-  }, [recompute]);
+  }, [cbRef, recompute]);
 
   return (
     <DrawingHud

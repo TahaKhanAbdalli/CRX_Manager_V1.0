@@ -25,6 +25,14 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // React 19 follow-up (2026-10-14): the v7 rules refs, purity, immutability and use-memo
+      // stay ON — they catch render-timing bugs like the four the React 19 upgrade exposed (#906).
+      // Each existing hit was fixed or carries an inline reason. Two rules are deferred:
+      // set-state-in-effect flags ~200 ordinary "load data in an effect, then set state" screens
+      // (a separate, gradual cleanup), and preserve-manual-memoization only matters once the
+      // React Compiler is adopted, which this app does not use yet.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
       // a11y rules — cherry-picked from recommended to avoid minimatch compatibility issues
       'jsx-a11y/alt-text': 'warn',
       'jsx-a11y/anchor-has-content': 'warn',

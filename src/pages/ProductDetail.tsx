@@ -19,6 +19,7 @@ import { waitForEpaRequestSlot } from '../lib/epaRequestThrottle';
 import { Sentry } from '../lib/sentry';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useLatestRef } from '../hooks/useLatestRef';
 import type { CostHistory, EpaLookupResult, Product, UnitConversion } from '../types';
 import {
   applyProductPricingChangeSet,
@@ -297,8 +298,8 @@ export default function ProductDetail() {
   const pricingPreviewIntentRef = useRef<string | null>(null);
   const costBasisWorkspaceRequestRef = useRef(0);
   const pricingPreviewRequestRef = useRef(0);
-  const productIdRef = useRef(id);
-  productIdRef.current = id;
+  // Committed product id, read after awaits to drop results for a product the user has left.
+  const productIdRef = useLatestRef(id);
   const [persistedLabelFields, setPersistedLabelFields] = useState<{
     signalWord: Product['signal_word'];
     epaRegistration: string | null;

@@ -23,6 +23,21 @@ const {
   mockUseParams: vi.fn(),
 }));
 
+// A ~40 ac square near the test field, shaped like DrawLayer's DrawnPolygon.
+const mockDrawnPolygon = {
+  drawId: 'draw-1',
+  acres: 40,
+  label: 'Part 1',
+  polygon: {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[[-89.05, 39.15], [-89.0475, 39.15], [-89.0475, 39.1523], [-89.05, 39.1523], [-89.05, 39.15]]],
+    },
+  },
+};
+
 vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
   useParams: () => mockUseParams(),
@@ -80,20 +95,29 @@ vi.mock('../components/map/CRXMap', () => ({
 vi.mock('../components/map/DrawLayer', () => ({
   default: ({
     disabled = false,
+    allowRemoveSinglePart = false,
     onDrawingStateChange,
+    onPolygonsChange,
   }: {
     disabled?: boolean;
+    allowRemoveSinglePart?: boolean;
     onDrawingStateChange?: (isDrawing: boolean) => void;
+    onPolygonsChange?: (polygons: unknown[]) => void;
   }) => {
-    mockDrawLayer({ disabled, onDrawingStateChange });
+    mockDrawLayer({ disabled, allowRemoveSinglePart, onDrawingStateChange });
     return (
-      <button
-        type="button"
-        data-testid="mock-draw-layer"
-        onClick={() => onDrawingStateChange?.(true)}
-      >
-        Start mock boundary drawing
-      </button>
+      <>
+        <button
+          type="button"
+          data-testid="mock-draw-layer"
+          onClick={() => onDrawingStateChange?.(true)}
+        >
+          Start mock boundary drawing
+        </button>
+        <button type="button" onClick={() => onPolygonsChange?.([mockDrawnPolygon])}>
+          Commit mock boundary
+        </button>
+      </>
     );
   },
 }));
@@ -142,10 +166,17 @@ function listChain(data: unknown, error: unknown = null): Record<string, unknown
   return chain;
 }
 
-function configureSupabase(obstacleReadError: unknown = null): void {
+function configureSupabase(obstacleReadError: unknown = null, measuredAcres: number | null = null): void {
   mockRpc.mockImplementation((name: string) => {
     if (name === 'get_field_geojson' || name === 'get_field_polygons') {
       return Promise.resolve({ data: [], error: null });
+    }
+    if (name === 'set_field_boundary') {
+      // Shape of the RPC's v_result (migration 20260623130000).
+      return Promise.resolve({
+        data: { field_id: 'field-1', measured_acres: 40, billable_acres: 40, acres_source: 'measured' },
+        error: null,
+      });
     }
     return Promise.resolve({ data: null, error: null });
   });
@@ -162,7 +193,7 @@ function configureSupabase(obstacleReadError: unknown = null): void {
                 field_name: 'North 40',
                 state: 'IL',
                 total_acres: 40,
-                measured_acres: null,
+                measured_acres: measuredAcres,
                 override_acres: null,
                 irrigation: false,
                 is_active: true,
@@ -276,6 +307,40 @@ describe('FieldSetup field obstacles', () => {
       'Finish or cancel the boundary before adding an obstacle.',
     );
     expect(mockDrawLayer).toHaveBeenLastCalledWith(expect.objectContaining({ disabled: false }));
+  });
+
+  it('lets a field without a saved boundary remove its only drawn part', async () => {
+    render(<FieldSetup />);
+
+    await screen.findByText(/West well/);
+    expect(mockDrawLayer).toHaveBeenLastCalledWith(expect.objectContaining({ allowRemoveSinglePart: true }));
+  });
+
+  it('keeps a saved measured boundary from being removed down to nothing', async () => {
+    // Render state, not a ref read during render, drives this prop (React 19 follow-up, 2026-10-14).
+    configureSupabase(null, 38.5);
+    render(<FieldSetup />);
+
+    await screen.findByText(/West well/);
+    await waitFor(() => expect(mockDrawLayer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ allowRemoveSinglePart: false }),
+    ));
+  });
+
+  it('stops offering single-part removal once a newly drawn boundary is saved', async () => {
+    render(<FieldSetup />);
+
+    await screen.findByText(/West well/);
+    expect(mockDrawLayer).toHaveBeenLastCalledWith(expect.objectContaining({ allowRemoveSinglePart: true }));
+    // FieldSetup marks geometry dirty only after its post-load tick.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit mock boundary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('set_field_boundary', expect.anything()));
+    await waitFor(() => expect(mockDrawLayer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ allowRemoveSinglePart: false }),
+    ));
   });
 
   it('keeps obstacle write controls hidden from applicators', async () => {

@@ -93,11 +93,6 @@ export default function TodaysDeliveries() {
   const [loading, setLoading] = useState(true);
   const [tomorrowOpen, setTomorrowOpen] = useState(false);
 
-  useEffect(() => {
-    fetchDeliveries();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const fetchDeliveries = async () => {
     setLoading(true);
     try {
@@ -116,6 +111,11 @@ export default function TodaysDeliveries() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchDeliveries();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Card padding={true}>

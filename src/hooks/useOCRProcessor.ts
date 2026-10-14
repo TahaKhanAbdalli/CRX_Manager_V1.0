@@ -14,20 +14,6 @@ export function useOCRProcessor(enabled: boolean = true) {
   const [processedCount, setProcessedCount] = useState(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    if (!enabled) return;
-
-    checkQueue();
-    pollIntervalRef.current = setInterval(checkQueue, POLL_INTERVAL);
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    };
-  }, [enabled]);
-
   async function checkQueue() {
     try {
       // Check for pending or stuck processing items
@@ -77,6 +63,20 @@ export function useOCRProcessor(enabled: boolean = true) {
       setIsProcessing(false);
     }
   }
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    checkQueue();
+    pollIntervalRef.current = setInterval(checkQueue, POLL_INTERVAL);
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [enabled]);
 
   return {
     isProcessing,

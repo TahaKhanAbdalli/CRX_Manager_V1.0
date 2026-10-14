@@ -702,6 +702,12 @@ export default function Jobs() {
     setApplied(draft);
   }, [draft]);
 
+  // U13 (#15-21/#111): "Needs Dispatch only" — a lightweight, LOCAL quick
+  // filter (not plumbed into the shared JobFilters/jobFilters.ts facts system,
+  // to keep this change additive and low-risk). Off by default. Declared before
+  // clearAll, which resets it.
+  const [needsDispatchOnly, setNeedsDispatchOnly] = useState(false);
+
   // CLEAR ALL: reset BOTH draft and applied back to empty (criterion #3).
   const clearAll = useCallback(() => {
     setDraft(emptyJobFilters);
@@ -726,11 +732,6 @@ export default function Jobs() {
   // type/crew/job#) so a job must clear EVERY active filter. The table, totals,
   // and selection all read this single filtered view so they never disagree
   // (criteria #2 + #5 + #6).
-  // U13 (#15-21/#111): "Needs Dispatch only" — a lightweight, LOCAL quick
-  // filter (not plumbed into the shared JobFilters/jobFilters.ts facts system,
-  // to keep this change additive and low-risk). Off by default.
-  const [needsDispatchOnly, setNeedsDispatchOnly] = useState(false);
-
   const visibleJobs = useMemo(() => {
     return jobs.filter((j) => {
       // Field-app parity #8: "Show Completed Jobs" toggle. When OFF, hide
@@ -1848,7 +1849,7 @@ export default function Jobs() {
               <button
                 type="button"
                 onClick={clearAll}
-                disabled={activeCount === 0 && isJobFiltersEmpty(draft)}
+                disabled={activeCount === 0 && isJobFiltersEmpty(draft) && !needsDispatchOnly}
                 className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 text-secondary hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Clear All

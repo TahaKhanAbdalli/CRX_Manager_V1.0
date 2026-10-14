@@ -123,11 +123,6 @@ export default function Rebates() {
   const [deleteClaimConfirmOpen, setDeleteClaimConfirmOpen] = useState(false);
   const [deleteClaimTarget, setDeleteClaimTarget] = useState<{ id: string; number: string } | null>(null);
 
-  useEffect(() => {
-    fetchLookups();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const fetchLookups = async () => {
     const [prodRes, custRes, ordRes] = await Promise.all([
       supabase.from('products').select('id, product_name, sku, vendor, manufacturer, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name'),
@@ -144,6 +139,11 @@ export default function Rebates() {
     setCustomers(custRes.data || []);
     setOrders(ordRes.data || []);
   };
+
+  useEffect(() => {
+    fetchLookups();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchPrograms = useCallback(async () => {
     setLoading(true);

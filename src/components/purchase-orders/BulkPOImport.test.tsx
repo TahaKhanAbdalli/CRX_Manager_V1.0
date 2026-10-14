@@ -299,6 +299,37 @@ describe('BulkPOImport', () => {
     expect(defaultProps.onClose).not.toHaveBeenCalled();
   });
 
+  it('marks only the PO that just imported as previously imported after a partial batch', async () => {
+    let saveCalls = 0;
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        saveCalls++;
+        if (saveCalls === 1) {
+          return { data: { po_id: 'po-new', status: 'saved', po_number: 'PO-1001' }, error: null };
+        }
+        return { data: null, error: new Error('temporary save failure') };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: {
+        files: [
+          new File(['one'], 'INV-201.pdf', { type: 'application/pdf' }),
+          new File(['two'], 'INV-202.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 2 files/i }));
+    expect(screen.queryByText('Previously imported')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /import 2 pos/i }));
+
+    // The badge is driven by render state published at the end of handleImport, not by
+    // re-reading the mutable marker ref (React 19 follow-up, 2026-10-14).
+    await waitFor(() => expect(screen.getAllByText('Previously imported')).toHaveLength(1));
+  });
+
   it('explains a changed-content conflict instead of showing only a generic failure', async () => {
     mocks.rpc.mockImplementation(async (name: string) => {
       if (name === 'save_purchase_order') {
