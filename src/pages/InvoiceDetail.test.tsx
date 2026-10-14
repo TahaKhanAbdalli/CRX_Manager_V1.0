@@ -6,11 +6,12 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { sanitizeError } from '../lib/errorSanitizer';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockCaptureException, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
+  mockCaptureException: vi.fn(),
   intentKeys: new Map<string, string>(),
   nextIntentKey: { value: 0 },
 }));
@@ -31,9 +32,14 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return self;
 }
 
-function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (result: { data: unknown; error: unknown }) => void } {
+function buildDeferredChain(): {
+  chain: Record<string, unknown>;
+  resolve: (result: { data: unknown; error: unknown }) => void;
+  reject: (reason: unknown) => void;
+} {
   let resolve!: (result: { data: unknown; error: unknown }) => void;
-  const promise = new Promise<{ data: unknown; error: unknown }>((done) => { resolve = done; });
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<{ data: unknown; error: unknown }>((done, fail) => { resolve = done; reject = fail; });
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
   const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
@@ -45,7 +51,7 @@ function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (resul
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
   chain.finally = promise.finally.bind(promise);
-  return { chain, resolve };
+  return { chain, resolve, reject };
 }
 
 vi.mock('../lib/db', () => ({
@@ -54,6 +60,8 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: vi.fn((d) => d),
   sanitizeError: (e: unknown) => sanitizeError(e),
 }));
+
+vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockCaptureException } }));
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
@@ -1150,6 +1158,81 @@ describe('InvoiceDetail — a product added on this screen is priced at the cust
     const savedItems = await saveAndReadItems();
     expect(savedItems).toHaveLength(0);
   });
+
+  // Sol on PR #908: the Supabase client reports network failures as { error }, but if the lookup
+  // ever throws (an unexpected client or runtime error) the user must still be told the product
+  // was not added, so they know to retry.
+  it('refuses to add the product and says so when the tier lookup throws', async () => {
+    const failure = new Error('unexpected client error');
+    const lookup = setup({ listed: [], byId: () => buildRejectingChain(failure) });
+    await addTieredProduct();
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', "Could not load this customer's price tier. The product was not added; try again."));
+    expect(lookup.byIdCalls).toBe(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(failure, TIER_SENTRY_CONTEXT);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(0);
+  });
+
+  it('a lookup that throws after the customer was switched reports the switch, not a tier failure', async () => {
+    const pending = buildDeferredChain();
+    setup({ listed: [{ ...CUSTOMER, id: 'cust-other', farm_name: 'Other Farm' }], byId: () => pending.chain });
+    await addTieredProduct();
+
+    fireEvent.change(screen.getByPlaceholderText('Search customers...'), { target: { value: 'Other' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Other Farm' }));
+    pending.reject(new Error('unexpected client error'));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'The customer changed while the product was being added. Add the product again.'));
+    expect(mockToast).not.toHaveBeenCalledWith('error', "Could not load this customer's price tier. The product was not added; try again.");
+    expect(mockCaptureException).not.toHaveBeenCalledWith(expect.anything(), TIER_SENTRY_CONTEXT);
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(0);
+  });
+
+  it('a stale lookup that throws stays silent and cannot unlock a newer one', async () => {
+    const lookupA = buildDeferredChain();
+    const lookupB = buildDeferredChain();
+    const lookup = setup({ listed: [], byId: () => (lookup.byIdCalls === 1 ? lookupA.chain : lookupB.chain) });
+    render(
+      <MemoryRouter initialEntries={['/invoices/inv-tier']}>
+        <Link to="/invoices/inv-tier-b">Invoice B</Link>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await pickTieredProduct();
+    lookup.switchToInvoiceB();
+    fireEvent.click(screen.getByRole('link', { name: 'Invoice B' }));
+    await waitFor(() => expect(screen.getAllByText('INV-TIER-B').length).toBeGreaterThan(0));
+
+    await pickTieredProduct();
+    expect(lookup.byIdCalls).toBe(2);
+    lookupA.reject(new Error('unexpected client error'));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(mockToast).not.toHaveBeenCalled();
+    expect(mockCaptureException).not.toHaveBeenCalledWith(expect.anything(), TIER_SENTRY_CONTEXT);
+
+    lookupB.resolve({ data: { assigned_tier: 3 }, error: null });
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search products by name or SKU...')).not.toBeInTheDocument());
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(1);
+    expect(savedItems[0]).toMatchObject({ unit_price_cents: 1199 });
+  });
+
+  // Other panels on this page report unrelated mock gaps to Sentry, so assert on this context only.
+  const TIER_SENTRY_CONTEXT = { extra: { context: 'invoice_add_product_customer_tier' } };
+
+  function buildRejectingChain(reason: unknown): Record<string, unknown> {
+    const chain: Record<string, unknown> = {};
+    for (const m of ['eq', 'maybeSingle']) chain[m] = () => chain;
+    chain.then = (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
+      Promise.reject(reason).then(onFulfilled, onRejected);
+    return chain;
+  }
 
   const CUSTOMER = { id: 'cust-tier', farm_name: 'Tier Farm', payment_terms: 'Net 30', is_active: true, assigned_tier: 1 };
 
