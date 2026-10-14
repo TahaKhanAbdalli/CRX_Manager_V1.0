@@ -1,12 +1,48 @@
 # Decision Log
 
-Last verified: 2026-10-14 (one entry added: revised quotes keep locked prices, reps see last-charged prices while price history stays admin-only, prices come in through the full Excel workbook; also re-read for PR #905 review; 2026-10-13: five entries added: a sent quote's prices stay locked until accepted or expired; an order's bill can be split to a landlord; a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-14 (seven entries added: six from Mason's answers to the goals plan's questions 6e–6k (orderless invoices carry no products; Chem Man's last bill 2026-12-31 and a CRX-only pilot from 2027-01-01; bill products only when delivered; Mason owns compliance and inventory; an overnight outage is acceptable; admin-only commission splits), plus revised quotes keep locked prices, reps see last-charged prices while price history stays admin-only, prices come in through the full Excel workbook; also re-read for PR #905 review; 2026-10-13: five entries added: a sent quote's prices stay locked until accepted or expired; an order's bill can be split to a landlord; a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-14 — Invoices made from scratch carry no product lines
+
+**Decision (Mason, in chat: "confirm 6e", after a plain-English explanation of goals-plan question 6e).** An invoice made from scratch (no order, no delivery) carries **only service or misc charges**, never product lines. Product sales go through an order and a delivery; a counter sale uses a quick delivery, which records the delivery and the invoice together.
+**Why.** A from-scratch invoice links to nothing, so neither the delivery-quantity cap nor the order/delivery overlap guard can see it. Product lines on one could overbill, double-bill a delivered sale, or bill goods with no matching stock or delivery record. It also follows from the same day's rule that products are billed only for delivered goods.
+**What this forbids/implies:** this closes the owner decision in the `KNOWN_ISSUES.md` entry "an invoice made from scratch can name any product and quantity". Enforcing it on every create, edit, import and direct server path is Goal 3 work in `docs/plans/2026-10-13-direction-and-goals.md`; until then the gap stays open. Service and misc charges on from-scratch invoices stay allowed.
+
+## 2026-10-14 — Chem Man's last bill is 2026-12-31; CRX-only billing pilot from 2027-01-01
+
+**Decision (Mason, in chat, goals-plan questions 6f and 6k).** Chem Man issues its last new bill on **2026-12-31**. From **2027-01-01** all billing runs in CRX; the first 30 days are the pilot, reconciled daily. This replaces "retired for billing by spring 2027" in the 2026-10-13 direction entry below.
+**Why.** Mason wants the new year to start in CRX.
+**What this forbids/implies:** the plan is compressed. The build estimates (roughly 14–25 weeks) exceed the time left (about 11 weeks), so `docs/plans/2026-10-13-direction-and-goals.md` orders work by what must be ready on 2027-01-01, and Mason decides any scope cut when a checkpoint slips. Returns on Chem Man-billed deliveries stay allowed after 2026-12-31 (the 2026-10-07 rule). Detail: `docs/changelog.d/2026-10-14-goals-plan-sol-review-revision.md`.
+
+## 2026-10-14 — Products are billed only when delivered; advance money is prepay
+
+**Decision (Mason, in chat: "yes i agree with recomendation", question 6g).** Product lines are billed only for goods actually delivered. Money a customer pays in advance is recorded as prepay, not as an invoice for undelivered goods.
+**Why.** Billing ahead of delivery leaves nothing to cap the quantities against and invites overbilling.
+**What this forbids/implies:** whole-order invoices for undelivered goods are not a supported workflow. Goal 3 enforces the cap across all of an order's invoices. The 2026-10-14 orderless-invoice entry above follows from this.
+
+## 2026-10-14 — Mason Wells owns compliance and inventory readiness; L1–L3 are his tasks
+
+**Decision (Mason, in chat: "mason wells on both", question 6h; and "dont force these, we will do that dont need code for this").** Mason owns pesticide compliance and inventory readiness. The goals plan's compliance, physical-inventory and opening-balance checks (L1–L3) are his own business tasks.
+**Why.** He will run the business readiness work himself.
+**What this forbids/implies:** agents do not build anything for L1–L3, and do not gate or hold other work on them. They still report any code defect they find in those areas.
+
+## 2026-10-14 — An outage may last overnight
+
+**Decision (Mason, in chat: "overnight", question 6i).** CRX may be down overnight, but it must be back by the next business morning.
+**Why.** That's the downtime the business can absorb.
+**What this forbids/implies:** this is Goal 6's recovery-time target. The data-loss limit is separate: only what point-in-time recovery allows (minutes, not a day), because Mason is paying for point-in-time recovery.
+
+## 2026-10-14 — Only admins change commission splits
+
+**Decision (Mason, in chat: "admin only on commision splits", question 6j).** Only admins change commission splits, on customers, jobs, quotes and orders.
+**Why.** Splits decide who gets paid.
+**What this forbids/implies:** this tightens what shipped in PR #907, where a customer's assigned rep may still edit that customer's default split (`COMMISSION_SPLIT_ADMIN_OR_ASSIGNED_REP`). It also tightens jobs, where any active rep can edit the split today. Making splits admin-only is a Goal 2 follow-up code change, with the usual review and its own migration.
 
 ## 2026-10-14 — Pricing: revised quotes keep locked prices; reps see last-charged prices, price history stays admin-only; prices come in through the full Excel workbook
 

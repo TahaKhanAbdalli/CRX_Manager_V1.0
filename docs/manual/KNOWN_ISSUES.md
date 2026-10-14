@@ -81,8 +81,9 @@ leave these open:
 - **An invoice made from scratch (no order, no delivery) can name any product and quantity**
   (pre-existing; found in the PR #889 security review, 2026-10-10). The New Invoice page creates
   `misc_charge` invoices with no order link, so neither the delivery cap nor the order/delivery
-  overlap guard can see them. Owner: Mason — decide whether product lines should be allowed on
-  orderless invoices at all.
+  overlap guard can see them. **Decided 2026-10-14 (Mason, "confirm 6e"):** orderless invoices
+  carry no product lines, only service or misc charges (`DECISION_LOG.md`). Still open until Goal 3
+  of `docs/plans/2026-10-13-direction-and-goals.md` enforces it in the database.
 - **The integrity checks page by offset, not by a snapshot.** Their reads (and the
   `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
   inserted between two pages can shift the next page by one, so a single run can miss or repeat a
@@ -442,8 +443,11 @@ archive. They are listed here so the open part of this file shows them. None was
   - **Commission splits outside the customer default.** `jobs_update` is `is_admin() OR
     is_sales_rep()` and nothing guards `jobs.commission_split`; quote and order splits are likewise
     editable by any rep on any customer (`save_quote`, order functions; pre-existing). The 2026-10-13
-    rule protects only `customers.default_commission_split`. Confirm with Mason whether job, quote
-    and order splits should follow the same admin-or-assigned-rep rule.
+    rule protects only `customers.default_commission_split`. **Decided 2026-10-14 (Mason, "admin
+    only on commision splits"; `DECISION_LOG.md`):** only admins change any commission split, on
+    customers, jobs, quotes and orders. That is stricter than the shipped admin-or-assigned-rep rule
+    on the customer default. Still open until the Goal 2 follow-up change enforces it, with its own
+    migration; do not ask Mason again.
   - **`customer-document-files` deploy.** The repo code opens documents to every rep; until that
     function is redeployed (Mason's OK required), reps see other customers' document rows but the
     live function still refuses their uploads and downloads. Deploy right after the migration
