@@ -1083,3 +1083,232 @@ describe('InvoiceDetail — new-invoice date default follows the Chicago busines
     expect(dateInput.value).not.toBe('2026-03-16');
   });
 });
+
+describe('InvoiceDetail — a product added on this screen is priced at the customer tier', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
+    mockIntentAwareRpc({ data: 'inv-tier', error: null });
+  });
+
+  // The shared buildChain ignores select(), so a customer row handed to it would carry
+  // assigned_tier whether or not the page asked for that column, and this test would pass
+  // against the original bug (the list query never selected assigned_tier, so every added
+  // product fell back to tier 1). This chain returns only the columns the page requested,
+  // the way PostgREST does, so dropping assigned_tier from the select turns the test red.
+  function buildSelectedColumnsChain(rows: Record<string, unknown>[]): Record<string, unknown> {
+    let columns: string[] | null = null;
+    const self: Record<string, unknown> = {};
+    const passthrough = (..._args: unknown[]) => self;
+    for (const m of ['eq', 'order', 'limit', 'in', 'maybeSingle', 'single']) self[m] = passthrough;
+    self.select = (cols: string) => { columns = cols.split(',').map((c) => c.trim()); return self; };
+    const result = () => ({
+      data: rows.map((row) => Object.fromEntries(Object.entries(row).filter(([key]) => columns?.includes(key)))),
+      error: null,
+    });
+    self.then = (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
+      Promise.resolve(result()).then(onFulfilled, onRejected);
+    return self;
+  }
+
+  // Live prices rise with tier (tier 3 above tier 1 on every active product, 2026-10-13), so the
+  // fixture does too. A product with no price for the customer's tier falls back to tier 1 (the
+  // shared getTierPrice rule), never $0.
+  it.each([
+    { tier: 2, tier3Price: 11.99, expectedCents: 1075, label: 'a tier-2 customer gets the tier-2 price' },
+    { tier: 3, tier3Price: 11.99, expectedCents: 1199, label: 'a tier-3 customer gets the tier-3 price' },
+    { tier: 3, tier3Price: null, expectedCents: 1000, label: 'a tier-3 customer falls back to tier 1 when the product has no tier-3 price' },
+  ])('$label, and that is the price saved', async ({ tier, tier3Price, expectedCents }) => {
+    setup({ listed: [{ ...CUSTOMER, assigned_tier: tier }], tier3Price });
+    await addTieredProduct();
+
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(1);
+    expect(savedItems[0]).toMatchObject({ product_id: 'product-tier-uuid', unit_price_cents: expectedCents });
+  });
+
+  // The picker list holds only active customers (capped at 500) and may not have loaded yet. A
+  // customer missing from it must still be priced at their own tier, read by id (CodeRabbit and
+  // the Codex connector on PR #908).
+  it('reads the tier by id when the invoice customer is not in the picker list', async () => {
+    const lookup = setup({ listed: [], byId: { data: { assigned_tier: 3 }, error: null } });
+    await addTieredProduct();
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search products by name or SKU...')).not.toBeInTheDocument());
+
+    const savedItems = await saveAndReadItems();
+    expect(lookup.byIdCalls).toBe(1);
+    expect(savedItems).toHaveLength(1);
+    expect(savedItems[0]).toMatchObject({ product_id: 'product-tier-uuid', unit_price_cents: 1199 });
+  });
+
+  it('refuses to add the product, rather than pricing it at tier 1, when the tier cannot be read', async () => {
+    setup({ listed: [], byId: { data: null, error: { message: 'network down' } } });
+    await addTieredProduct();
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', "Could not load this customer's price tier. The product was not added; try again."));
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(0);
+  });
+
+  const CUSTOMER = { id: 'cust-tier', farm_name: 'Tier Farm', payment_terms: 'Net 30', is_active: true, assigned_tier: 1 };
+
+  // Luna round 3: while the by-id lookup is in flight, a second click must not add a second line,
+  // Save must be blocked, and a customer switched meanwhile must not be priced with the old tier.
+  it('runs one lookup at a time and blocks Save until the line is added', async () => {
+    const pending = buildDeferredChain();
+    const lookup = setup({ listed: [], byId: () => pending.chain });
+    await addTieredProduct();
+    fireEvent.click(screen.getByText('Product ID: product-tier-uuid'));
+
+    expect(lookup.byIdCalls).toBe(1);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    pending.resolve({ data: { assigned_tier: 3 }, error: null });
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search products by name or SKU...')).not.toBeInTheDocument());
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(1);
+    expect(savedItems[0]).toMatchObject({ unit_price_cents: 1199 });
+  });
+
+  it('drops a lookup answered after the customer was switched', async () => {
+    const pending = buildDeferredChain();
+    setup({ listed: [{ ...CUSTOMER, id: 'cust-other', farm_name: 'Other Farm' }], byId: () => pending.chain });
+    await addTieredProduct();
+
+    fireEvent.change(screen.getByPlaceholderText('Search customers...'), { target: { value: 'Other' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Other Farm' }));
+    pending.resolve({ data: { assigned_tier: 3 }, error: null });
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'The customer changed while the product was being added. Add the product again.'));
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(0);
+  });
+
+  // CodeRabbit + Codex connector on PR #908: React reuses this page across /invoices/:id, so a
+  // lookup still pending from invoice A must not keep invoice B's Save locked, and when A's lookup
+  // finally settles it must not release the lock held by B's own lookup.
+  it('releases the lock on an invoice switch, and a stale lookup cannot unlock a newer one', async () => {
+    const lookupA = buildDeferredChain();
+    const lookupB = buildDeferredChain();
+    const lookup = setup({ listed: [], byId: () => (lookup.byIdCalls === 1 ? lookupA.chain : lookupB.chain) });
+    render(
+      <MemoryRouter initialEntries={['/invoices/inv-tier']}>
+        <Link to="/invoices/inv-tier-b">Invoice B</Link>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await pickTieredProduct();
+    expect(lookup.byIdCalls).toBe(1);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    lookup.switchToInvoiceB();
+    fireEvent.click(screen.getByRole('link', { name: 'Invoice B' }));
+    await waitFor(() => expect(screen.getAllByText('INV-TIER-B').length).toBeGreaterThan(0));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    await pickTieredProduct();
+    expect(lookup.byIdCalls).toBe(2);
+    lookupA.resolve({ data: { assigned_tier: 2 }, error: null });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    lookupB.resolve({ data: { assigned_tier: 3 }, error: null });
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search products by name or SKU...')).not.toBeInTheDocument());
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(1);
+    expect(savedItems[0]).toMatchObject({ unit_price_cents: 1199 });
+  });
+
+  // Codex connector on PR #908: closing the picker while the lookup is pending cancels the add, so
+  // the late answer neither adds the product nor closes a picker the user has since reopened.
+  it('closing the picker cancels a pending add', async () => {
+    const pending = buildDeferredChain();
+    setup({ listed: [], byId: () => pending.chain });
+    await addTieredProduct();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    pending.resolve({ data: { assigned_tier: 3 }, error: null });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(screen.getByPlaceholderText('Search products by name or SKU...')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    const savedItems = await saveAndReadItems();
+    expect(savedItems).toHaveLength(0);
+  });
+
+  function setup({ listed, tier3Price = 11.99, byId = { data: null, error: null } }: {
+    listed: Record<string, unknown>[];
+    tier3Price?: number | null;
+    byId?: { data: unknown; error: unknown } | (() => Record<string, unknown>);
+  }) {
+    const invoice = {
+      id: 'inv-tier', invoice_number: 'INV-TIER', invoice_type: 'chemical_sale', status: 'draft',
+      customer_id: 'cust-tier', order_id: 'ord-1', invoice_date: '2026-03-15', due_date: null,
+      payment_terms: 'Net 30', subtotal_cents: 0, total_cents: 0, balance_cents: 0,
+      header_notes: '', footer_notes: '', purchase_order_ref: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    const product = {
+      id: 'product-tier-uuid', product_name: 'Tiered Product', sku: null,
+      tier1_price: 10, tier2_price: 10.75, tier3_price: tier3Price, current_cost: 5,
+    };
+    let shown = invoice;
+    let invoiceCalls = 0;
+    const lookup = {
+      byIdCalls: 0,
+      // The next invoice the route loads is a second draft for the same customer.
+      switchToInvoiceB: () => {
+        shown = { ...invoice, id: 'inv-tier-b', invoice_number: 'INV-TIER-B' };
+        invoiceCalls = 0;
+      },
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? shown : [], error: null });
+      }
+      if (table === 'customers') {
+        // The picker list asks for farm_name; the by-id tier read asks for assigned_tier alone.
+        const listChain = buildSelectedColumnsChain(listed);
+        const select = listChain.select as (cols: string) => Record<string, unknown>;
+        listChain.select = (cols: string) => {
+          if (cols.trim() === 'assigned_tier') {
+            lookup.byIdCalls += 1;
+            return typeof byId === 'function' ? byId() : buildChain(byId);
+          }
+          return select(cols);
+        };
+        return listChain;
+      }
+      if (table === 'products') return buildChain({ data: [product], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    return lookup;
+  }
+
+  async function addTieredProduct() {
+    renderInvoiceDetail('inv-tier');
+    await pickTieredProduct();
+  }
+
+  async function pickTieredProduct() {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    if (!screen.queryByPlaceholderText('Search products by name or SKU...')) {
+      fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    }
+    fireEvent.change(screen.getByPlaceholderText('Search products by name or SKU...'), { target: { value: 'tiered' } });
+    fireEvent.click(await screen.findByText('Product ID: product-tier-uuid'));
+  }
+
+  async function saveAndReadItems() {
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.anything()));
+    const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+    return saveCall?.[1].p_items as Array<{ product_id: string; unit_price_cents: number }>;
+  }
+});

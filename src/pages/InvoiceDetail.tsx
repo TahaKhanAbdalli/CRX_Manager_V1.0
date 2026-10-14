@@ -19,6 +19,7 @@ import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents'
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
+import { getTierPrice } from '../lib/quoteCalc';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
@@ -179,6 +180,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Latest invoice id the route is showing — older in-flight fetches bail (stale guard).
   const activeInvoiceIdRef = useRef<string | undefined>(undefined);
   const productSearchRequestRef = useRef(0);
+  // Add Product's by-id tier lookup: a single flight, bound to the invoice and customer it was
+  // asked for. The ref holds the in-flight lookup's token (0 = none); switching invoices clears it.
+  const addingProductRef = useRef(0);
+  const addProductLookupSeqRef = useRef(0);
+  const [addingProduct, setAddingProduct] = useState(false);
+  const invoiceCustomerIdRef = useRef<string | null>(null);
 
   // Email invoice
   const [emailing, setEmailing] = useState(false);
@@ -311,8 +318,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   useEffect(() => {
     const fetchRef = async () => {
       const [custRes, salesRes] = await Promise.all([
-        // email + billing address feed Email and the printed invoice (buildInvoicePdfData, handleEmail).
-        supabase.from('customers').select('id, farm_name, payment_terms, email, billing_address, city, state, zip, account_number').eq('is_active', true).order('farm_name').limit(500),
+        // email + billing address feed Email and the printed invoice (buildInvoicePdfData, handleEmail);
+        // assigned_tier prices each product added below (addProduct); save_invoice stores the sent price as-is.
+        supabase.from('customers').select('id, farm_name, payment_terms, email, billing_address, city, state, zip, account_number, assigned_tier').eq('is_active', true).order('farm_name').limit(500),
         // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
@@ -656,20 +664,77 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     return () => clearTimeout(t);
   }, [productSearch, searchProducts]);
 
-  // Add product as line item
-  const addProduct = (product: Product) => {
-    const tierPrice = invoice.customer_id
-      ? (() => {
-          const cust = customers.find((c) => c.id === invoice.customer_id);
-          const tier = cust?.assigned_tier || 1;
-          if (tier === 1) return product.tier1_price;
-          if (tier === 2) return product.tier2_price;
-          return product.tier3_price;
-        })()
-      : product.tier1_price;
+  useEffect(() => {
+    invoiceCustomerIdRef.current = invoice.customer_id ?? null;
+  }, [invoice.customer_id]);
 
-    const priceCents = Math.round((tierPrice || 0) * 100);
-    const costCents = Math.round((product.current_cost || 0) * 100);
+  // Invalidates a pending by-id tier lookup: it will add nothing, and Add Product and Save unlock.
+  const cancelPendingAddProduct = useCallback(() => {
+    addingProductRef.current = 0;
+    setAddingProduct(false);
+  }, []);
+
+  // A lookup started on the previous invoice must not keep this one's Add Product and Save locked.
+  useEffect(() => {
+    cancelPendingAddProduct();
+  }, [id, cancelPendingAddProduct]);
+
+  // Add product as line item
+  const addProduct = async (product: Product) => {
+    // save_invoice stores the price sent, so the customer's tier must be known before pricing.
+    // The picker list holds only active customers (capped) and may not have loaded yet, so a
+    // customer missing from it is read by id; if the tier cannot be read, refuse rather than
+    // fall back to tier 1.
+    let tier = 1;
+    if (invoice.customer_id) {
+      const listed = customers.find((c) => c.id === invoice.customer_id);
+      if (listed) {
+        tier = listed.assigned_tier || 1;
+      } else {
+        // One lookup at a time: a second click would add a duplicate line, and Save is disabled
+        // meanwhile so it cannot persist the items without the line being added.
+        if (addingProductRef.current) return;
+        const lookup = ++addProductLookupSeqRef.current;
+        addingProductRef.current = lookup;
+        setAddingProduct(true);
+        try {
+          const requestedFor = id;
+          const requestedCustomerId = invoice.customer_id;
+          const { data, error } = await supabase
+            .from('customers')
+            .select('assigned_tier')
+            .eq('id', requestedCustomerId)
+            .maybeSingle();
+          if (addingProductRef.current !== lookup || activeInvoiceIdRef.current !== requestedFor) return;
+          if (invoiceCustomerIdRef.current !== requestedCustomerId) {
+            toast('error', 'The customer changed while the product was being added. Add the product again.');
+            return;
+          }
+          if (error || !data) {
+            if (error) Sentry.captureException(error, { extra: { context: 'invoice_add_product_customer_tier' } });
+            toast('error', "Could not load this customer's price tier. The product was not added; try again.");
+            return;
+          }
+          tier = (data as { assigned_tier: number | null }).assigned_tier || 1;
+        } finally {
+          // Only the current lookup releases the lock; one invalidated by an invoice switch must
+          // not unlock a newer lookup.
+          if (addingProductRef.current === lookup) {
+            addingProductRef.current = 0;
+            setAddingProduct(false);
+          }
+        }
+      }
+    }
+
+    // Shared helper: a product with no tier-2/3 price falls back to tier 1 instead of $0.
+    // Exact decimal-to-cents parse (no binary-float rounding); a sub-cent price is refused.
+    const priceCents = parseDollarsToCents(String(getTierPrice(product, tier)));
+    const costCents = parseDollarsToCents(String(product.current_cost || 0));
+    if (priceCents === null || costCents === null) {
+      toast('error', `${product.product_name} has a price or cost with more than two decimal places. Fix it in Products before invoicing it.`);
+      return;
+    }
 
     setItems((prev) => [
       ...prev,
@@ -723,6 +788,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Save invoice
   const handleSave = async () => {
+    if (addingProductRef.current) return;
     if (paymentTerms === 'Custom date…' && !customDueDate) {
       toast('error', 'Choose a custom due date before saving.');
       return;
@@ -1466,7 +1532,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         </div>
         <div className="flex gap-2 flex-wrap">
           {editable && (
-            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
+            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={addingProduct}>
               Save
             </Button>
           )}
@@ -2039,7 +2105,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       )}
 
       {/* Product Search Modal */}
-      <Modal open={showProductModal} onClose={() => { setShowProductModal(false); clearProductSearch(); }} title="Add Product" size="large">
+      {/* Closing the picker cancels a pending add, so a late tier answer cannot add the product. */}
+      <Modal open={showProductModal} onClose={() => { cancelPendingAddProduct(); setShowProductModal(false); clearProductSearch(); }} title="Add Product" size="large">
         <div className="space-y-4">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
