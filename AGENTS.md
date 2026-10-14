@@ -6,7 +6,7 @@ The always-loaded shared contract for Codex, Claude, and any other coding agent.
 
 ## Project and Owner
 
-- CRX Manager is the production operations app for Crop RX Solutions, an agricultural chemical distributor: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
+- CRX Manager is the production operations app for Crop RX Solutions, an agricultural chemical distributor: React 19, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
 - Repository `https://github.com/masonwells1/CRX_Manager_V1.0`; production `https://croprxsolutions.app`; Supabase project `rhyzpcqhnizqbxphqdkr`.
 - Mason Wells owns the product. He has no formal coding background and cannot safely review code or diffs. Own the technical process; explain outcomes, risk, and proof in plain English.
 

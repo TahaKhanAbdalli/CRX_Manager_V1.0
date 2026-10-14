@@ -141,6 +141,11 @@ export default function UnbilledApplicationsPanel() {
   const [billNextReady, setBillNextReady] = useState(false);
   const [reconciliationPendingJobIds, setReconciliationPendingJobIds] = useState<Set<string>>(() => new Set());
   const jobInvoiceKeysRef = useRef<Map<string, JobInvoiceKeyControls>>(new Map());
+  // Bumped by every successful reconciliation. It keys each row action, so the remount that
+  // gives a still-listed job a fresh component-local idempotency key always happens. React 19
+  // can merge a fast loading true→false pair into one render, so the loading boundary alone
+  // does not guarantee it.
+  const [rowActionGeneration, setRowActionGeneration] = useState(0);
 
   const registerJobInvoiceKeys = useCallback((jobId: string, controls: JobInvoiceKeyControls | null) => {
     if (controls) {
@@ -189,6 +194,7 @@ export default function UnbilledApplicationsPanel() {
   const refreshAndReconcile = useCallback(async () => {
     if (!await fetchAll()) return false;
 
+    setRowActionGeneration((generation) => generation + 1);
     setReconciliationPendingJobIds(new Set());
     return true;
   }, [fetchAll]);
@@ -246,8 +252,8 @@ export default function UnbilledApplicationsPanel() {
         toast('error', transferInvoiceErrorMessage(err)!);
         // The row stays blocked if either authoritative list read fails. A
         // successful automatic or operator-triggered refresh settles whether an
-        // invoice exists. The loading boundary remounts the row action with a fresh
-        // component-local key before a new confirmation can run another mutation.
+        // invoice exists. A successful refresh remounts the row action (rowActionGeneration)
+        // with a fresh component-local key before a new confirmation can run another mutation.
         await refreshAndReconcile();
       } else {
         toast('error', transferInvoiceErrorMessage(err) ?? sanitizeError(err));
@@ -425,6 +431,7 @@ export default function UnbilledApplicationsPanel() {
                         {s.key === 'jobs' && profile && (
                           <td className="py-2 text-right">
                             <CreateJobInvoiceButton
+                              key={`${row.id}:${rowActionGeneration}`}
                               row={row}
                               profileId={profile.id}
                               disabled={creatingInvoice || reconciliationPendingJobIds.has(row.id)}

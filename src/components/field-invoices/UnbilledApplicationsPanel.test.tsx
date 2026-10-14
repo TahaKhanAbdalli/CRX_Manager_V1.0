@@ -83,6 +83,9 @@ function queryResult(data: unknown[], error: unknown = null) {
   for (const method of ['select', 'eq', 'is', 'order']) {
     chain[method] = vi.fn(() => chain);
   }
+  // Resolves within microtasks on purpose: React 19 then merges the loading
+  // true→false pair into one render, so a fresh key after reconciliation must
+  // come from the explicit row-action remount, not from the loading boundary.
   chain.limit = vi.fn(() => Promise.resolve({ data, error }));
   return chain;
 }

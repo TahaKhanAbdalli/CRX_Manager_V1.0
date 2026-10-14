@@ -1,4 +1,4 @@
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, JSX } from 'react';
 import type { LoaderWorksheet } from '../../lib/loaderWorksheet';
 import type { LoaderVesselOption } from '../../lib/loaderVesselOptions';
 

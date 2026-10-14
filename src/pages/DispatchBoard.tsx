@@ -21,7 +21,7 @@
  *     EXISTING job-level applicator assignment; 'Dispatch Jobs' reuses the
  *     existing inline assign control (the wizard is #36's job).
  */
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Map as MapIcon,

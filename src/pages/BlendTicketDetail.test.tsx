@@ -13,16 +13,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, mockStorageFrom, mockCreateSignedUrl } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockStorageFrom, mockCreateSignedUrl, mockInvoke } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockResolvedValue({ data: null, error: null }),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
   mockCreateSignedUrl: vi.fn(),
   mockStorageFrom: vi.fn(),
+  mockInvoke: vi.fn(),
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
@@ -42,7 +43,7 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
 }
 
 vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: mockStorageFrom } },
+  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: mockStorageFrom }, functions: { invoke: mockInvoke } },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
@@ -914,5 +915,42 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
     // remain available instead of disabling the entire page.
     expect(screen.getByRole('button', { name: 'Create App Record' })).toBeEnabled();
     expect(mockRpc.mock.calls.some(([name]) => name === 'save_blend_ticket')).toBe(false);
+  });
+
+  it('keeps tracking edits when the reload after an OCR re-process fails', async () => {
+    const ocrTicket = { ...baseTicket, source: 'ocr', review_status: 'unreviewed' };
+    let ticketReads = 0;
+    let imageReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'blend_tickets') {
+        ticketReads += 1;
+        return buildChain(ticketReads === 1
+          ? { data: ocrTicket, error: null }
+          : { data: null, error: { message: 'reload failed' } });
+      }
+      if (table === 'blend_ticket_images') {
+        imageReads += 1;
+        return buildChain({ data: imageReads === 1 ? [] : [{ id: 'img-1' }], error: null });
+      }
+      if (table === 'unit_conversions') return buildChain({ data: unitConversions, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockInvoke.mockResolvedValue({ data: { success: true }, error: null });
+
+    renderTicket();
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    await waitFor(() => expect(approve).toBeEnabled());
+    // Let the post-load animation frame re-arm dirty tracking.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+
+    fireEvent.click(screen.getByRole('button', { name: /Re-process OCR/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-process' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load blend ticket. Please try again.'));
+    expect(mockInvoke).toHaveBeenCalledWith('process-blend-ticket', expect.anything());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+
+    // The reload failed, so the page still shows the old ticket: an edit must count as unsaved.
+    fireEvent.change(screen.getByPlaceholderText('Add notes...'), { target: { value: 'edited after a failed reload' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled());
   });
 });

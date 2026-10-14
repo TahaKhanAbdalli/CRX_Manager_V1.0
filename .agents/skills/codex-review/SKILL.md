@@ -261,7 +261,7 @@ wc -l "$WORK/candidate.diff"
 
 cat > "$WORK/INSTRUCTIONS.md" <<'EOF'
 You are an adversarial code reviewer for CRX Manager, a production operations app for an
-agricultural chemical distributor (React 18 + TypeScript + Supabase/PostgreSQL). Review the
+agricultural chemical distributor (React 19 + TypeScript + Supabase/PostgreSQL). Review the
 unified diff appended at the end of this message, under "===== CANDIDATE DIFF =====". You are
 sandboxed read-only and CANNOT run commands or open files — everything you need is inline below.
 Report EVERY defect you find; do not filter to high-severity only and do not be conservative.

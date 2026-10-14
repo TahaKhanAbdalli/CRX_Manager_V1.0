@@ -1280,7 +1280,8 @@ export default function JobDetail() {
   // §5 (Codex r6): the block-mode save gate FAILS CLOSED until BOTH the mode read AND the
   // by-id label fetch resolve, so an early Save can't slip an over-label line past block mode.
   const [guardrailModeLoaded, setGuardrailModeLoaded] = useState(false);
-  const [jobLabelsLoaded, setJobLabelsLoaded] = useState(false);
+  // The product-id set whose by-id label fetch has settled; see jobLabelsLoaded below.
+  const [jobLabelsLoadedKey, setJobLabelsLoadedKey] = useState<string | null>(null);
   const [jobEarliestHarvestDate, setJobEarliestHarvestDate] = useState<string | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
@@ -1413,18 +1414,21 @@ export default function JobDetail() {
   // when the set of product ids on the lines changes. A failed fetch => empty map (the row
   // falls back to allProducts, then degrades to "no label max" — never blocks/errors).
   const chemProductIdKey = Array.from(new Set(chemRows.map((c) => c.product_id).filter(Boolean))).sort().join(',');
+  // Loaded only for the CURRENT id set. A boolean flag stayed true from the empty set
+  // for the render in which the job's lines arrived, before this effect could clear it,
+  // so a Save in that window passed the fail-closed gate with no label data.
+  const jobLabelsLoaded = jobLabelsLoadedKey === chemProductIdKey;
   useEffect(() => {
     let cancelled = false;
     const ids = chemProductIdKey ? chemProductIdKey.split(',') : [];
-    if (ids.length === 0) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
-    setJobLabelsLoaded(false);
+    if (ids.length === 0) { setJobProductLabels(new Map()); setJobLabelsLoadedKey(chemProductIdKey); return; }
     (async () => {
       const { data, error } = await supabase
         .from('products')
         .select('id, max_label_rate, max_label_rate_unit, product_form')
         .in('id', ids);
       if (cancelled) return;
-      if (error) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
+      if (error) { setJobProductLabels(new Map()); setJobLabelsLoadedKey(chemProductIdKey); return; }
       const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; product_form: 'liquid' | 'dry' | null }>();
       for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; product_form: string | null }> | null) ?? []) {
         m.set(p.id, {
@@ -1434,7 +1438,7 @@ export default function JobDetail() {
         });
       }
       setJobProductLabels(m);
-      setJobLabelsLoaded(true);
+      setJobLabelsLoadedKey(chemProductIdKey);
     })();
     return () => { cancelled = true; };
   }, [chemProductIdKey]);

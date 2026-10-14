@@ -4,7 +4,7 @@ Business management system for **Crop RX Solutions**, an agricultural chemical d
 
 ## Tech Stack
 
-- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS
+- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, Realtime, Edge Functions)
 - **Maps:** Mapbox GL JS + react-map-gl (satellite field mapping with draw tools)
 - **Testing:** Vitest (unit) + Playwright (E2E)

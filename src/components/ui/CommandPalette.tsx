@@ -188,7 +188,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [entityResults, setEntityResults] = useState<GlobalSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // AppLayout is withheld while auth loads; the fallback keeps isolated component
   // renders using AuthContext's loading default equivalent to the prior admin tests.
   const role = authRole ?? (authLoading ? 'admin' : null);

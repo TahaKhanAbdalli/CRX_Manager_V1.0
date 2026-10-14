@@ -12,7 +12,7 @@ const POLL_INTERVAL = 30000;
 export function useOCRProcessor(enabled: boolean = true) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
-  const pollIntervalRef = useRef<NodeJS.Timeout>();
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -23,7 +23,7 @@ export function useOCRProcessor(enabled: boolean = true) {
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = undefined;
+        pollIntervalRef.current = null;
       }
     };
   }, [enabled]);

@@ -209,7 +209,7 @@ describe('SupplierPricing page', () => {
     fireEvent.click(screen.getByRole('button', { name: /The Andersons/ }));
 
     await waitFor(() => expect(mockGetImport).toHaveBeenCalledWith('import-1'));
-    expect(screen.getByText(
+    expect(await screen.findByText(
       'You are adding 1 supplier observations. You are changing ZERO sell prices.',
     )).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();

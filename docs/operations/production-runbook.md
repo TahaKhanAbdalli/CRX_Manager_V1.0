@@ -20,7 +20,7 @@
 | CI | GitHub Actions (`.github/workflows/ci.yml`) | Repo → Actions tab |
 | Error tracking | Sentry | https://sentry.io |
 
-**Stack:** React 18 + TypeScript + Vite + Tailwind + Supabase + Vercel.
+**Stack:** React 19 + TypeScript + Vite + Tailwind + Supabase + Vercel.
 
 ---
 

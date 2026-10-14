@@ -120,6 +120,12 @@ export function BlendTicketDetail() {
     total_volume_unit: '',
     notes: '',
   });
+  // The exact form and product objects the last server hydration set. A render
+  // that still shows them is hydration, not an edit, however late its effects run.
+  const hydratedStateRef = useRef<{ formData: typeof formData | null; products: BlendTicketProduct[] | null }>({
+    formData: null,
+    products: null,
+  });
 
   const contentLocked = Boolean(ticket && (
     ticket.order_link_status === 'linked'
@@ -305,7 +311,9 @@ export function BlendTicketDetail() {
         );
       }
       setImages(imagesWithSignedUrls);
-      setProducts((productsResult.data || []) as BlendTicketProduct[]);
+      const hydratedProducts = (productsResult.data || []) as BlendTicketProduct[];
+      hydratedStateRef.current.products = hydratedProducts;
+      setProducts(hydratedProducts);
       if (allProductsResult.error) {
         Sentry.captureException(allProductsResult.error, {
           level: 'warning',
@@ -339,7 +347,7 @@ export function BlendTicketDetail() {
         }));
       setFieldsDirty(false);
 
-      setFormData({
+      const hydratedForm = {
         customer_id: ticketResult.data.customer_id || '',
         ticket_date: ticketResult.data.ticket_date || '',
         ticket_time: ticketResult.data.ticket_time || '',
@@ -357,7 +365,9 @@ export function BlendTicketDetail() {
         total_volume: ticketResult.data.total_volume?.toString() || '',
         total_volume_unit: ticketResult.data.total_volume_unit || '',
         notes: ticketResult.data.notes || '',
-      });
+      };
+      hydratedStateRef.current.formData = hydratedForm;
+      setFormData(hydratedForm);
       setSaveHydrationRequired(false);
       // Mark initial load complete so future changes trigger isDirty
       requestAnimationFrame(() => { initialLoadDone.current = true; });
@@ -476,6 +486,8 @@ export function BlendTicketDetail() {
 
   // Track dirty state from form changes
   useEffect(() => {
+    const hydrated = hydratedStateRef.current;
+    if (formData === hydrated.formData && products === hydrated.products) return;
     if (initialLoadDone.current) setIsDirty(true);
   }, [formData, products]);
 
@@ -747,7 +759,8 @@ export function BlendTicketDetail() {
       }
       toast('success', 'OCR re-processing complete');
       await logActivity({ event: 'blend_ticket_reprocessed', description: `Re-processed OCR for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
-      initialLoadDone.current = false;
+      // loadTicketData suspends dirty tracking itself and restores the prior mode if the
+      // reload fails; clearing it here first would leave later edits untracked after a failure.
       await loadTicketData();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reprocess_ocr' } });

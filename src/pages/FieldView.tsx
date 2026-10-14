@@ -58,7 +58,7 @@
  * no dispatch/assign controls, no office filters, no Cancel/Transfer — just the
  * applicator's own cards and the two actions (Start/Complete) they're allowed to run.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import {
   List as ListIcon,
   Map as MapIcon,

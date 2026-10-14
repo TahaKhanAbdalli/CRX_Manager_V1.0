@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { Check, ChevronDown, ChevronUp, Edit3, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';

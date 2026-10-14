@@ -40,7 +40,7 @@ way you'd explain something to a smart non-technical business partner.
 ```
  ┌─────────────────────────────────────────────────────────────┐
  │  Browser / phone (PWA — installable, works offline-ish)     │
- │  React 18 + TypeScript + Vite + Tailwind CSS                │
+ │  React 19 + TypeScript + Vite + Tailwind CSS                │
  └───────────────────────────┬───────────────────────────────────┘
                               │  PR merged into protected `main`
                               ▼
@@ -61,7 +61,7 @@ way you'd explain something to a smart non-technical business partner.
  └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Frontend**: React 18 + TypeScript, built by Vite, styled with Tailwind
+- **Frontend**: React 19 + TypeScript, built by Vite, styled with Tailwind
   CSS. Packaged as a PWA (Progressive Web App — an installable, app-like
   website) via `vite-plugin-pwa` (see `vite.config.ts`). Error/performance
   monitoring via Sentry.

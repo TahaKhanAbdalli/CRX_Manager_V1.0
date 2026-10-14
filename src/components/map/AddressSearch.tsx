@@ -18,7 +18,7 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
   const [results, setResults] = useState<GeocodingResult[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const geocode = useCallback(async (text: string) => {
     if (!MAPBOX_TOKEN || text.length < 3) {
