@@ -203,7 +203,7 @@ and `20260903230000_commission_report_snapshot_contract`; PR #599 (2026-09-11, `
 The 2026-09-11 backlog plan (`docs/plans/2026-09-11-open-pr-backlog-plan.md`) and its queue are
 finished; its guard-policy window ran to 2026-09-25. Of its rows, #599, #630, #646 and #650 merged; #624, #626,
 #634, #635, #638, #647, #449 and #544 closed (#635 was replaced by the merged #764, and #544 by
-issue #747). #605, #612 and #631 are still open. Its follow-up about locked
+issue #747). #605, #612 and #631 closed unmerged on 2026-09-30 (Chicago time) in Mason's triage. Its follow-up about locked
 pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff recovery steps are in
 `docs/workflows/INVENTORY_RULES.md`. For the live list, run `gh pr list --state open`.
 

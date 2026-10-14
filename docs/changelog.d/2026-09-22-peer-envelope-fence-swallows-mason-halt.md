@@ -12,8 +12,8 @@ code, then any unclosed envelope, then blockquotes.
 ### Origin
 
 Finding #504b from the 2026-09-03 PR-comment audit
-(`docs/audits/2026-09-03-pr-comment-audit-reconciliation.md`, on the unmerged branch
-`codex/pr-comment-remediation-20260903`). An earlier fix attempt on
+(`docs/audits/2026-09-03-pr-comment-audit-reconciliation.md`, on closed PR #591's branch
+`codex/pr-comment-remediation-20260903`; restorable from the PR #591 page). An earlier fix attempt on
 `codex/peer-envelope-fence-20260908` (six commits, ~250 lines of candidate-boundary
 "consensus" parsing) was cherry-picked, reviewed by `gpt-5.6-luna` at xhigh, and
 **abandoned**: Luna returned 8 findings, and a measured side-by-side run confirmed its

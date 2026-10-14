@@ -11,7 +11,9 @@ files and re-pointing only this PR's own entries at the current facts.
   closed #832 and #793. The hold is unchanged: do not merge #800 or apply `20260921180000` until
   `20260914101300_finish_generic_field_invoice_cutover` is confirmed in the live ledger.
 - `KNOWN_ISSUES.md` now names the page branch (`claude/customer-document-rep-remove-page-v3`)
-  instead of saying the Documents-tab change is not written.
+  instead of saying the Documents-tab change is not written. (2026-10-13: that page change shipped as PR
+  #875; the branch is on the GitHub branch-cleanup list and its tip is listed in
+  `docs/audits/2026-10-13-github-branch-cleanup-audit.md`.)
 
 **CodeRabbit on `cf15887d8` (CHANGES_REQUESTED) and the Codex connector.** Fixed: every parked file
 must now appear in the replay plan (the `20260914100700` exemption is gone now that `main` carries it);

@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-10-14 (seven entries added: six from Mason's answers to the goals plan's questions 6e–6k (orderless invoices carry no products; Chem Man's last bill 2026-12-31 and a CRX-only pilot from 2027-01-01; bill products only when delivered; Mason owns compliance and inventory; an overnight outage is acceptable; admin-only commission splits), plus revised quotes keep locked prices, reps see last-charged prices while price history stays admin-only, prices come in through the full Excel workbook; also re-read for PR #905 review; 2026-10-13: five entries added: a sent quote's prices stay locked until accepted or expired; an order's bill can be split to a landlord; a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-14 (GitHub branch cleanup: two owner decisions recovered from never-merged branches, the 2026-08-09 pricing answers and the 2026-08-27 ingredient-identity model D-AA, and a new entry recording that #544's 2026-09-20 close superseded the 2026-09-01 return-credit split; seven entries added: six from Mason's answers to the goals plan's questions 6e–6k (orderless invoices carry no products; Chem Man's last bill 2026-12-31 and a CRX-only pilot from 2027-01-01; bill products only when delivered; Mason owns compliance and inventory; an overnight outage is acceptable; admin-only commission splits), plus revised quotes keep locked prices, reps see last-charged prices while price history stays admin-only, prices come in through the full Excel workbook; also re-read for PR #905 review; 2026-10-13: five entries added: a sent quote's prices stay locked until accepted or expired; an order's bill can be split to a landlord; a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -80,6 +80,54 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Decision (Mason, in chat, answering the scalability review).** Finish Goals 1–7 of `docs/plans/2026-10-13-direction-and-goals.md` (including a QuickBooks Desktop sync and online card/ACH payments), clean up, hand off to an outside senior developer for independent review, then roll out, with Chem Man retired for billing by spring 2027.
 **Why.** The review found a sound foundation but real gaps, and an outside expert should check the system before real money depends on it.
 **What this forbids/implies:** the same day Mason also chose a Supabase Pro upgrade with point-in-time recovery, private photos, and keeping all AI tooling (documented) at handoff. The goals doc sets priorities only and authorizes no build; open questions are listed there.
+
+## 2026-09-20 (recorded 2026-10-14) — The parked return-credit gate work is closed, not resumed
+
+**Supersedes** the "What this forbids/implies" rule of the 2026-09-01 entry "split the return-credit
+landing: docs now, migration-gate hardening separately", which said not to treat the parked gate work as
+abandoned.
+**Decision.** Mason closed that work's PR #544 without merging it on 2026-09-20. Its measured findings
+moved to open issue #747 the same day.
+**Why.** The PR's stated purpose had already landed on `main` separately, its technical premise was
+superseded, and two independent reviews agreed it should be neither merged nor repaired in place (the
+PR's closing comment).
+**What this forbids/implies:** do not resume or reopen PR #544. The branch the 2026-09-01 entry names is
+kept only as issue #747's evidence. Work on the migration-proof gate starts from issue #747.
+
+## 2026-08-27 (recovered 2026-10-13) — Product data model: the ingredient identity model (D-AA)
+
+**Recovered** from never-merged PR #507 (`claude/product-plan-rev12-followup`); this change merges its
+Revision 13 into `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md`, whose §D-AA is authoritative.
+**Decision (Mason, in chat, 2026-08-27):** D-AA-1, a CAS number, where present, is the chemical's identity
+across every name and spelling, so a CAS match merges automatically. D-AA-2, any identity claim resting
+on a name alone waits for Mason's side-by-side approval; CAS-less identities are provisional and listed
+for CAS backfill. D-AA-3, a match by name OR CAS that claims a different canonical parent is refused at
+import with a named error, before any write. D-AA-4 (settled technically): no path renames a shared
+ingredient row, and multi-identity inserts take a deterministic order.
+**Why.** A CAS number is an official registry identifier, while names are not unique and change, so a
+name-only match is a suspicion that goes to a person; and ambiguous chemistry must not enter the system
+(plan §D-AA).
+**What this forbids/implies:** WP-1 implements D-AA as settled; Revision 12's `ON CONFLICT … DO UPDATE SET
+name` mechanism stays withdrawn. Until WP-1 ships, concurrent creation of one new ingredient can still
+duplicate rows (an open HIGH in the plan).
+
+## 2026-08-09 (recovered 2026-10-13) — Pricing: commission clawed back on returns, no historical backfill, per-product margin targets, below-cost as a hard rule
+
+**Recovered** from never-merged PRs #350 (`claude/pricing-audit-strategy-jym8rr`) and #397
+(`codex/pr389-coderabbit-fixes`). Source: `docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md`.
+**Decision (Mason, in chat, 2026-08-09):** (1) a return claws back commission proportionally: unpaid
+commission is reduced, and paid commission becomes a debit against the rep's next check. **Not built as
+of 2026-10-13** (trace in `KNOWN_ISSUES.md`). (2) No backfill of return costs: credit memos issued before
+the live apply of `20260827041100_rebuild_return_credit_cogs_reversal` (ledger `20260901182753`) are out
+of scope; revisit only if real customer returns predate it. (3) Margin targets are per product; a global
+value is only a fallback (seeding is in `TODO.md`). (4) Below-cost lines are refused server-side unless an
+approval reason is checked against the locked cost, with an admin exception; live since 2026-08-12
+(`20260812115237_enforce_below_cost_admin_approval`) on every money-write RPC.
+**Why.** The 2026-08-08 audit found the sale-time margin guard was only a text colour, so a rep could save
+a below-cost line freely; and the existing return-cost rows were test and transitional data, not real
+history. The sources record no separate reason for the clawback or the per-product targets.
+**What this forbids/implies:** browser below-cost checks are a convenience, never the control; a new
+line-writing path must join the server-side wall, and an unrecognized below-cost path fails closed.
 
 ## 2026-10-09 — Mason approves parked migrations by chat reply, not Windows Hello
 

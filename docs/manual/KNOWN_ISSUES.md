@@ -12,7 +12,9 @@ entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150
 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
-date and was not all re-measured.
+date and was not all re-measured. On 2026-10-13 the GitHub branch cleanup added five OPEN entries
+rescued from never-merged branches or found by its salvage review, and repointed the entries that name
+branches on the cleanup list (`docs/audits/2026-10-13-github-branch-cleanup-audit.md`).
 
 - **Applied live:** the September commission cohort `20260914100100` through `20260914100600`
   (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), the customer-document
@@ -44,6 +46,248 @@ with `where name ~ '^[0-9]{14}'`.
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-10-13 (latent; rescued from closed PRs #397 and #350) — quote screen: re-saving a quote with two lines of one product is refused, and Convert to Order can leave an accepted quote with no order
+
+**Rescued in the 2026-10-13 GitHub branch cleanup** (`docs/audits/2026-10-13-github-branch-cleanup-audit.md`).
+These findings were recorded only on the never-merged branches `codex/pr389-coderabbit-fixes` (PR #397,
+closed 2026-08-20) and `claude/pricing-audit-strategy-jym8rr` (PR #350), whose commits stay restorable
+from their PR pages. Each was re-checked against `main` on 2026-10-13 as stated below.
+
+**The quote re-save refusal (MED, latent).** The live `save_quote` (`20260812115236`, applied
+2026-08-12) keeps each existing line's recorded cost only when the browser says which saved line each
+row is. `src/pages/QuoteBuilder.tsx` on `main` sends no line `id` (checked 2026-10-13: the save payload
+built near line 1740 carries `product_id`, prices and quantities only). So when an EXISTING quote
+already holds a line of a product and a save sends two or more lines of that product, the RPC raises
+`QUOTE_ITEM_AMBIGUOUS_COST` and tells the user to reload, which cannot help because the page never sends
+ids. That includes the ordinary act of adding a second line of a product the saved quote already has.
+A brand-new quote is unaffected (nothing is saved yet), and so is any save that carries at most one line
+per product the quote already holds. **Exposure today:** a read-only live query on 2026-10-13 found 4
+quotes in total, none currently holding a repeated product, the newest last updated 2026-07-19; the
+refusal would hit the first time someone edits a saved quote into that shape. **Fix shape:** QuoteBuilder
+sends each saved line's `id`, sends a `client_key` on every new line, and installs the `item_ids` mapping
+the RPC returns (client key to new id), so the next save can name every line. Identity rule from the same
+reference fix: swapping a line to a different product clears its saved `id` (it becomes a new line at
+today's cost), while re-picking the same product keeps it. The reference implementation is commit
+`dec5d3378`, carried on both PR #350's and PR #397's branches (`QuoteBuilder.tsx` about lines 1586-1666);
+it predates months of `main` changes, so re-derive it rather than cherry-pick. Fix it before quoting is
+used for real.
+
+**Convert to Order marks the quote accepted before the order exists (MED, latent; flagged by the branch
+reviews, traced on `main` 2026-10-13).** `executeConvertToOrder` commits `save_quote` with status
+`accepted` (`src/pages/QuoteBuilder.tsx:3053-3055`) before calling `convert_quote_to_order` (`:3065`).
+Entering `accepted` fires the hold-release trigger, which deactivates every active hold on the quote
+(`20260706030000_closed_short_booking_closure.sql:133-137`). If the conversion then fails, the page's
+live-status check finds `accepted` and no order, warns that "its order could not be found" and returns
+(`:3164-3194`), so the revert to `sent` (`:3221-3240`) is effectively never reached; and an admin who
+cancels the second below-cost reason prompt returns silently (`:3132-3134`). Result: a quote that reads
+as converted, no order, and stock that was held for a planned booking now neither held nor pre-booked.
+Recovery: Convert stays available on accepted quotes (`:597`) and the RPC creates the missing order on
+retry. **Fix shape:** save without changing the status and let `convert_quote_to_order` flip it to
+`accepted` inside the same transaction that creates the order (it already sets it). **Live state
+2026-10-13 (read-only):** one of the 4 quotes is `accepted` with no order. It belongs to a real customer,
+was last updated 2026-07-19, has 3 lines, and has never had an inventory hold. That shape matches this
+bug, but it may also have been accepted by hand; the record is identified in the live database, not
+named here. Whether that customer still expects an order is a question for Mason.
+
+**The quote screen shows profit from today's product cost (LOW, display only).** QuoteBuilder's own
+`recalcItem` (`QuoteBuilder.tsx:1337`; the copy in `src/lib/quoteCalc.ts` is used only by tests) replaces
+a line's cost with the product's current catalog cost and recomputes profit and margin (`:1352`, `:1368`)
+on a tier or customer change, any line edit, or a field pick. `save_quote` ignores those numbers and
+reprices every line from the frozen `cost_at_quote_cents`, so on an existing quote whose product cost has
+changed, the internal Cost/Profit/Margin columns can differ from what is stored until the quote is
+reloaded (the screen can also be one cent off: it rounds profit as one figure, the server rounds revenue
+and cost separately). Customers never see these columns and no stored money is wrong. PR #350's branch
+changed both copies; only the QuoteBuilder copy matters.
+
+**Two smaller database findings from PR #397 (LOW).**
+- `public.quote_sections` still grants the browser role `authenticated` `TRUNCATE`, `TRIGGER` and
+  `REFERENCES`, and still carries the obsolete `qsections_insert`/`qsections_update`/`qsections_delete`
+  policies (verified read-only on live 2026-10-13; `20260730235031` revoked only INSERT/UPDATE/DELETE).
+  The web API cannot issue `TRUNCATE`, so this is clean-up, not an open door. A never-applied candidate,
+  `20260814063000_quote_sections_rpc_owned.sql`, is on PR #397's branch.
+- `_below_cost_reason_from_json` (`20260812115237`, live) treats an explicit null or empty
+  `below_cost_reason` as absent and searches the payload recursively, so an older "Below-cost approved:"
+  line in copied or imported notes can be accepted as the approval reason without a fresh prompt. An
+  admin is still required. Source: CodeRabbit finding 3779708583 on PR #397. Not re-measured 2026-10-13.
+  A never-applied candidate fix, `20260814041419_fresh_below_cost_reason.sql`, is on PR #397's branch. Its
+  precondition hash still matches the live function (`md5(prosrc)` `6fda4d6d…`, checked 2026-10-13), but it
+  only works together with its client half (commit `d197264e6`: send an explicit null reason and strip
+  approval markers from notes). Its header says it preserves access, yet it revokes `service_role`, so
+  re-review it before any apply.
+
+## OPEN 2026-10-13 (HIGH; rescued from closed PR #605) — connected MCP tools with no permission rule run without a prompt, including production deploy, rollback and email send
+
+**What happens.** `.claude/hooks/migration-apply-guard.mjs` runs on every `mcp__.*` call and, for any
+tool whose name does not contain `apply_migration`, returns an explicit `permissionDecision: "allow"`
+(line 59; it also allows when its input cannot be parsed, line 54). Claude Code's documentation
+(fetched 2026-10-13) says a hook's "allow" skips the permission prompt but does NOT override settings
+rules: "a matching deny rule blocks the call, and a matching ask rule still prompts even when the hook
+returned allow". So any MCP tool that no `ask` or `deny` rule names runs with no prompt. In the
+project's `dontAsk` mode such a call would otherwise be auto-denied; the hook's allow lets it run.
+
+**Measured 2026-10-13 against `main`'s hooks and both settings files, with synthetic hook input (no tool
+was called):** the hook returned allow, and no allow/ask/deny rule in `.claude/settings.json` or the
+user's `~/.claude/settings.json` names, any of these connected tools: the Vercel connector's
+`request_promote`, `edit_project_env` and `create_deployment`; a Supabase connector's `pause_project`;
+`mcp__supabase__create_edge_function_secret` and `mcp__supabase__delete_branch`; and an email
+connector's `send_message`. **Why the existing Vercel denies do not help:** they are written as
+`mcp__Vercel__*`, and MCP rules match the server name as configured; the connected Vercel server is
+named by a UUID (`0fb370f6-…`), so those rules match nothing (only its `deploy_to_vercel` is denied by
+UUID). Not verified: whether the desktop app's auto-mode classifier still reviews a hook-allowed call.
+
+**Fix shape.** Either make the hook return no decision for tools it does not judge (PR #605's reference
+fix, restorable from the PR #605 page, also denied unregistered connector ids in
+`.claude/hooks/mcp-tool-guard.mjs`), or add `ask`/`deny` rules spelled with the connected servers' real
+names. This touches the agent permission layer, so it is its own reviewed change; it reaches
+irreversible, outward-facing actions, which meets Mason's 2026-10-02 bar for guard work. PR #605 closed
+unmerged 2026-09-30 Chicago time (2026-10-01 UTC).
+
+**Same PR, second gap (LOW, likely latent):** `money-safety.mjs`, `rls-on-new-tables.mjs`, `env-guard.mjs`
+and `generated-column-check.mjs` judge only `tool_input.content` or `tool_input.new_string`, so a
+`MultiEdit` call (whose text is in `edits[]`) is never inspected (checked on `main` 2026-10-13). PR #605's
+`judgedContent()` change covered it. The current desktop harness exposes no `MultiEdit` tool, so this
+matters only if one returns.
+
+**Same PR, third item (historical, not re-verified):** a Codex P1 on PR #605 reported that a non-canonical
+path spelling such as `.github/scripts/../workflows/ci.yml` could skip `ask`-tier path matching. It was not
+re-checked against the current harness on 2026-10-13; whoever fixes the MCP gap above should test it too.
+
+## OPEN 2026-10-13 (first measured 2026-09-05; owner action: Mason) — a review proof can be read and rewritten through its Windows 8.3 short name
+
+**Rescued from closed PR #612** (`claude/review-proof-guard-read-only-narrowing`, closed unmerged
+2026-09-30 Chicago time, 2026-10-01 UTC; the full write-up is in that branch's `docs/manual/KNOWN_ISSUES.md`, restorable from
+the PR #612 page). Not re-run on 2026-10-13; recorded as the PR #612 review rounds measured it.
+
+The PR #612 rounds measured that the review-proof file answers to an 8.3 short alias on this NTFS volume
+(`.claude/session-state/CODEX-~1.JSO` is a `codex-review-<sha>.json` proof); whether every long file name
+has one depends on the volume's short-name setting, which was not measured. The review-proof guard's
+shell rule matches protected names in the command text, so a command that spells the alias is not
+recognised. Two `gpt-5.6-sol` rounds showed that, combined with a hard link made through the alias, an
+agent could rewrite a proof's `base_sha`, timestamp, model or verdict, and the push guard would accept
+it, because proof validation trusts those fields without checking who wrote them. That would defeat the
+expiry and moved-base rules of the protected-review gate. (Merging into `main` still also needs
+CodeRabbit's APPROVED review of the exact head, which a rewritten proof does not supply.)
+
+**The 8.3 alias is one route, not the whole problem.** The same write-up records that the review-proof
+guard is a named-access speed bump against mistakes and casual self-certification, NOT a
+confidentiality or integrity boundary for proof bytes. Routes that stay open regardless of short names:
+a shell, PowerShell or Node interpreter can construct a proof pathname instead of spelling it; a hard
+link made outside the state directory can expose proof bytes under a harmless name; and a check made
+before a tool runs cannot bind the file the tool later opens (an alias, junction or hard link can be
+swapped in after the check). Command-text matching cannot enumerate every interpreter or
+path-construction form. So removing short names closes only the alias route.
+
+**Fix options.** (1) An owner action that narrows the alias route only: turn off Windows short-name
+creation for the drive (reversible), then strip the existing short names under the repository folder
+only (not reversible: run the tool's test mode first and take a backup, because programs that stored a
+short path can break). An agent must not do either; they change a system setting. (2) The durable fix
+for the whole class is a design change: authenticate proof content (wrapper-held creation and
+validation, so a rewritten field is detected) rather than add another command-text rule.
+
+## OPEN 2026-10-13 (mostly LOW; three MED) — smaller notes rescued from branches in the GitHub branch cleanup
+
+Each was found by the cleanup's reviewers on a branch that is being removed and was written down nowhere
+else on `main`. None blocks this branch cleanup; they are recorded here for follow-up so they are not lost, and some are real gaps. Each says how it was checked.
+
+- **MED (money): commission clawback on returns is decided but not built** (Mason's 2026-08-09 decision,
+  `DECISION_LOG.md`). A trace of the live catalog and `main` on 2026-10-13 found no function, trigger,
+  view, scheduled job or app code that changes a commission when a return is created, received or
+  credited, or when its credit memo is applied, unapplied or voided. Commission is fixed from order or
+  job profit when it is minted and can never be negative (`chk_commission_amount >= 0`). The only
+  reversal today is cancelling PENDING commission in full when a whole order, delivery or invoice is
+  voided or cancelled; already-paid commission is never debited. Live data that day: one approved return
+  and no credit memos ever (whether that return's sale carried commission was not traced).
+
+- **`save_field` reports success for a field id that does not exist** (from
+  `claude/bulk-import-retry-scopes`). Read from the live function body 2026-10-13: when `p_field_id` is
+  given it runs `UPDATE fields … WHERE id = p_field_id` with no row-count or `FOUND` check, sets the
+  returned id to `p_field_id`, writes an activity row and saves the idempotency result. With no billing
+  splits in the payload, a missing id therefore returns that id as if saved while nothing was written
+  (with billing splits, their insert would presumably fail on the field foreign key; not tested). It
+  matters to whoever builds the tracked bulk-import duplicate-field fix in `TODO.md`, which names a stable
+  client-generated field id as the redesign. The same body checks only the admin or sales-rep role, not
+  which customer the field belongs to; whether reps are meant to be limited there is not settled here.
+- **`git clean` with `clean.requireForce` switched off** (from `claude/bash-safety-opacity-cleanup`,
+  PR #527). Measured 2026-10-13 by feeding `main`'s Bash hooks synthetic input (nothing was run): the
+  project `bash-safety.mjs` denies the reported `-c clean.requireForce=false clean -d`, `=0` and
+  `--config-env` forms, but allows a `git clean` with no `-f`/`-d`/`-x` flag (plain, or `-X`) when the
+  override is given by `-c`, `--config-env` or `GIT_CONFIG_*` variables. With the override, plain `clean`
+  deletes untracked files and `-X` deletes ignored ones such as `.env*` (git documentation; not run).
+- **Transfer-created field invoices are stamped Net 30 regardless of the customer's terms (MED, needs a
+  trace)** (from the PR #591 review). On `main`, `transfer_job_to_invoice` sets the invoice date to the
+  Chicago date and `due_date` to that date + 30 days
+  (`20260914100500_commission_dates_follow_chicago_business_day.sql:2587` and `:2820`). Mason's settled
+  rule (`DECISION_LOG.md`, 2026-09-03) is that payment terms run from the invoice date using the
+  customer's terms, so for a Net 15 or due-on-receipt customer this stamp contradicts the rule unless
+  something corrects it before posting. Reported, not re-measured: posting keeps a non-null due date, and
+  the field-app editor clears a matching stamp when the billing form is saved. Trace the post path before
+  relying on either.
+- **Live-data guard: an `[E2E]` marker anywhere in a SQL batch exempts every write in it** (from
+  `claude/live-data-guard-comment-aware`, PR #639). Measured 2026-10-13 with synthetic hook input (nothing
+  ran): `.claude/hooks/live-testdata-guard.mjs` denies `DELETE FROM customers WHERE id = '…'` but allows
+  the same delete when the batch also contains `SELECT '[E2E]';`. PR #639 had scoped the marker to its own
+  statement; that change never landed. `main` mentioned this only in two 2026-08-08 audit documents
+  (`docs/audits/2026-08-08-crx-harness-permissions-audit.md`, `…-permissions-overhaul-handoff.md`), not
+  as an open item. It reaches irreversible live-data deletes, so it meets Mason's 2026-10-02 bar. PR #639's
+  other unlanded change made `isClearlyReadOnlySql` hold under both readings of a backslash in a string;
+  per its reviewer, on `main` that matters only in a database session with `standard_conforming_strings`
+  turned off, which is not the default (reported, not re-measured).
+- **Local hooks do not inspect GitHub GraphQL ref updates.** Measured the same way: a
+  `gh api graphql … updateRefs` mutation passes every Bash hook, even one aimed at `refs/heads/main`. The
+  boundary for `main` is GitHub's server-side `protect-main` ruleset (rules read 2026-10-13: deletion,
+  non-fast-forward, pull request, required status checks; no bypass actors per `DECISION_LOG.md`).
+- **Return-credit container prover is pre-apply** (from `codex/defer-return-credit-rollout-20260831`,
+  PR #532). Reasoned from the code, not run: it replays the six return-credit migrations onto a fresh
+  live dump, and their pre-flight checks expect the state from before their 2026-09-01 apply, so it can
+  no longer pass. A rebuild should also pin `America/Chicago` (the smoke file uses `CURRENT_DATE`) and
+  normalize Windows line endings in the dump; PR #532 holds reference commits.
+- **Two test hardenings that never landed** (test-only; no product bug). The inventory hold retry tests
+  in `src/pages/InventoryPage.uncertainRetry.test.tsx` compare the retry key with the original without
+  first asserting a non-empty key (the live wrapper refuses a blank key, so a regression fails loudly);
+  PR #672 held the assertions. And `src/lib/waveAMoneyMigrations.test.ts` lacks PR #395's case pinning the
+  parked Wave A `030000` probe's locked product cost (`FOR SHARE OF p` and its NOT NULL column list);
+  Wave A gets a full re-review before any apply anyway.
+- **"Gross margin means markup" note** (from PR #350). The 2026-08-08 pricing audit on `main` says to add
+  it to `docs/reference/gotchas.md`; it was never added. Its content is finding 1 of
+  `docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md`.
+
+## OPEN 2026-10-13 (one MED with an owner decision; the rest LOW) — found by the branch salvage review
+
+The cleanup's second salvage pass compared every line each old branch added with `main`'s whole tree.
+These came out of it. Each says how it was checked.
+
+- **Splitting an order's bill to a landlord always fails (MED). Mason, 2026-10-13: it should work**
+  ("landlord yes"). Read from the live database 2026-10-13: the invoice trigger
+  `trg_guard_invoice_terminal_order` (function `guard_invoice_terminal_order`) raises
+  `INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID` whenever an invoice's customer is not its order's customer,
+  so the split engine can never bill a landlord or any other non-owner. Per the review, one live billing
+  default would bill a non-owner and has never fired. Not exercised; the fix must let a split bill
+  another customer without opening the general check. Source: the KNOWN_ISSUES additions on the kept
+  branch `claude/rep-scope-order-invoices`.
+- **Invoices created through the order functions would be numbered INV- instead of CS- or MC- (LOW,
+  latent).** Same source. Per the review, 0 of 12 live order invoices are affected; not re-measured.
+- **The split-billing smoke chain `smoke-split_invoices_jsonb_fix.sql` is stale (LOW).** Same source;
+  reported, not re-run.
+- **Autopilot auto-approves some delete and hook-skip spellings (MED; inside Mason's 2026-09-10 exception
+  for deletion guards).** Reproduced 2026-10-13 by calling `autopilotDecision` from
+  `.claude/hooks/autopilot-lib.mjs` with sample commands (nothing ran). It denies `rm -rf`, `git clean -fd`,
+  `git branch -D` and `--no-verify`, but returns "allow" for `rm -Rf`, `rm -r -f`,
+  `rm --recursive --force`, `Remove-Item -Recurse`, `git clean --force -d`, `git branch -d -f` and
+  `git commit -n` (the short form of `--no-verify`). The cause is the `rm` rule near line 216, which matches
+  a lowercase `r` only, and similar single-spelling rules. Per the review, `bash-safety-lib.mjs` still
+  blocks recursive deletes of `src`, `supabase` and `docs` in every spelling, but its absolute-path rule also
+  matches lowercase `r` only. That part was not re-checked. A fix exists on the kept branch
+  `claude/autopilot-recursive-delete-alias-20260907` (with an 18,131-command sweep), but it must be
+  rebuilt on current `main`, not merged.
+- **Bulk order import: Escape on the below-cost prompt also closes the Import Orders dialog while the
+  upload continues out of sight (LOW).** Reasoned from code by the review, not run. PR #350's branch has a
+  fix in `src/components/orders/BulkOrderImport.tsx` ("Codex round 24").
+- **Two stale spots on `main` (LOW).** Both reported by the review, not re-checked:
+  - a comment in `src/lib/rlsContracts.test.ts` (about lines 148-160) still describes `quote_versions` as
+    allowing inserts;
+  - `scripts/land-pr.mjs` (about lines 23 and 165-167) suggests a `gh pr merge … --auto` command that the
+    merge guard refuses.
 
 ## OPEN 2026-10-07 (owner: Mason) — what the 2026-10-01 integrity-report fixes leave behind
 
@@ -119,10 +363,13 @@ Found by the 2026-10-08 overnight bug hunt.
 unsaved edits, plus a re-read of the saved invoice before the Post confirm). The final Codex Sol review
 of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what is posted, because
 another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
-fix was taken out of PR #892, so the editor's Post behaves exactly as before.
+fix was taken out of PR #892, so the editor's Post behaves exactly as before. The removed app-side code
+(`src/lib/invoicePostRecheck.ts`, the `InvoiceDetail.tsx` changes and two tests) is recoverable at
+`3507b92c5^` on PR #892's kept branch `claude/invoice-screen-safety-20261009`; it is absent from `main`.
 
-**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" change, in two parts
-that are both required, because neither alone covers the bug:
+**Planned fix (not built).** It was to be built in the "invoicing admin-only" change, but that change
+(PR #902) was closed unmerged on 2026-10-13, so the fix has no home yet. It needs two parts, both
+required, because neither alone covers the bug:
 1. **In the editor:** Post stays disabled while the form has unsaved edits (the version check below
    cannot see edits that exist only in the browser), and the credit-limit and restricted-use
    warnings are computed from the saved invoice, not the on-screen copy.
@@ -313,6 +560,11 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   `src/pages/Reports.tsx` compute margins in the browser from `orders.total_profit` and `order_items.profit`.
   The server RPC `get_profitability_report` (`20260812115235`, live 2026-08-12), which uses the as-of-sale cost
   snapshot, has no caller. Fix: switch the three sub-fetchers to the RPC and compare a real date range.
+  Working code for that switch, with a test, is on PR #397's kept branch `codex/pr389-coderabbit-fixes`
+  (commit `d03a60fc9`: `src/pages/Reports.tsx`, `Reports.profitability.test.tsx`). The same branch has the
+  only database test of `get_profitability_report`, `scripts/smoke/smoke-remaining-money-inventory-hardening.sql`
+  (exact revenue, cost, profit and margin by customer, product and month; voided orders left out). Run it
+  in a throwaway database before relying on it, because `main`'s triggers changed after August.
   (Source: `docs/handoffs/2026-08-09-pricing-audit-local-finish.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/handoffs/2026-08-09-pricing-audit-local-finish.md`).)
 - **AR aging and date boundaries (2026-05-25 review).** (1) The Financial Dashboard's AR aging (current ≤ 30
   days, UTC `now()`) disagrees with the AR Aging page (current 0–29, as-of date), so a 30-day-old invoice shows
@@ -482,6 +734,15 @@ archive. They are listed here so the open part of this file shows them. None was
   allocated order fails on the table CHECK only after its first INSERT has drawn an invoice number
   from the sequence, so each such refused call (never sent by the app) leaves a numbering gap
   (Codex GitHub review on PR #885). (See CRX-LIFE-001.)
+  **Update 2026-10-13: neither planned change will carry the allow-list.** On 2026-10-09 Mason chose
+  admin-only invoicing (PR #902) instead of the rep-scoping change; #902 was closed unmerged on 2026-10-13,
+  when he decided reps invoice any customer (`DECISION_LOG.md`, 2026-10-13). That decision drops only the
+  customer-assignment half of rep scoping. The own-name half stays the intended rule (a rep should name
+  only themselves as salesperson), but on these order-invoice RPCs it is NOT yet enforced; see
+  "Salesperson" and "Next change" above. PR #902 had re-emitted the split wrapper without the allow-list. The ready code
+  (`ORDER_INVOICE_TYPE_NOT_ALLOWED`, before any number is drawn) is in migration `20261008120000`, about
+  lines 339-344, on the kept branch `claude/rep-scope-order-invoices`. Whichever change next re-emits the
+  split wrapper should add it.
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
@@ -586,7 +847,9 @@ time.
 - Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
   `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
   preflight accepts only `ef485890…` or `457cfb00…` while live is `9a503e54…`
-  (`PREFLIGHT_BODY`). Do not revive that one.
+  (`PREFLIGHT_BODY`). Do not revive that one. (Its GitHub copy, the older delivery lap at `965089215`,
+  is on the 2026-10-13 branch-cleanup list and stays restorable from the PR #711 page. The parked branch
+  above is kept.)
 - **Known-open on the parked branch, if it is ever taken up:** two postflight assertions were proven
   defeatable by review — the cutover-trigger check no longer inspects the trigger function's body,
   and the control-character check is satisfied by a *commented-out* clause. Four documents also still
@@ -1623,7 +1886,8 @@ That limit is now written into the test file rather than assumed away.**
 **F1 (original report) — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
 `src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**
 `assertRpcResult(...)`; the 2026-08-02 branch `codex/idempotency-reset-order-hardening-20260802`
-found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,
+(on the 2026-10-13 branch-cleanup list; if it is gone from GitHub, its tip `9049efc80` is kept as tag
+`archive/2026-10-13/codex/idempotency-reset-order-hardening-20260802`) found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,
 deliveries, prepayments, returns, month-end close, vendor bills). Transport errors are caught earlier
 and a SQL error rolls back, so the exposure is an **ambiguous reply** — a null or malformed success
 payload after the server may have committed — where the user's retry travels under a fresh key and
@@ -1643,14 +1907,22 @@ Still open on 2026-09-26: none of the nine patterns appears in `.claude/settings
 `scripts/post-agent-review-to-pr.mjs`, `scripts/agent-health-check.mjs`, `.claude/commands/**`,
 `.claude/skills/**`, `.claude/agents/**`, `.agents/skills/**` — 18 `Edit()`/`Write()` entries in
 commit `b985e919b` on `claude/control-file-coverage-a41c`, a single additive hunk. PR #530 covers 2
-of the 9 at a different layer (Bash guard). **Fix shape:** land the 18 entries as a one-file change;
-the branch stays until then.
+of the 9 at a different layer (Bash guard). **Fix shape:** land the 18 entries as a one-file change.
 
-**Branch retention (updated 2026-09-26):** F1 (PR #584, merged 2026-09-04) and F2 (PR #583, merged
-2026-09-03) have landed, so of the three audit branches only F3's `claude/control-file-coverage-a41c`
-(on origin at `b985e919b`) is still needed. `codex/section1-security-hardening-20260725` is also still
-on origin. F2 landed (PR #583), so the original retention rule no longer requires this branch;
-deleting it is Mason's call.
+**Does it still stand? (2026-10-13)** Mason's 2026-09-26 "fewer permission prompts" decision
+(`DECISION_LOG.md`, PR #841) deliberately took check scripts, tests and routers out of the `ask` tier,
+which covers most of these nine patterns. Treat F3 as needing a fresh decision before anyone builds it,
+not as a ready fix. One pattern may still qualify under that decision: `.claude/agents/**` holds the
+reviewer charters that feed the live-apply proof minter, which is a production-gate path (raised by a
+Codex review on closed PR #605; not re-checked against the current harness).
+
+**Branch retention (updated 2026-10-13):** F1 (PR #584, merged 2026-09-04) and F2 (PR #583, merged
+2026-09-03) have landed. F3's branch `claude/control-file-coverage-a41c` (on origin at `b985e919b`) still
+stays until F3 lands or Mason retires F3; the 2026-10-13 branch cleanup put it to Mason as a decision
+rather than deleting it. Every F3 pattern is listed above word for word.
+`codex/section1-security-hardening-20260725` is on the 2026-10-13 cleanup list; its tip `53f6177eb` is
+already kept as tag `preserve/2026-07-29/codex-section1-security-hardening-20260725`. Restore details:
+`docs/audits/2026-10-13-github-branch-cleanup-audit.md`.
 
 ## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
 
@@ -2771,7 +3043,7 @@ without `RETURNING`. Reproduced on a local copy of the live policies; admins are
 document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
 `SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
 
-**Database fix APPLIED LIVE 2026-10-02** (`20260921180000_soft_delete_customer_document_rpc`, ledger version `20261002230949`; PR #800 merged as `c78b73b67`). What remains is the page change: until it ships, the live Documents tab still updates the row directly, so a rep's Remove is still refused. It is on branch `claude/customer-document-rep-remove-page-v4`, rebuilt on current `main`. The history below is the pre-apply record.
+**Database fix APPLIED LIVE 2026-10-02** (`20260921180000_soft_delete_customer_document_rpc`, ledger version `20261002230949`; PR #800 merged as `c78b73b67`). (As of 2026-10-02, before the page change shipped as PR #875 the next day:) What remains is the page change: until it ships, the live Documents tab still updates the row directly, so a rep's Remove is still refused. It is on branch `claude/customer-document-rep-remove-page-v4`, rebuilt on current `main`. The history below is the pre-apply record. (2026-10-13: the earlier PR-less page branches `-remove-page`, `-v2` and `-v3` named below are on the GitHub branch-cleanup list; their tips will be kept as `archive/2026-10-13/claude/customer-document-rep-remove-page…` tags when they are removed, listed in `docs/audits/2026-10-13-github-branch-cleanup-audit.md`.)
 
 **Pre-apply record (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
 the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
@@ -3594,6 +3866,8 @@ lands." All three were obtained on 2026-09-04 and the migration applied; the ite
 the heading above. **Branch retention (updated 2026-09-26):** the note that kept
 `codex/section1-security-hardening-20260725` moved to the F3 OPEN entry at the top of this file; F2
 landed (PR #583), so the original retention rule no longer requires this branch; deleting it is Mason's call.
+**Update 2026-10-13:** on the GitHub branch-cleanup list; if it is gone, its tip `53f6177eb` stays on
+GitHub as tag `preserve/2026-07-29/codex-section1-security-hardening-20260725`.
 
 (The F3 finding and the branch-retention note that followed here were moved on 2026-09-26 to their
 own OPEN entry at the top of this file.)
