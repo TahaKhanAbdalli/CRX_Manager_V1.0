@@ -1,12 +1,30 @@
 # Decision Log
 
-Last verified: 2026-10-13 (three entries added: a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-14 (one entry added: revised quotes keep locked prices, reps see last-charged prices while price history stays admin-only, prices come in through the full Excel workbook; also re-read for PR #905 review; 2026-10-13: five entries added: a sent quote's prices stay locked until accepted or expired; an order's bill can be split to a landlord; a plain "I approve" replaces typing the approval code; reps work with any customer (the build session's full entry, merged with the short one PR #904 added), superseding the 2026-10-06 rep-scoping entry and marking three 2026-07-17 SETTLED entries superseded; direction to a senior-developer handoff; earlier: owner approval moved from Windows Hello to a chat reply, superseding rule 1 of the 2026-09-29 entry; documentation-only Sol exemption entry added, Mason kept DECISION_LOG.md eligible on 2026-10-09 and dropped docs/reference/ from it on 2026-10-10; CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-14 — Pricing: revised quotes keep locked prices; reps see last-charged prices, price history stays admin-only; prices come in through the full Excel workbook
+
+**Decision (Mason, in chat).** (1) A revised quote keeps its locked prices, with "update to today's prices" per line and for the whole quote, and a rewind to the last version quoted. (2) Reps see the last price charged to a customer; price history is admin-only ("only admin can see the price hisotry"). (3) Prices come in through the full downloadable/uploadable Excel workbook, with no automatic PDF reading for now ("we can build this in future"); inline edits stay for one-off fixes.
+**Why.** Prices arrive as supplier PDFs, emails and texts, monthly and sometimes mid-month. Mason wants control, visibility and accountability ("scared a agent would extract numbers wrong"); a workbook can be checked by several agents before it is applied.
+**What this forbids/implies:** not built. Never auto-apply prices read from a document; future PDF reading may only draft a workbook. Price history, sell and cost, stays admin-only (2026-07-20). Quotes and detail: `docs/plans/2026-10-13-pricing-history-cost-tracking-and-quote-pricing-PLAN.md`.
+
+## 2026-10-13 — Billing: an order's bill can be split to a landlord
+
+**Decision (Mason, in chat: "landlord yes").** Splitting an order's bill to a landlord, a customer other than the order's own, must work.
+**Why.** The 2026-10-13 branch salvage review found it never can today: the live trigger `trg_guard_invoice_terminal_order` refuses any invoice whose customer is not its order's customer (`INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID`; read from the live function, not exercised).
+**What this forbids/implies:** not built. The fix must let a split bill a landlord without opening the general customer-lineage check. Tracked in `TODO.md`; the branch cleanup change (PR #901) adds the full `KNOWN_ISSUES.md` entry.
+
+## 2026-10-13 — Pricing: a sent quote's prices stay locked until it is accepted or expires
+
+**Decision (Mason, in chat: "yes a sent quote should stay locked until accepted or expires").** Once a quote is sent, its line sell prices stop following the catalog until it is accepted (becoming an order at those prices) or it expires.
+**Why.** Each line's cost is frozen at save (`quote_items.cost_at_quote_cents`), but its sell price is not. Two 2026-10-13 reviews of `save_quote`'s live body (not exercised) found that every save, including Convert to Order, re-prices lines without a manual override to that day's tier price.
+**What this forbids/implies:** not built; until it is, nothing may describe sent-quote prices as locked. Revised quotes keep their locked prices (2026-10-14 entry above). The open design questions (when the lock starts, how a restored version keeps its prices, expiry, overrides) are in `docs/plans/2026-10-13-pricing-history-cost-tracking-and-quote-pricing-PLAN.md`, to be iterated before any build.
 
 ## 2026-10-13 — A plain "I approve" is enough; no code to type
 

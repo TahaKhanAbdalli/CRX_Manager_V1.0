@@ -15,6 +15,42 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ---
 
+## ▶ NEXT SECTION OF WORK — pricing history, cost tracking and quote pricing (Mason, 2026-10-13)
+
+> **Plan and iterate first. Do NOT start building.** Mason: "I dont want to start building anything but
+> want to leave top of list on to do this is next section of work. I want more iteration on it before
+> strat buiding."
+>
+> - **Plan (draft):** `docs/plans/2026-10-13-pricing-history-cost-tracking-and-quote-pricing-PLAN.md`
+>   covers what exists, what's missing, reusable work, a draft build path and the open questions.
+> - **Decided:** a sent quote's prices stay locked until it is accepted or expires
+>   (`docs/manual/DECISION_LOG.md`, 2026-10-13). Also decided 2026-10-14: a revised quote keeps its locked
+>   prices, with an "update to today's prices" option (per line and whole quote) and a rewind to the last
+>   version sent; reps see last-charged prices, price history stays admin-only; prices keep coming in through
+>   the full Excel workbook, with no automatic PDF reading for now.
+> - **Reusable work is on kept GitHub branches.** Do not delete them until the plan is built or the work is
+>   consciously dropped:
+>   - PR #397, `codex/pr389-coderabbit-fixes`;
+>   - PR #350, `claude/pricing-audit-strategy-jym8rr`;
+>   - PR #892, `claude/invoice-screen-safety-20261009`. This one holds the invoice "Post with unsaved
+>     edits" guard, which is related but not pricing.
+> - **Related:** the ⏰ deadline item below (test the repricing path before sales season; costs are stale).
+>   It overlaps the plan's "cost freshness" slice.
+> - **Where it sits against the 2026-10-13 direction-and-goals plan**
+>   (`docs/plans/2026-10-13-direction-and-goals.md`, PR #904): that plan's ten goals do not include pricing.
+>   Mason set pricing as the next section *to plan* in a later chat the same day. When building starts,
+>   confirm its order against those goals with him.
+
+> ### ⏰ DEADLINE: before 2026-12-31 — quote, order and rebate-claim numbers take their year from the UTC clock
+>
+> Numbers created after about 6 pm Chicago time on 2026-12-31 would get a 2027 number. Recorded in
+> `docs/manual/KNOWN_ISSUES.md` ("quote, order and rebate-claim numbers still take their year from the UTC
+> clock"). Fix and verify before New Year's Eve. Added 2026-10-13 from the branch salvage review.
+
+- **Landlord split billing must work (Mason, 2026-10-13: "landlord yes").** Today the live invoice trigger
+  refuses every split to a non-owner. See `docs/manual/DECISION_LOG.md` and the 2026-10-13
+  salvage-review entry in `docs/manual/KNOWN_ISSUES.md`. Not built.
+
 ## 🔴 1. Owner actions (needs Mason — ranked by value unblocked)
 
 > ### ⏰ DEADLINE ITEM — test the pricing/repricing path before sales season
