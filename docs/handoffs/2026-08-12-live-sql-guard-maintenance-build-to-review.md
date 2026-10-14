@@ -1,5 +1,9 @@
 # Live SQL guard maintenance — build-to-review handoff
 
+> **STATUS 2026-10-14 — superseded; nothing below is actionable.** The maintenance producer this
+> handoff describes was denied by name in #619 (`8cff940ce`) and retired without ever being run in
+> #622 (`dd9b5d3df`). Kept as history.
+
 ## WHERE
 
 - Checkout: repository root in the isolated owning worktree (local workstation path intentionally omitted)

@@ -1,5 +1,8 @@
 # Per-Line Split-Billing — Codex Round-6 Review Runbook (front → back)
 
+> **STATUS 2026-10-14 — historical.** PR #164 merged (`85f64c315`) and the feature is shipped and live
+> (#244, `48bd1982c`). This runbook is no longer a to-do list.
+
 **Purpose:** the definitive to-do list for the FINAL independent Codex review that gates go-live.
 Codex round 6 was usage-blocked until ~2026-07-24. Run this the moment Codex is available.
 This feature is the risky class (money + RLS + live migrations), so a genuinely CLEAN Codex

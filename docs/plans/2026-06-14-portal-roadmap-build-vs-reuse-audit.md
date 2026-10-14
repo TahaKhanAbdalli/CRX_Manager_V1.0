@@ -1,5 +1,8 @@
 # Grower Portal Roadmap — Build-vs-Reuse Audit (G4–G15)
 
+> **STATUS 2026-10-14 — point-in-time audit.** Its live-database facts are as of 2026-06-14 and were
+> not re-checked. The grower portal is still deferred and unbuilt (`TODO.md` §3).
+
 **Date:** 2026-06-14 · **Status:** READ-ONLY AUDIT — verified against the live DB + codebase. Informs sequencing; **nothing built.**
 **Companion to:** [`2026-06-10-grower-portal-brainstorm.md`](2026-06-10-grower-portal-brainstorm.md) · [`2026-06-14-spray-compliance-data-model.md`](2026-06-14-spray-compliance-data-model.md)
 

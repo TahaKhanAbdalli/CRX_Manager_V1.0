@@ -4,7 +4,7 @@
 
 **Date:** 2026-07-25
 **Scope:** `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `.claude/skills/`, `.claude/workflows/`, `.codex/hooks.json`, `.agents/`, `docs/workflows/AGENT_COLLABORATION.md`, `docs/manual/AGENT_ONBOARDING.md`
-**Status:** APPLIED. One item remains open — the P1 in §1.1a, which Mason approved on 2026-07-25 as its own separate PR. The two P2s Codex raised (§2.1a, §2.4) are **settled decisions, not open work**.
+**Status:** APPLIED. (2026-10-14: nothing remains open. The §1.1a P1 landed in #228, `25363345a`, "bind Codex PR-merge gate to GitHub's current base".) Originally: one item remained open — the P1 in §1.1a, which Mason approved on 2026-07-25 as its own separate PR. The two P2s Codex raised (§2.1a, §2.4) are **settled decisions, not open work**.
 
 **Three of this review's own claims were wrong and are corrected in place rather than edited away:**
 1. The first draft called the Claude/Codex hook wiring a BLOCKER. It isn't — `agent-manifest-parity.mjs` declares and build-enforces it (§1.1).

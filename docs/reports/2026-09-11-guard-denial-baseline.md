@@ -4,6 +4,9 @@
 same command and window length, per section 6 of `docs/plans/2026-09-11-open-pr-backlog-plan.md`.
 **Rule from that plan:** no guard change is proposed from denial counts alone.
 
+> **STATUS 2026-10-14 — frozen baseline.** No 2026-09-25 re-measure is recorded anywhere in the
+> repository; whether one ran is unknown. The backlog plan it served is complete.
+
 ## How it was measured
 
 Read-only. The script reads the Claude Code transcripts on this PC and sends nothing anywhere.

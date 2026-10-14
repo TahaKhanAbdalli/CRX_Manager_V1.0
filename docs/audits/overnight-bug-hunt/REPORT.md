@@ -226,7 +226,7 @@ Each has a clear, small fix already written down in its ledger entry. The rest (
 - **Nothing is urgent** — none of this is live-impacting today.
 - When you're ready, **approve the 6 high-attention items first**; each ships through the normal review (`/ship`) as a small database fix. Tell me "fix the parked HIGHs" and I'll take them one at a time.
 - The **1 green auto-fix** is already on the `claude/overnight-bug-hunt` branch — `git merge` (or cherry-pick) lands it whenever you like.
-- Full worst-first detail is below and in [LEDGER.json](docs/audits/overnight-bug-hunt/LEDGER.json).
+- Full worst-first detail is below and in [LEDGER.json](LEDGER.json).
 
 > **One note on how the night went:** for a stretch early on, a one-time scheduled task accidentally started a *second* copy of this loop alongside this one. We caught it, you stopped the extra one, and this session drove the rest solo — with a safety check before every cycle confirming no second loop was running. Nothing was lost or double-counted in the handoff.
 

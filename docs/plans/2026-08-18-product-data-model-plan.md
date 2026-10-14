@@ -1,7 +1,12 @@
 # Product Data Model — Implementation Plan
 
 **Date:** 2026-08-18
-**Status:** DRAFT — awaiting Mason's approval. No code written, no database changed.
+> **STATUS 2026-10-14 — superseded as the executable plan** by
+> `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` (merged in PRs #429, #435 and #498). This
+> file stays as the working-file reasoning trail (see the table in
+> `2026-08-18-product-data-model-MASTER-RECORD.md`). The build has not started.
+
+**Status (original, 2026-08-18):** DRAFT — awaiting Mason's approval. No code written, no database changed.
 **Revision:** amended three times on 2026-08-18 after three adversarial review rounds
 (Fable, read-only, live-verified). Round 1 asked *"is this design sound?"* — changes marked
 **[REV]**, listed in §9. Round 2 asked *"what is missing?"* — changes marked **[REV2]**,

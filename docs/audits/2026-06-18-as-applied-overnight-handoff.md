@@ -1,6 +1,6 @@
 # As-Applied / Field Invoices — Overnight Build Handoff (for Mason's morning review)
 
-**Branch:** `feat/as-applied-invoices` · **Plan:** [`docs/plans/2026-06-18-as-applied-application-invoices-plan.md`](../plans/2026-06-18-as-applied-application-invoices-plan.md)
+**Branch:** `feat/as-applied-invoices` · **Plan:** `docs/plans/2026-06-18-as-applied-application-invoices-plan.md` (removed in the 2026-07-16 docs review, #139; recover with `git show 0d0211c3e^:docs/plans/2026-06-18-as-applied-application-invoices-plan.md`)
 **Rule in force:** the loop SKIPS anything it needs you for, logs it here, and keeps building (Mason, 2026-06-18). **Nothing went live overnight** — all go-live steps are parked for your one-click approval.
 
 ---
