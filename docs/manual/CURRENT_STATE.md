@@ -1,21 +1,20 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-13 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-13 22:02 UTC, while building
-`20261013220000_reps_work_any_customer` (NOT applied): 1024 rows / 1017 names, `max(version)`
-`20261012234633`, no 2026-10-13 file applied; unchanged since the 2026-10-12 ~23:47 UTC read after
-PR #889's last two applies; the read before that, on 2026-10-10 after PR #889's
-first three applies, had 1022 rows, `max(version)` `20261010043006`).
+**Last verified:** 2026-10-14 (America/Chicago) for the migration ledger only (read-only
+`list_migrations` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-14 ~14:10 UTC, while building
+`20261014150000_products_tier_price_cent_scale` (NOT applied): 1025 rows / 1018 names, `max(version)`
+`20261014131450` = `20261013220000_reps_work_any_customer`, applied 2026-10-14 13:14:50 UTC; the
+2026-10-13 22:02 UTC read before it had 1024 rows / 1017 names, `max(version)` `20261012234633`).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-12)
+## Current state at a glance (2026-10-12; ledger lines 2026-10-14)
 
-- **Effective ordering high-water: `20261010120000_cap_delivery_invoice_at_delivered`**
-  (ledger version `20261012234633`, UTC; applied live 2026-10-12 from PR #889). It replaced
-  `20261007150200_release_reservations_of_deleted_spring_orders` (ledger `20261012234157`, applied
-  minutes before it from the same PR). Nothing from PR #889 is left unapplied. The effective ordering high-water is the
+- **Effective ordering high-water: `20261013220000_reps_work_any_customer`**
+  (ledger version `20261014131450`, UTC; applied live 2026-10-14, PR #907). It replaced
+  `20261010120000_cap_delivery_invoice_at_delivered` (ledger `20261012234633`, applied 2026-10-12 from
+  PR #889). Nothing from PR #889 is left unapplied. The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -42,7 +41,8 @@ ships or quarterly, whichever comes first.
   `20261007150050_lock_soft_deleted_orders` (`20261010014642`) and
   `20261007150100_mark_spring_2026_deliveries_billed_in_chem_man` (`20261010043006`); then, from PR #889
   (2026-10-12 UTC), `20261007150200_release_reservations_of_deleted_spring_orders` (`20261012234157`)
-  and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`).
+  and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`); then
+  `20261013220000_reps_work_any_customer` (`20261014131450`, PR #907).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`

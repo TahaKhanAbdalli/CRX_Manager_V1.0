@@ -1,9 +1,11 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-13 (America/Chicago) against the live migration ledger** (read-only,
-2026-10-13 22:02 UTC, while building `20261013220000_reps_work_any_customer`, which is NOT applied;
-the ledger was unchanged since the 2026-10-12 read after PR #889's last two applies; the counts and
-high-water live only in `docs/reference/migration-history.md`). That read also re-checked the
+**Last verified: 2026-10-14 (America/Chicago) against the live migration ledger** (read-only
+`list_migrations`, 2026-10-14 ~14:10 UTC, while building `20261014150000_products_tier_price_cent_scale`,
+which is NOT applied; the one change since the 2026-10-13 22:02 UTC read is that
+`20261013220000_reps_work_any_customer` is now applied (ledger `20261014131450`); the counts and
+high-water live only in `docs/reference/migration-history.md`). That 2026-10-14 read re-certified only
+this header's ledger facts. The 2026-10-13 read also re-checked the
 order-invoice rep-scope entry below against Mason's 2026-10-13 decision.
 That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
 entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The
