@@ -155,6 +155,16 @@ Small slices, each its own change. Order and scope are open for discussion.
      map allows `revised` to `accepted`). Then Convert must build from the current revision's products and
      quantities, taking only the locked prices from the sent version (or require a re-send first). The proof
      includes revise-then-convert.
+   - Structural edits on a revision break that matching: a newly added product has no price in the sent
+     version, and `create_quote_version` snapshots `product_id` and price but not `quote_item_id`, so two
+     lines of the same product cannot be told apart. Preferred fix: version snapshots carry `quote_item_id`,
+     and Convert matches lines by it. Until they do, the conversion RPC refuses (and asks for a re-send)
+     unless the current lines and the sent lines pair up one-to-one by product: the same number of lines,
+     every sent line used exactly once, and no product on more than one line. That rules out any added,
+     removed or swapped product and any duplicate, including duplicates already present when the quote was
+     sent. The proof covers an added line, a removed line, a product
+     swapped on an existing line, a duplicate added in the revision, and a quote sent with two differently
+     priced lines of the same product followed by a quantity-only revision.
    - Partly drawn quotes: `draw_down_quote` relies on stable `quote_item_id` provenance and the
      `units_current` / `units_settled` split so a price change never re-bills delivered product
      (`20260816120000_draw_down_split_order_lines_by_price_tier.sql`; invariant in `KNOWN_ISSUES.md`). The
