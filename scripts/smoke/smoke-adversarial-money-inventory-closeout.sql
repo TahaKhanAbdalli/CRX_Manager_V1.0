@@ -30,6 +30,7 @@ DECLARE
   v_err text;
   v_source text;
   v_outer_source text;
+  v_serialized_source text;
   v_identity_source text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_intent text;
@@ -596,14 +597,26 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: PO lock does not precede omitted-cost hydration';
   END IF;
 
+  -- Live layering since 20260726190515 (section 9 PO/AP remediation):
+  -- save_purchase_order takes the PO advisory lock and delegates to
+  -- _section9_save_purchase_order_serialized, which owns the bulk vendor
+  -- checks and delegates to the ASCII-identity impl, which allocates the PO
+  -- number before calling the atomic-number impl.
   SELECT prosrc INTO v_outer_source
     FROM pg_proc
    WHERE oid = 'public.save_purchase_order(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
+  SELECT prosrc INTO v_serialized_source
+    FROM pg_proc
+   WHERE oid = 'public._section9_save_purchase_order_serialized(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
   SELECT prosrc INTO v_identity_source
     FROM pg_proc
    WHERE oid = 'public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
-  IF strpos(v_outer_source, '_save_purchase_order_ascii_identity_impl') = 0
-     OR strpos(v_outer_source, 'BULK_PO_VENDOR_REQUIRED') = 0
+  IF strpos(v_outer_source, 'pg_advisory_xact_lock') = 0
+     OR strpos(v_outer_source, '_section9_save_purchase_order_serialized') = 0
+     OR strpos(v_outer_source, 'pg_advisory_xact_lock')
+        > strpos(v_outer_source, '_section9_save_purchase_order_serialized')
+     OR strpos(v_serialized_source, '_save_purchase_order_ascii_identity_impl') = 0
+     OR strpos(v_serialized_source, 'BULK_PO_VENDOR_REQUIRED') = 0
      OR strpos(v_identity_source, 'normalize(v_requested_vendor, NFKC)') = 0
      OR strpos(v_identity_source, 'normalize(v_vendor_reference, NFKC)') = 0
      OR strpos(v_identity_source, 'translate(') > 0
@@ -654,6 +667,15 @@ BEGIN
      OR (SELECT total_cost_cents FROM public.purchase_orders WHERE id = v_rounding_po) <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: atomic PO number or rounded two-line header missing: %', v_replay;
   END IF;
+
+  -- create_vendor_bill bills only a submitted or received PO (PO_NOT_BILLABLE
+  -- since 20260726190515), and an ordinary save cannot change status, so
+  -- submit it through its lifecycle RPC first, as the app does.
+  PERFORM public.submit_purchase_order(
+    v_rounding_po,
+    v_admin,
+    'smk-po-rounded-submit-' || v_suffix
+  );
 
   SELECT gs::date INTO v_open_date
     FROM generate_series(

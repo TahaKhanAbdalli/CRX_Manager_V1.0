@@ -283,12 +283,40 @@ BEGIN
     ELSE (v_open_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago'
   END;
 
+  -- A product is born pricing-free (require_governed_product_pricing refuses
+  -- current_cost on INSERT), and order lines need a positive cost basis, so
+  -- price the shell through the governed preview/apply path the app uses
+  -- (the smoke-order-invoice-type-gate.sql pattern).
   INSERT INTO public.products (
-    product_name, unit_size, current_cost, epa_registration, product_form
+    product_name, unit_size, epa_registration, product_form
   ) VALUES (
     '[SMOKE] Aggregate Stock Product ' || v_suffix,
-    'GL', 6, '[SMOKE]-AGG-' || v_suffix, 'liquid'
+    'GL', '[SMOKE]-AGG-' || v_suffix, 'liquid'
   ) RETURNING id INTO v_product;
+  v_result := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+      'new_cost', '6.00', 'tier1_price', '10.00', 'tier2_price', '10.00', 'tier3_price', '10.00'
+    )),
+    v_admin,
+    'smk-agg-pricing-preview-' || v_suffix
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_result->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_result;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_result->>'change_set_id')::uuid,
+    v_result->>'request_fingerprint',
+    v_admin,
+    'smk-agg-pricing-apply-' || v_suffix
+  );
+  IF (SELECT current_cost FROM public.products WHERE id = v_product) IS DISTINCT FROM 6.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price the product';
+  END IF;
+  v_result := NULL;
 
   INSERT INTO public.inventory (
     product_id, location, quantity_available, quantity_prebooked, unit_size

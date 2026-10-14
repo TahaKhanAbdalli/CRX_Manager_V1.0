@@ -44,10 +44,10 @@
 -- Honest limits (not covered here): posting/unposting the group and the
 -- post-time snapshot trigger (post_invoice_group consumes payments/idempotency
 -- machinery better exercised by its own chains), service/fuel/flat line kinds,
--- per-person mixed-tier pricing (needs governed products pricing writes — the
--- pricing-governance trigger is deliberately not poked; the product fixture is
--- a PRICE-LESS SHELL and the line uses an explicit manual override, which the
--- engine treats as a uniform price), and commissions on a job-backed happy path
+-- per-person mixed-tier pricing (the product fixture is priced through the
+-- governed preview/apply path with one cost and three EQUAL tier prices, and the
+-- line uses an explicit manual override, which the engine treats as a uniform
+-- price), and commissions on a job-backed happy path
 -- (the happy path saves job-less; the job fixture only feeds the G2/G3 guards).
 --
 -- Ends in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'.
@@ -60,6 +60,7 @@ DECLARE
   v_cust_a  uuid; v_cust_b  uuid;
   v_field   uuid; v_field2  uuid;
   v_prod    uuid;
+  v_pricing jsonb;
   v_svc     uuid;
   v_chem_only jsonb;
   v_g5_invoices int := 0;
@@ -96,9 +97,12 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
 
   -- ---- Fixtures: two co-owners on one 50/50 field, a second field NOT on the
-  -- job, a PRICE-LESS product shell (pricing-governance trigger untouched; the
-  -- line prices itself via an explicit manual override), and a completed job
-  -- that owns ONLY the first field (feeds G2/G3).
+  -- job, a product with a positive cost basis (invoice lines refuse a cost-less
+  -- product: _enforce_below_cost_line COST_BASIS_REQUIRED; a product is born
+  -- pricing-free, so it is priced through the governed preview/apply path, the
+  -- smoke-order-invoice-type-gate.sql pattern; the line still prices itself via
+  -- an explicit manual override), and a completed job that owns ONLY the first
+  -- field (feeds G2/G3).
   INSERT INTO customers (farm_name, assigned_tier) VALUES ('[E2E][SMOKE] PLSB A '||v_sfx, 1) RETURNING id INTO v_cust_a;
   INSERT INTO customers (farm_name, assigned_tier) VALUES ('[E2E][SMOKE] PLSB B '||v_sfx, 1) RETURNING id INTO v_cust_b;
   INSERT INTO fields (field_name, customer_id, total_acres)
@@ -110,6 +114,29 @@ BEGIN
   INSERT INTO fields (field_name, customer_id, total_acres)
     VALUES ('[E2E][SMOKE] PLSB OffJob '||v_sfx, v_cust_a, 40) RETURNING id INTO v_field2;
   INSERT INTO products (product_name, unit_size) VALUES ('[E2E][SMOKE] PLSB Prod '||v_sfx, 'gal') RETURNING id INTO v_prod;
+  v_pricing := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_prod, 'row_version', 1, 'pricing_mode', 'price_driven',
+      'new_cost', '5.00', 'tier1_price', '15.01', 'tier2_price', '15.01', 'tier3_price', '15.01'
+    )),
+    v_admin,
+    'smoke-plsb-pricing-preview-'||v_sfx
+  );
+  IF v_pricing->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_pricing->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_pricing;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_pricing->>'change_set_id')::uuid,
+    v_pricing->>'request_fingerprint',
+    v_admin,
+    'smoke-plsb-pricing-apply-'||v_sfx
+  );
+  IF (SELECT current_cost FROM products WHERE id = v_prod) IS DISTINCT FROM 5.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price the product';
+  END IF;
   INSERT INTO application_services (name, is_active) VALUES ('[E2E][SMOKE] PLSB Svc '||v_sfx, true) RETURNING id INTO v_svc;
   INSERT INTO jobs (job_number, customer_id, status, job_date, total_acres, created_by)
     VALUES ('[E2E][SMOKE] PLSB-'||v_sfx, v_cust_a, 'completed', CURRENT_DATE, 100, v_admin) RETURNING id INTO v_job;

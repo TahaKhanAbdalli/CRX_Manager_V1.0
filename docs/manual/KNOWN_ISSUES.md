@@ -5,7 +5,9 @@ Management API query, 2026-10-14 17:28 UTC; the two changes since the 2026-10-13
 that `20261013220000_reps_work_any_customer` (ledger `20261014131450`) and
 `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`) are now applied; the counts
 and high-water live only in `docs/reference/migration-history.md`). That 2026-10-14 read re-certified only
-this header's ledger facts. The 2026-10-13 read also re-checked the
+this header's ledger facts. A 14:16 UTC read the same day, after `20261013220000_reps_work_any_customer`
+applied at 13:14:50 UTC, re-certified the reps-work-any-customer follow-ups entry (migration and
+`customer-document-files` v2 both live). The 2026-10-13 read also re-checked the
 order-invoice rep-scope entry below against Mason's 2026-10-13 decision.
 That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
 entry (all five of PR #889's migrations live: `150000`, `150050`, `150100`, `150200` and `20261010120000`). The
@@ -29,7 +31,10 @@ branches on the cleanup list (`docs/audits/2026-10-13-github-branch-cleanup-audi
   `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`), and on 2026-10-07 by
   `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, CRX-LIFE-001),
   and on 2026-10-10 (UTC) by PR #889's `20261007150000` (ledger `20261010014555`), `20261007150050`
-  (`20261010014642`) and `20261007150100` (`20261010043006`).
+  (`20261010014642`) and `20261007150100` (`20261010043006`); then on 2026-10-12 by PR #889's
+  `20261007150200` (`20261012234157`) and `20261010120000` (`20261012234633`); and on 2026-10-14 by
+  PR #907's `20261013220000_reps_work_any_customer` (`20261014131450`) and PR #910's
+  `20261014150000_products_tier_price_cent_scale` (`20261014150257`; PR #910 merged as `729f9fa2d`).
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -702,10 +707,9 @@ archive. They are listed here so the open part of this file shows them. None was
     customers, jobs, quotes and orders. That is stricter than the shipped admin-or-assigned-rep rule
     on the customer default. Still open until the Goal 2 follow-up change enforces it, with its own
     migration; do not ask Mason again.
-  - **`customer-document-files` deploy.** The repo code opens documents to every rep; until that
-    function is redeployed (Mason's OK required), reps see other customers' document rows but the
-    live function still refuses their uploads and downloads. Deploy right after the migration
-    applies, never before it.
+  - **RESOLVED 2026-10-14: `customer-document-files` deploy.** Redeployed as v2 at 13:54 UTC on
+    Mason's yes, after the migration applied at 13:14:50 UTC; the live function now admits reps to
+    every customer's documents. A signed-in rep click-through is still owed (goals doc, Goal 2).
 
 - **Order-invoice RPCs let a rep name another salesperson (found 2026-10-06 while fixing
   CRX-LIFE-001; pre-existing; read from the live catalog, not exercised live).** **Updated

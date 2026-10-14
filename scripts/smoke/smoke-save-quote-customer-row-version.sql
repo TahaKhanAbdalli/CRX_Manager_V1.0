@@ -31,11 +31,38 @@ BEGIN
 
   INSERT INTO public.customers (farm_name, assigned_sales_rep)
   VALUES ('[SMOKE] RV quote customer ' || v_suffix, v_admin) RETURNING id INTO v_customer;
-  -- Supplier-pricing hardening permits only a pricing-free shell here. The
-  -- concurrency smoke deliberately does not forge a pricing change set; its
-  -- server-math assertion below proves the client-supplied 999 cannot land.
+  -- Supplier-pricing hardening permits only a pricing-free shell on INSERT,
+  -- and a quote line needs a positive cost basis (_snapshot_quote_item_cost
+  -- COST_BASIS_REQUIRED), so price the shell through the governed
+  -- preview/apply path the app uses (the smoke-order-invoice-type-gate.sql
+  -- pattern). The server-math assertion below proves the client-supplied 999s
+  -- cannot land: the stored values come from this governed cost and price.
   INSERT INTO public.products (product_name, unit_size)
   VALUES ('[SMOKE] RV product ' || v_suffix, 'gal') RETURNING id INTO v_product;
+  v_q := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+      'new_cost', '5.00', 'tier1_price', '7.00', 'tier2_price', '7.00', 'tier3_price', '7.00'
+    )),
+    v_admin,
+    'rv-pricing-preview-' || v_suffix
+  );
+  IF v_q->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_q->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_q;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_q->>'change_set_id')::uuid,
+    v_q->>'request_fingerprint',
+    v_admin,
+    'rv-pricing-apply-' || v_suffix
+  );
+  IF (SELECT current_cost FROM public.products WHERE id = v_product) IS DISTINCT FROM 5.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price the product';
+  END IF;
+  v_q := NULL;
   v_sections := jsonb_build_array(jsonb_build_object('section_name', 'S', 'sort_order', 0, 'items', jsonb_build_array(
     jsonb_build_object('product_id', v_product, 'calc_mode', 'units_direct', 'total_units_needed', 2, 'price_per_unit', 999, 'current_cost', 999, 'sort_order', 0))));
 
@@ -75,19 +102,20 @@ BEGIN
   IF v_q->>'status' <> 'saved' OR (v_q->>'row_version')::bigint <> v_quote_after OR v_quote_after <> v_quote_before + 1
      OR v_note_before <> 'fresh' OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1
      OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1
-     -- The Product shell has no governed price/cost data.  Forged client 999s
-     -- must therefore be replaced with the Product-derived zero values at
-     -- both the stored item and returned/stored quote-total boundaries.
-     OR (SELECT price_per_unit FROM quote_items WHERE quote_id = v_quote) <> 0
-     OR (SELECT current_cost FROM quote_items WHERE quote_id = v_quote) <> 0
-     OR (SELECT total_price FROM quote_items WHERE quote_id = v_quote) <> 0
-     OR (SELECT profit FROM quote_items WHERE quote_id = v_quote) <> 0
-     OR (SELECT total_price FROM quotes WHERE id = v_quote) <> 0
-     OR (SELECT total_cost FROM quotes WHERE id = v_quote) <> 0
-     OR (SELECT total_profit FROM quotes WHERE id = v_quote) <> 0
-     OR (v_q->'server_totals'->>'total_price')::numeric <> 0
-     OR (v_q->'server_totals'->>'total_cost')::numeric <> 0
-     OR (v_q->'server_totals'->>'total_profit')::numeric <> 0 THEN
+     -- Forged client 999s must be replaced with the Product's governed cost
+     -- (5.00) and tier-1 price (7.00) at both the stored item and the
+     -- returned/stored quote-total boundaries: 2 units = 14.00 price,
+     -- 10.00 cost, 4.00 profit.
+     OR (SELECT price_per_unit FROM quote_items WHERE quote_id = v_quote) IS DISTINCT FROM 7::numeric
+     OR (SELECT current_cost FROM quote_items WHERE quote_id = v_quote) IS DISTINCT FROM 5::numeric
+     OR (SELECT total_price FROM quote_items WHERE quote_id = v_quote) IS DISTINCT FROM 14::numeric
+     OR (SELECT profit FROM quote_items WHERE quote_id = v_quote) IS DISTINCT FROM 4::numeric
+     OR (SELECT total_price FROM quotes WHERE id = v_quote) IS DISTINCT FROM 14::numeric
+     OR (SELECT total_cost FROM quotes WHERE id = v_quote) IS DISTINCT FROM 10::numeric
+     OR (SELECT total_profit FROM quotes WHERE id = v_quote) IS DISTINCT FROM 4::numeric
+     OR (v_q->'server_totals'->>'total_price')::numeric IS DISTINCT FROM 14::numeric
+     OR (v_q->'server_totals'->>'total_cost')::numeric IS DISTINCT FROM 10::numeric
+     OR (v_q->'server_totals'->>'total_profit')::numeric IS DISTINCT FROM 4::numeric THEN
     RAISE EXCEPTION 'SMOKE_FAIL: fresh quote save lost canonical section/item/math behavior';
   END IF;
 
@@ -589,8 +617,13 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_nonoffice, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_nonoffice::text, true);
+  -- Live (since 20260812115237) the save_quote wrapper's
+  -- _begin_below_cost_money_write refuses a non-office role with
+  -- INSUFFICIENT_ROLE before the impl's older 'Not authorized to save quotes'
+  -- check is reached; the older message is the same gate on the 20260730
+  -- catalog that prove-quote-customer-row-version-real-schema.mjs replays.
   BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'sent', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';
-  EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'Not authorized to save quotes' THEN RAISE EXCEPTION 'SMOKE_FAIL: quote role gate %', SQLERRM; END IF; END;
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM NOT IN ('INSUFFICIENT_ROLE', 'Not authorized to save quotes') THEN RAISE EXCEPTION 'SMOKE_FAIL: quote role gate %', SQLERRM; END IF; END;
 
   -- Keep fixtures addressable after this privileged setup so the following
   -- authenticated-role block can prove child writes are RPC-only.

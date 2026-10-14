@@ -9,13 +9,15 @@ Every other section keeps its own date; nothing below was re-certified by that r
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-12; ledger lines 2026-10-14)
+## Current state at a glance (2026-10-14)
 
 - **Effective ordering high-water: `20261014150000_products_tier_price_cent_scale`**
-  (ledger version `20261014150257`, UTC; applied live 2026-10-14, PR #910). It replaced
-  `20261013220000_reps_work_any_customer` (ledger `20261014131450`, applied 2026-10-14 from PR #907),
-  which replaced `20261010120000_cap_delivery_invoice_at_delivered` (ledger `20261012234633`, applied
-  2026-10-12 from PR #889). Nothing from PR #889 is left unapplied. The effective ordering high-water is the
+  (ledger version `20261014150257`, UTC; applied live 2026-10-14 15:02 UTC from PR #910, merged as
+  `729f9fa2d`; read-only ledger read 2026-10-14 15:35 UTC: 1026 rows / 1019 names). Before it, the same
+  morning: `20261013220000_reps_work_any_customer` (ledger `20261014131450`, applied from PR #907, which
+  merged as `395bdcd9a`), which replaced `20261010120000_cap_delivery_invoice_at_delivered` (ledger
+  `20261012234633`, applied 2026-10-12 from PR #889). Nothing from PR #889 or PR #907 is left
+  unapplied. The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -42,9 +44,10 @@ ships or quarterly, whichever comes first.
   `20261007150050_lock_soft_deleted_orders` (`20261010014642`) and
   `20261007150100_mark_spring_2026_deliveries_billed_in_chem_man` (`20261010043006`); then, from PR #889
   (2026-10-12 UTC), `20261007150200_release_reservations_of_deleted_spring_orders` (`20261012234157`)
-  and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`); then
-  `20261013220000_reps_work_any_customer` (`20261014131450`, PR #907); then
-  `20261014150000_products_tier_price_cent_scale` (`20261014150257`, PR #910).
+  and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`). Then, from PR #907
+  (2026-10-14 UTC), `20261013220000_reps_work_any_customer` (`20261014131450`); then, from PR #910
+  (merged as `729f9fa2d`; 2026-10-14 UTC), `20261014150000_products_tier_price_cent_scale`
+  (`20261014150257`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -218,6 +221,12 @@ APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Ma
 
 ## Recent production deployments
 
+- **2026-10-14 (sales reps work with any customer):** migration
+  `20261013220000_reps_work_any_customer` applied 13:14:50 UTC on Mason’s in-chat approval
+  (ledger `20261014131450`); PR #907 merged as `395bdcd9a` at 13:16 UTC (production deploys from
+  `main`); the `customer-document-files` Edge Function was redeployed as v2 at 13:54 UTC on his yes
+  (ACTIVE; signed-out calls refused), so the live function now admits reps to every customer's documents.
+  Not yet done: a signed-in rep click-through on the live site (goals doc, Goal 2).
 - **2026-09-22 → 2026-09-26 (customer documents served only through the server):** the
   `customer-document-files` Edge Function was deployed live as v1 on 2026-09-22 UTC with Mason's
   in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin); the
