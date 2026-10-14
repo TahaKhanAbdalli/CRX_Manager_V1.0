@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-10-12",
+    "generated_at": "2026-10-14",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261012234633",
+    "migrations_high_water": "20261014150257",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -405,6 +405,8 @@
       "20261007150100_mark_spring_2026_deliveries_billed_in_chem_man",
       "20261007150200_release_reservations_of_deleted_spring_orders",
       "20261010120000_cap_delivery_invoice_at_delivered",
+      "20261013220000_reps_work_any_customer",
+      "20261014150000_products_tier_price_cent_scale",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3900,6 +3902,24 @@
       "table": "products",
       "constraint": "products_current_cost_cent_scale_chk",
       "def": "CHECK (((current_cost IS NULL) OR ((current_cost = round(current_cost, 2)) AND (current_cost > '-Infinity'::numeric) AND (current_cost < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "products_tier1_price_whole_cents_chk",
+      "def": "CHECK (((tier1_price IS NULL) OR ((tier1_price = round(tier1_price, 2)) AND (tier1_price > '-Infinity'::numeric) AND (tier1_price < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "products_tier2_price_whole_cents_chk",
+      "def": "CHECK (((tier2_price IS NULL) OR ((tier2_price = round(tier2_price, 2)) AND (tier2_price > '-Infinity'::numeric) AND (tier2_price < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "products_tier3_price_whole_cents_chk",
+      "def": "CHECK (((tier3_price IS NULL) OR ((tier3_price = round(tier3_price, 2)) AND (tier3_price > '-Infinity'::numeric) AND (tier3_price < 'Infinity'::numeric))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
