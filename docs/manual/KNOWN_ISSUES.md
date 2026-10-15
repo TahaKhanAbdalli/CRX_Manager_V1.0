@@ -1,7 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-14 (America/Chicago) against the live migration ledger** (read-only
-Management API query, 2026-10-14 17:28 UTC; the two changes since the 2026-10-13 22:02 UTC read are
+**Last verified: 2026-10-15 (America/Chicago) against the live migration ledger** (read-only
+`execute_sql`, 2026-10-15 12:32 UTC; the one change since the 2026-10-14 17:28 UTC read is that
+`20261014210000_order_invoices_rep_own_name` (ledger `20261015080515`, PR #928 merged as `7cd781f77`)
+is now applied, which re-certified the order-invoice salesperson entry below. The 2026-10-14 17:28 UTC
+read was a Management API query; the two changes since the 2026-10-13 22:02 UTC read are
 that `20261013220000_reps_work_any_customer` (ledger `20261014131450`) and
 `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`) are now applied; the counts
 and high-water live only in `docs/reference/migration-history.md`). That 2026-10-14 read re-certified only
@@ -34,7 +37,8 @@ branches on the cleanup list (`docs/audits/2026-10-13-github-branch-cleanup-audi
   (`20261010014642`) and `20261007150100` (`20261010043006`); then on 2026-10-12 by PR #889's
   `20261007150200` (`20261012234157`) and `20261010120000` (`20261012234633`); and on 2026-10-14 by
   PR #907's `20261013220000_reps_work_any_customer` (`20261014131450`) and PR #910's
-  `20261014150000_products_tier_price_cent_scale` (`20261014150257`; PR #910 merged as `729f9fa2d`).
+  `20261014150000_products_tier_price_cent_scale` (`20261014150257`; PR #910 merged as `729f9fa2d`);
+  and on 2026-10-15 by PR #928's `20261014210000_order_invoices_rep_own_name` (`20261015080515`).
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -719,10 +723,10 @@ archive. They are listed here so the open part of this file shows them. None was
   2026-10-13 (Mason: reps work with ANY customer, `DECISION_LOG.md`):** the customer-scope half
   below is no longer a gap: a rep may bill any customer, and `20261013220000_reps_work_any_customer`
   removes the matching `CUSTOMER_SCOPE_DENIED` from `save_invoice`, `post_invoice` and
-  `post_invoice_group` instead. **Salesperson half: fix written as
-  `20261014210000_order_invoices_rep_own_name` (Mason chose it 2026-10-14). It applies live with its
-  PR, before the merge; `docs/reference/migration-history.md` row 945 is the apply record, and it is
-  not in force until that row says APPLIED.** Both public wrappers refuse a non-admin caller whose
+  `post_invoice_group` instead. **Salesperson half: RESOLVED 2026-10-15 by
+  `20261014210000_order_invoices_rep_own_name` (Mason chose it 2026-10-14), applied live 08:05 UTC
+  from PR #928 (merged as `7cd781f77`); `docs/reference/migration-history.md` row 945 is the apply
+  record.** Both public wrappers refuse a non-admin caller whose
   effective salesperson, `COALESCE(p_salesman_id, orders.salesman_id)`, is someone else, with
   `SALESMAN_SCOPE_DENIED`; a NULL salesperson is accepted only on the caller's own order or one with
   no salesperson (Sol on PR #928). The one exception (Mason, 2026-10-14, "Option A"):

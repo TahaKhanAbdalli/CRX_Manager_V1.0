@@ -1,20 +1,23 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-14 (America/Chicago) for the migration ledger only (read-only
-Management API query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-14 17:28 UTC: 1026 rows / 1019
-names, `max(version)` `20261014150257` = `20261014150000_products_tier_price_cent_scale`, applied
-2026-10-14 15:02:57 UTC; the ~14:10 UTC read before it had 1025 rows / 1018 names, `max(version)`
+**Last verified:** 2026-10-15 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 12:32 UTC: 1027 rows / 1020 names,
+`max(version)` `20261015080515` = `20261014210000_order_invoices_rep_own_name`, applied 2026-10-15
+08:05:15 UTC; the 2026-10-14 17:28 UTC read before it had 1026 rows / 1019 names, `max(version)`
+`20261014150257` = `20261014150000_products_tier_price_cent_scale`, applied 2026-10-14 15:02:57 UTC;
+the ~14:10 UTC read before that had 1025 rows / 1018 names, `max(version)`
 `20261014131450` = `20261013220000_reps_work_any_customer`, applied 2026-10-14 13:14:50 UTC).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-14)
+## Current state at a glance (2026-10-15)
 
-- **Effective ordering high-water: `20261014150000_products_tier_price_cent_scale`**
-  (ledger version `20261014150257`, UTC; applied live 2026-10-14 15:02 UTC from PR #910, merged as
-  `729f9fa2d`; read-only ledger read 2026-10-14 15:35 UTC: 1026 rows / 1019 names). Before it, the same
-  morning: `20261013220000_reps_work_any_customer` (ledger `20261014131450`, applied from PR #907, which
+- **Effective ordering high-water: `20261014210000_order_invoices_rep_own_name`**
+  (ledger version `20261015080515`, UTC; applied live 2026-10-15 08:05 UTC from PR #928, merged as
+  `7cd781f77`; read-only ledger read 2026-10-15 12:32 UTC: 1027 rows / 1020 names). Before it,
+  `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`, applied 2026-10-14 from
+  PR #910, merged as `729f9fa2d`), and the same morning: `20261013220000_reps_work_any_customer` (ledger `20261014131450`, applied from PR #907, which
   merged as `395bdcd9a`), which replaced `20261010120000_cap_delivery_invoice_at_delivered` (ledger
   `20261012234633`, applied 2026-10-12 from PR #889). Nothing from PR #889 or PR #907 is left
   unapplied. The effective ordering high-water is the
@@ -47,7 +50,8 @@ ships or quarterly, whichever comes first.
   and `20261010120000_cap_delivery_invoice_at_delivered` (`20261012234633`). Then, from PR #907
   (2026-10-14 UTC), `20261013220000_reps_work_any_customer` (`20261014131450`); then, from PR #910
   (merged as `729f9fa2d`; 2026-10-14 UTC), `20261014150000_products_tier_price_cent_scale`
-  (`20261014150257`).
+  (`20261014150257`); then, from PR #928 (merged as `7cd781f77`; 2026-10-15 UTC),
+  `20261014210000_order_invoices_rep_own_name` (`20261015080515`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -56,8 +60,10 @@ ships or quarterly, whichever comes first.
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
 - **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-14 17:28 UTC
-  on PR #921 (`migrations_high_water` `20261014150257`), after `20261014150000`. Refresh it after
-  the next live apply.
+  on PR #921, after `20261014150000`; on 2026-10-15 it was brought to live by delta (the applied name
+  `20261014210000_order_invoices_rep_own_name` and `migrations_high_water` `20261015080515`; that
+  migration changed only function bodies, and the ledger shows no other apply since the full refresh).
+  Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
