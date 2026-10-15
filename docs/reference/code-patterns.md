@@ -175,11 +175,17 @@ The Team Board was decomposed from a monolith (`TeamBoard.tsx`) into reusable co
 - Returns `{ today: [], tomorrow: [], today_total, unassigned_count }`
 
 **Photo Upload Pattern (Supabase Storage):**
-- Bucket: `team-note-attachments` (public read, authenticated write)
-- Upload path: `{userId}/{timestamp}_{index}.{ext}`
+- Bucket: `team-note-attachments`. Read: active staff (admin, sales rep, driver, applicator) through the storage read
+  policy (`20261015230000`); the bucket is still public until step 2 makes it private. Write: active staff, into
+  their own folder.
+- Upload path: `team-note-attachments/{userId}/{timestamp}_{index}.{ext}` (folder 2 is the uploader)
 - 10MB max per file, client-side compression before upload
-- DB record in `team_note_attachments` links `note_id` → `file_url`
-- Delete removes both storage object and DB record
+- DB record in `team_note_attachments` links `note_id` → `file_url` (the public URL; the app parses the object path
+  out of it, it never displays it)
+- Display: `PrivatePhoto` / `PrivatePhotoButton` (`src/components/ui/PrivatePhoto.tsx`) download with the user's
+  session and show a tab-local `blob:` URL; never `getPublicUrl` or `window.open(url)` for staff photos. The same
+  applies to `delivery-photos` (path `delivery-photos/{deliveryId}/...`, read via `delivery_photos.storage_path`).
+- Delete removes both storage object and DB record (uploader or admin only)
 
 **Adding QuickTaskModal to a new detail page:**
 ```tsx

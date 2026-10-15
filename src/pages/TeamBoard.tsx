@@ -26,6 +26,7 @@ import NoteCard from '../components/team/NoteCard';
 import EntityBadge from '../components/team/EntityBadge';
 import NoteAttachments from '../components/team/NoteAttachments';
 import NotePhotoUpload from '../components/team/NotePhotoUpload';
+import { canUseTeamNotePhotos } from '../lib/privatePhotos';
 import EmptyState from '../components/ui/EmptyState';
 import HelpTip from '../components/ui/HelpTip';
 import TodaysDeliveries from '../components/team/TodaysDeliveries';
@@ -105,6 +106,7 @@ export default function TeamBoard() {
   });
 
   const isAdmin = role === 'admin';
+  const canUseNotePhotos = canUseTeamNotePhotos(profile);
   const completeIdem = useIdempotencyKey('complete_team_note', profile?.id || '');
   const [completingNote, setCompletingNote] = useState<string | null>(null);
 
@@ -1458,8 +1460,10 @@ export default function TeamBoard() {
 
             <TagsManager noteId={selectedNote.id} onTagsChange={fetchNotes} />
 
-            <NoteAttachments noteId={selectedNote.id} canDelete={canEdit(selectedNote)} refreshKey={attachmentRefresh} />
-            {!selectedNote.is_completed && (
+            {canUseNotePhotos && (
+              <NoteAttachments noteId={selectedNote.id} refreshKey={attachmentRefresh} />
+            )}
+            {canUseNotePhotos && !selectedNote.is_completed && (
               <NotePhotoUpload noteId={selectedNote.id} onUploadComplete={() => setAttachmentRefresh(prev => prev + 1)} />
             )}
 

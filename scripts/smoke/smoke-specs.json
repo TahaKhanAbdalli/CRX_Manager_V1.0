@@ -221,6 +221,17 @@
         "security"
       ]
     },
+    "staff_photo_storage_access": {
+      "chain": "smoke-staff_photo_storage_access.sql",
+      "covers": [
+        "staff_photo_storage_access",
+        "delivery_photos"
+      ],
+      "description": "REQUIRES 20261015230000. Staff photo Storage access by role, as live sessions (authenticated with real profile claims) and a signed-out visitor, through the storage.objects queries Storage runs for download, upload and delete: delivery photos for admins, reps and the assigned active driver only; receiving photos for admins and reps; team-note photos for active staff but not commission-recipient profiles; uploads scoped to the same rules (a driver cannot upload into another driver's delivery or another user's team-note folder); a rep cannot delete a receiving photo, an admin can; an uploader deletes their own team-note photo. Probe objects are catalog rows only and roll back.",
+      "area": [
+        "security"
+      ]
+    },
     "order_invoice_rep_own_name": {
       "chain": "smoke-order-invoice-rep-own-name.sql",
       "container_only": true,

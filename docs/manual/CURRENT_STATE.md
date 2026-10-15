@@ -21,8 +21,8 @@ ships or quarterly, whichever comes first.
 - **Effective ordering high-water: `20261015200000_quotes_rep_own_name`**
   (ledger version `20261015193420`, UTC; applied live 2026-10-15 19:34 UTC on Mason's approval, PR
   #938 merged as `1673d5b58`; read-only ledger read 2026-10-15 19:36 UTC: 1030 rows / 1023 names).
-  PR #929's open candidate `20261015170000` now sorts below it and must be re-stamped before it can
-  apply. Before it, `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`,
+  PR #929's open candidate, first stamped `20261015170000`, sorted below it and was re-stamped to
+  `20261015230000` (migration-history row 949). Before it, `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`,
   applied 2026-10-15 16:30 UTC, PR #933 merged as `b2203fd82`),
   `20261014220000_rup_register_admin_only` (ledger `20261015135505`, applied 2026-10-15
   13:55 UTC, PR #927 merged as `dd2bda843`) and `20261014210000_order_invoices_rep_own_name` (ledger

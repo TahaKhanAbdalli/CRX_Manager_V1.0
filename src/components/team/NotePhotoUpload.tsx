@@ -5,6 +5,7 @@ import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { compressImage } from '../../lib/imageCompression';
+import { teamNotePhotoExtension } from '../../lib/privatePhotos';
 
 interface NotePhotoUploadProps {
   noteId: string;
@@ -38,12 +39,12 @@ export default function NotePhotoUpload({ noteId, onUploadComplete }: NotePhotoU
     for (const rawFile of Array.from(files)) {
       try {
         const file = await compressImage(rawFile);
-        const ext = file.name.split('.').pop() || 'jpg';
+        const ext = teamNotePhotoExtension(file.name);
         const storagePath = `team-note-attachments/${profile.id}/${Date.now()}_${uploadCount}.${ext}`;
 
         const { error: uploadErr } = await supabase.storage
           .from('team-note-attachments')
-          .upload(storagePath, file, { contentType: file.type });
+          .upload(storagePath, file, { contentType: file.type, cacheControl: '0' });
 
         if (uploadErr) {
           toast('error', `Upload failed: ${uploadErr.message}`);

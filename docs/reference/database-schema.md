@@ -387,7 +387,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | receiving_photos | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned, while in_progress or completed) | Admin |
 | delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
+| delivery_photos | Admin / Sales Rep / active Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
 | delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | delivery_external_billings | Admin / Sales Rep | - (migrations only) | - (migrations only) | - (migrations only) |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |

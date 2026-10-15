@@ -20,11 +20,8 @@ export interface CompletionEmailItem {
   qty: number;
 }
 
-export interface CompletionEmailPhoto {
-  image_url: string;
-  caption?: string | null;
-}
-
+// No delivery photos in this email (Mason, 2026-10-14): photos are private staff
+// records, and a link in an email would work for anyone holding it.
 export interface DeliveryCompletionEmailParams {
   customerEmail: string;
   contactName?: string | null;
@@ -34,7 +31,6 @@ export interface DeliveryCompletionEmailParams {
   items: CompletionEmailItem[];
   isPartial: boolean;
   signedBy: string;
-  photos: CompletionEmailPhoto[];
 }
 
 /**
@@ -45,7 +41,7 @@ export interface DeliveryCompletionEmailParams {
  * receipt email must never surface as a completion error.
  */
 export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmailParams): Promise<void> {
-  const { customerEmail, contactName, deliveryNumber, deliveryId, customerId, items, isPartial, signedBy, photos } = params;
+  const { customerEmail, contactName, deliveryNumber, deliveryId, customerId, items, isPartial, signedBy } = params;
 
   try {
     const deliveredItems = items
@@ -56,13 +52,6 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
       </tr>`)
       .join('');
 
-    const photoCount = photos.length;
-    const photoImages = photos.slice(0, 6).map((p) =>
-      `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
-    ).join('');
-    const photoNote = photoCount > 0
-      ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">Delivery Photos (${photoCount})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photoCount > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photoCount - 6} more photo(s) on file</p>` : ''}</div>`
-      : '';
     const signatureNote = signedBy
       ? `<p style="color:#475569;font-size:13px;">Signed by: <strong>${signedBy}</strong></p>`
       : '';
@@ -98,7 +87,6 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
       </table>
       ${partialNote}
       ${signatureNote}
-      ${photoNote}
       <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
         Thank you for your business!
       </p>

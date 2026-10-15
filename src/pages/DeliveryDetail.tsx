@@ -39,6 +39,8 @@ import { addDeliveryEditItem, removeDeliveryEditItem, type AvailableDeliveryEdit
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
+import PrivatePhoto, { PrivatePhotoButton } from '../components/ui/PrivatePhoto';
+import { deliveryPhotoPath } from '../lib/privatePhotos';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
   Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
@@ -784,7 +786,7 @@ export default function DeliveryDetail() {
 
         const { error: uploadErr } = await supabase.storage
           .from('delivery-photos')
-          .upload(storagePath, file, { contentType: file.type });
+          .upload(storagePath, file, { contentType: file.type, cacheControl: '0' });
 
         if (uploadErr) {
           toast('error', `Upload failed: ${uploadErr.message}`);
@@ -1075,13 +1077,8 @@ export default function DeliveryDetail() {
             </tr>`)
             .join('');
 
-          const photoCount = photos.length;
-          const photoImages = photos.slice(0, 6).map((p) =>
-            `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
-          ).join('');
-          const photoNote = photoCount > 0
-            ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">Delivery Photos (${photoCount})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photoCount > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photoCount - 6} more photo(s) on file</p>` : ''}</div>`
-            : '';
+          // No delivery photos in the customer email (Mason, 2026-10-14): photos are
+          // private staff records and a link in an email would work for anyone holding it.
           const signatureNote = signedBy
             ? `<p style="color:#475569;font-size:13px;">Signed by: <strong>${signedBy}</strong></p>`
             : '';
@@ -1117,7 +1114,6 @@ export default function DeliveryDetail() {
             </table>
             ${partialNote}
             ${signatureNote}
-            ${photoNote}
             <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
               Thank you for your business!
             </p>
@@ -1164,12 +1160,7 @@ export default function DeliveryDetail() {
           </tr>`
         ).join('');
 
-      const photoImages = photos.slice(0, 6).map((p) =>
-        `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
-      ).join('');
-      const photoNote = photos.length > 0
-        ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">📷 Delivery Photos (${photos.length})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photos.length > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photos.length - 6} more photo(s) on file</p>` : ''}</div>`
-        : '';
+      // No delivery photos in the customer email (Mason, 2026-10-14).
       const signatureNote = delivery.signed_by
         ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${delivery.signed_by}</strong></p>`
         : '';
@@ -1201,7 +1192,6 @@ export default function DeliveryDetail() {
           ${deliveredItems}
         </table>
         ${signatureNote}
-        ${photoNote}
         <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
           Thank you for your business!
         </p>
@@ -1494,17 +1484,19 @@ export default function DeliveryDetail() {
           {canUploadPhoto && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-white font-semibold">Delivery Photos<HelpTip text="Take up to 10 photos as proof of delivery — product condition, drop location, etc. These attach to the delivery record and can be included in the customer email." className="ml-1" /></h3>
+                <h3 className="text-white font-semibold">Delivery Photos<HelpTip text="Take up to 10 photos as proof of delivery — product condition, drop location, etc. They stay on the delivery record for staff; they are not sent to the customer." className="ml-1" /></h3>
                 <span className="text-sm text-gray-400">{photos.length}/10</span>
               </div>
               {photos.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
                   {photos.map((photo) => (
-                    <img
+                    <PrivatePhoto
                       key={photo.id}
-                      src={photo.image_url}
+                      bucket="delivery-photos"
+                      path={deliveryPhotoPath(photo)}
                       alt={photo.caption || 'Delivery photo'}
                       className="w-full h-36 sm:h-48 object-contain rounded-lg border border-gray-600 bg-gray-800"
+                      placeholderClassName="text-gray-500"
                     />
                   ))}
                 </div>
@@ -1614,7 +1606,7 @@ export default function DeliveryDetail() {
                     className="w-4 h-4 rounded border-gray-600 text-crx-green focus:ring-crx-green bg-gray-700"
                   />
                   Email delivery receipt to customer
-                  <HelpTip text="If checked, the customer receives an email with the items delivered, photos, and signature. Uncheck if this is an internal transfer." className="ml-1" />
+                  <HelpTip text="If checked, the customer receives an email with the items delivered and who signed (no photos). Uncheck if this is an internal transfer." className="ml-1" />
                 </label>
               )}
               {!isOnline && (
@@ -2376,7 +2368,7 @@ export default function DeliveryDetail() {
                 className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
               />
               Email delivery receipt to customer
-              <HelpTip text="If checked, the customer receives an email with the items delivered, photos, and signature. Uncheck if this is an internal transfer." className="ml-1" />
+              <HelpTip text="If checked, the customer receives an email with the items delivered and who signed (no photos). Uncheck if this is an internal transfer." className="ml-1" />
             </label>
           )}
 
@@ -2484,14 +2476,12 @@ export default function DeliveryDetail() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             {photos.map((photo) => (
               <div key={photo.id} className="relative group">
-                <img
-                  src={photo.image_url}
+                <PrivatePhotoButton
+                  bucket="delivery-photos"
+                  path={deliveryPhotoPath(photo)}
                   alt={photo.caption || 'Delivery photo'}
+                  viewerTitle={photo.caption || 'Delivery photo'}
                   className="w-full h-48 object-contain rounded-lg border border-gray-200 bg-gray-50 cursor-pointer"
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => { e.stopPropagation(); window.open(photo.image_url, '_blank'); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.open(photo.image_url, '_blank'); } }}
                 />
                 {photo.caption && (
                   <p className="text-xs text-secondary mt-1 truncate">{photo.caption}</p>
