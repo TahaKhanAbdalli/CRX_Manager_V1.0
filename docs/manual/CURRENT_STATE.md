@@ -1,9 +1,12 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-15 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 12:32 UTC: 1027 rows / 1020 names,
-`max(version)` `20261015080515` = `20261014210000_order_invoices_rep_own_name`, applied 2026-10-15
-08:05:15 UTC; the 2026-10-14 17:28 UTC read before it had 1026 rows / 1019 names, `max(version)`
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 17:28 UTC: 1029 rows / 1022 names,
+`max(version)` `20261015163041` = `20261015130000_orders_blend_tickets_rep_own_name`, applied
+2026-10-15 16:30:41 UTC, after `20261014220000_rup_register_admin_only` at 13:55:05 UTC; the
+12:32 UTC read before them had 1027 rows / 1020 names, `max(version)` `20261015080515` =
+`20261014210000_order_invoices_rep_own_name`, applied 2026-10-15 08:05:15 UTC; the 2026-10-14
+17:28 UTC read before it had 1026 rows / 1019 names, `max(version)`
 `20261014150257` = `20261014150000_products_tier_price_cent_scale`, applied 2026-10-14 15:02:57 UTC;
 the ~14:10 UTC read before that had 1025 rows / 1018 names, `max(version)`
 `20261014131450` = `20261013220000_reps_work_any_customer`, applied 2026-10-14 13:14:50 UTC).
@@ -13,9 +16,12 @@ ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-15)
 
-- **Effective ordering high-water: `20261014210000_order_invoices_rep_own_name`**
-  (ledger version `20261015080515`, UTC; applied live 2026-10-15 08:05 UTC from PR #928, merged as
-  `7cd781f77`; read-only ledger read 2026-10-15 12:32 UTC: 1027 rows / 1020 names). Before it,
+- **Effective ordering high-water: `20261015130000_orders_blend_tickets_rep_own_name`**
+  (ledger version `20261015163041`, UTC; applied live 2026-10-15 16:30 UTC on Mason's approval, PR
+  #933 merged as `b2203fd82`; read-only ledger read 2026-10-15 17:28 UTC: 1029 rows / 1022 names).
+  Before it, `20261014220000_rup_register_admin_only` (ledger `20261015135505`, applied 2026-10-15
+  13:55 UTC, PR #927 merged as `dd2bda843`) and `20261014210000_order_invoices_rep_own_name` (ledger
+  `20261015080515`, applied 08:05 UTC from PR #928, merged as `7cd781f77`). Before those,
   `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`, applied 2026-10-14 from
   PR #910, merged as `729f9fa2d`), and the same morning: `20261013220000_reps_work_any_customer` (ledger `20261014131450`, applied from PR #907, which
   merged as `395bdcd9a`), which replaced `20261010120000_cap_delivery_invoice_at_delivered` (ledger
@@ -51,7 +57,10 @@ ships or quarterly, whichever comes first.
   (2026-10-14 UTC), `20261013220000_reps_work_any_customer` (`20261014131450`); then, from PR #910
   (merged as `729f9fa2d`; 2026-10-14 UTC), `20261014150000_products_tier_price_cent_scale`
   (`20261014150257`); then, from PR #928 (merged as `7cd781f77`; 2026-10-15 UTC),
-  `20261014210000_order_invoices_rep_own_name` (`20261015080515`).
+  `20261014210000_order_invoices_rep_own_name` (`20261015080515`); then, from PR #927 (merged as
+  `dd2bda843`; 2026-10-15 UTC), `20261014220000_rup_register_admin_only` (`20261015135505`); then,
+  from PR #933 (merged as `b2203fd82`; 2026-10-15 UTC),
+  `20261015130000_orders_blend_tickets_rep_own_name` (`20261015163041`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -60,9 +69,11 @@ ships or quarterly, whichever comes first.
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
 - **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-14 17:28 UTC
-  on PR #921, after `20261014150000`; on 2026-10-15 it was brought to live by delta (the applied name
-  `20261014210000_order_invoices_rep_own_name` and `migrations_high_water` `20261015080515`; that
-  migration changed only function bodies, and the ledger shows no other apply since the full refresh).
+  on PR #921, after `20261014150000`; on 2026-10-15 it was brought to live by delta (the applied names
+  `20261014210000_order_invoices_rep_own_name`, `20261014220000_rup_register_admin_only` and
+  `20261015130000_orders_blend_tickets_rep_own_name`, and `migrations_high_water` `20261015163041`;
+  those migrations changed function bodies, grants, one RLS policy and two triggers, none of which the
+  registry tracks, and the ledger shows no other apply since the full refresh).
   Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening

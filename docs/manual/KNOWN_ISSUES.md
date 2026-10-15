@@ -1,9 +1,13 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-15 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-15 12:32 UTC; the one change since the 2026-10-14 17:28 UTC read is that
+`execute_sql`, 2026-10-15 17:28 UTC; the two changes since the 12:32 UTC read are that
+`20261014220000_rup_register_admin_only` (ledger `20261015135505`, PR #927 merged as `dd2bda843`) and
+`20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`, PR #933 merged as
+`b2203fd82`) are now applied, which re-certified the order and blend-ticket salesperson entry below.
+In the 12:32 UTC read, the one change since the 2026-10-14 17:28 UTC read was that
 `20261014210000_order_invoices_rep_own_name` (ledger `20261015080515`, PR #928 merged as `7cd781f77`)
-is now applied, which re-certified the order-invoice salesperson entry below. The 2026-10-14 17:28 UTC
+had applied, which re-certified the order-invoice salesperson entry below. The 2026-10-14 17:28 UTC
 read was a Management API query; the two changes since the 2026-10-13 22:02 UTC read are
 that `20261013220000_reps_work_any_customer` (ledger `20261014131450`) and
 `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`) are now applied; the counts
@@ -748,9 +752,11 @@ archive. They are listed here so the open part of this file shows them. None was
   drafts under the order's salesperson. The app always sends the signed-in profile. The split wrapper also gained the
   CRX-LIFE-001 type allow-list before its claim (a refused `field_application` split no longer draws
   an invoice number) and now requires its idempotency key. Remaining, not fixed here:
-  - **Order and blend-ticket salesperson (follow-up for Goal 2's "own-name everywhere"): fix
-    written as `20261015130000_orders_blend_tickets_rep_own_name`; not in force until
-    `docs/reference/migration-history.md` row 947 says APPLIED.** Read live 2026-10-14: the `orders` INSERT policy is
+  - **Order and blend-ticket salesperson (follow-up for Goal 2's "own-name everywhere"): RESOLVED
+    2026-10-15 by `20261015130000_orders_blend_tickets_rep_own_name`, applied live 16:30 UTC on
+    Mason's approval; PR #933 merged as `b2203fd82`; `docs/reference/migration-history.md` row 947
+    is the apply record (re-checked read-only 17:28 UTC: function md5 matches, both triggers
+    enabled).** The record below is kept as history. Read live 2026-10-14: the `orders` INSERT policy is
     `is_admin() OR is_sales_rep()` with no salesperson condition, and `blend_tickets_office_update`
     lets any active rep UPDATE `blend_tickets.salesman_id` (authenticated holds UPDATE on that
     column); `create_order_from_blend_ticket` copies it onto the order, and
