@@ -1,9 +1,10 @@
-# Pricing history, cost tracking and quote pricing — next section of work (DRAFT)
+# Pricing history, cost tracking and quote pricing — next section of work
 
-**Status: DRAFT for iteration. NOT approved to build.** Mason, 2026-10-13: "I dont want to start building
-anything but want to leave top of list on to do this is next section of work. I want more iteration on it
-before start building." Nothing here is a build instruction yet. Each round of iteration should update this
-file; building starts only when Mason says so in chat.
+**Status: PLAN FINISHED 2026-10-14. NOT STARTED.** Every open question in section 5 has Mason's answer
+(2026-10-14), and supplier-cost rollout and Early Bird are parked for a later, separate plan. Mason,
+2026-10-14: "I don't want to start work I want to finish the plan and goal." Building starts only when Mason
+says so in chat. Earlier (2026-10-13): "I dont want to start building anything but want to leave top of list
+on to do this is next section of work."
 
 **Decided so far** (all in `docs/manual/DECISION_LOG.md`):
 - A sent quote's prices stay locked until the quote is accepted or expires (Mason, 2026-10-13).
@@ -23,6 +24,27 @@ file; building starts only when Mason says so in chat.
   changes prices. Each change downloads the entire sheet ("might aswell download entire sheet so is simple and
   that is all current pricing"). Inline price editing stays for one-off fixes ("keep inline edits for one-off
   fixes"). Mason asked for a Sol review of the workbook method (section 8).
+- **Answers to the remaining open questions** (Mason, 2026-10-14, each picked from a recommended set):
+  - **"Locked" means prices only.** Staff may still revise a sent quote's products, quantities and notes; its
+    prices stay as sent unless someone picks "update to today's prices". There is no admin unlock that skips
+    the re-send.
+  - **A revision that changes any price must be re-sent** before it can become an order or be partly drawn;
+    the order then uses the newly sent prices.
+  - **Planned bookings and partly drawn quotes stay locked until staff close them**, since they never
+    auto-expire.
+  - **Expiry:** editing a sent quote no longer moves its expiry date; only a re-send sets a new one. After
+    expiry a quote never re-prices on its own: it must be updated to today's prices and re-sent.
+  - **If cost rises above a locked price before Convert:** honor the promised price, but Convert needs an
+    admin's below-cost approval with a reason, recorded for review.
+  - **Workbook warnings:** flag a price that moves more than 10% up or down, any price below cost, and any
+    margin under the product's floor. A flagged row applies only after a ticked acknowledgement with a
+    reason.
+  - **Sales reps never see cost or margin.** Admins see both the quote-time cost and today's cost beside
+    each quote line.
+  - **Margin targets and floors are set per product,** with no company-wide default.
+  - **Supplier-quote cost rollout and Early Bird committed prices are parked** for a later, separate plan.
+  - **Field jobs from a never-sent planned quote stay as today:** they may be scheduled and billed at the
+    draft's price. The sent-price rule applies once a quote has been sent.
 
 **Iteration 2 (2026-10-14).** Merged the findings of three sessions ("CRX pricing updates and history",
 "Missing pricing and cost tracking features" and the branch-cleanup session that wrote this draft), with a Codex
@@ -115,16 +137,17 @@ lost: `20260814041419_fresh_below_cost_reason` (an old below-cost approval note 
 approval still needs an active admin) and `20260814063000_quote_sections_rpc_owned` (drops the
 `qsections_insert/update/delete` policies, which live still has).
 
-## 4. Draft build path (to iterate, not to start)
+## 4. Build path (finished; not started)
 
-Small slices, each its own change. Order and scope are open for discussion.
+Small slices, each its own change. Building starts only when Mason says so; slices 7 and 9 are parked.
 
 0. **Workbook hardening** (section 8, from the Sol review; can run alongside slices 1-2). It must include
    slice 4's per-acre history (or disable workbook edits to `rate_per_acre` and `rate_unit` until slice 4
    lands), because otherwise a rate-only workbook edit would satisfy "source and reason stored with history"
    while writing no history; its proof includes a rate-only edit. A "Download full
-   price sheet" action that always exports every active product; outlier warnings for a large jump or a margin
-   outside a band, added beside the existing below-cost warning; a required acknowledgement of every warning,
+   price sheet" action that always exports every active product; outlier warnings for a move of more than 10%
+   up or down and for a margin under the product's floor (slice 8; a product with no floor set skips only that
+   check), added beside the existing below-cost warning (Mason, 2026-10-14); a required acknowledgement of every warning,
    **enforced by the apply RPC** (the preview stores the exact warning set and apply refuses a change set
    without a matching acknowledgement, so a stale or bypassed screen cannot skip it); the effective price per
    tier after fallback; required source and reason columns for changed rows, stored with history; and the
@@ -140,6 +163,37 @@ Small slices, each its own change. Order and scope are open for discussion.
    quote is sent, the same way cost is frozen, and stop Convert to Order from re-pricing. Depends on slice 1.
    - Enforce it in the database, not only on screen: `save_quote` today checks only status *changes*, so a
      same-status save of a sent or accepted quote is accepted by the server (section 7, finding 2).
+   - **Every route from a quote to something billable uses the sent prices** (Codex on PR #923, 2026-10-14).
+     Start the slice by listing every such route; known so far are Convert, `draw_down_quote`, and
+     `create_job_from_quote_section` (it accepts `revised` quotes and copies the live
+     `quote_items.price_per_unit` into `job_chemicals`, which `transfer_job_to_invoice` later bills). Each
+     route gets the re-send gate and a price-changing-revision proof.
+     **Exception (Mason, 2026-10-14):** a field job may still be scheduled from a planned quote that was never
+     sent, and billed at that draft's price, as today (`QuoteBuilder.tsx` allows scheduling a draft). The
+     sent-price rule applies once a quote has been sent.
+   - **Mason's lock rules (2026-10-14):** the lock covers prices only; staff can still revise products,
+     quantities and notes. Planned bookings and partly drawn quotes stay locked until staff close them.
+     Editing a sent quote no longer moves its expiry date (today every save resets it; see section 5); only a
+     re-send sets a new date, and an expired quote must be updated to today's prices and re-sent, never
+     re-priced on its own. If cost rises above a locked price, Convert honors the price but needs an admin's
+     below-cost approval with a reason. Manual price overrides made before sending are part of the locked
+     line and carry through unchanged. A below-cost approval made before sending stays on record, but it
+     does not authorize a larger loss: when Convert or a draw-down finds the price below the cost at that
+     moment, it needs a fresh, signed-in admin approval (the earlier reason may be reused as its text)
+     (Codex on PR #926).
+   - **Build details from review (Codex on PR #926):**
+     - Expired quotes: `auto_expire_quotes()` sets `expired`, which `_enforce_quote_status_transition()` and
+       `save_quote()` treat as final. "Update and re-send" therefore needs a renew route (a database
+       transition from `expired` to `revised`, or a renew-as-copy), with an expired-to-sent proof.
+     - Field jobs from a never-sent planned quote (the exception above): `transfer_job_to_invoice` takes no
+       approval reason, so once cost rises above the draft price, `_enforce_below_cost_line` refuses the
+       invoice line. At invoicing, `transfer_job_to_invoice` rechecks cost at that moment and needs a fresh
+       admin approval with a reason whenever the line is below cost, for jobs from sent and never-sent quotes
+       alike, with a cost-rise proof. An approval given at scheduling does not cover a later rise.
+     - Changing the customer: a sent snapshot records its customer, and `save_quote` overwrites
+       `quotes.customer_id` on a revision. A revision that changes the customer must be re-sent before it is
+       billed, even if the prices match. The price authority compares customer as well as prices, with a
+       customer-change proof.
    - A revision keeps the locked prices. Add an **"Update to today's prices"** action on a revised quote, both
      per line and for the whole quote, that shows each line's locked price beside today's price and applies
      only what the user picks.
@@ -158,9 +212,9 @@ Small slices, each its own change. Order and scope are open for discussion.
    - Codex's suggested shape (section 7, finding 10): the sent version is the price authority; Convert
      builds the order from that exact version.
    - A revised quote can be converted without being re-sent (`QuoteBuilder.tsx`, about line 597; the status
-     map allows `revised` to `accepted`). Then Convert must build from the current revision's products and
-     quantities, taking only the locked prices from the sent version (or require a re-send first). The proof
-     includes revise-then-convert.
+     map allows `revised` to `accepted`). That stays allowed only when every price is unchanged; Convert then
+     builds from the current revision's products and quantities, taking the locked prices from the sent
+     version. The proof includes revise-then-convert.
    - Structural edits on a revision break that matching: a newly added product has no price in the sent
      version, and `create_quote_version` snapshots `product_id` and price but not `quote_item_id`, so two
      lines of the same product cannot be told apart. Preferred fix: version snapshots carry `quote_item_id`,
@@ -182,27 +236,25 @@ Small slices, each its own change. Order and scope are open for discussion.
      - **Rewinds:** `_restore_quote_version_owner_impl` deletes the quote's sections, which cascades to the
        lines, and re-inserts them without `id`, so every restored line gets a new ID. Under ID matching,
        rewinding to the sent version and then converting would be refused even though nothing changed.
-       Restore must keep the snapshot's line IDs or record an old-to-new ID map that Convert uses. Snapshots saved
-     before slice 2 carry no line IDs (Codex on PR #923) and come in two kinds:
-     - **Untrusted** (`restore_trusted_at` is null, from before the
-       `20260826220000_quote_version_restore_trust_boundary` migration): the live restore refuses them with
-       `QUOTE_VERSION_LEGACY_UNTRUSTED` before any matching runs, so they cannot be rewound at all; that
-       quote must be re-sent. All 3 live versions were in this state on 2026-10-14.
-     - **Trusted but without line IDs:** not backfilled. Restoring and converting one falls back to the
-       one-to-one pairing by product above, which fails closed, so any duplicate product or other mismatch
-       requires a re-send.
-
-     The proof adds rewind-then-convert with and without a later quantity edit, a trusted pre-slice-2
-     version with and without a duplicate product, and an untrusted version that is refused and re-sent.
-   - **Open for the slice 2 build** (Codex on PR #923, confirmed live 2026-10-14; to be designed when slice 2
-     is built, not settled here):
+       Restore must keep the snapshot's line IDs or record an old-to-new ID map that Convert uses.
+     - **Older versions:** snapshots saved before slice 2 carry no line IDs (Codex on PR #923). Two kinds:
+       - **Untrusted** (`restore_trusted_at` is null, from before the
+         `20260826220000_quote_version_restore_trust_boundary` migration): the live restore refuses them with
+         `QUOTE_VERSION_LEGACY_UNTRUSTED` before any matching runs, so they cannot be rewound at all; that
+         quote must be re-sent. All 3 live versions were in this state on 2026-10-14.
+       - **Trusted but without line IDs:** not backfilled. Restoring and converting one falls back to the
+         one-to-one pairing by product above, which fails closed, so any duplicate product or other mismatch
+         requires a re-send.
+     - **Proof:** rewind-then-convert with and without a later quantity edit, a trusted pre-slice-2 version
+       with and without a duplicate product, and an untrusted version that is refused and re-sent.
+   - **Also required in slice 2** (Codex on PR #923, confirmed live 2026-10-14):
      - Partial draw-downs: `_draw_down_quote_below_cost_impl_20260810` accepts `revised` quotes and prices
        the new order from the current lines. The same re-send gate must apply there, with a proof that a
        price-changing revision cannot be partly drawn until it is re-sent.
      - Rewind stays unavailable for a booking that has ever been partly drawn:
        `_restore_quote_version_owner_impl` raises `QUOTE_RESTORE_BLOCKED_BY_DRAW`, an accepted invariant in
-       `KNOWN_ISSUES.md`, even after the drawn orders are cancelled or voided. Keep it, or design and prove a
-       safe replacement that covers cancelled and voided draws.
+       `KNOWN_ISSUES.md`, even after the drawn orders are cancelled or voided. Slice 2 keeps this rule; replacing it
+       would need its own design and proof, covering cancelled and voided draws.
    - Partly drawn quotes: `draw_down_quote` relies on stable `quote_item_id` provenance and the
      `units_current` / `units_settled` split so a price change never re-bills delivered product
      (`20260816120000_draw_down_split_order_lines_by_price_tier.sql`; invariant in `KNOWN_ISSUES.md`). The
@@ -229,20 +281,27 @@ Small slices, each its own change. Order and scope are open for discussion.
      the per-acre price moved: store the old and new `rate_per_acre` and `rate_unit`, or the old and new
      per-acre prices in whole cents;
    - a required reason on each price change instead of the generic default (finding 6).
-5. **Cost evidence beside each quote line** (admin only, hidden in Customer View and on PDFs).
+5. **Cost evidence beside each quote line** (admin only, hidden in Customer View and on PDFs). Show both the
+   quote-time cost and today's cost side by side, so a locked quote that has lost margin is visible (Mason,
+   2026-10-14). Sales reps never see cost or margin.
 6. **Profitability reports on cost at time of sale** (independent; can go first). Copy #397's three report
    fetchers and its test. The numbers will change, because lines on deleted or cancelled orders drop out.
-7. **Cost freshness.** Widen supplier-evidence cost selection beyond the 10 pilot products and map the
+7. **Cost freshness. PARKED for a later, separate plan (Mason, 2026-10-14).** Widen supplier-evidence cost selection beyond the 10 pilot products and map the
    remaining purchase-order vendor names. Mostly data entry. Roll it out product by product (or vendor by
    vendor) through the `product_cost_basis_rollout` list, adding a product only once it has current
    supplier evidence. The global `supplier_cost_basis_enabled` setting switches it on for every product
    at once (`supabase/migrations/20260722064814_wells_cost_basis_rollout_gate.sql`), so it is the last
    step, after the rollout is complete. Both are live changes and need Mason's yes. This overlaps the
    TODO deadline item "test the pricing/repricing path before sales season".
-8. **Margin targets and floor.**
-9. **Early Bird price lists**, from the deleted design. Only after slice 2.
+8. **Margin targets and floor,** set per product with no company-wide default (Mason, 2026-10-14). The
+   floor feeds slice 0's low-margin warning; a product without one skips only that warning.
+9. **Early Bird price lists. PARKED for a later, separate plan (Mason, 2026-10-14).** From the deleted
+   design; only after slice 2.
 
-## 5. Open questions for the next iteration
+## 5. Open questions: all answered 2026-10-14
+
+Every question below now has Mason's answer (2026-10-14), shown in **bold** after it and recorded in "Decided
+so far" at the top and in `docs/manual/DECISION_LOG.md`. The questions stay for the record.
 
 From Mason's sell-price-lock decision. Facts found by the second salvage pass, read from code and not
 exercised:
@@ -252,32 +311,42 @@ exercised:
   rebuilt Convert fix must not re-price a sent quote on the way to the order.
 
 Questions:
-- **Does "locked" mean prices only, or no edits at all** once a quote is sent?
-- **When does "sent" start the lock?** On the first move to `sent`, or on every send?
-- **Can an admin unlock a sent quote**, and should that be recorded?
+- Does "locked" mean prices only, or no edits at all once a quote is sent? **Prices only.**
+- When does "sent" start the lock? **Every send:** each sent version becomes the price authority, since a
+  price-changing revision must be re-sent.
+- Can an admin unlock a sent quote, and should that be recorded? **No unlock that skips the re-send.** Prices
+  change only through "update to today's prices" in a revision, which is then re-sent.
 - **Expiry already runs automatically, but not for every quote.** Checked live 2026-10-13: the cron job
   `auto-expire-quotes` (daily at 06:05 UTC) runs `auto_expire_quotes()`. It sets `sent` and `revised` quotes
   whose `expires_at` is before the current date to `expired` and releases their stock holds. It deliberately
   skips planned quotes (`is_planned`) and quotes with any partial draw-down, which staff close by hand. So
   under the lock decision, a planned or partly drawn quote would stay price-locked until someone closes it.
-  - Should those quotes stay locked indefinitely, or does the lock need its own end?
+  - Should those quotes stay locked indefinitely, or does the lock need its own end? **Locked until staff
+    close them.**
   - **Every save resets the expiry date** (read from code 2026-10-14, not exercised). The quote screen
     sends `expires_at` = the moment of the save plus `valid_days` on every save
     (`src/pages/QuoteBuilder.tsx`, about lines 1719-1722), and `save_quote` overwrites the stored date
     with it (`supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql`, about lines
     907-908; the live `save_quote` wrapper from `20260812115237` calls that body). So editing or revising
-    a sent quote today pushes its expiry, and with it any price lock, further out. The lock design must
-    keep or change this on purpose.
-  - Does a separate 30-day stale rule matter here? The review mentioned one.
-  - After expiry, does the quote re-price on its next save, or must it be re-sent?
-- **What if cost rises above a locked price before conversion?** The below-cost check uses today's cost, so
-  converting a locked quote could be refused.
+    a sent quote today pushes its expiry, and with it any price lock, further out. **Change it: editing a
+    sent quote keeps its expiry date; only a re-send sets a new one.**
+  - Does a separate 30-day stale rule matter here? The review mentioned one. **None of the answers depend
+    on it.** The slice 2 build confirms from source whether such a rule exists and, if it does, makes it
+    follow the rules above.
+  - After expiry, does the quote re-price on its next save, or must it be re-sent? **It must be updated to
+    today's prices and re-sent; it never re-prices on its own.**
+- What if cost rises above a locked price before conversion? The below-cost check uses today's cost, so
+  converting a locked quote could be refused. **Honor the locked price; Convert needs an admin's below-cost
+  approval with a reason, recorded for review.**
 - ~~**What about a revision?**~~ **Answered 2026-10-14:** a revision keeps the locked prices, with an
   "update to today's prices" option, offered both per line and for the whole quote, plus a rewind to the
   version last quoted to the customer.
-- **What about manual price overrides and below-cost approvals** on a locked line?
-- **The cost side.** Should quote-time cost also stay locked for the margin shown, given that the
-  below-cost check today uses today's cost (a line can look profitable on screen and still be refused)?
+- What about manual price overrides and below-cost approvals on a locked line? **They are part of the locked
+  line and carry through unchanged** (follows from "prices only").
+- The cost side. Should quote-time cost also stay locked for the margin shown, given that the below-cost
+  check today uses today's cost (a line can look profitable on screen and still be refused)? **Admins see
+  both the quote-time cost and today's cost side by side; the Convert check uses today's cost with the admin
+  approval above.**
 
 Carried from the salvage review:
 - ~~**(b) Visibility.**~~ **Answered 2026-10-14:** sales reps see the last price charged to a customer; price
@@ -285,17 +354,19 @@ Carried from the salvage review:
 - ~~**Other ways to change a price (section 8).**~~ **Answered 2026-10-14:** keep inline editing on the
   Products page and the product page's pricing card for one-off fixes (Mason: "keep inline edits for one-off
   fixes"). Slice 0's required source and reason should apply to them too.
-- **Outlier band.** What counts as a suspicious change for the preview warning: for example a move of more
-  than 15% from the current price, any price below cost, or a margin under a floor?
+- ~~**Outlier band.**~~ **Answered 2026-10-14:** flag a move of more than 10% up or down, any price below
+  cost, and any margin under the product's floor; a flagged row applies only after a ticked acknowledgement
+  with a reason.
 - ~~**Price intake cadence.**~~ **Answered 2026-10-14:** download the entire sheet each time, monthly or
   mid-month. The export is valid for 7 days and a preview for 2 hours, so each change starts from a fresh
   export.
-- **(c) Which cost the quote screen shows:** quote-time cost, today's cost, or both.
-- **(d) Supplier quotes.** Who supplies fresh supplier quotes, in what order should products join the
-  per-product rollout list, and when is the rollout complete enough to flip the global switch (slice 7)?
-- **(e) Margin targets:** one per product, a company default, or seeded from past selling prices?
-- **(f) Early Bird.** The design's four open questions, including what happens when a committed price is
-  below today's cost.
+- ~~**(c) Which cost the quote screen shows.**~~ **Answered 2026-10-14:** both, side by side, for admins
+  only. Sales reps never see cost or margin.
+- ~~**(d) Supplier quotes.**~~ **Parked 2026-10-14** with slice 7, for a later, separate plan: who supplies
+  fresh supplier quotes, the rollout order, and when to flip the global switch.
+- ~~**(e) Margin targets.**~~ **Answered 2026-10-14:** one per product, no company-wide default.
+- ~~**(f) Early Bird.**~~ **Parked 2026-10-14** with slice 9, for a later, separate plan, including what
+  happens when a committed price is below today's cost.
 
 ## 6. Not verified yet
 
@@ -418,8 +489,12 @@ $900 typed for $90. The method needs a tighter review step and a few small produ
 
 **Conflicts with other parts of this plan:**
 - **The quote lock must come first (Sol's only BLOCKER).** Under today's code a mid-month workbook change
-  re-prices every sent quote on its next save and on Convert (section 7, finding 1). Slice 2 should land
-  before Mason relies on sent quotes keeping their prices.
+  re-prices every sent quote on its next save and on Convert (section 7, finding 1). **Rollout gate
+  (CodeRabbit on PR #926):** slice 0 may be built alongside slices 1-2, but it is not switched on for live price
+  changes until slice 2 is live and slice 8 has given products their margin floors (otherwise every product
+  would skip the low-margin warning; Codex on PR #926). Until then the current workbook keeps working as today, and before applying a
+  price change an admin checks the Quotes list for open sent or revised quotes that contain a changed product
+  and handles them by hand, because those quotes will re-price.
 - **Other ways to change a price still exist.** Inline editing on the Products page and the product page's
   pricing card change prices without the workbook's review. Mason keeps them for one-off fixes (2026-10-14).
 - **Stale costs.** 600 of 602 cost bases are still the original load, so margins in the sheet are measured
@@ -433,7 +508,8 @@ returns a list of discrepancies with their sources, and never edits numbers or a
 recheck the arithmetic independently. Mason or an admin resolves every exception against the original
 supplier message.
 
-**Draft monthly / mid-month routine** (to be confirmed with Mason):
+**Monthly / mid-month routine** (confirmed by Mason as written, 2026-10-14; it becomes the working checklist
+once slice 0 is live, which waits for slices 2 and 8, as described in the rollout gate above):
 1. Save the supplier message (PDF, email or text) and note its effective date.
 2. Download a fresh full price sheet. Keep the original download unedited as the dated "before" record.
 3. In a working copy, find the products the supplier changed, check the package and unit, enter the new

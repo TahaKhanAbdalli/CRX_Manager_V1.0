@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-14 — Pricing plan finished: the remaining quote-lock, cost and margin questions answered
+
+**Decision (Mason, in chat: "I want to finish the plan and goal"; each answer picked from recommended options).** The quote lock covers prices only. A price change must be re-sent before it is billed, with no admin bypass. Bookings stay locked until closed, and edits don't move the expiry date. A cost spike needs admin below-cost approval at Convert. The workbook flags moves over 10%, below-cost prices and margins under the product's own floor. Reps never see cost or margin. Margins are set per product. Supplier-cost rollout and Early Bird are parked. Field jobs from a never-sent planned quote stay as today.
+**Why.** Customers are billed only prices they were sent, without freezing legitimate edits; cost stays with admins.
+**What this forbids/implies:** once a quote is sent, every route from it to something billable takes prices from the sent version, enforced in the database. Details and the full answer list are in sections 4-5 of `docs/plans/2026-10-13-pricing-history-cost-tracking-and-quote-pricing-PLAN.md`. The plan is finished but not started.
+
 ## 2026-10-14 — Clarification: the 6e and 6g rules leave field-application billing as it is
 
 **Decision (clarifies the two 2026-10-14 entries below, "Invoices made from scratch carry no product lines" and "Products are billed only when delivered").** The 6e rule covers invoices made from scratch, as it was explained to Mason: a `misc_charge` or `chemical_sale` invoice with no order or delivery behind it. The New Invoice page makes `misc_charge` invoices, and without `?type=misc_charge` it defaults to `chemical_sale` (`src/pages/InvoiceDetail.tsx`). It does not cover field-application invoices: direct field-app, blend-ticket and completed-job invoices. For the 6g rule, chemicals applied on a field application count as delivered goods.
