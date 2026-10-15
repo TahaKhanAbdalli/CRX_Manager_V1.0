@@ -26,7 +26,7 @@ That means every quote, order, delivery, invoice and payment for the season live
 
 **Goal numbers are priorities, not a strict one-after-another order.** Three things start now, in parallel with Goal 1:
 - **Goal 6's test system and backups.** The billing, volume, offline and integration proofs in Goals 3–5 and 7 need a safe test system to run on.
-- **Goal 7's outside lead times:** the accountant's answer (6a), the QuickBooks Desktop connection test, and payment processor sign-up (6c). Each can take weeks before any code is written.
+- **Goal 7's outside lead times:** the accountant's confirmation that our Desktop version stays supported (6a), the QuickBooks Desktop connection test, and Stripe sign-up and approval (6c). Each can take weeks before any code is written.
 - **Lining up the senior developer (6d).**
 
 Sessions can run side by side only when they don't change the same database functions or migrations. Working on different screens is not enough.
@@ -36,7 +36,7 @@ Sessions can run side by side only when they don't change the same database func
 **Timeline risk: this is very tight.** From 2026-10-14 to 2027-01-01 is about 11 weeks. The Phase A estimates add up to roughly 14–25 weeks, plus about a week for the Goal 2 follow-up (its main change shipped; Mason's Supabase billing change takes minutes and is not counted), and cleanup plus handoff add another 4–7. Hitting January 1 needs early decisions, proven integrations, heavy overlap, and the work ordered by what must be ready that day. It is not yet a reliable forecast.
 
 **Checkpoints:**
-- **By 2026-10-31:** test system and backup work underway; accountant asked; payment processor and senior developer chosen.
+- **By 2026-10-31:** test system and backup work underway; accountant asked; Stripe sign-up started; senior developer chosen.
 - **By 2026-11-15:** a QuickBooks Desktop connection proven with a real invoice, a payment applied to it, and a credit, in a copy of our actual company file.
 - **By 2026-11-30:** Goals 1, 3, 5 and 6 done, and the Goal 2 follow-up (own-name on every invoice path, reps read every invoice, admin-only commission splits) shipped.
 - **By 2026-12-15:** Goals 4 and 7 done, and a test month reconciled in QuickBooks on the test system.
@@ -85,7 +85,9 @@ If a checkpoint slips, Mason gets a revised forecast straight away. Cut optional
 | 2026-10-14 | **An outage may last overnight:** CRX is back up by the next business morning. |
 | 2026-10-14 | **Mason Wells owns pesticide compliance and inventory readiness,** and runs L1–L3 himself. They need no code and are not agent-enforced gates. |
 | 2026-10-13 | **Everything is built before handoff, integrations included.** Accounting sync and online card/ACH payments are part of Phase A. |
-| 2026-10-13 | **The books stay in QuickBooks Desktop** (most company data is there today). CRX syncs to it. |
+| 2026-10-13 | **The books stay in QuickBooks Desktop** (most company data is there today). CRX syncs to it. Reaffirmed 2026-10-15 (6a). |
+| 2026-10-15 | **Stripe is the card and ACH processor** (6c). Its hosted payment page takes the card and bank details, so CRX never stores them. |
+| 2026-10-15 | **A stock shortage only warns; it never blocks a delivery** (6b). This is permanent, not an interim policy. |
 | 2026-10-13 | **All AI tooling is kept at handoff** and documented for the developer (Goal 9). |
 | 2026-10-07 | **Returns on Chem Man-billed deliveries stay allowed**, with the credit handled in Chem Man or the books. |
 | 2026-10-13 | The scalability review's verdict: **strong foundation, no rewrite; not yet ready for $10M.** |
@@ -207,7 +209,7 @@ Failed work stays visible and recoverable. The app tells the driver which steps 
   - commissions.
 
   For each one, name which system creates it, which may correct it, and how it reaches the other. Nothing is entered in both. Include the chart-of-accounts mapping and the rules for closed periods.
-- **Online card and ACH payments.** Use the processor's own hosted payment page; CRX never stores card or bank numbers. A payment link only lets the customer pay that invoice; it is not the grower portal. An invoice is marked paid only on a verified processor event, never because a browser showed a success page. Name which processor event counts as "settled", and how later bank deposits and fees reconcile.
+- **Online card and ACH payments,** through **Stripe** (Mason, 2026-10-15). Use Stripe's own hosted payment page. At sign-up, confirm that Stripe approves an agricultural chemical business and supports the ACH volume we need; CRX never stores card or bank numbers. A payment link only lets the customer pay that invoice; it is not the grower portal. An invoice is marked paid only on a verified processor event, never because a browser showed a success page. Name which processor event counts as "settled", and how later bank deposits and fees reconcile.
 - **Opening balances and cut-over:** Mason's task L3.
 
 **Done when:**
@@ -235,7 +237,7 @@ These aren't app features, but the business needs them before January 1. **Mason
 - the counts match CRX, and every accepted difference has an owner and a resolution date;
 - receiving, partial delivery, return, void, transfer and field-application use all hit the same stock records, including package conversions, damaged returns and lot tracing.
 
-Warn-only shortages stay the policy until Mason decides otherwise (6b), but every shortage has someone assigned to deal with it.
+A shortage only warns and never blocks a delivery (Mason, 2026-10-15, 6b; permanent, do not reopen). Every shortage still has someone assigned to deal with it.
 
 **L3. Opening balances and cut-over.** Chem Man's last bill is 2026-12-31 and CRX's first is 2027-01-01.
 
@@ -326,10 +328,13 @@ Each answer gets recorded with its owner, the date, and the goal it unlocks.
 
 | # | Question | Recommendation |
 |---|---|---|
-| 6a | Stay on QuickBooks Desktop long-term, or move to QuickBooks Online? Intuit has been steering new customers to Online, so ask your accountant whether your Desktop version will stay supported. Online is much easier to connect to. | Ask the accountant **now**; the developer weighs in. Goal 7 builds for Desktop unless you decide to move. |
-| 6b | When stock runs short, should a delivery warn (today) or be blocked? | Keep warn-only until the L2 stock count is clean, then decide. |
-| 6c | Which card/ACH processor? It has to accept an agricultural chemical business and support card and ACH, refunds, returns, reliable notifications and the chosen QuickBooks route. | Pick one and start sign-up **in October**. Compare approval time, all fees, ACH limits, payout timing, reserves, dispute handling and support, not only ACH fees. |
-| 6d | Who is the senior developer, what will they charge, and can they hold time for the final review and launch support? | Engage them **in October** for early advice on QuickBooks Desktop, payments and backups. The formal handoff still waits for the finished build and cleanup. |
+| 6d | Who is the senior developer, what will they charge, and can they hold time for the final review and launch support? Not known yet (Mason, 2026-10-15). | Engage them **in October** for early advice on QuickBooks Desktop, payments and backups. The formal handoff still waits for the finished build and cleanup. |
+
+**Answered 2026-10-15** (now in section 4 and `DECISION_LOG.md`):
+- 6a: stay on QuickBooks Desktop (Mason: "we will stay with desktop quickbooks i imagine"). Goal 7 builds for Desktop. Still ask the accountant to confirm our Desktop version stays supported, since Intuit has been steering customers to Online.
+- 6b: a stock shortage only warns and never blocks a delivery. Permanent.
+- 6c: Stripe is the card and ACH processor.
+
 **Answered 2026-10-14** (now in section 4 and `DECISION_LOG.md`):
 - 6e: invoices made from scratch on the New Invoice page carry no product lines, only service or misc charges. Field-application, blend-ticket and job invoices are not covered.
 - 6f: Chem Man's last bill is 2026-12-31.
