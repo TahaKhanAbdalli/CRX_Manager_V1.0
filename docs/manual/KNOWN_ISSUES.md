@@ -332,8 +332,11 @@ leave these open:
 - **An invoice made from scratch (no order, no delivery) can name any product and quantity**
   (pre-existing; found in the PR #889 security review, 2026-10-10). The New Invoice page creates
   `misc_charge` invoices with no order link, so neither the delivery cap nor the order/delivery
-  overlap guard can see them. **Decided 2026-10-14 (Mason, "confirm 6e"):** orderless invoices
-  carry no product lines, only service or misc charges (`DECISION_LOG.md`). Still open until Goal 3
+  overlap guard can see them. **Decided 2026-10-14 (Mason, "confirm 6e"):** a `misc_charge` or `chemical_sale`
+  invoice with no order or delivery behind it (the New Invoice page's two types)
+  carries no product lines, only service or misc charges; field-application,
+  blend-ticket and job invoices (`invoices.invoice_type = 'field_application'`) keep their chemical lines
+  (`DECISION_LOG.md`), and so do credit memos (return credits). Still open until Goal 3
   of `docs/plans/2026-10-13-direction-and-goals.md` enforces it in the database.
 - **The integrity checks page by offset, not by a snapshot.** Their reads (and the
   `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
