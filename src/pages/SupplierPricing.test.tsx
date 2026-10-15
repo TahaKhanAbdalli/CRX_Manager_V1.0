@@ -91,6 +91,22 @@ function renderSupplierPricing() {
   );
 }
 
+// The Linked Product select is on screen, empty, before the supplier workspace
+// loads. Under CI load a test that picks a link as soon as the select appears
+// picks from an empty list and then clicks a still-disabled Stage button, so the
+// staging under test never starts (CI, PR #927). Pick only once the link's
+// option exists and loading has finished, and prove the pick took.
+async function chooseQuickQuoteLink(linkId: string) {
+  const linkedProduct = await screen.findByLabelText('Linked Product');
+  await waitFor(() => {
+    expect(linkedProduct.querySelector(`option[value="${linkId}"]`)).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Stage quick quote' })).toBeEnabled();
+  });
+  fireEvent.change(linkedProduct, { target: { value: linkId } });
+  expect(linkedProduct).toHaveValue(linkId);
+  return linkedProduct;
+}
+
 function makeImportSummary(
   id: string,
   vendorName: string,
@@ -628,9 +644,8 @@ describe('SupplierPricing page', () => {
     mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
 
     renderSupplierPricing();
-    const linkedProduct = await screen.findByLabelText('Linked Product');
+    const linkedProduct = await chooseQuickQuoteLink(link.id);
     expect(screen.getByRole('option', { name: /SKU: EXACT-SKU.*Supplier SKU: SUP-1/ })).toBeInTheDocument();
-    fireEvent.change(linkedProduct, { target: { value: link.id } });
     fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
 
     mockStageSupplierPriceImport.mockClear();
@@ -682,8 +697,7 @@ describe('SupplierPricing page', () => {
     mockGetWorkspace.mockResolvedValueOnce(initial).mockReturnValueOnce(pendingRefresh);
 
     renderSupplierPricing();
-    const linkedProduct = await screen.findByLabelText('Linked Product');
-    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    const linkedProduct = await chooseQuickQuoteLink(link.id);
     fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
 
     mockStageSupplierPriceImport.mockClear();
@@ -741,8 +755,7 @@ describe('SupplierPricing page', () => {
     mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
 
     const { container } = renderSupplierPricing();
-    const linkedProduct = await screen.findByLabelText('Linked Product');
-    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    const linkedProduct = await chooseQuickQuoteLink(link.id);
     fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
     const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
     expect(pdfInput).not.toBeNull();
@@ -812,8 +825,7 @@ describe('SupplierPricing page', () => {
     mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
 
     const { container } = renderSupplierPricing();
-    const linkedProduct = await screen.findByLabelText('Linked Product');
-    fireEvent.change(linkedProduct, { target: { value: firstLink.id } });
+    const linkedProduct = await chooseQuickQuoteLink(firstLink.id);
     fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
     const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
     expect(pdfInput).not.toBeNull();
@@ -882,8 +894,7 @@ describe('SupplierPricing page', () => {
     );
 
     const { container } = renderSupplierPricing();
-    const linkedProduct = await screen.findByLabelText('Linked Product');
-    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    await chooseQuickQuoteLink(link.id);
     fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
     const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
     expect(pdfInput).not.toBeNull();
