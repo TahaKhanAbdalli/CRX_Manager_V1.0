@@ -719,8 +719,31 @@ archive. They are listed here so the open part of this file shows them. None was
   2026-10-13 (Mason: reps work with ANY customer, `DECISION_LOG.md`):** the customer-scope half
   below is no longer a gap: a rep may bill any customer, and `20261013220000_reps_work_any_customer`
   removes the matching `CUSTOMER_SCOPE_DENIED` from `save_invoice`, `post_invoice` and
-  `post_invoice_group` instead. The **salesperson half stays OPEN** and is the next change (reps
-  bill only under their own name, admins unrestricted). Original record, in
+  `post_invoice_group` instead. **Salesperson half: fix written as
+  `20261014210000_order_invoices_rep_own_name` (Mason chose it 2026-10-14). It applies live with its
+  PR, before the merge; `docs/reference/migration-history.md` row 945 is the apply record, and it is
+  not in force until that row says APPLIED.** Both public wrappers refuse a non-admin caller whose
+  effective salesperson, `COALESCE(p_salesman_id, orders.salesman_id)`, is someone else, with
+  `SALESMAN_SCOPE_DENIED`; a NULL salesperson is accepted only on the caller's own order or one with
+  no salesperson (Sol on PR #928). The one exception (Mason, 2026-10-14, "Option A"):
+  `complete_delivery`'s automatic split marks its own NULL-salesperson call with the transaction-local
+  setting `crx.order_invoice_autosplit`, so a rep completing another rep's delivery still gets split
+  drafts under the order's salesperson. The app always sends the signed-in profile. The split wrapper also gained the
+  CRX-LIFE-001 type allow-list before its claim (a refused `field_application` split no longer draws
+  an invoice number) and now requires its idempotency key. Remaining, not fixed here:
+  - **Order and blend-ticket salesperson (OPEN follow-up for Goal 2's "own-name everywhere").** Read live 2026-10-14: the `orders` INSERT policy is
+    `is_admin() OR is_sales_rep()` with no salesperson condition, and `blend_tickets_office_update`
+    lets any active rep UPDATE `blend_tickets.salesman_id` (authenticated holds UPDATE on that
+    column); `create_order_from_blend_ticket` copies it onto the order, and
+    `create_invoice_from_blend_ticket` writes it onto the invoice with no own-name test. The order
+    RPCs no longer accept a rep's NULL on another rep's order, but a rep can still record another
+    salesperson on an order or blend ticket (where commissions read it), and the blend-ticket invoice
+    path still invoices under the ticket's salesperson. The fix belongs on the order and blend-ticket
+    writers (a rep names only themselves).
+  - The split wrapper still passes a NULL key to its implementation, so on an order with no field
+    allocations it still raises `IDEMPOTENCY_KEY_REQUIRED` (pre-existing, unreachable from the app).
+
+  Original record (history), in
   `create_invoice_from_order` and `create_split_invoices_from_order`, whose only gate is
   `is_admin() OR is_sales_rep()`:
   - **Customer scope (intended since 2026-10-13, not a gap).** They never check that the order's
@@ -733,7 +756,7 @@ archive. They are listed here so the open part of this file shows them. None was
     field-billing child tables, plus `get_customer_balance_listing` and `get_field_profitability`),
     so naming another profile grants that profile read access to the invoice. Sales reports and
     commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
-  **Next change (Mason, 2026-10-06, narrowed 2026-10-13).** Intended rule: reps bill any customer,
+  **Next change (history: done by `20261014210000`; Mason, 2026-10-06, narrowed 2026-10-13).** Intended rule: reps bill any customer,
   but only under their own name; admins unrestricted. Fix in a separate reviewed migration: refuse
   a non-admin caller whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
   the split RPC. That change re-emits the split wrapper, so it also adds the CRX-LIFE-001 type
@@ -741,7 +764,7 @@ archive. They are listed here so the open part of this file shows them. None was
   allocated order fails on the table CHECK only after its first INSERT has drawn an invoice number
   from the sequence, so each such refused call (never sent by the app) leaves a numbering gap
   (Codex GitHub review on PR #885). (See CRX-LIFE-001.)
-  **Update 2026-10-13: neither planned change will carry the allow-list.** On 2026-10-09 Mason chose
+  **Update 2026-10-13 (history; superseded by `20261014210000`, which carries it): neither planned change will carry the allow-list.** On 2026-10-09 Mason chose
   admin-only invoicing (PR #902) instead of the rep-scoping change; #902 was closed unmerged on 2026-10-13,
   when he decided reps invoice any customer (`DECISION_LOG.md`, 2026-10-13). That decision drops only the
   customer-assignment half of rep scoping. The own-name half stays the intended rule (a rep should name
@@ -749,7 +772,7 @@ archive. They are listed here so the open part of this file shows them. None was
   "Salesperson" and "Next change" above. PR #902 had re-emitted the split wrapper without the allow-list. The ready code
   (`ORDER_INVOICE_TYPE_NOT_ALLOWED`, before any number is drawn) is in migration `20261008120000`, about
   lines 339-344, on the kept branch `claude/rep-scope-order-invoices`. Whichever change next re-emits the
-  split wrapper should add it.
+  split wrapper should add it. **Done 2026-10-14 by `20261014210000` (see above).**
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,

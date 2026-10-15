@@ -410,10 +410,13 @@ BEGIN
    WHERE id = v_oitem;
   PERFORM set_config('app.admin_override', 'false', true);
 
-  -- CRX-LIFE-001 (20261006200000): the split engine inserts its per-customer
-  -- invoices directly, so the invoices CHECK is what refuses a field_application
-  -- split; nothing it wrote (invoices, claim, provenance) survives. FAIL-FIRST:
-  -- before that migration this call creates order-backed field invoices.
+  -- CRX-LIFE-001: a field_application split is refused and nothing it wrote
+  -- (invoices, claim, provenance) survives. FAIL-FIRST: before 20261006200000 this
+  -- call creates order-backed field invoices. From 20261006200000 the invoices
+  -- CHECK refuses its first direct INSERT; from 20261014210000 the wrapper refuses
+  -- the type first, before any invoice number is drawn. Either refusal passes here;
+  -- smoke-order-invoice-rep-own-name.sql proves the earlier one and
+  -- smoke-order-invoice-type-gate.sql proves the CHECK.
   SELECT count(*) INTO v_invoice_count FROM public.invoices WHERE order_id = v_order;
   BEGIN
     PERFORM public.create_split_invoices_from_order(
@@ -424,7 +427,9 @@ BEGIN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT, v_state = RETURNED_SQLSTATE,
                             v_constraint = CONSTRAINT_NAME;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_state <> '23514' OR v_constraint IS DISTINCT FROM 'invoices_field_application_has_no_order' THEN
+    IF v_state <> '23514'
+       OR NOT (v_constraint IS NOT DISTINCT FROM 'invoices_field_application_has_no_order'
+               OR v_err LIKE 'ORDER_INVOICE_TYPE_NOT_ALLOWED:%') THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
         v_state, v_constraint, v_err;
     END IF;

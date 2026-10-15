@@ -21,6 +21,7 @@ DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_product uuid;
+  v_pricing jsonb;
   v_field uuid;
   v_order uuid;
   v_order_item uuid;
@@ -138,12 +139,38 @@ BEGIN
   VALUES ('[SMOKE] Offline Receipt Farm ' || v_suffix)
   RETURNING id INTO v_customer;
 
+  -- A product is born pricing-free (PRODUCT_PRICING_GOVERNED_PATH_REQUIRED), so price the
+  -- shell through the governed preview/apply path the app uses (the smoke-return-credit-chain.sql
+  -- pattern; repaired 2026-10-14).
   INSERT INTO public.products (
-    product_name, unit_size, current_cost, epa_registration, product_form
+    product_name, unit_size, epa_registration, product_form
   ) VALUES (
     '[SMOKE] Offline Receipt Product ' || v_suffix,
-    'GL', 6, '[SMOKE]-EPA-' || v_suffix, 'liquid'
+    'GL', '[SMOKE]-EPA-' || v_suffix, 'liquid'
   ) RETURNING id INTO v_product;
+  v_pricing := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+      'new_cost', '6.00', 'tier1_price', '10.00', 'tier2_price', '10.00', 'tier3_price', '10.00'
+    )),
+    v_admin,
+    '[SMOKE] offline-pricing-preview-' || v_suffix
+  );
+  IF v_pricing->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_pricing->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_pricing;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_pricing->>'change_set_id')::uuid,
+    v_pricing->>'request_fingerprint',
+    v_admin,
+    '[SMOKE] offline-pricing-apply-' || v_suffix
+  );
+  IF (SELECT current_cost FROM public.products WHERE id = v_product) IS DISTINCT FROM 6.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price the product';
+  END IF;
 
   INSERT INTO public.inventory (
     product_id, location, quantity_available, quantity_prebooked, unit_size

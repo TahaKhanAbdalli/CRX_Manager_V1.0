@@ -1051,12 +1051,19 @@ BEGIN
   -- Existing production history includes completed unbilled deliveries whose
   -- otherwise fulfilled parent orders were soft-deleted. Only the canonical
   -- writer/poster may recover that exact delivered quantity; no capability may
-  -- remain after either wrapper returns.
+  -- remain after either wrapper returns. The order is soft-deleted only after its
+  -- delivery completes, as in that history: since 20261007150050 a deleted order's
+  -- lines and deliveries are locked (ORDER_DELETED_LINES_LOCKED). That history also
+  -- predates ORDER_MUST_BE_TERMINAL_BEFORE_DELETE (a fulfilled order can no longer be
+  -- soft-deleted), so only a role that may bypass triggers can rebuild it: hosted live
+  -- smoke roles skip this whole deleted-order recovery section, which the disposable
+  -- superuser proof runs.
+  IF v_can_bypass_triggers THEN
   INSERT INTO public.orders (
-    order_number, customer_id, order_date, status, booking_draw, deleted_at
+    order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
     'E2E-LIFE-DELETED-' || v_suffix, v_customer, v_today,
-    'fulfilled', false, now()
+    'fulfilled', false
   ) RETURNING id INTO v_deleted_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -1081,6 +1088,9 @@ BEGIN
   UPDATE public.deliveries
      SET status = 'completed', completed_at = now(), signed_by = '[E2E] Historical Receiver'
    WHERE id = v_deleted_delivery;
+  PERFORM set_config('session_replication_role', 'replica', true);
+  UPDATE public.orders SET deleted_at = now() WHERE id = v_deleted_order;
+  PERFORM set_config('session_replication_role', 'origin', true);
 
   -- The trusted writer must reject corrupt historical quantity even if a
   -- privileged test fixture bypasses the normal completed-delivery immutability
@@ -1226,6 +1236,7 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong deleted recovery item guard error: %', v_err;
     END IF;
   END;
+  END IF;  -- v_can_bypass_triggers: deleted-order recovery section
 
   -- Reversed write-offs remain historical rows but must not appear as active
   -- customer credits in transaction review.
