@@ -70,9 +70,14 @@ describe('BelowCostApprovalProvider', () => {
 
     const confirm = screen.getByText('Approve and Retry').closest('button')!;
     expect(confirm).toBeDisabled();
+    // The dialog clears its reason in an effect on open that React 19 may still
+    // have queued here; it moves focus inside itself only after that effect, so
+    // a reason typed before then could be wiped (see QuoteBuilder.test.tsx).
+    await waitFor(() => expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement));
     fireEvent.change(screen.getByLabelText('Approval reason (required)'), {
       target: { value: '  approved competitor match  ' },
     });
+    expect(confirm).toBeEnabled();
     fireEvent.click(confirm);
 
     await waitFor(() => expect(screen.getByText('saved')).toBeInTheDocument());

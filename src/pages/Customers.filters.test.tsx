@@ -189,12 +189,23 @@ describe('Customers list filters', () => {
     expect(screen.getByText('Active Unassigned Farm')).toBeInTheDocument();
   });
 
+  // The two cap tests must render a full 1,000-row page — fewer rows could not
+  // tell the count-based check from the page-length fallback. That render is
+  // genuinely heavy (~0.3s locally, ~10x that on a busy CI runner), and every
+  // whole-document getByText/queryByText walk over it costs another ~0.1s, so
+  // they wait on the row count and read the warning from the page text once,
+  // and get a timeout sized for the render instead of the 5s default.
+  const FULL_PAGE_TIMEOUT_MS = 20_000;
+  const waitForFullPage = () =>
+    waitFor(() => expect(document.querySelectorAll('tbody tr')).toHaveLength(1000), { timeout: FULL_PAGE_TIMEOUT_MS });
+
   it('warns instead of silently truncating when there are more customers than the cap', async () => {
     const capped = Array.from({ length: 1000 }, (_, i) => customer({ id: `c-${i}`, farm_name: `Farm ${i}` }));
     mockTables(capped, 1500);
     renderCustomers();
-    expect(await screen.findByText(/this list is truncated/)).toBeInTheDocument();
-  });
+    await waitForFullPage();
+    expect(document.body).toHaveTextContent('this list is truncated');
+  }, FULL_PAGE_TIMEOUT_MS);
 
   // A full page is not the same fact as a truncated one. A book of exactly the cap
   // returns every customer there is, so warning would tell Mason rows are hidden
@@ -203,9 +214,9 @@ describe('Customers list filters', () => {
     const exact = Array.from({ length: 1000 }, (_, i) => customer({ id: `c-${i}`, farm_name: `Farm ${i}` }));
     mockTables(exact, 1000);
     renderCustomers();
-    await screen.findByText('Farm 0');
-    expect(screen.queryByText(/this list is truncated/)).not.toBeInTheDocument();
-  });
+    await waitForFullPage();
+    expect(document.body).not.toHaveTextContent('this list is truncated');
+  }, FULL_PAGE_TIMEOUT_MS);
 
   it('does not warn about truncation below the cap', async () => {
     renderCustomers();
