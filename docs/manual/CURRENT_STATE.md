@@ -1,8 +1,10 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-15 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 17:28 UTC: 1029 rows / 1022 names,
-`max(version)` `20261015163041` = `20261015130000_orders_blend_tickets_rep_own_name`, applied
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 19:36 UTC: 1030 rows / 1023 names,
+`max(version)` `20261015193420` = `20261015200000_quotes_rep_own_name`, applied 2026-10-15
+19:34:20 UTC; the 17:28 UTC read before it had 1029 rows / 1022 names, `max(version)`
+`20261015163041` = `20261015130000_orders_blend_tickets_rep_own_name`, applied
 2026-10-15 16:30:41 UTC, after `20261014220000_rup_register_admin_only` at 13:55:05 UTC; the
 12:32 UTC read before them had 1027 rows / 1020 names, `max(version)` `20261015080515` =
 `20261014210000_order_invoices_rep_own_name`, applied 2026-10-15 08:05:15 UTC; the 2026-10-14
@@ -16,10 +18,13 @@ ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-15)
 
-- **Effective ordering high-water: `20261015130000_orders_blend_tickets_rep_own_name`**
-  (ledger version `20261015163041`, UTC; applied live 2026-10-15 16:30 UTC on Mason's approval, PR
-  #933 merged as `b2203fd82`; read-only ledger read 2026-10-15 17:28 UTC: 1029 rows / 1022 names).
-  Before it, `20261014220000_rup_register_admin_only` (ledger `20261015135505`, applied 2026-10-15
+- **Effective ordering high-water: `20261015200000_quotes_rep_own_name`**
+  (ledger version `20261015193420`, UTC; applied live 2026-10-15 19:34 UTC on Mason's approval, PR
+  #938 merged as `1673d5b58`; read-only ledger read 2026-10-15 19:36 UTC: 1030 rows / 1023 names).
+  PR #929's open candidate `20261015170000` now sorts below it and must be re-stamped before it can
+  apply. Before it, `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`,
+  applied 2026-10-15 16:30 UTC, PR #933 merged as `b2203fd82`),
+  `20261014220000_rup_register_admin_only` (ledger `20261015135505`, applied 2026-10-15
   13:55 UTC, PR #927 merged as `dd2bda843`) and `20261014210000_order_invoices_rep_own_name` (ledger
   `20261015080515`, applied 08:05 UTC from PR #928, merged as `7cd781f77`). Before those,
   `20261014150000_products_tier_price_cent_scale` (ledger `20261014150257`, applied 2026-10-14 from
@@ -60,7 +65,8 @@ ships or quarterly, whichever comes first.
   `20261014210000_order_invoices_rep_own_name` (`20261015080515`); then, from PR #927 (merged as
   `dd2bda843`; 2026-10-15 UTC), `20261014220000_rup_register_admin_only` (`20261015135505`); then,
   from PR #933 (merged as `b2203fd82`; 2026-10-15 UTC),
-  `20261015130000_orders_blend_tickets_rep_own_name` (`20261015163041`).
+  `20261015130000_orders_blend_tickets_rep_own_name` (`20261015163041`); then, from PR #938 (merged
+  as `1673d5b58`; 2026-10-15 UTC), `20261015200000_quotes_rep_own_name` (`20261015193420`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -71,8 +77,9 @@ ships or quarterly, whichever comes first.
 - **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-14 17:28 UTC
   on PR #921, after `20261014150000`; on 2026-10-15 it was brought to live by delta (the applied names
   `20261014210000_order_invoices_rep_own_name`, `20261014220000_rup_register_admin_only` and
-  `20261015130000_orders_blend_tickets_rep_own_name`, and `migrations_high_water` `20261015163041`;
-  those migrations changed function bodies, grants, one RLS policy and two triggers, none of which the
+  `20261015130000_orders_blend_tickets_rep_own_name` and `20261015200000_quotes_rep_own_name`, and
+  `migrations_high_water` `20261015193420`;
+  those migrations changed function bodies, grants, one RLS policy and three triggers, none of which the
   registry tracks, and the ledger shows no other apply since the full refresh).
   Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on

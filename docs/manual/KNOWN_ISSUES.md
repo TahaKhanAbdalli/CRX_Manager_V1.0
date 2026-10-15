@@ -1,10 +1,13 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-15 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-15 17:28 UTC; the two changes since the 12:32 UTC read are that
+`execute_sql`, 2026-10-15 19:36 UTC; the one change since the 17:28 UTC read is that
+`20261015200000_quotes_rep_own_name` (ledger `20261015193420`, PR #938 merged as `1673d5b58`) is now
+applied, which re-certified the quote salesperson entry below. In the 17:28 UTC read, the two changes
+since the 12:32 UTC read were that
 `20261014220000_rup_register_admin_only` (ledger `20261015135505`, PR #927 merged as `dd2bda843`) and
 `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`, PR #933 merged as
-`b2203fd82`) are now applied, which re-certified the order and blend-ticket salesperson entry below.
+`b2203fd82`) had applied, which re-certified the order and blend-ticket salesperson entry below.
 In the 12:32 UTC read, the one change since the 2026-10-14 17:28 UTC read was that
 `20261014210000_order_invoices_rep_own_name` (ledger `20261015080515`, PR #928 merged as `7cd781f77`)
 had applied, which re-certified the order-invoice salesperson entry below. The 2026-10-14 17:28 UTC
@@ -785,13 +788,17 @@ archive. They are listed here so the open part of this file shows them. None was
     names someone else. Read live 2026-10-15: no screen writes either column, every order RPC but
     `create_order_from_blend_ticket` inserts it as NULL, all live orders have it NULL, and no blend
     tickets exist, so no screen changes behavior.
-  - **Quote salesperson (DECIDED 2026-10-15, fix pending apply).** `quotes_insert`/`quotes_update`
+  - **Quote salesperson: RESOLVED 2026-10-15 by `20261015200000_quotes_rep_own_name`, applied live
+    19:34 UTC on Mason's approval; PR #938 merged as `1673d5b58`; `docs/reference/migration-history.md`
+    row 948 is the apply record (re-checked read-only 19:36 UTC: rollover md5 matches the post pin,
+    the trigger is enabled, the guard is SECURITY INVOKER with EXECUTE for `postgres` only). The
+    deferred rollover-edit note at the end of this entry is still open.** The record below is kept
+    as history. `quotes_insert`/`quotes_update`
     do not test `quotes.salesman_id`, so a rep can record another rep on a quote they created.
     Nothing reads it for access or money today (quote-to-order does not copy it), but
     `rollover_quote_to_season` copies it to the new season's quote. Mason, 2026-10-15: "quotes
     follow the own-name rule. On season rollover, keep the original rep on the new quote."
-    `20261015200000_quotes_rep_own_name` (migration-history row 948; in force once that row says
-    APPLIED) adds trigger `quotes_guard_rep_salesman_20261015` with the orders rule, and
+    `20261015200000_quotes_rep_own_name` (migration-history row 948, applied) adds trigger `quotes_guard_rep_salesman_20261015` with the orders rule, and
     `rollover_quote_to_season` marks its own insert (`crx.quote_rollover_source` = the source
     quote), so the new quote keeps the source quote's salesperson and nothing else can claim that.
     Left as is (pre-existing, no money or access effect today): any rep may roll over any rep's
