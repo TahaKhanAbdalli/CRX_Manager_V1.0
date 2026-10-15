@@ -34,7 +34,7 @@ Example: "Delivered YTD" means total delivered since October 1 of the current se
 ```
 Net Position = quantity_available - quantity_prebooked + on_order
 ```
-**This is the only formula used for the user-visible "Net Position" number.** The InventoryPage column, the dashboard summary, the order-creation warnings (`create_direct_order`, `convert_quote_to_order`), and the field-app preview all read this same number from the same RPC: `get_inventory_position()` (Wave B.3, migration 20260507150000).
+**This is the only formula used for the user-visible "Net Position" number.** The InventoryPage column, the dashboard summary and the field-app preview read this number from the same RPC: `get_inventory_position()` (Wave B.3, migration 20260507150000). The order-creation warnings (`create_direct_order`, `convert_quote_to_order`, the booking draw-down, `bulk_import_order`, `create_rush_order`) compute the same formula inside their own transaction from the `inventory` row, so their `on_order` term is the stored `inventory.quantity_on_order` column, not the RPC's open-PO sum.
 
 Holds and planned-quote demand are **not** subtracted from Net Position. They are reported in their own "Planned" column. Mixing them in confused users in the past (audit findings P4-1 + P4-2) — three different formulas on the same page meant a sales rep could read "12 free" from one column and be warned "would go negative" from another. One formula now, period.
 
@@ -46,15 +46,16 @@ The manual-hold creation modal warns when `Today's Free - new hold qty < 0`. Net
 
 ### On Order (incoming from suppliers)
 ```
-On Order = SUM(quantity_ordered - quantity_received) from open POs
+On Order = SUM(GREATEST(quantity_ordered - quantity_received, 0)) from open POs
 ```
-Only POs with status `submitted` or `partially_received` count.
+Only POs with status `submitted` or `partially_received` count, and an over-received line counts as 0, not a negative.
 
 ### Low Stock Alert
 ```
-Low Stock = quantity_available <= reorder_point
+Low Stock = (reorder_point > 0 AND quantity_available <= reorder_point)
+            OR quantity_available < 0
 ```
-Products at or below their reorder point show a low-stock badge.
+A product with a reorder point above 0 shows the low-stock badge at or below it. Negative stock is always low, whether or not a reorder point is set. `get_inventory_position()` returns this as `is_low_stock`.
 
 ### Total on Floor
 ```
@@ -63,10 +64,12 @@ Total on Floor = quantity_available (what's physically in the warehouse)
 
 ### Delivered YTD (season-based)
 ```
-Delivered YTD = SUM(quantity) from inventory_transactions
-  WHERE transaction_type = 'delivered'
-  AND created_at >= season start date (October 1)
+Delivered YTD = GREATEST(
+    SUM(delivered) - SUM(cancelled_delivery_reversal + void_delivery_reversal), 0)
+  from inventory_transactions linked to a delivery
+  WHERE the delivery's business date >= season start date (October 1)
 ```
+The business date is the delivery's `completed_at` (or the ledger row's `created_at` when it has none) in Chicago time. A reversal counts against the season of the delivery it reverses. An order voided with `void_order` drops out entirely: all of that order's delivered volume for the product is excluded.
 
 ---
 
@@ -77,14 +80,14 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
 | Type | When used | Effect on quantity_available |
 |------|-----------|------------------------------|
 | `received` | PO items are received | + (increases stock) |
-| `booked` | Inventory hold is created (quote planned) | No change to quantity_available (tracked via holds) |
+| `booked` | An order is created and its lines are pre-booked, by every order-creation path except quick delivery: quote conversion, direct order, rush order, bulk import, blend-ticket order and booking draw-down. Inventory holds write no ledger row | No change to quantity_available (adds to quantity_prebooked) |
 | `delivered` | Delivery is completed | - (decreases stock) |
 | `returned` | Customer return is received back | + (increases stock, if restocked) |
 | `adjusted` | Manual inventory adjustment or cycle count variance | +/- (can go either direction) — **see caveat below** |
-| `transferred` | Stock moved between warehouses | +/- (decrease at source, increase at destination) |
+| `transferred` | Allowed by the type check and shown in the ledger, but no current code writes it (there is no warehouse-transfer function) | +/- if ever used (decrease at source, increase at destination) |
 | `job_applied` | Product applied during a job or field application (incl. blend-ticket applications) | - (decreases stock) |
-| `prebooked` | Order created, inventory reserved | No change to quantity_available (tracked via prebooked) |
-| `released` | Order cancelled or fulfilled, prebooked inventory released | No change to quantity_available (tracked via prebooked) |
+| `prebooked` | A quick delivery creates its order, or an order edit adds a line or raises a quantity | No change to quantity_available (adds to quantity_prebooked) |
+| `released` | An order is cancelled or voided (its undelivered remainder), an order edit removes or lowers a line, or a quick delivery is cancelled. Completing a delivery lowers quantity_prebooked without a `released` row | No change to quantity_available (reduces quantity_prebooked) |
 | `prebook_reconciliation` | Data-fix correction of `quantity_prebooked` only (added 2026-06-10) | **No change to quantity_available** (prebooked-only) |
 | `cancelled_delivery_reversal` | Cancelled delivery restores inventory | + (increases stock) |
 | `void_delivery_reversal` | Voided delivery restores inventory | + (increases stock) |
@@ -126,9 +129,9 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
 
 ### Critical rule: All inventory math happens in the database, NOT in React.
 
-Inventory calculations are done in PostgreSQL RPCs and triggers. The React frontend only displays results — it never calculates stock levels itself.
+Inventory calculations are done in PostgreSQL RPCs and triggers. The React frontend only displays results — it never calculates an authoritative stock level itself. Some screens do compute warning-only figures in the browser from raw inventory columns; known cases include the manual-hold preview "Today's Free" (above), the Deliveries page shortage badge (`quantity_available` only) and the New Delivery stock warning (available minus prebooked). They only warn: whatever is saved comes from the database, and `create_inventory_hold()` recomputes free stock there before it saves a hold.
 
-The single source of truth for inventory math is the `get_inventory_position()` RPC (added in Wave B.3, migration 20260507150000). It returns one row per (product, location) for active products with `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), and the computed `net_position`. **Don't add a parallel inventory aggregation in another file; if you need numbers, call this RPC.**
+The single source of truth for inventory math is the `get_inventory_position()` RPC (added in Wave B.3, migration 20260507150000). It returns a JSON array with one row per inventory row of an active product, plus one row for an active product that has no inventory row but has stock on open POs (that row has a null `inventory_id` and `location`); an active product with neither gets no row. Each row has `inventory_id`, `product_id`, `product_name`, `inventory_unit`, `container_size`, `container_type`, `vendor`, `current_cost`, `location`, `unit_size`, `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `job_holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), the computed `net_position`, `reorder_point`, `min_stock_level` and `is_low_stock`. **Don't add a parallel inventory aggregation in another file; if you need numbers, call this RPC.** Known exceptions are the stock checks inside write RPCs, which compute their numbers inline in their own transaction instead of calling this RPC. The order-creation RPCs (`create_direct_order`, `convert_quote_to_order`, the booking draw-down, `bulk_import_order` and `create_rush_order`) use the Net Position formula from the `inventory` row (see Net Position above). `create_quick_delivery()` locks the row and uses `quantity_available - quantity_prebooked`, deliberately leaving out on-order stock because the product leaves today. `convert_quote_to_order`, the draw-down and `bulk_import_order` lock that row first; `create_direct_order` and `create_rush_order` read it without a lock. Existing display and reporting code does not all follow the rule yet. Known cases: `get_inventory_forecast()` (Forecast tab) returns product/month forecast rows, so it reads the same supply columns itself (see the note below); `get_inventory_cost_report()` (Reports page) aggregates on its own; and several screens compute warning-only figures in the browser (see above, plus the pick-list shortages on Orders and Order Detail and the on-hand warning on Delivery Detail). New display or reporting code must still call this RPC.
 
 Note: `get_inventory_forecast()` (Forecast tab) computes the same supply numbers (`current_available`, `prebooked`, `on_order`) using the same column definitions, so the two views are already consistent. A future cleanup could DRY the supply math by having `get_inventory_forecast` call `get_inventory_position` internally; today both functions just read the same source columns identically.
 
@@ -145,10 +148,10 @@ Holds reserve inventory for planned quotes without actually deducting stock.
 - `is_active` — whether the hold is currently in effect
 
 ### How holds work
-1. Quote is marked `is_planned = true`
+1. Quote is marked `is_planned = true` while it is `draft`, `sent` or `revised`
 2. System creates `inventory_holds` records for each quote item
 3. Holds reduce "Today's Free" but NOT `quantity_available` (and not Net Position)
-4. When quote is accepted and converted to order, holds are released
+4. Holds are released when the quote is accepted (including by conversion to an order), declined, expired, cancelled or closed, or when `is_planned` is switched off
 5. Expired holds (past `expires_at`) are no longer counted
 
 ### Manual holds — server-side validated (P4-3, 2026-05-07)

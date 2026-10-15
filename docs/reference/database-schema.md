@@ -369,15 +369,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | RPC only |
 | product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | RPC only | RPC only |
 | product_cost_basis_rollout *(live Wells canary)* | RPC only | RPC only | RPC only | RPC only |
-| customers | Admin / Sales Rep (assigned) / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned) | Admin / Sales Rep (assigned) | Admin |
-| customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
+| customers | Admin / Sales Rep / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned to themselves) | Admin / Sales Rep (any customer). For a sales rep only (admins skip these checks), `customers_guard_rep_edit_20261013` refuses reassignment, a default commission split change unless they are the assigned rep, deactivating a customer with a posted or overdue invoice (`CUSTOMER_HAS_OPEN_INVOICES`), and a direct `prepay_balance_cents` change (`PREPAY_BALANCE_SERVER_ONLY`) | Admin |
+| customer_addresses | All authenticated | Admin / Sales Rep by policy, but `authenticated` holds no INSERT grant (`save_customer` writes addresses) | Admin / Sales Rep by policy, but no UPDATE grant either | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
 | quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
 | quote_versions | Admin / Sales Rep | - for browser roles (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`; `service_role` and `postgres` retain direct write grants and bypass RLS) | - (same scope) | - (same scope) |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| order_items | Admin / Sales Rep | Admin / Sales Rep | Admin (sales reps edit order lines only through `update_order_items()`, never by direct UPDATE) | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
 | inventory_holds | All authenticated | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |

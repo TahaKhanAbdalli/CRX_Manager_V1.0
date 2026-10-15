@@ -7,8 +7,10 @@ Complete reference for the business pipeline from quoting a customer through del
 ## Pipeline Overview
 
 ```
-Quote (draft) -> Send -> Accept -> Convert to Order -> Create Delivery -> Confirm -> Complete -> Invoice -> Payment
+Quote (draft) -> Send -> [Accept, optional] -> Convert to Order -> Create Delivery -> Confirm -> Complete -> Invoice -> Payment
 ```
+
+A separate Accept step is optional: `convert_quote_to_order()` converts a `sent`, `revised` or `accepted` quote and marks it `accepted` itself.
 
 There is also a **Quick Delivery** shortcut that creates an order + delivery + draft invoice in one atomic step (skips the quote entirely).
 
@@ -57,7 +59,7 @@ therefore fails earlier and with a clearer error, while the trigger remains auth
 - **closed_by_application**: Terminal planned quote fulfilled through application jobs rather than converted to a chemical-sale order.
 - **closed_short**: Terminal partially drawn booking closed without fulfilling the remaining quantity.
 - **revised**: Edits were made after sending. New version snapshot created on next send.
-- **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
+- **accepted**: Customer accepted, or the quote was converted to an order (conversion sets this status). Entering `accepted` releases any inventory holds the quote had.
 - **declined**: Customer said no.
 - **expired**: Past the `expires_at` date.
 - **cancelled**: Quote was cancelled before fulfillment. It is terminal and reachable from `draft`, `sent`, and `revised`.
@@ -70,7 +72,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 
 ### Rules
 - Tier pricing: customers have assigned tier (1-3). Quote inherits the customer's tier but can be overridden per item.
-- `is_planned` flag: when true, inventory holds are created to reserve stock.
+- `is_planned` flag: when true, inventory holds reserve stock while the quote is `draft`, `sent` or `revised`. They are released when the quote is accepted (including by conversion), declined, expired, cancelled or closed, or when `is_planned` is switched off.
 - Commission splits stored as JSONB: `{ splits: [{ recipient, recipient_user_id, percentage }] }` — the immutable `recipient_user_id` (profile UUID), not the display name, routes the money (since `20260722174029`).
 - Always call `logActivity()` after send/accept/decline events.
 
@@ -101,10 +103,10 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - **cancelled**: Order was cancelled.
 
 ### Key RPCs
-- `convert_quote_to_order()` — creates order + order_items + commissions from an accepted quote
+- `convert_quote_to_order()` — creates order + order_items + commissions from a `sent`, `revised` or `accepted` quote and sets the quote to `accepted`. Any other status is refused (`BOOKING_CLOSED`), as is a partly drawn booking (`BOOKING_PARTIALLY_DRAWN`) or a line without a positive quote-time cost (`COST_BASIS_REQUIRED`)
 - `create_direct_order()` — creates an order without a quote
-- `cancel_order()` — cancels order and releases any inventory holds
-- `update_order_items()` — modify order items (admin only)
+- `cancel_order()` — cancels order and releases its prebooked stock (the undelivered remainder, recorded as `released` ledger rows)
+- `update_order_items()` — modify order items (admin or sales rep)
 
 ### Rules
 - Accounts receivable is tracked on `invoices` (`invoices.balance_cents`, GENERATED), NOT on the order. The order header has no `total_paid`/`balance_due` — those columns were dropped.
@@ -114,7 +116,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - Always send the idempotency key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) for order creation to prevent double-submissions. The key is stable across re-renders and retries only while the hook instance is mounted; after an unmount/remount, use durable intent restoration or authoritative reconciliation. ESLint (`local-rules/idempotency-key-from-hook`) rejects a fresh `generateIdempotencyKey()` call at the RPC call site, because a retry would send a different key.
 
 ### What can go wrong
-- Creating an order from a quote that wasn't accepted
+- Trying to convert a `draft`, `declined`, `expired`, `cancelled` or closed quote (the RPC refuses it with `BOOKING_CLOSED`; only a `sent`, `revised` or `accepted` quote converts, so a draft must be sent first and a terminal quote cannot be converted)
 - Forgetting that order items have `quantity_remaining` which drives delivery fulfillment
 - Modifying an order after deliveries have already been made
 
@@ -143,7 +145,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - **voided**: Completed delivery reversed by admin (`void_delivery()` RPC). Inventory restored.
 
 ### Two-step delivery flow (CRITICAL)
-1. **`confirm_delivery()`** — transitions scheduled -> in_progress. Shows inventory warning if stock is low.
+1. **`confirm_delivery()`** — transitions scheduled -> in_progress. It does not check stock: the low-stock warning is the shortage badge on the Deliveries page, and `complete_delivery()` warns rather than blocks.
 2. **`complete_delivery()`** — transitions in_progress -> completed. This is where the real work happens:
    - Deducts inventory (creates `inventory_transactions` of type 'delivered')
    - Updates `order_items.quantity_delivered` and `quantity_remaining`
@@ -313,7 +315,7 @@ For each (customer × field) pair, the RPC chooses ONE of:
   - `invoice_items.price_source = 'manual'`
 
 - **Mode B — Line-item billing** (no override):
-  - Per-product chemical lines priced at: `manual_override > quoted (quote_sections.field_id linkage) > customer.assigned_tier × product.tierN_price`
+  - Per-product chemical lines priced at: `manual_override > quoted (quote_sections.field_id linkage) > customer.assigned_tier × product.tierN_price` (an empty tier 2 or tier 3 price falls back to the tier 1 price, and an empty tier 1 price to 0)
   - Application service fee from `customer_application_rates` override → `application_services.default_rate_per_acre_cents`
   - `invoice_items.price_source` ∈ `{'manual', 'quoted', 'tier'}`
 

@@ -3,19 +3,19 @@
 ## Role-Based Testing Matrix
 
 Test every feature as each role. Page access follows the route role gates in `src/App.tsx`
-(re-checked 2026-09-27): "No page access" means the route rejects that role, although related rows
+(re-checked 2026-09-27; Sales Rep, Dashboard and Purchase Orders rows re-checked against the code 2026-10-14): "No page access" means the route rejects that role, although related rows
 may still appear inside pages the role can open, as RLS allows.
 
 | Feature | Admin | Sales Rep | Driver | Applicator |
 |---------|-------|-----------|--------|------------|
-| Dashboard KPIs | Full view | Full view | Deliveries only | Jobs only |
+| Dashboard KPIs | Full view | Full view | No page access (lands on My Route) | No page access (lands on Field View) |
 | Products CRUD | Full | Read only | No page access | No page access |
-| Customers CRUD | Full | Own assigned | Via delivery only | No page access |
-| Quotes CRUD | Full | Own only | No access | No access |
-| Orders CRUD | Full | Create/Read | No access | No access |
+| Customers CRUD | Full | Read/edit any customer; create only self-assigned; no delete (only an admin reassigns; only an admin or the assigned rep changes the default commission split; a customer with a posted or overdue invoice cannot be deactivated, `CUSTOMER_HAS_OPEN_INVOICES`) | Via delivery only | No page access |
+| Quotes CRUD | Full | Read all; edit own | No access | No access |
+| Orders CRUD | Full | Create/Read/Edit lines | No access | No access |
 | Inventory | Full | Read + holds | No page access | No access |
 | Deliveries | Full | Create/Edit/Cancel | Own + confirm/complete/photos/issues/quick delivery | No access |
-| Purchase Orders | Full | Read/Receive | No access | No access |
+| Purchase Orders | Full | Create/Edit/Submit/Cancel/Receive (no delete, no reversing a receipt, no over-receiving) | No access | No access |
 | Blend Tickets | Full | Upload/review | No access | No access |
 | Jobs | Full | Create/Edit | No access | Own assigned + record applied info |
 | Vehicles | Full | No page access | No access | No page access |
@@ -24,7 +24,7 @@ may still appear inside pages the role can open, as RLS allows.
 | Payments | Full | Read/Create | No access | No access |
 | Month-End Close | Full | No access | No access | No access |
 | Commission Payments | Full | No access | No access | No access |
-| Fields | Full | Own customer | No access | No page access |
+| Fields | Full | Any customer (no delete) | No access | No page access |
 | Reports | Full | Limited | No access | No access |
 | Team Board | Full (own notes) | Full (own notes) | Full (own notes) | Full (own notes) |
 | Settings | Full | No access | No access | No access |
@@ -39,7 +39,7 @@ may still appear inside pages the role can open, as RLS allows.
 5. Convert to order (creates order + order_items + commissions)
 6. Create delivery from order
 7. Assign driver
-8. Confirm/start delivery (scheduled -> in_progress, inventory check warning)
+8. Confirm/start delivery (scheduled -> in_progress; no stock check here — a short delivery shows the shortage badge on the Deliveries page, and completion warns rather than blocks)
 9. Complete delivery (updates inventory, order fulfillment, creates remainders for partial)
 10. Record payment (updates the invoice's `paid_amount_cents`, so its generated `balance_cents` falls — orders carry no balance)
 
