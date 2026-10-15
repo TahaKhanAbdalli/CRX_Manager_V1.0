@@ -60,6 +60,17 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-10-15 (LOW, proof tooling only) — the Phase 3 return-policy concurrency prover no longer reaches its chain
+
+`scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs` stops during its own
+post-baseline replay, at `20260810010308_active_team_note_assignment_actor`, with
+`PREFLIGHT_FAIL: notify_team_note_assignment live base drift`, so none of its concurrency races
+run. The other real-schema provers replay that migration cleanly, so the gap is in this runner's
+replay set-up, not in the schema. The rollback matrix chain it also ran is proven separately by
+`prove-supplier-pricing-phase3-return-policy-real-schema.mjs` (2026-10-15, see
+`docs/changelog.d/2026-10-15-phase3-return-policy-chain-fixture.md`). Next step: align the runner's
+replay with the shared real-schema harness, then re-run its races.
+
 ## OPEN 2026-10-14 (MED; pre-existing) — a sales rep can write RUP register rows for an invoice that was never posted
 
 Found by the rls-security-reviewer on PR #927 (Goal 1, part 1: the RUP sales register is admin-only to read).

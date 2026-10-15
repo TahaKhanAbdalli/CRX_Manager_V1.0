@@ -141,6 +141,19 @@ Safety notes:
   transiently locks/expires real expired quotes inside its rolled-back
   transaction — run off-hours if cautious (see its header).
 
+## Disposable Phase 3 return-policy chain proof
+
+`smoke-supplier-pricing-phase3-return-policy.sql` prices its products through the
+governed preview/apply RPCs and delivers each returned line through the real
+`complete_delivery` before returning it. This replays the current schema in a
+network-disabled container and proves the chain passes, plus two controls
+(without the pricing setup it stops at `COST_BASIS_REQUIRED`, without the
+deliveries at `RETURN_SOURCE_NOT_DELIVERED`):
+
+```bash
+node scripts/smoke/prove-supplier-pricing-phase3-return-policy-real-schema.mjs
+```
+
 ## Adding a chain when shipping a migration
 
 For every RPC the migration creates or modifies:

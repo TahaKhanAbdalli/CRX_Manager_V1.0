@@ -34,6 +34,9 @@ DECLARE
   v_result jsonb;
   v_reason text;
   v_n int;
+  v_priced uuid;
+  v_pricing jsonb;
+  v_meta jsonb;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles WHERE role='admin' AND is_active ORDER BY created_at LIMIT 1;
   SELECT id INTO v_sales FROM public.profiles WHERE role='sales_rep' AND is_active ORDER BY created_at LIMIT 1;
@@ -71,9 +74,64 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: metadata RPC is executable by an app role';
   END IF;
 
+  -- Order lines need a positive cost basis (COST_BASIS_REQUIRED) and a product is born
+  -- pricing-free, so price each order-line product through the governed preview/apply path.
+  -- Pricing changes no Phase 3 metadata; the policy assertions below still see each default.
+  SELECT jsonb_agg(jsonb_build_array(id,product_family_id,return_policy,packaging_variant,is_full_tote_only) ORDER BY id) INTO v_meta
+    FROM public.products WHERE id IN (v_unknown,v_returnable,v_blocked,v_other);
+  FOREACH v_priced IN ARRAY ARRAY[v_unknown,v_returnable,v_blocked,v_other] LOOP
+    v_pricing:=public.preview_product_pricing_changes(
+      'product_page',NULL,
+      jsonb_build_array(jsonb_build_object(
+        'product_id',v_priced,'row_version',(SELECT pricing_version FROM public.products WHERE id=v_priced),
+        'pricing_mode','price_driven','new_cost','5.00','tier1_price','10.00','tier2_price','10.00','tier3_price','10.00'
+      )),
+      v_admin,'smk-p3-'||v_suffix||'-pricing-preview-'||v_priced
+    );
+    IF v_pricing->>'status' IS DISTINCT FROM 'previewed' OR (v_pricing->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %',v_pricing;
+    END IF;
+    PERFORM public.apply_product_pricing_change_set((v_pricing->>'change_set_id')::uuid,v_pricing->>'request_fingerprint',v_admin,'smk-p3-'||v_suffix||'-pricing-apply-'||v_priced);
+    IF (SELECT current_cost FROM public.products WHERE id=v_priced) IS DISTINCT FROM 5.00::numeric THEN
+      RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price %',v_priced;
+    END IF;
+  END LOOP;
+  IF (SELECT jsonb_agg(jsonb_build_array(id,product_family_id,return_policy,packaging_variant,is_full_tote_only) ORDER BY id)
+        FROM public.products WHERE id IN (v_unknown,v_returnable,v_blocked,v_other)) IS DISTINCT FROM v_meta
+     OR jsonb_array_length(v_meta)<>4 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed pricing changed Phase3 return metadata';
+  END IF;
+  -- A returned line needs delivered quantity behind it (create_return: RETURN_SOURCE_NOT_DELIVERED)
+  -- from completed delivery history (receive_return: RETURN_SOURCE_DELIVERY_NOT_COMPLETED), so
+  -- order lines start undelivered and this rollback-only helper delivers a line in
+  -- full through the canonical complete_delivery boundary, as the caller in the current JWT;
+  -- it draws down stock, so each delivered product's warehouse row is seeded once up front.
+  INSERT INTO public.inventory(product_id,location,quantity_available,unit_size)
+  SELECT p,'Main Warehouse',100,'ea' FROM unnest(ARRAY[v_unknown,v_returnable,v_other]) AS p;
+  EXECUTE $sql$
+    CREATE FUNCTION pg_temp.smk_p3_delivered(p_item uuid,p_key text) RETURNS void
+    LANGUAGE plpgsql AS $fn$
+    DECLARE v_oi record; v_delivery uuid;
+    BEGIN
+      SELECT oi.*,o.customer_id INTO v_oi FROM public.order_items oi JOIN public.orders o ON o.id=oi.order_id WHERE oi.id=p_item;
+      INSERT INTO public.deliveries(delivery_number,order_id,customer_id,scheduled_date,status,created_by)
+      VALUES('SMK-P3-D-'||p_key,v_oi.order_id,v_oi.customer_id,current_date,'scheduled',auth.uid()) RETURNING id INTO v_delivery;
+      INSERT INTO public.delivery_items(delivery_id,order_item_id,product_id,quantity,quantity_delivered,unit_size)
+      VALUES(v_delivery,p_item,v_oi.product_id,v_oi.total_units_needed,v_oi.total_units_needed,v_oi.unit_size);
+      UPDATE public.deliveries SET status='in_progress' WHERE id=v_delivery;
+      PERFORM public.complete_delivery(v_delivery,'[SMOKE] Phase3 receiver',auth.uid(),NULL,NULL,NULL,'smk-p3-complete-'||p_key,now());
+      IF (SELECT status FROM public.deliveries WHERE id=v_delivery) IS DISTINCT FROM 'completed'
+         OR NOT EXISTS (SELECT 1 FROM public.order_items WHERE id=p_item AND quantity_delivered=v_oi.total_units_needed AND quantity_remaining=0) THEN
+        RAISE EXCEPTION 'SMOKE_SETUP: canonical complete_delivery did not complete %',p_key;
+      END IF;
+    END;
+    $fn$
+  $sql$;
+
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-'||v_suffix,v_customer,v_admin) RETURNING id INTO v_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
-  VALUES(v_order,v_unknown,'[SMOKE] unknown',10,4,'ea',40,4,0) RETURNING id INTO v_item;
+  VALUES(v_order,v_unknown,'[SMOKE] unknown',10,4,'ea',40,0,4) RETURNING id INTO v_item;
+  PERFORM pg_temp.smk_p3_delivered(v_item,v_suffix||'-unknown');
   -- sales_rep positive control proves the public wrapper remains available.
   PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
@@ -118,8 +176,8 @@ BEGIN
   -- dormant unknown compatibility chain above.
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-RET-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_returnable_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
-  VALUES(v_returnable_order,v_returnable,'[SMOKE] returnable',10,4,'ea',40,4,0) RETURNING id INTO v_returnable_item;
-  INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES(v_returnable,'Main Warehouse',7,'ea');
+  VALUES(v_returnable_order,v_returnable,'[SMOKE] returnable',10,4,'ea',40,0,4) RETURNING id INTO v_returnable_item;
+  PERFORM pg_temp.smk_p3_delivered(v_returnable_item,v_suffix||'-returnable');
   v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_returnable_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_returnable_item,'quantity',2,'condition','unopened','restock',true)),'smk-p3-'||v_suffix||'-returnable-create');
   v_returnable_return:=(v_result->>'return_id')::uuid;
   IF v_returnable_return IS NULL THEN RAISE EXCEPTION 'SMOKE_FAIL: returnable create failed'; END IF;
@@ -127,7 +185,7 @@ BEGIN
   IF v_result->>'status' IS DISTINCT FROM 'approved' THEN RAISE EXCEPTION 'SMOKE_FAIL: returnable approve %',v_result; END IF;
   SELECT quantity_available INTO v_before_inventory FROM public.inventory WHERE product_id=v_returnable AND location='Main Warehouse';
   v_result:=public.receive_return(v_returnable_return,v_sales,'smk-p3-'||v_suffix||'-returnable-receive');
-  IF v_result->>'status' IS DISTINCT FROM 'received' OR v_result->>'restocked_quantity' IS DISTINCT FROM '2' THEN RAISE EXCEPTION 'SMOKE_FAIL: returnable receive %',v_result; END IF;
+  IF v_result->>'status' IS DISTINCT FROM 'received' OR (v_result->>'restocked_quantity')::numeric IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'SMOKE_FAIL: returnable receive %',v_result; END IF;
   IF (SELECT quantity_available FROM public.inventory WHERE product_id=v_returnable AND location='Main Warehouse') IS DISTINCT FROM v_before_inventory+2
      OR (SELECT count(*) FROM public.inventory_transactions WHERE product_id=v_returnable AND transaction_type='returned') <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: returnable receive did not restock exactly once';
@@ -212,8 +270,8 @@ BEGIN
   IF v_result->>'status' IS DISTINCT FROM 'rejected' THEN RAISE EXCEPTION 'SMOKE_FAIL: reject boundary %',v_result; END IF;
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-CAN-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_cancel_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
-  VALUES(v_cancel_order,v_other,'[SMOKE] cancel',10,4,'ea',40,4,0) RETURNING id INTO v_cancel_item;
-  INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES(v_other,'Main Warehouse',7,'ea');
+  VALUES(v_cancel_order,v_other,'[SMOKE] cancel',10,4,'ea',40,0,4) RETURNING id INTO v_cancel_item;
+  PERFORM pg_temp.smk_p3_delivered(v_cancel_item,v_suffix||'-cancel');
   v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_cancel_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_cancel_item,'quantity',1,'condition','unopened','restock',true)),'smk-p3-'||v_suffix||'-cancel-create');
   v_cancel_return:=(v_result->>'return_id')::uuid;
   PERFORM public.approve_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-cancel-approve');
@@ -304,7 +362,8 @@ BEGIN
   -- cancel_return reverses received inventory before its late activity row.
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-FORCE-CAN-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_force_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
-  VALUES(v_force_order,v_other,'[SMOKE] forced cancel',10,4,'ea',40,4,0) RETURNING id INTO v_force_item;
+  VALUES(v_force_order,v_other,'[SMOKE] forced cancel',10,4,'ea',40,0,4) RETURNING id INTO v_force_item;
+  PERFORM pg_temp.smk_p3_delivered(v_force_item,v_suffix||'-force-cancel');
   v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_force_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_force_item,'quantity',1,'condition','unopened','restock',true)),'smk-p3-'||v_suffix||'-force-cancel-create');
   v_cancel_return:=(v_result->>'return_id')::uuid;
   PERFORM public.approve_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-force-cancel-approve');
@@ -330,7 +389,8 @@ BEGIN
   -- forced late activity failure must erase all three and the idempotency row.
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-FORCE-C-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_force_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
-  VALUES(v_force_order,v_other,'[SMOKE] forced create',10,4,'ea',40,4,0) RETURNING id INTO v_force_item;
+  VALUES(v_force_order,v_other,'[SMOKE] forced create',10,4,'ea',40,0,4) RETURNING id INTO v_force_item;
+  PERFORM pg_temp.smk_p3_delivered(v_force_item,v_suffix||'-force-create');
   SELECT count(*) INTO v_before_count FROM public.activity_feed WHERE customer_id=v_customer AND event_type='return_requested';
   PERFORM set_config('app.phase3_smoke_force','return_requested',true);
   BEGIN
@@ -460,9 +520,12 @@ BEGIN
     IF SQLERRM NOT LIKE 'RETURN_POLICY_NO_RETURN%' THEN RAISE EXCEPTION 'SMOKE_FAIL: expected RETURN_POLICY_NO_RETURN direct update, got %',SQLERRM; END IF;
   END;
 
-  -- The four wrappers must retain the common exact refusal before effects.
+  -- The four wrappers must retain the common exact refusal before effects. Since
+  -- 20260812130145 each public wrapper is an intent-binding shell that delegates to its
+  -- _<name>_intent_impl_20260812, which holds the assertion; both links must stand.
   FOR v_reason IN SELECT unnest(ARRAY['create_return','approve_return','receive_return','issue_return_credit']) LOOP
-    IF position('assert_phase3_return_policy' IN (SELECT prosrc FROM pg_proc WHERE oid=('public.'||v_reason||CASE WHEN v_reason='create_return' THEN '(jsonb,jsonb,text)' ELSE '(uuid,uuid,text)' END)::regprocedure))=0 THEN
+    IF position('public._'||v_reason||'_intent_impl_20260812(' IN (SELECT prosrc FROM pg_proc WHERE oid=('public.'||v_reason||CASE WHEN v_reason='create_return' THEN '(jsonb,jsonb,text)' ELSE '(uuid,uuid,text)' END)::regprocedure))=0
+       OR position('assert_phase3_return_policy' IN (SELECT prosrc FROM pg_proc WHERE oid=('public._'||v_reason||'_intent_impl_20260812'||CASE WHEN v_reason='create_return' THEN '(jsonb,jsonb,text)' ELSE '(uuid,uuid,text)' END)::regprocedure))=0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: % lost policy assertion',v_reason;
     END IF;
   END LOOP;
