@@ -1,6 +1,15 @@
 # CRX Manager V1.0
 
-Business management system for **Crop RX Solutions**, an agricultural chemical distributor. Manages the full order-to-cash workflow: customer management, 3-tier product pricing, quote building, order fulfillment, delivery scheduling with GPS & digital signatures, inventory tracking, purchase orders, blend ticket OCR, invoicing, payments, AR aging, commission tracking, field mapping, compliance, and reporting.
+The operations system for **Crop RX Solutions**, an agricultural chemical distributor and custom application business. One app runs the whole season, from the first customer call to the posted invoice and the commission check:
+
+- **Sell** — customer records and call lists, 3-tier pricing, quotes, bookings, and orders
+- **Move product** — purchasing, receiving, inventory, deliveries with signatures and photos, returns
+- **Apply** — field maps, spray jobs, dispatch, blend tickets, and legal application records
+- **Get paid** — chemical and field-application invoicing, split billing between co-owners, payments, prepay, AR, finance charges
+- **Pay out and close** — vendor bills, commissions, rebates, month-end close, and reports
+- **Stay compliant** — applicator licenses, restricted-use (RUP) sales register, EPA label data, and lot recall tracing
+
+It runs in the office on a desktop and in the field on a phone, including an offline queue for drivers and applicators.
 
 ## Tech Stack
 
@@ -64,7 +73,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | Role | Access |
 |------|--------|
 | **admin** | Full access to everything |
-| **sales_rep** | Any customer (read and edit; only an admin reassigns one, only an admin or the assigned rep changes its default commission split, and a customer with a posted or overdue invoice cannot be deactivated), all quotes (edits only their own), all orders (creates them and edits their lines), purchase orders (create, edit, submit, cancel and receive; deleting, reversing a receipt and over-receiving are admin-only), invoices under their own name (enforced by save and post; the two create-invoice-from-order functions do not check it yet, see `docs/manual/KNOWN_ISSUES.md`), products (read-only) |
+| **sales_rep** | Any customer (read and edit; only an admin reassigns one, only an admin or the assigned rep changes its default commission split, and a customer with a posted or overdue invoice cannot be deactivated), all quotes (edits only their own), all orders (creates them and edits their lines), purchase orders (create, edit, submit, cancel and receive; deleting, reversing a receipt and over-receiving are admin-only), invoices under their own name (they can name only themselves as salesperson on orders, blend tickets and invoices), products (read-only), the RUP sales register (admin-only) |
 | **driver** | Own assigned deliveries, customer addresses (read-only) |
 | **applicator** | Own assigned jobs, application records, products/fields (read-only) |
 
@@ -74,39 +83,74 @@ The database also allows a fifth role, `entity_recipient`. It is not a login rol
 
 ## Features
 
-### Core Business
-- **Customers** — Master list, tiered pricing, addresses, farm fields, purchase history
-- **Products** — Catalog with 3-tier pricing, EPA registration, unit conversions, cost history
-- **Quotes** — Multi-section quote builder, margin calculations, PDF generation, convert to order
-- **Orders** — Line-item management, fulfillment tracking, credit limit alerts, bulk import
-- **Deliveries** — Driver assignment, signature capture, photo upload, GPS tracking, partial delivery support, offline capable
-- **Receiving** — PO receipt with condition tracking (good/damaged/short), quick receive workflow
+### Daily Command Centers
 
-### Inventory & Purchasing
-- **Inventory** — Real-time stock levels, low stock alerts, holds, adjustments, cycle counts
-- **Purchase Orders** — Vendor PO creation, receiving workflow, condition recording
-- **Returns** — RMA processing, restocking, credit memos
+- **Today (Office Cockpit)** — One exception screen for the office: unbilled jobs, jobs needing dispatch, bookings needing attention, invoices ready to post, deliveries not yet invoiced, watchdog flags, the next 7 days of jobs, expiring licenses, overdue field-application AR, and inventory shortfalls
+- **To-Ship** — What needs to go out, by product and by customer, alongside low stock, overdue or unassigned deliveries, and inbound purchase orders, with one-click Schedule and Reorder
+- **Watchdog** — Standing list of flagged jobs and invoices, with one-tap dismiss and an on-demand re-check
+- **Role landing** — Everyone signs in to their own starting screen: office staff to Today, drivers to My Route, applicators to My Day
+- **Getting Started** — Walkthrough of the Quote → Order → Deliver cycle for office staff, and of the delivery steps for drivers
 
-### Financial
-- **Invoicing** — Auto-generate from deliveries, 3 layout modes, batch print, void/write-off
-- **Payments** — Check recording, auto-allocation across invoices, prepay credits
-- **AR Aging** — Aging buckets (current/30/60/90+), customer statements, finance charges
-- **Commissions** — Split percentages, payment lifecycle, posting workflow
-- **Month-End** — Period close checklist, batch statement generation, year-end summaries
+### Customers & Sales
 
-### Field Operations
-- **Field Mapping** — Mapbox satellite maps, polygon draw tools, bulk import (shapefile/KML/GeoJSON)
-- **Jobs** — Application scheduling, applicator/vehicle assignment, recipe loading
-- **Blend Tickets** — OCR upload via Google Vision AI, manual creation, order linkage
-- **Recipes** — Tank mix templates with product ratios
-- **Compliance** — Applicator license tracking, RUP product flags, expiry alerts
+- **Customers** — Customer 360 profile: addresses, farm fields, crops, credit limit, pricing tier, finance-charge settings, season summary, purchase history, and stored customer documents
+- **Call Lists (CRM)** — Seasonal worklists: prepay prospects, customers with no recent contact, stale quotes, lapsed products, and unassigned accounts, with a call-prep summary and call logging on each row
+- **Products** — Catalog with 3-tier pricing, EPA registration and restricted-use flags, container sizes, unit conversions, application rates, and cost history
+- **Supplier Pricing** — Admin-only workspace for supplier quote sheets: staging and approval, comparable-cost review, product and supplier links, and a below-cost approval check on sales prices
+- **Quotes** — Multi-line quote builder with tiered pricing, margin, commission splits, and a PDF that is emailed to the customer when the quote is sent; convert straight to an order
+- **Orders** — Direct orders or quotes converted to orders, open-booking banners, credit-limit warnings, and an "Order Confirmed" email to the customer
+- **Sell & Deliver Now** — Quick delivery path for walk-in and same-day sales
+- **Crop Programs & Program Tracker** — Seasonal crop programs, with planned versus actual acres by customer
+- **Brand vs Generic** — Map branded products to their generic equivalents by active ingredient
 
-### Collaboration & Reporting
-- **Team Board** — Notes, todos, announcements with tags and comments
-- **Notifications** — Real-time via Supabase (low stock, expiring quotes, order status, etc.)
-- **Reports** — Profitability, logbook, P&L, gross sales, commission balance, chemical history, price list, year-end
-- **Bulk Import** — CSV import for customers, products, quotes, orders, POs, blend tickets
-- **Offline Support** — IndexedDB queue for critical operations when disconnected
+### Inventory, Purchasing & Delivery
+
+- **Inventory** — Live stock levels, vendor-grouped reorder alerts, holds, batch adjustments, a full transaction ledger, cost valuation, and cycle counts with variance tracking
+- **Purchase Orders** — Vendor POs from the catalog, with a two-step receive and receiving history
+- **Receiving** — One screen with three tabs: a hub of open PO lines across all vendors, a Quick Receive wizard that matches products to the oldest open POs, and a searchable receiving log
+- **Deliveries** — Driver assignment, signature capture, photos, issues, partial deliveries with remainder tracking, load sheets, backdated entry, a completion email to the customer, and a shortage badge when deliveries compete for the same stock
+- **Field Mode (My Route)** — Phone-first route for drivers: every open delivery assigned to them, in-progress first and then by scheduled date; complete a delivery on site with signature, photos, and quantities
+- **My Day (applicators)** — Phone view of an applicator's dispatched jobs: start a job, then complete it with weather, gallons applied, acres applied per field, and notes
+- **Returns** — Return requests through approval, receipt, restock, and credit memo
+
+### Field Application
+
+- **Field Mapping** — Mapbox satellite maps, draw-your-own boundaries (including multi-part fields), one-click USDA field boundaries, shapefile/KML/GeoJSON import, legal-description (PLSS) lookup, and obstacle markers
+- **Field Dashboard** — Per-field history: season stats, every application with weather, billing splits, and FSA details
+- **Jobs** — Spray-job editor with a map-based field picker, route-order numbers on the job's field map, chemicals, vehicle and applicator, customer-supplied chemicals, application fees, and transfer to invoice
+- **Dispatch** — Map-based dispatch board with applicator assignment
+- **Loader & Applicator Sheets** — Multiple saved loader worksheets per job, satellite map pages and previous-application history on printed applicator sheets
+- **Blend Tickets & Recipes** — Upload a ticket photo for OCR (Google Vision AI) or enter it by hand, pick units from a list, and build reusable tank-mix recipes that start a job
+- **Application Records** — The legal record of every application: actual application date, applicator name and license captured at the time, and products used
+- **Vehicles & Application Services** — Ground and air equipment, and application-fee pricing with per-customer rate overrides
+
+### Billing & Money
+
+- **Chemical Invoicing** — Invoices from orders and deliveries, payment-terms picker, batch print, posting rights and a Ready-to-Post queue, unpost, void, and write-off
+- **Field-Application Invoices** — As-applied billing with tabs for unbilled work, drafts, posted, and a per-customer summary; quantities and customer shares are figured from the job
+- **Split Billing** — Divide a spray job or chemical order between the co-owners of a field, each on their own invoice, rounded to the exact cent
+- **Payments & Prepay** — Allocate a check across invoices with the remainder kept as prepay credit; a prepay workspace to apply credits; credit memos applied to open invoices
+- **Accounts Receivable** — One workspace for aging, payment history, prepayments, and customer ledgers, plus finance charges, emailed AR reminders, and batch statements
+- **Accounts Payable** — Vendor master, vendor bills (manual or from a PO) with due dates from payment terms, bill payments, and an AP dashboard with aging
+- **Commissions** — Commission splits on orders and spray jobs, commission payments with a posting workflow, and ledger-backed commission history
+- **Rebates** — Manufacturer rebate programs and claims
+- **Month-End** — Period-close checklist, batch statements, "Roll the Month", and year-end summaries
+- **Financial Dashboard** — AR aging, revenue, payments, prepay balances, and finance charges at a glance
+
+### Compliance & Data Quality
+
+- **Compliance** — Applicator license tracking with expiry alerts, the restricted-use product list, and an admin-only RUP Sales Register built from invoices, with CSV export
+- **Lot Trace** — Enter a lot number and see every application that used it: field, date, customer, applicator, record, and invoice, for recalls and audits
+- **Label Data** — EPA registration lookup, a label data-quality screen that flags missing EPA numbers with inline fixes, and a review queue where no label value reaches a product without a person accepting it
+- **Integrity** — Admin data-integrity report (order totals, inventory ledger, payments, commissions, delivery-to-invoice parity, and more) and cleanup tools for the problems it finds
+
+### Reports, Team & Mobile
+
+- **Reports** — Profitability, field-level profitability (margin per acre), application logbook, financial and operational reports, year-end summaries, and sales and chemical history by product, customer, month, or sales rep, with a customer view that hides cost; CSV and PDF export
+- **Team Board** — Notes, to-dos, and announcements linked to customers, orders, deliveries, jobs, POs, and quotes, with photos, comments, today's deliveries, and yesterday's recap, updated in real time
+- **Notifications** — Real-time alerts for low stock, expiring quotes, order status, dispatch, and more
+- **Bulk Import** — CSV import for customers, products, quotes, orders, POs, and blend tickets
+- **Mobile & Offline** — Bottom navigation, phone card layouts, and full-screen forms on small screens; installable as an app; field work queues offline and is reviewed when the connection returns
 
 ## Database
 
@@ -149,4 +193,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-10-14
+**Last Updated:** 2026-10-15
