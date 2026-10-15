@@ -46,8 +46,14 @@ interface RUPProduct {
 
 export default function Compliance() {
   const { profile } = useAuth();
+  // The RUP sales register is admin-only: get_rup_sales_register refuses every
+  // other caller in the database (20261014220000_rup_register_admin_only).
+  const canViewRupRegister = profile?.role === 'admin' && profile.is_active;
   const { toast } = useToast();
-  const [tab, setTab] = useState<TabKey>('licenses');
+  const [selectedTab, setTab] = useState<TabKey>('licenses');
+  // Derived so a profile refreshed in place (an admin demoted while the page is
+  // open) falls back to Licenses instead of an empty register panel.
+  const tab: TabKey = selectedTab === 'rup_sales' && !canViewRupRegister ? 'licenses' : selectedTab;
   const [loading, setLoading] = useState(true);
 
   // Licenses
@@ -514,14 +520,16 @@ export default function Compliance() {
         >
           <Package className="w-4 h-4" /> RUP Products
         </button>
-        <button
-          onClick={() => setTab('rup_sales')}
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${
-            tab === 'rup_sales' ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
-          }`}
-        >
-          <FileText className="w-4 h-4" /> RUP Sales Register
-        </button>
+        {canViewRupRegister && (
+          <button
+            onClick={() => setTab('rup_sales')}
+            className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${
+              tab === 'rup_sales' ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
+            }`}
+          >
+            <FileText className="w-4 h-4" /> RUP Sales Register
+          </button>
+        )}
         <button
           onClick={() => setTab('field_listing')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${

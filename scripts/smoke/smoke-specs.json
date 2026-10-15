@@ -249,6 +249,17 @@
         "inventory"
       ]
     },
+    "get_rup_sales_register": {
+      "chain": "smoke-rup_register_admin_only.sql",
+      "covers": [
+        "get_rup_sales_register",
+        "rup_sales_records"
+      ],
+      "description": "REQUIRES 20261014220000. The RUP sales register is admin-only: as each live role (authenticated with real profile claims), an active admin pulls a rolled-back probe row through get_rup_sales_register and the table, while an active sales rep, driver, applicator, commission-recipient profile and an id with no active profile are refused by the function and see 0 table rows; a signed-out visitor (anon) is refused both.",
+      "area": [
+        "security"
+      ]
+    },
     "supplier_pricing_phase1b": {
       "chain": "smoke-supplier-pricing-phase1b.sql",
       "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",

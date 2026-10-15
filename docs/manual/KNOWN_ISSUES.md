@@ -56,6 +56,19 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-10-14 (MED; pre-existing) — a sales rep can write RUP register rows for an invoice that was never posted
+
+Found by the rls-security-reviewer on PR #927 (Goal 1, part 1: the RUP sales register is admin-only to read).
+Live `public.generate_rup_sales_records(uuid, text)` (SECURITY DEFINER, owner postgres; body md5
+`18802cbdbbd8a91334dcad11e5303e70`, read 2026-10-14) is executable by `authenticated` on purpose
+(`supabase/migrations/20260707040000_generate_rup_sales_records_role_gate.sql:155`) and checks only that the caller is an
+active admin or sales rep. It never checks the invoice's status, so a rep calling `/rpc/generate_rup_sales_records`
+with a draft or unposted invoice id inserts register rows dated today, which admins then see as real restricted-use
+sales; the returned count also reveals how many RUP lines that invoice has. It is a write to the regulatory record,
+not a read, so PR #927's read lock does not cover it. Fix (its own PR): require a posted invoice inside the function,
+or revoke `authenticated` EXECUTE if no browser caller needs it (posting calls it as owner). A follow-up task was
+offered to Mason on 2026-10-14. Live register rows on 2026-10-14: 0.
+
 ## OPEN 2026-10-13 (latent; rescued from closed PRs #397 and #350) — quote screen: re-saving a quote with two lines of one product is refused, and Convert to Order can leave an accepted quote with no order
 
 **Rescued in the 2026-10-13 GitHub branch cleanup** (`docs/audits/2026-10-13-github-branch-cleanup-audit.md`).

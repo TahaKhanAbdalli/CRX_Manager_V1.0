@@ -300,8 +300,8 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > itself is `a4b4e9ce`; nothing between them touched a role word), **61**
 > after the role-wording pass (`21f29c4a`), **33** now. Read that as a *proxy*,
 > not a defect count: correcting `rup_sales_records` SELECT from `Admin` to
-> `Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so
-> the fix is real — *raised* it by one, because the classifier matches
+> `Admin / Sales Rep` — live was `role = ANY (ARRAY['admin','sales_rep'])` then (admin only,
+> `USING ((SELECT public.is_admin()))`, since `20261014220000`), so the fix was real — *raised* it by one, because the classifier matches
 > helper-function names (`is_admin()`, `is_sales_rep()`, `is_applicator()`,
 > `is_driver()`) and that policy inlines its role test as a scalar subquery.
 >
@@ -311,8 +311,8 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > `= 'admin'` on `ar_reminder_tracking`, `email_log`, `failed_notifications`,
 > `team_note_attachments`, `vendor_bills`, `vendor_payments` and the
 > soft-deleted-rows policy on `vendors`; it is
-> `= ANY (ARRAY['admin','sales_rep'])` on `rup_sales_records`,
-> `offline_action_receipts` and the main `vendors` SELECT policy. (2) A cell
+> `= ANY (ARRAY['admin','sales_rep'])` on `rup_sales_records` (until `20261014220000` made it
+> `is_admin()`), `offline_action_receipts` and the main `vendors` SELECT policy. (2) A cell
 > that names a role by *how the row is reached* rather than by a role check —
 > the `Driver` cells on `deliveries`, `delivery_items`, `delivery_photos` and
 > `delivery_remainders`, where live is `assigned_driver = auth.uid()`. (3) A
@@ -428,7 +428,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | vendors | Admin / Sales Rep (not soft-deleted) / Admin (soft-deleted) | - (no write policy) | - (no write policy) | - (no write policy) |
 | vendor_bills | Admin (not soft-deleted) | Admin | Admin | Admin |
 | vendor_payments | Admin | Admin | - | Admin |
-| rup_sales_records | Admin / Sales Rep | Admin | - | - |
+| rup_sales_records | Admin | Admin | - | - |
 | email_log | Admin / Own created_by | Admin | - | - |
 | ar_reminder_tracking | Admin | Admin | - | - |
 | failed_notifications | Admin | Admin | Admin | Admin |
