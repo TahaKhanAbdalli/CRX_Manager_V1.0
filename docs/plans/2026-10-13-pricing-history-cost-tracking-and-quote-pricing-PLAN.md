@@ -143,6 +143,12 @@ Small slices, each its own change. Order and scope are open for discussion.
    - A revision keeps the locked prices. Add an **"Update to today's prices"** action on a revised quote, both
      per line and for the whole quote, that shows each line's locked price beside today's price and applies
      only what the user picks.
+   - **Price authority after a price change (CodeRabbit on PR #923).** A revision that changes any line's
+     price (this update action, a manual price edit or a tier change) must be re-sent before Convert, and
+     Convert then uses that newly sent version's prices. The customer is never billed a price they were not
+     sent, and an update is never silently ignored. Revise-then-convert without a re-send (below) applies only
+     to revisions that leave every price unchanged. The proof covers update-then-convert, refused until
+     re-sent and then billed at the new prices.
    - **Rewind:** the quote screen already has Version History (`src/pages/QuoteBuilder.tsx`, about line 3604:
      "Every time you send or revise, a snapshot is saved. You can compare versions side-by-side or restore an
      older version"), backed by `quote_versions` and `restore_quote_version`. Build on it: make "the version
@@ -165,6 +171,38 @@ Small slices, each its own change. Order and scope are open for discussion.
      sent. The proof covers an added line, a removed line, a product
      swapped on an existing line, a duplicate added in the revision, and a quote sent with two differently
      priced lines of the same product followed by a quantity-only revision.
+   - Line IDs are not stable today, so ID matching has a prerequisite (Codex on PRs #917 and #923, checked
+     2026-10-14).
+     - **Ordinary saves:** `_save_quote_below_cost_impl_20260810` keeps a line's `id` only when the save
+       sends it, but the quote screen's save payload (`src/pages/QuoteBuilder.tsx`, about lines 1742-1764)
+       sends neither `id` nor `client_key` and does not install the returned `item_ids`. So the screen's saves
+       do not keep line identity, and a quote with two lines of the same product at different recorded costs
+       is refused with `QUOTE_ITEM_AMBIGUOUS_COST`. Before ID matching, slice 2 must make the screen send each
+       line's ID and install the returned IDs, with a proof that a duplicate-product quote saves cleanly.
+     - **Rewinds:** `_restore_quote_version_owner_impl` deletes the quote's sections, which cascades to the
+       lines, and re-inserts them without `id`, so every restored line gets a new ID. Under ID matching,
+       rewinding to the sent version and then converting would be refused even though nothing changed.
+       Restore must keep the snapshot's line IDs or record an old-to-new ID map that Convert uses. Snapshots saved
+     before slice 2 carry no line IDs (Codex on PR #923) and come in two kinds:
+     - **Untrusted** (`restore_trusted_at` is null, from before the
+       `20260826220000_quote_version_restore_trust_boundary` migration): the live restore refuses them with
+       `QUOTE_VERSION_LEGACY_UNTRUSTED` before any matching runs, so they cannot be rewound at all; that
+       quote must be re-sent. All 3 live versions were in this state on 2026-10-14.
+     - **Trusted but without line IDs:** not backfilled. Restoring and converting one falls back to the
+       one-to-one pairing by product above, which fails closed, so any duplicate product or other mismatch
+       requires a re-send.
+
+     The proof adds rewind-then-convert with and without a later quantity edit, a trusted pre-slice-2
+     version with and without a duplicate product, and an untrusted version that is refused and re-sent.
+   - **Open for the slice 2 build** (Codex on PR #923, confirmed live 2026-10-14; to be designed when slice 2
+     is built, not settled here):
+     - Partial draw-downs: `_draw_down_quote_below_cost_impl_20260810` accepts `revised` quotes and prices
+       the new order from the current lines. The same re-send gate must apply there, with a proof that a
+       price-changing revision cannot be partly drawn until it is re-sent.
+     - Rewind stays unavailable for a booking that has ever been partly drawn:
+       `_restore_quote_version_owner_impl` raises `QUOTE_RESTORE_BLOCKED_BY_DRAW`, an accepted invariant in
+       `KNOWN_ISSUES.md`, even after the drawn orders are cancelled or voided. Keep it, or design and prove a
+       safe replacement that covers cancelled and voided draws.
    - Partly drawn quotes: `draw_down_quote` relies on stable `quote_item_id` provenance and the
      `units_current` / `units_settled` split so a price change never re-bills delivered product
      (`20260816120000_draw_down_split_order_lines_by_price_tier.sql`; invariant in `KNOWN_ISSUES.md`). The
