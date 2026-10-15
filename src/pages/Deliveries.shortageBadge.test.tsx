@@ -10,6 +10,10 @@
  * sees. Reverting the per-product summing in src/lib/inventoryShortage.ts turns
  * the first case red.
  *
+ * It also sums each product across ALL active deliveries on the list, so two
+ * deliveries that each fit the stock alone but not together are both flagged
+ * (Mason, 2026-10-14, "flag shared shortages").
+ *
  * Out of scope, deliberately: this screen compares against `quantity_available`
  * at Main Warehouse and does not subtract prebooked stock. That is a separate,
  * pre-existing choice; only the per-line/per-product basis changed here.
@@ -149,6 +153,45 @@ describe('Deliveries shortage badge — across tier-split lines', () => {
 
   it('stays quiet when the same two lines are genuinely covered', async () => {
     tables.data.inventory = [{ product_id: 'product-1', quantity_available: 20 }];
+
+    expect(await renderDeliveries()).toBe(0);
+  });
+});
+
+/** True when the badge sits next to this delivery number in every layout that renders it. */
+function hasBadge(deliveryNumber: string): boolean {
+  const labels = screen.getAllByText(deliveryNumber);
+  return labels.length > 0
+    && labels.every((el) => el.parentElement?.querySelector('[title="Inventory shortage"]') != null);
+}
+
+describe('Deliveries shortage badge — across deliveries (Mason, 2026-10-14)', () => {
+  const SECOND = { ...DELIVERY, id: 'del-2', delivery_number: 'DEL-TIER-2', customer_id: 'cust-2' };
+
+  beforeEach(() => {
+    tables.data = {
+      deliveries: [DELIVERY, SECOND],
+      delivery_items: [
+        { delivery_id: 'del-1', product_id: 'product-1', quantity: 6 },
+        { delivery_id: 'del-2', product_id: 'product-1', quantity: 6 },
+      ],
+      customers: [],
+      profile_public_view: [],
+      inventory: [],
+    };
+  });
+
+  it('flags both deliveries when each fits stock alone but together they do not', async () => {
+    // 10 on hand: each delivery needs 6, together 12.
+    tables.data.inventory = [{ product_id: 'product-1', quantity_available: 10 }];
+    await renderDeliveries();
+
+    await waitFor(() => expect(hasBadge('DEL-TIER-1')).toBe(true));
+    expect(hasBadge('DEL-TIER-2')).toBe(true);
+  });
+
+  it('flags neither when stock covers both deliveries together', async () => {
+    tables.data.inventory = [{ product_id: 'product-1', quantity_available: 12 }];
 
     expect(await renderDeliveries()).toBe(0);
   });

@@ -39,7 +39,7 @@ import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
-import { sumNeedByProduct, type ProductLineNeed } from '../lib/inventoryShortage';
+import { findShortDeliveries } from '../lib/inventoryShortage';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
@@ -382,28 +382,12 @@ export default function Deliveries() {
             invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
           }
 
-          // Sum each product across the delivery's lines BEFORE comparing to
-          // stock. A tier-split booking puts the same product on several lines,
-          // so checking each line alone lets two half-sized lines both look
-          // covered when together they are not. See src/lib/inventoryShortage.ts.
-          const linesByDelivery = new Map<string, ProductLineNeed[]>();
-          for (const item of (diData || []) as Array<{ delivery_id: string; product_id: string; quantity: number }>) {
-            const lines = linesByDelivery.get(item.delivery_id);
-            const line = { productId: item.product_id, label: '', quantity: Number(item.quantity) };
-            if (lines) lines.push(line);
-            else linesByDelivery.set(item.delivery_id, [line]);
-          }
-
-          const shortageIds = new Set<string>();
-          for (const [deliveryId, lines] of linesByDelivery) {
-            for (const need of sumNeedByProduct(lines)) {
-              if ((invMap[need.productId] ?? 0) < need.quantity) {
-                shortageIds.add(deliveryId);
-                break;
-              }
-            }
-          }
-          setShortageDeliveryIds(shortageIds);
+          // Sum each product across ALL active deliveries before comparing to
+          // stock, so tier-split lines and deliveries competing for the same
+          // product are flagged together. See src/lib/inventoryShortage.ts.
+          const lines = ((diData || []) as Array<{ delivery_id: string; product_id: string; quantity: number }>)
+            .map((item) => ({ deliveryId: item.delivery_id, productId: item.product_id, quantity: Number(item.quantity) }));
+          setShortageDeliveryIds(findShortDeliveries(lines, invMap));
         } else {
           setShortageDeliveryIds(new Set());
         }
@@ -1056,7 +1040,7 @@ export default function Deliveries() {
     },
     {
       key: 'delivery_number',
-      header: (<span className="flex items-center">Delivery #<HelpTip text="This delivery has items where warehouse stock is running low. Check inventory before dispatching." className="ml-1" /></span>),
+      header: (<span className="flex items-center">Delivery #<HelpTip text="Warehouse stock on hand is less than this delivery needs, counting every active delivery that needs the same product. Check inventory before dispatching." className="ml-1" /></span>),
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">

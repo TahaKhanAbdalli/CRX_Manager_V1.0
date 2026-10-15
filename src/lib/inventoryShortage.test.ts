@@ -5,7 +5,7 @@
  * guards, which that page test cannot reach.
  */
 import { describe, expect, it } from 'vitest';
-import { sumNeedByProduct } from './inventoryShortage';
+import { findShortDeliveries, sumNeedByProduct } from './inventoryShortage';
 
 describe('sumNeedByProduct', () => {
   it('adds every tier line of the same product into one need', () => {
@@ -62,5 +62,72 @@ describe('sumNeedByProduct', () => {
 
   it('returns nothing for no lines', () => {
     expect(sumNeedByProduct([])).toEqual([]);
+  });
+});
+
+describe('findShortDeliveries', () => {
+  it('flags every delivery that shares a product whose combined need exceeds stock', () => {
+    // 10 on hand: each delivery fits alone (6), together they need 12.
+    const short = findShortDeliveries(
+      [
+        { deliveryId: 'd1', productId: 'p1', quantity: 6 },
+        { deliveryId: 'd2', productId: 'p1', quantity: 6 },
+        { deliveryId: 'd3', productId: 'p2', quantity: 1 },
+      ],
+      { p1: 10, p2: 5 }
+    );
+    expect([...short].sort()).toEqual(['d1', 'd2']);
+  });
+
+  it('stays quiet when the combined need fits exactly', () => {
+    expect(
+      findShortDeliveries(
+        [
+          { deliveryId: 'd1', productId: 'p1', quantity: 6 },
+          { deliveryId: 'd2', productId: 'p1', quantity: 4 },
+        ],
+        { p1: 10 }
+      ).size
+    ).toBe(0);
+  });
+
+  it('still flags a delivery that is short on its own', () => {
+    expect([...findShortDeliveries([{ deliveryId: 'd1', productId: 'p1', quantity: 3 }], { p1: 2 })]).toEqual(['d1']);
+  });
+
+  it('treats a product with no stock row as zero on hand', () => {
+    expect([...findShortDeliveries([{ deliveryId: 'd1', productId: 'p9', quantity: 1 }], {})]).toEqual(['d1']);
+  });
+
+  it('does not flag decimal needs that fit exactly despite float rounding', () => {
+    // 0.1 + 0.2 is 0.30000000000000004 in binary floating point.
+    expect(
+      findShortDeliveries(
+        [
+          { deliveryId: 'd1', productId: 'p1', quantity: 0.1 },
+          { deliveryId: 'd2', productId: 'p1', quantity: 0.2 },
+        ],
+        { p1: 0.3 }
+      ).size
+    ).toBe(0);
+  });
+
+  it('treats a non-finite stock value as zero so the warning still shows', () => {
+    expect([...findShortDeliveries([{ deliveryId: 'd1', productId: 'p1', quantity: 1 }], { p1: Number.NaN })]).toEqual(['d1']);
+  });
+
+  it('ignores non-positive, non-finite and unlinked lines', () => {
+    expect(
+      findShortDeliveries(
+        [
+          { deliveryId: 'd1', productId: 'p1', quantity: 0 },
+          { deliveryId: 'd2', productId: 'p1', quantity: -5 },
+          { deliveryId: 'd3', productId: 'p1', quantity: Number.NaN },
+          { deliveryId: '', productId: 'p1', quantity: 50 },
+          { deliveryId: 'd4', productId: '', quantity: 50 },
+        ],
+        { p1: 0 }
+      ).size
+    ).toBe(0);
   });
 });
