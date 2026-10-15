@@ -238,6 +238,22 @@
         "security"
       ]
     },
+    "orders_blend_tickets_rep_own_name": {
+      "chain": "smoke-orders-blend-tickets-rep-own-name.sql",
+      "container_only": true,
+      "container_prover": "prove-orders-blend-tickets-rep-own-name-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-orders-blend-tickets-rep-own-name-real-schema.mjs, never through run-smoke.mjs against the live database: the chain creates orders and invoices, which draw customer-visible order and invoice numbers from non-transactional sequences that a rollback does not return. 20261015130000: a sales rep records only themselves (or no one) as salesperson on orders and blend tickets and bills or converts a blend ticket only when it is theirs or unassigned; admins are unrestricted. Trigger guard_rep_salesman_20261015 refuses, with SALESMAN_SCOPE_DENIED and nothing written, a rep inserting an order or blend ticket naming someone else (as the owner and as the authenticated role through RLS), replacing or clearing another rep's name on an order or ticket (even with their own), clearing their own, or filling a blank with someone else's name; a rep inserts under their own name or none, fills a blank with their own, and updates that leave the salesperson alone (even with the column in the SET list) work on another rep's rows. create_invoice_from_blend_ticket refuses a rep billing another rep's ticket before any invoice is written, and bills the rep's own (replays exactly) and an unassigned ticket; create_order_from_blend_ticket refuses a rep converting another rep's ticket and converts an unassigned one. An admin bills and converts another rep's tickets under that rep's name and reassigns orders and tickets. Fail-first: step 1 fails before the guard exists. Uses an active admin and two active sales reps; prices its own [E2E] product through the governed pricing RPCs; terminal rollback.",
+      "covers": [
+        "create_invoice_from_blend_ticket",
+        "create_order_from_blend_ticket",
+        "guard_rep_salesman_20261015"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "security"
+      ]
+    },
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
       "covers": [

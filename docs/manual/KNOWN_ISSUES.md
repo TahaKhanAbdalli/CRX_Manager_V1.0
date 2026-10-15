@@ -748,15 +748,31 @@ archive. They are listed here so the open part of this file shows them. None was
   drafts under the order's salesperson. The app always sends the signed-in profile. The split wrapper also gained the
   CRX-LIFE-001 type allow-list before its claim (a refused `field_application` split no longer draws
   an invoice number) and now requires its idempotency key. Remaining, not fixed here:
-  - **Order and blend-ticket salesperson (OPEN follow-up for Goal 2's "own-name everywhere").** Read live 2026-10-14: the `orders` INSERT policy is
+  - **Order and blend-ticket salesperson (follow-up for Goal 2's "own-name everywhere"): fix
+    written as `20261015130000_orders_blend_tickets_rep_own_name`; not in force until
+    `docs/reference/migration-history.md` row 947 says APPLIED.** Read live 2026-10-14: the `orders` INSERT policy is
     `is_admin() OR is_sales_rep()` with no salesperson condition, and `blend_tickets_office_update`
     lets any active rep UPDATE `blend_tickets.salesman_id` (authenticated holds UPDATE on that
     column); `create_order_from_blend_ticket` copies it onto the order, and
     `create_invoice_from_blend_ticket` writes it onto the invoice with no own-name test. The order
     RPCs no longer accept a rep's NULL on another rep's order, but a rep can still record another
-    salesperson on an order or blend ticket (where commissions read it), and the blend-ticket invoice
-    path still invoices under the ticket's salesperson. The fix belongs on the order and blend-ticket
-    writers (a rep names only themselves).
+    salesperson on an order or blend ticket, and the blend-ticket invoice path still invoices under
+    the ticket's salesperson. (Correction 2026-10-15, read live: commissions do NOT read
+    `orders.salesman_id` or `blend_tickets.salesman_id`; the order's salesperson decides who reads
+    the order's shares (`order_shares_select`), groups the sales reports, and is copied onto order
+    and return-credit invoices.) The fix: trigger `guard_rep_salesman_20261015` on both tables lets a
+    rep record only themselves or no one, and change a salesperson only from blank to themselves
+    (never replacing or clearing another name, not even with their own), refusing with
+    `SALESMAN_SCOPE_DENIED`; an update that leaves the salesperson alone is never refused, and
+    admins are unrestricted. `create_invoice_from_blend_ticket` refuses a rep billing a ticket that
+    names someone else. Read live 2026-10-15: no screen writes either column, every order RPC but
+    `create_order_from_blend_ticket` inserts it as NULL, all live orders have it NULL, and no blend
+    tickets exist, so no screen changes behavior.
+  - **Quote salesperson (OPEN, needs Mason's call).** `quotes_insert`/`quotes_update` do not test
+    `quotes.salesman_id`, so a rep can record another rep on a quote they created. Nothing reads it
+    for access or money today (quote-to-order does not copy it), but `rollover_quote_to_season`
+    copies it to the new season's quote, so an own-name rule there changes rollover of another
+    rep's quote. Not in `20261015130000`.
   - The split wrapper still passes a NULL key to its implementation, so on an order with no field
     allocations it still raises `IDEMPOTENCY_KEY_REQUIRED` (pre-existing, unreachable from the app).
 

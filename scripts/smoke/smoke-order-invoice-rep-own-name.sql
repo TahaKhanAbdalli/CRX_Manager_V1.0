@@ -193,7 +193,15 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong NULL-salesperson refusal: %', v_err;
     END IF;
   END;
-  UPDATE public.orders SET salesman_id = v_rep WHERE id = v_orders[2];  -- now the rep's own order
+  -- An admin makes it the rep's own order (since 20261015130000 a rep cannot take over another
+  -- rep's order themselves).
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  UPDATE public.orders SET salesman_id = v_rep WHERE id = v_orders[2];
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
   v_ids := ARRAY[
     public.create_invoice_from_order(v_orders[2], NULL, 'chemical_sale', 'e2e-own-name-single-null-' || v_suffix),
     public.create_invoice_from_order(v_orders[7], NULL, 'chemical_sale', 'e2e-own-name-single-none-' || v_suffix)
