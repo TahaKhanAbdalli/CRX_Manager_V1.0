@@ -156,7 +156,32 @@ changed both copies; only the QuoteBuilder copy matters.
   approval markers from notes). Its header says it preserves access, yet it revokes `service_role`, so
   re-review it before any apply.
 
+## OPEN 2026-10-15 (MED) — a helper agent's report can latch, or clear, the hold
+
+**What happens.** The UserPromptSubmit hook payload for a subagent hand-back can start at its
+`<agent-message>` tag, without the "Another Claude session sent a message:" line the transcript shows.
+`prompt-source-lib.mjs` only recognises a hand-back after that line, so the report body is read as
+Mason's words. On 2026-10-15 two reports containing "Stop" (a list of hook events) latched
+`hold.json` in the main checkout, which every session whose hooks run from there shares; the same
+report shape also counts as Mason speaking and can clear a hold he set. Reproduced by replaying both
+real reports minus the preamble line through `origin/main`'s hooks.
+
+**Why not fixed yet.** A text-shape fix (recognise the exact harness frame at the start of the prompt)
+was tried on PR #940 and removed: Sol blocked it because a user-typed message of the same shape with
+an indented "stop" would no longer latch. Sol's direction, which Mason chose: decide by trusted
+origin, not text. The session transcript records it (`"origin":{"kind":"peer"}` on a hand-back,
+`{"kind":"human"}` on Mason's messages); not yet verified is whether the hook can read that record
+when it runs, since the hook receives only `transcript_path`.
+
 ## OPEN 2026-10-13 (HIGH; rescued from closed PR #605) — connected MCP tools with no permission rule run without a prompt, including production deploy, rollback and email send
+
+**Partly fixed 2026-10-15.** The Vercel rules are now spelled with the connector's real name
+(`mcp__0fb370f6-…`), so promote, rollback, create-deployment and env edits are denied, and Supabase
+secret creation, project pause/restore/create and branch operations now ask first on both Supabase
+connections. Still open: the email connector's `send_message`; any connector, including one added
+later under a new name, whose tools match no `ask` or `deny` rule, because those tools run with no
+prompt; and the hook's explicit allow described below, which is why. See
+`docs/changelog.d/2026-10-15-vercel-supabase-permission-rule-real-names.md`.
 
 **What happens.** `.claude/hooks/migration-apply-guard.mjs` runs on every `mcp__.*` call and, for any
 tool whose name does not contain `apply_migration`, returns an explicit `permissionDecision: "allow"`
