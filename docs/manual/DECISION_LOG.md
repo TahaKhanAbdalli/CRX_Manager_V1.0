@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-15 — Quotes follow the own-name rule; season rollover keeps the original rep
+
+**Decision (Mason, in chat: "Yes — quotes follow the own-name rule. On season rollover, keep the original rep on the new quote.").** A sales rep records only themselves, or no one, as a quote's salesperson; admins name anyone. Rolling a quote over to the next season keeps the source quote's salesperson, even when another rep runs the rollover.
+**Why.** The same own-name rule as invoices, orders and blend tickets (2026-10-13). Rollover is a copy of an existing quote, not a new naming, so it keeps whoever the quote belonged to.
+**What this forbids/implies:** `20261015200000_quotes_rep_own_name.sql` (migration-history row 948; in force once that row says APPLIED) enforces this with trigger `quotes_guard_rep_salesman_20261015`; only `rollover_quote_to_season`'s own marked insert may carry another rep's name. Do not ask Mason again about quote salesperson or rollover. Source: `docs/changelog.d/2026-10-15-quotes-rep-own-name.md`.
+
 ## 2026-10-15 — Goals 2 and 3 settled item by item; cost and margin are admin-only; order split billing is in, field split billing and blend pricing are future work
 
 **Decision (Mason, in chat, after an item-by-item walkthrough checked against `7cd781f77`).** Goals 2 and 3 are settled as follows:

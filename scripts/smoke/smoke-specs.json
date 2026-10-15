@@ -254,6 +254,20 @@
         "security"
       ]
     },
+    "quotes_rep_own_name": {
+      "chain": "smoke-quotes-rep-own-name.sql",
+      "container_only": true,
+      "container_prover": "prove-quotes-rep-own-name-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-quotes-rep-own-name-real-schema.mjs, never through run-smoke.mjs against the live database: season rollover draws a customer-visible quote number from a non-transactional sequence that a rollback does not return. 20261015200000: a sales rep records only themselves (or no one) as a quote's salesperson; admins are unrestricted; season rollover keeps the original rep. Trigger guard_rep_quote_salesman_20261015 refuses, with SALESMAN_SCOPE_DENIED and nothing written, a rep inserting a quote naming someone else (as the owner and as the authenticated role through RLS), replacing or clearing another rep's name, filling a blank with someone else's, handing their own quote to another rep, or clearing their own name; a rep inserts under their own name or none and fills a blank with their own, and an update that leaves another rep's salesperson alone works. rollover_quote_to_season run by a rep on another rep's quote keeps that rep; afterwards, or with a marker naming a quote that carries a different salesperson, the exception cannot be claimed. An admin rolls over (keeping the original rep), names and reassigns anyone. Fail-first: step 1 fails before the guard exists. Uses an active admin and two active sales reps; terminal rollback.",
+      "covers": [
+        "rollover_quote_to_season",
+        "guard_rep_quote_salesman_20261015"
+      ],
+      "area": [
+        "lifecycle",
+        "security"
+      ]
+    },
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
       "covers": [
