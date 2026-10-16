@@ -42,6 +42,12 @@ export interface ProfilePublic {
   is_active: boolean;
 }
 
+/** One row from the active-product search picker (ProductSearchPicker): identity details plus Crop Program defaults. */
+export type ProductSearchResult = Pick<Product,
+  'id' | 'product_name' | 'sku' | 'unit_size' | 'packaging_variant' | 'container_size' | 'container_unit'
+  | 'inventory_unit' | 'return_policy' | 'is_full_tote_only' | 'rate_unit' | 'rate_per_acre'
+> & { product_family?: { name?: string | null } | null };
+
 export interface Product {
   id: string;
   product_name: string;

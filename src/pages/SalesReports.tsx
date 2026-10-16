@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
+import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
@@ -70,6 +71,9 @@ export default function SalesReports() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [productId, setProductId] = useState('');
+  const [productName, setProductName] = useState('');
+  // Bumped by Clear All to remount the product picker, so unselected typed text is cleared too.
+  const [productPickerKey, setProductPickerKey] = useState(0);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   const [salesRepId, setSalesRepId] = useState('');
   const [category, setCategory] = useState('');
@@ -77,7 +81,6 @@ export default function SalesReports() {
   const [includeFarmGroup, setIncludeFarmGroup] = useState(false);
 
   // ── Filter dropdown options ──
-  const [productOptions, setProductOptions] = useState<FilterOption[]>([]);
   const [customerOptions, setCustomerOptions] = useState<FilterOption[]>([]);
   const [salesRepOptions, setSalesRepOptions] = useState<FilterOption[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
@@ -111,8 +114,6 @@ export default function SalesReports() {
 
   // ── Load filter options on mount ──
   useEffect(() => {
-    supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(500)
-      .then(({ data }) => setProductOptions((data || []).map(r => ({ id: r.id, name: r.product_name }))));
     supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
       .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
     // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
@@ -212,7 +213,7 @@ export default function SalesReports() {
 
   // ── Clear all filters ──
   const clearFilters = () => {
-    setStartDate(''); setEndDate(''); setProductId('');
+    setStartDate(''); setEndDate(''); setProductId(''); setProductName(''); setProductPickerKey((k) => k + 1);
     setSelectedCustomerIds([]); setSalesRepId('');
     setCategory(''); setSeason(''); setIncludeFarmGroup(false);
     setCustomerSearch('');
@@ -447,11 +448,15 @@ export default function SalesReports() {
             {/* Product */}
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Product</label>
-              <select value={productId} onChange={e => setProductId(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[180px]">
-                <option value="">All Products</option>
-                {productOptions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <ProductSearchPicker
+                key={productPickerKey}
+                value={productId}
+                selectedLabel={productName}
+                onSelect={p => { setProductId(p?.id ?? ''); setProductName(p?.product_name ?? ''); }}
+                placeholder="All products (type to search)"
+                ariaLabel="Filter by product"
+                className="min-w-[240px]"
+              />
             </div>
 
             {/* Customer multi-select */}

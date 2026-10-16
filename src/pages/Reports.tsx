@@ -15,6 +15,7 @@ import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
 import { formatExactUSD } from '../lib/money';
 import LogbookReport from '../components/reports/LogbookReport';
+import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
@@ -22,6 +23,7 @@ import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
+import { fetchAllRows } from '../lib/reconciliation';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
@@ -216,9 +218,16 @@ export default function Reports() {
   // ─── OPERATIONAL data ───────────────────────────────────────
   const [chemHistoryData, setChemHistoryData] = useState<ChemicalHistoryRow[]>([]);
   const [chemProductId, setChemProductId] = useState('');
-  const [productOptions, setProductOptions] = useState<{ id: string; name: string }[]>([]);
+  const [chemProductName, setChemProductName] = useState('');
   const [inventoryCostData, setInventoryCostData] = useState<InventoryCostRow[]>([]);
   const [priceListData, setPriceListData] = useState<Record<string, unknown>[]>([]);
+  const [priceListError, setPriceListError] = useState(false);
+  const [priceListLoaded, setPriceListLoaded] = useState(false);
+  const priceListRequestId = useRef(0);
+  // Its own pending flag: the shared `loading` can be cleared by another report's request
+  // while a Price List load is still running.
+  const [priceListPending, setPriceListPending] = useState(false);
+  const priceListExportReady = !loading && !priceListPending && !priceListError && priceListLoaded;
   const [postedAppsData, setPostedAppsData] = useState<Record<string, unknown>[]>([]);
 
   // ─── YEAR-END data ────────────────────────────────────────
@@ -227,15 +236,6 @@ export default function Reports() {
   const [showYeDialog, setShowYeDialog] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
   const [yeBatchMode, setYeBatchMode] = useState(false);
-
-  // Load product options on mount (for chemical history filter)
-  useEffect(() => {
-    supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(500)
-      .then(({ data: rows }) => {
-        setProductOptions((rows || []).map((r) => ({ id: r.id, name: r.product_name })));
-      })
-      ; // non-critical: product filter dropdown stays empty on error
-  }, []);
 
   // ─── PROFITABILITY sub-fetchers ────────────────────────────
   const fetchCustomerProfitability = useCallback(async () => {
@@ -452,15 +452,67 @@ export default function Reports() {
     setInventoryCostData(assertRpcResult<InventoryCostRow[]>(data, 'get_inventory_cost_report'));
   }, [toast]);
 
+  // Reads every active product page by page (one request stops at the row cap).
+  // A failed page clears the list and shows an error, so a partial price list
+  // never appears, or exports, as if it were complete.
   const fetchPriceList = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('products')
-      .select('product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size')
-      .eq('is_active', true)
-      .order('product_name')
-      .limit(500);
-    if (error) { toast('error', 'Failed to load price list.'); return; }
-    setPriceListData((data || []) as Record<string, unknown>[]);
+    // Only the newest load may set state; an older one finishing late is ignored.
+    const requestId = ++priceListRequestId.current;
+    setPriceListPending(true);
+    let data: Record<string, unknown>[] | null = null;
+    try {
+      const result = await fetchAllRows<Record<string, unknown>>((from, to) => supabase
+        .from('products')
+        .select('id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size')
+        .eq('is_active', true)
+        .order('product_name')
+        .order('id')
+        .range(from, to));
+      if (result.error) {
+        Sentry.captureException(new Error(result.error.message), { extra: { context: 'price_list_load' } });
+      } else {
+        // The pages are separate reads, so a product added, renamed or deactivated during them
+        // can shift the offsets and skip or repeat a row. Read the active ids again afterwards:
+        // the list is accepted only if it has no repeats and exactly the same products as that
+        // second read, so a membership change still in effect when the second read runs shows as
+        // an error. This is not a transactional snapshot (an off-then-on flip between the reads
+        // is not seen).
+        const rows = result.data ?? [];
+        const recheck = await fetchAllRows<{ id: string }>((from, to) => supabase
+          .from('products')
+          .select('id')
+          .eq('is_active', true)
+          .order('id')
+          .range(from, to));
+        const listIds = new Set(rows.map((r) => r.id as string));
+        const recheckIds = new Set((recheck.data ?? []).map((r) => r.id));
+        const sameProducts = !recheck.error
+          && listIds.size === rows.length
+          && recheckIds.size === listIds.size
+          && [...listIds].every((id) => recheckIds.has(id));
+        if (!sameProducts) {
+          Sentry.captureException(new Error('Price list read was not a complete snapshot'), {
+            extra: { context: 'price_list_load', rows: rows.length, uniqueIds: listIds.size, recheckRows: recheckIds.size, recheckError: recheck.error?.message },
+          });
+        } else {
+          data = rows;
+        }
+      }
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'price_list_load' } });
+    }
+    if (requestId !== priceListRequestId.current) return;
+    setPriceListPending(false);
+    if (!data) {
+      setPriceListData([]);
+      setPriceListLoaded(false);
+      setPriceListError(true);
+      toast('error', 'Failed to load price list.');
+      return;
+    }
+    setPriceListError(false);
+    setPriceListData(data);
+    setPriceListLoaded(true);
   }, [toast]);
 
   const fetchPostedApplications = useCallback(async () => {
@@ -918,6 +970,10 @@ export default function Reports() {
         { key: 'below_reorder', header: 'Below Reorder', format: (v) => v ? 'Yes' : 'No' },
       ], 'inventory_cost');
     } else if (operationalTab === 'price_list') {
+      if (!priceListExportReady) {
+        toast('error', 'Price list export unavailable until the full list loads.');
+        return;
+      }
       exportToCSV(priceListData, [
         { key: 'product_name', header: 'Product' },
         { key: 'sku', header: 'SKU' },
@@ -1155,12 +1211,13 @@ export default function Reports() {
         {category === 'operational' && operationalTab === 'chemical_history' && (
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Product</label>
-            <select value={chemProductId} onChange={(e) => setChemProductId(e.target.value)} aria-label="Select product" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]">
-              <option value="">— Select Product —</option>
-              {productOptions.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+            <ProductSearchPicker
+              value={chemProductId}
+              selectedLabel={chemProductName}
+              onSelect={(p) => { setChemProductId(p?.id ?? ''); setChemProductName(p?.product_name ?? ''); }}
+              ariaLabel="Select product"
+              className="min-w-[260px]"
+            />
           </div>
         )}
 
@@ -1344,7 +1401,18 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleOperationalCSV)}
+          {dateFilterBar(handleOperationalCSV, operationalTab === 'price_list' && !priceListExportReady)}
+
+          {operationalTab === 'price_list' && priceListError && (
+            <div role="alert" className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+              The price list could not be loaded completely, so it is not shown and cannot be exported. Refresh the page to try again.
+            </div>
+          )}
+          {operationalTab === 'price_list' && priceListExportReady && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800">
+              <span className="font-semibold">Active products:</span> {priceListData.length}
+            </div>
+          )}
 
           {/* Inventory cost total */}
           {operationalTab === 'inventory_cost' && inventoryCostData.length > 0 && (
@@ -1362,14 +1430,14 @@ export default function Reports() {
             </div>
           )}
 
-          <Card padding={false}>
+          {!(operationalTab === 'price_list' && priceListError) && <Card padding={false}>
             <div className="p-5">
               {operationalTab === 'inventory_cost' && <DataTable data={inventoryCostData as unknown as Record<string, unknown>[]} columns={inventoryCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category']} emptyTitle="No inventory data" loading={loading} />}
               {operationalTab === 'chemical_history' && <DataTable data={chemHistoryData as unknown as Record<string, unknown>[]} columns={chemHistoryCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No chemical history" emptyDescription="Select a product and date range" loading={loading} />}
               {operationalTab === 'posted_applications' && <DataTable data={postedAppsData} columns={postedAppsCols} searchable searchKeys={['customer_name', 'record_number']} emptyTitle="No posted applications" loading={loading} />}
-              {operationalTab === 'price_list' && <DataTable data={priceListData} columns={priceListCols} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'vendor']} emptyTitle="No products" loading={loading} />}
+              {operationalTab === 'price_list' && <DataTable data={priceListData} columns={priceListCols} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'vendor']} emptyTitle="No products" loading={loading || priceListPending} />}
             </div>
-          </Card>
+          </Card>}
         </>
       )}
 

@@ -13,7 +13,7 @@ import { Plus, Copy, Pencil, Trash2, Sprout, Save, X, ChevronDown, ChevronUp } f
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
-import SearchableSelect from '../components/ui/SearchableSelect';
+import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import Modal from '../components/ui/Modal';
 import Badge from '../components/ui/Badge';
 import SplitHeading from '../components/ui/SplitHeading';
@@ -26,7 +26,7 @@ import { logActivity } from '../lib/activityLogger';
 import HelpTip from '../components/ui/HelpTip';
 import { computeSeason } from '../utils/season';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
-import type { Product, UnitConversion } from '../types';
+import type { ProductSearchResult, UnitConversion } from '../types';
 
 interface ProgramItem {
   product_id: string;
@@ -62,7 +62,6 @@ export default function CropPrograms() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const [programs, setPrograms] = useState<CropProgram[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProgram, setEditingProgram] = useState<CropProgram | null>(null);
@@ -112,23 +111,9 @@ export default function CropPrograms() {
     setLoading(false);
   }, [toast]);
 
-  const fetchProducts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('is_active', true)
-      .order('product_name')
-      .limit(500);
-    if (error) {
-      Sentry.captureException(error);
-    }
-    setProducts((data || []) as Product[]);
-  }, []);
-
   useEffect(() => {
     fetchPrograms();
-    fetchProducts();
-  }, [fetchPrograms, fetchProducts]);
+  }, [fetchPrograms]);
 
   const savePrograms = async (updated: CropProgram[]) => {
     const { data: existing } = await supabase
@@ -209,12 +194,14 @@ export default function CropPrograms() {
   const updateItem = (idx: number, field: keyof ProgramItem, value: string | number) => {
     const updated = [...formItems];
     (updated[idx] as unknown as Record<string, string | number>)[field] = value;
-    if (field === 'product_id') {
-      const prod = products.find((p) => p.id === value);
-      updated[idx].product_name = prod?.product_name || '';
-      if (prod?.rate_unit) updated[idx].rate_unit = prod.rate_unit;
-      if (prod?.rate_per_acre) updated[idx].rate = prod.rate_per_acre;
-    }
+    setFormItems(updated);
+  };
+
+  const selectItemProduct = (idx: number, prod: ProductSearchResult | null) => {
+    const updated = [...formItems];
+    updated[idx] = { ...updated[idx], product_id: prod?.id ?? '', product_name: prod?.product_name ?? '' };
+    if (prod?.rate_unit) updated[idx].rate_unit = prod.rate_unit;
+    if (prod?.rate_per_acre) updated[idx].rate = prod.rate_per_acre;
     setFormItems(updated);
   };
 
@@ -497,11 +484,11 @@ export default function CropPrograms() {
                     </div>
                     <div className="col-span-2 sm:col-span-4">
                       <label className="block text-xs font-medium text-secondary mb-1">Product</label>
-                      <SearchableSelect
-                        options={products.map((p) => ({ value: p.id, label: p.product_name }))}
+                      <ProductSearchPicker
                         value={item.product_id}
-                        onChange={(value) => updateItem(idx, 'product_id', value)}
-                        placeholder="Select product..."
+                        selectedLabel={item.product_name}
+                        onSelect={(prod) => selectItemProduct(idx, prod)}
+                        ariaLabel={`Product for item ${idx + 1}`}
                       />
                     </div>
                     <div className="col-span-1 sm:col-span-2">
