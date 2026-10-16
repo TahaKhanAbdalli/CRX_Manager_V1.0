@@ -1,8 +1,11 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-15 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-15 19:36 UTC; the one change since the 17:28 UTC read is that
-`20261015200000_quotes_rep_own_name` (ledger `20261015193420`, PR #938 merged as `1673d5b58`) is now
+`execute_sql`, 2026-10-15 23:12 UTC; the one change since the 19:36 UTC read is that
+`20261015230000_staff_photo_storage_access` (ledger `20261015210630`, PR #929 merged as `cd7b796a4`) is
+now applied, which re-certified the public photo buckets entry below. In the 19:36 UTC read, the one
+change since the 17:28 UTC read was that
+`20261015200000_quotes_rep_own_name` (ledger `20261015193420`, PR #938 merged as `1673d5b58`) had
 applied, which re-certified the quote salesperson entry below. In the 17:28 UTC read, the two changes
 since the 12:32 UTC read were that
 `20261014220000_rup_register_admin_only` (ledger `20261015135505`, PR #927 merged as `dd2bda843`) and
@@ -636,7 +639,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   and `FieldStop` silently skips the customer receipt email. Fix: widen the driver branch for assigned open
   stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`),
   `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`).)
-- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 in progress 2026-10-14, Goal 1).** `delivery-photos`,
+- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 APPLIED LIVE 2026-10-15 21:06 UTC as `20261015230000`, PR #929 merged as `cd7b796a4`; step 2 open, Goal 1).** `delivery-photos`,
   `receiving-photos` and `team-note-attachments` are `public=true` (checked live 2026-10-14). Mason decided on
   2026-10-13 that viewing them needs an active staff sign-in every time; an expiring signed URL does not meet that,
   so `createSignedUrl` is not the fix. Step 1 (`20261015230000_staff_photo_storage_access` plus the app's
@@ -654,7 +657,10 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   Storage deletes as the signed-in user, and a DELETE only reaches rows that user may also read, so with no storage
   read policy no delete in these buckets removed anything, even an admin's (proven in the disposable-database prover,
   which models live's `storage.protect_delete`); that is why "deleted" team-note photos left orphan files. Step 1 fixes
-  it.
+  it. **Deferred to step 2 (Sol MED on PR #929):** two `team_note_attachments` rows may name the same file in the
+  uploader's own folder, so deleting one row removes the file the other names; only the uploader can create that, the
+  app never does (each upload gets a fresh name), and 0 rows exist live (2026-10-15). Fix: a unique canonical file path
+  or a remaining-reference check before the file is removed.
   (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`).)
 - **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
   active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`
