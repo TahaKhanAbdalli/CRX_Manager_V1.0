@@ -639,7 +639,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   and `FieldStop` silently skips the customer receipt email. Fix: widen the driver branch for assigned open
   stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`),
   `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`).)
-- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 APPLIED LIVE 2026-10-15 21:06 UTC as `20261015230000`, PR #929 merged as `cd7b796a4`; step 2 open, Goal 1).** `delivery-photos`,
+- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 APPLIED LIVE 2026-10-15 21:06 UTC as `20261015230000`, PR #929 merged as `cd7b796a4`; step 2 written as `20261016030000_staff_photo_buckets_private` (migration-history row 950), not applied, Goal 1).** `delivery-photos`,
   `receiving-photos` and `team-note-attachments` are `public=true` (checked live 2026-10-14). Mason decided on
   2026-10-13 that viewing them needs an active staff sign-in every time; an expiring signed URL does not meet that,
   so `createSignedUrl` is not the fix. Step 1 (`20261015230000_staff_photo_storage_access` plus the app's
@@ -659,8 +659,8 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   which models live's `storage.protect_delete`); that is why "deleted" team-note photos left orphan files. Step 1 fixes
   it. **Deferred to step 2 (Sol MED on PR #929):** two `team_note_attachments` rows may name the same file in the
   uploader's own folder, so deleting one row removes the file the other names; only the uploader can create that, the
-  app never does (each upload gets a fresh name), and 0 rows exist live (2026-10-15). Fix: a unique canonical file path
-  or a remaining-reference check before the file is removed.
+  app never does (each upload gets a fresh name), and 0 rows exist live (2026-10-15). Fixed in step 2
+  (`20261016030000`, once applied) by a unique index on the storage path inside `file_url`.
   (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`).)
 - **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
   active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`

@@ -23,6 +23,11 @@
  *   4. The preflight refuses a drifted policy and a second apply; the buckets stay public.
  *   5. MUTATION: with is_driver() forced true, the applicator downloads a delivery photo of a
  *      delivery assigned to them, so the driver gate is what refuses it.
+ *   6. STEP 2 (20261016030000): its preflight refuses two team-note rows naming one file, a
+ *      missing step 1 read policy, an extra policy naming a photo bucket, a policy that tests no
+ *      bucket and an OR-bypass policy only the whole-set pin catches; applied, the three buckets are private, every access case is
+ *      unchanged, a second row naming the same file is refused (and only because of the new
+ *      index), the live chain still passes, and a second apply is refused.
  *
  * Run: node scripts/smoke/prove-staff-photo-storage-access-real-schema.mjs   (needs Docker)
  * Prints STAFF_PHOTO_STORAGE_PROOF_PASS on success.
@@ -42,6 +47,8 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20261015230000_staff_photo_storage_access.sql');
+// Step 2 of 2 (make the buckets private), proved here on top of step 1.
+const STEP2 = path.join(MIGRATIONS, '20261016030000_staff_photo_buckets_private.sql');
 // Live but not replayable here (customer-documents storage policies); it does not touch photo buckets.
 const PARKED = new Set(['20260914100700_customer_document_bytes_server_only.sql']);
 const LEDGER_ONLY = new Set([
@@ -145,8 +152,10 @@ function plan() {
   const at = all.indexOf(CANDIDATE);
   assert.ok(at >= 0, 'the candidate must be selected for post-baseline replay');
   // Later-stamped migrations (authored after this one, not yet applied live) are not replayed: the
-  // candidate applies before them, as on live. None may touch what this proof covers.
-  for (const file of all.slice(at + 1)) {
+  // candidate applies before them, as on live. None may touch what this proof covers, except step 2,
+  // which this proof applies itself after step 1.
+  assert.ok(all.includes(STEP2), 'step 2 must be selected for post-baseline replay');
+  for (const file of all.slice(at + 1).filter((f) => f !== STEP2)) {
     assert.ok(!/delivery-photos|receiving-photos|team-note-attachments|delivery_photos|team_note_attachments|storage\.objects/i.test(lf(file)),
       `${path.basename(file)} is stamped after the candidate and touches what this proof covers; re-think the order`);
   }
@@ -170,7 +179,7 @@ function buildContainer() {
   // Owned by postgres here so the candidate applies as postgres; live applies it through the same
   // Management API path that applied 20260914100700's storage policies.
   psql(`CREATE SCHEMA IF NOT EXISTS storage;
-    CREATE TABLE IF NOT EXISTS storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
+    CREATE TABLE IF NOT EXISTS storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false, file_size_limit bigint, allowed_mime_types text[], updated_at timestamptz);
     CREATE TABLE IF NOT EXISTS storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL, name text NOT NULL, owner_id text, metadata jsonb);
     CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT string_to_array(name, '/') $$;
     CREATE OR REPLACE FUNCTION storage.filename(name text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;
@@ -423,6 +432,83 @@ ROLLBACK;`,
   console.log('[prover] PREFLIGHT: a drifted policy aborts the candidate before any change');
 }
 
+// Step 2 (20261016030000): the buckets go private, one team-note row per file, policies untouched.
+const PRIVATE_COUNT = "SELECT count(*) FROM storage.buckets WHERE id IN ('delivery-photos','receiving-photos','team-note-attachments') AND public IS FALSE;";
+const twoRowsOneFile = `${noteRow(U.REP, PUBLIC_NOTE_URL + OBJ.NOTE_REP)}; ${noteRow(U.REP, PUBLIC_NOTE_URL + OBJ.NOTE_REP)}`;
+// The same object under another scheme and host: step 1's policy accepts it, and the app reads only the path.
+const twoUrlsOneFile = `${noteRow(U.REP, PUBLIC_NOTE_URL + OBJ.NOTE_REP)}; ${noteRow(U.REP, PUBLIC_NOTE_URL.replace('https://rhyzpcqhnizqbxphqdkr.supabase.co', 'http://other.example') + OBJ.NOTE_REP)}`;
+// Step 2 pins live's whole storage.objects policy set (25 policies, including buckets this container
+// does not replay); here it is re-pinned to this container's set, read after step 1, exactly once.
+const LIVE_STORAGE_POLICY_SET_MD5 = 'd40293d14ae8054e3b88e0dc5525987f';
+const POLICY_SET_MD5 = `SELECT md5(string_agg(policyname || '|' || cmd || '|' || roles::text || '|' || permissive || '|'
+  || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\\n' ORDER BY policyname)) FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects';`;
+let containerSetMd5 = null;
+function step2Text() {
+  const text = lf(STEP2);
+  assert.equal(text.split(LIVE_STORAGE_POLICY_SET_MD5).length - 1, 1, 'step 2 must pin the live policy set exactly once');
+  return text.replace(LIVE_STORAGE_POLICY_SET_MD5, containerSetMd5);
+}
+function step2Refuses(setup, expected, label) {
+  stageText('step2.sql', step2Text());
+  const r = docker([...psqlArgs()], { input: `BEGIN;\n${setup}\n\\i /tmp/step2.sql\nROLLBACK;`, allowFailure: true });
+  assert.notEqual(r.status, 0, `step 2 applied ${label}`);
+  assert.match(r.stderr, expected, `step 2 refused ${label} for the wrong reason:\n${r.stderr}`);
+  assert.equal(scalar(PRIVATE_COUNT), '0', `step 2 left a bucket private after refusing ${label}`);
+  console.log(`[prover] STEP 2 PREFLIGHT: refuses ${label}`);
+}
+function step2(afterStep1) {
+  containerSetMd5 = scalar(POLICY_SET_MD5);
+  assert.match(containerSetMd5, /^[0-9a-f]{32}$/, 'could not read the container policy set');
+  // A second file naming the same object before the index exists: the app would delete it twice.
+  const dup = attempt(U.REP, twoRowsOneFile, { statement: true });
+  assert.match(dup, /^ok\|1$/, `before step 2 two rows may name one file, got ${dup}`);
+  const dupUrl = attempt(U.REP, twoUrlsOneFile, { statement: true });
+  assert.match(dupUrl, /^ok\|1$/, `before step 2 step 1's policy accepts two URLs for one file, got ${dupUrl}`);
+  step2Refuses(`INSERT INTO public.team_note_attachments (note_id, file_url, file_name, file_type, file_size_bytes, uploaded_by)
+  SELECT '${NOTE}', '${PUBLIC_NOTE_URL}${OBJ.NOTE_REP}', 'p.jpg', 'image/jpeg', 1, '${U.REP}' FROM generate_series(1, 2);`, /STAFF_PHOTOS_PRIVATE_PREFLIGHT: two or more team_note_attachments rows name the same file/, 'two rows naming one file');
+  step2Refuses('DROP POLICY "staff_photos_receiving_select" ON storage.objects;',
+    /STAFF_PHOTOS_PRIVATE_PREFLIGHT: storage\.objects policy "staff_photos_receiving_select" is missing/, 'a missing step 1 read policy');
+  // Permissive policies OR together: an added broad read would keep photos open once private.
+  step2Refuses(`CREATE POLICY "prover_extra_read" ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'delivery-photos');`,
+    /STAFF_PHOTOS_PRIVATE_PREFLIGHT: an unexpected storage policy names a photo bucket/, 'an extra policy naming a photo bucket');
+  step2Refuses('CREATE POLICY "prover_any_bucket" ON storage.objects FOR SELECT TO authenticated USING (true);',
+    /STAFF_PHOTOS_PRIVATE_PREFLIGHT: a storage\.objects policy does not test bucket_id/, 'a policy that tests no bucket');
+  // Passes both text checks (names no photo bucket, mentions bucket_id =), yet opens every bucket.
+  step2Refuses(`CREATE POLICY "prover_or_bypass" ON storage.objects FOR SELECT TO authenticated USING (true OR bucket_id = 'other-bucket');`,
+    /STAFF_PHOTOS_PRIVATE_PREFLIGHT: the storage\.objects policy set changed since it was read/, 'a bypass policy the text checks miss');
+
+  stageText('step2.sql', step2Text());
+  const a = apply('step2.sql');
+  assert.equal(a.status, 0, `step 2 failed to apply:\n${a.output}`);
+  assert.equal(scalar(PRIVATE_COUNT), '3', 'step 2 did not make the three buckets private');
+  assert.equal(scalar("SELECT count(*) FROM storage.buckets WHERE id IN ('delivery-photos','receiving-photos','team-note-attachments') AND updated_at > now() - interval '5 minutes';"),
+    '3', 'step 2 did not stamp the buckets\' updated_at');
+  console.log('[prover] STEP 2 applied: the three photo buckets are private');
+
+  const after2 = runMatrix('after step 2');
+  const changed = CASES.map(([label]) => label).filter((label) => after2[label] !== afterStep1[label]);
+  assert.deepEqual(changed, [], `step 2 changed who may view, upload or delete:\n  ${changed.map((l) => `${l}: "${afterStep1[l]}" -> "${after2[l]}"`).join('\n  ')}`);
+  console.log(`[prover] STEP 2: all ${CASES.length} access cases identical to step 1`);
+
+  const dup2 = attempt(U.REP, twoRowsOneFile, { statement: true });
+  assert.match(dup2, /^23505\|duplicate key value violates unique constraint "team_note_attachments_object_path_key"/, `after step 2 a second row naming the same file must be refused, got ${dup2}`);
+  const dupUrl2 = attempt(U.REP, twoUrlsOneFile, { statement: true });
+  assert.match(dupUrl2, /^23505\|duplicate key value violates unique constraint "team_note_attachments_object_path_key"/, `after step 2 a second URL for the same file must be refused, got ${dupUrl2}`);
+  const dupMutant = attempt(U.REP, twoUrlsOneFile, { statement: true, fixture: 'DROP INDEX public.team_note_attachments_object_path_key;' });
+  assert.match(dupMutant, /^ok\|1$/, `MUTATION: without the index the second row should insert, got ${dupMutant}`);
+  console.log('[prover] STEP 2: a second team-note row naming the same file, even under another scheme and host, is refused, and only because of the new index');
+
+  const chain = runChain();
+  assert.match(chain, /SMOKE_PASS_ROLLBACK/, `the live chain failed after step 2:\n${chain}`);
+  assert.doesNotMatch(chain, /SMOKE_FAIL|SMOKE_SETUP/, `the live chain failed after step 2:\n${chain}`);
+  console.log('[prover] STEP 2: the live chain still passes');
+
+  const again = apply('step2.sql');
+  assert.notEqual(again.status, 0, 'step 2 applied a second time');
+  assert.match(again.output, /STAFF_PHOTOS_PRIVATE_PREFLIGHT: the three photo buckets must exist and still be public/, `second step 2 apply refused for the wrong reason:\n${again.output}`);
+  console.log('[prover] STEP 2 RE-APPLY: refused by the preflight');
+}
+
 function main() {
   if (!REUSE) buildContainer();
   fidelity();
@@ -458,6 +544,7 @@ function main() {
   assert.match(mutant, SEEN, `MUTATION: with is_driver() forced true the applicator should see the photo of a delivery assigned to them, got ${mutant}`);
   console.log('[prover] MUTATION: with is_driver() forced true the applicator sees that photo, so the driver gate is what refuses it');
 
+  step2(after);
   console.log('STAFF_PHOTO_STORAGE_PROOF_PASS');
 }
 
