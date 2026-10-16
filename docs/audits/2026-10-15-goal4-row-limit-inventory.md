@@ -6,7 +6,7 @@ Code baseline: `origin/main` at `9b6eb8607`. Line numbers were rechecked against
 
 ## Summary for Mason
 
-**What a "row limit" is.** When a screen asks the database for records, it often says "give me at most 500." The database itself also has a ceiling (Supabase's default is 1,000 rows per request). Once the business has more records than that, the extra ones are quietly left off. Nearly every screen below gives **no warning** when that happens. Every "1,000" in this summary assumes the database uses that default. The real setting hasn't been read yet (see "Something only you can check" below). If it is higher, the server-ceiling findings start at that number instead.
+**What a "row limit" is.** When a screen asks the database for records, it often says "give me at most 500." The Supabase Data API, the layer the app uses to read the database, also caps every response at 1,000 rows. That is Supabase's default, and it was confirmed in the dashboard on 2026-10-16 (see "Max rows, confirmed" below). Once the business has more records than that, the extra ones are quietly left off. Nearly every screen below gives **no warning** when that happens.
 
 **What it means for you:**
 
@@ -16,7 +16,7 @@ Code baseline: `origin/main` at `9b6eb8607`. Line numbers were rechecked against
    - the product filters on Reports and Sales Reports, and Crop Programs, now search as you type;
    - the Price List now reads every product.
 4. **Pickers and lists without a database search will lose records** (customers, products, fields, orders, deliveries) at 20, 50, 200, 500 or 1,000. The search-as-you-type pickers in L15 are the exception: they can find any record. There are **62 such open findings**, plus the 4 already fixed (M1–M4). Most are dropdowns that load the first N records instead of searching.
-5. **Compliance records can be incomplete.** These would silently drop records past the server ceiling (1,000 if it is the default), or past 500 where noted:
+5. **Compliance records can be incomplete.** These would silently drop records past the server ceiling of 1,000, or past 500 where noted:
    - the restricted-use pesticide sales register;
    - the application logbooks (including FAA);
    - the Application Records export and the Posted Applications report (both stop at 500);
@@ -24,7 +24,7 @@ Code baseline: `origin/main` at `9b6eb8607`. Line numbers were rechecked against
 
 **What isn't a problem.** The places listed in "Already correct" below read every row properly. Several dashboard "top 10" lists are short on purpose. These were all checked and need no fix.
 
-**Something only you can check (2 minutes, read-only).** The database's per-request ceiling ("Max rows") is set in the Supabase dashboard and can't be read from the database itself. Open Supabase, go to Project Settings, then API (Data API), and tell me the "Max rows" number. If it's 1,000 (the default), four screens that set their own limit at 2,000 or 5,000 are really capped at 1,000. Their "some may be hidden" warning can then never appear. This document assumes 1,000.
+**Max rows, confirmed (2026-10-16).** The database's per-request ceiling ("Max rows") is set in the Supabase dashboard and can't be read from the database itself. Mason signed in to the dashboard, and Claude read the setting on the Data API settings page. It is **1,000**, the default, and nothing was changed. So six reads that set their own limit at 2,000 or 5,000 are really capped at 1,000: Invoices, the three Field Invoices panels, and To Ship's orders and order lines. On the Invoices and Field Invoices screens, the "some may be hidden" warning can never appear. If anyone raises Max rows later, every "1,000 (server)" finding below moves to the new number, and this audit should be updated.
 
 **Recommended next step:** fix the money totals first by computing them in the database (the fix order is at the end).
 
@@ -32,7 +32,7 @@ Code baseline: `origin/main` at `9b6eb8607`. Line numbers were rechecked against
 
 - **Signal:** "Silent" means nothing on screen says records are missing. "Toast" means a pop-up that disappears. "Banner" means a message that stays on the page.
 - **Severity:** **HIGH** means a wrong money total, or an integrity or compliance check that can miss a problem. **MED** means a record missing from a picker or list. **LOW** is cosmetic, or a short list that is short on purpose.
-- **Cap "1,000 (server)"** means the code asks for everything, but the database ceiling cuts it at 1,000 (assumed default, see above).
+- **Cap "1,000 (server)"** means the code asks for everything, but the database ceiling cuts it at 1,000 (the confirmed Max rows setting, see above).
 - **RPC** means a database function the screen calls. A function that returns a list of rows is cut at 1,000 too. Function names marked *(live)* were confirmed to return rows, or to contain the stated LIMIT, in the live database on 2026-10-15 (`pg_proc` / `pg_get_function_result`, SELECT only).
 - **Found by:** "C" means Claude's sweep, "X" means Codex (`gpt-6-luna`, xhigh) in its independent hunt, and "C+X" means both found it. Claude checked every "X" finding at its file:line before adding it. The picker and LOW tables have no column; their Codex-only rows are marked "found by Codex."
 - All paths are under `src/` unless they start with `supabase/`.
@@ -240,7 +240,7 @@ Across all of these, the Goal 4 rule applies: a failed or partial read must neve
 ## Method
 
 - Four read-only sweeps covered `src/pages`, the shared code (`src/components`, `src/lib`, `src/hooks`), queries with no limit (the server ceiling), and SQL functions plus Edge Functions. Claude then opened the code at each line cited above to confirm the cap, what the screen does with it, and whether a total is summed from it.
-- Live database, SELECT only: every public function containing `LIMIT` (`pg_proc.prosrc`), every function that returns rows (`proretset`), role settings (`pg_roles.rolconfig`, which doesn't hold Max rows), and record counts (595 active products, 151 active customers).
+- Live database, SELECT only: every public function containing `LIMIT` (`pg_proc.prosrc`), every function that returns rows (`proretset`), role settings (`pg_roles.rolconfig`, which doesn't hold Max rows; the value was read from the Supabase dashboard instead), and record counts (595 active products, 151 active customers).
 - Codex: an independent hunt by `gpt-6-luna` at `xhigh` on a frozen copy of `src/` and `supabase/` in a neutral folder, without seeing Claude's list. Then a second Luna pass reviewed this draft from a self-contained packet (the sandbox couldn't read files on that run). Both results are under "Codex cross-check."
 - IDs are not renumbered after the review. Gaps (H17, H31, H35, L8, L16) mark items that moved, and each new row says where it came from.
 
