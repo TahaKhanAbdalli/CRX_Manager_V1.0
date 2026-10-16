@@ -3012,12 +3012,11 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
-  // Pruned on 2026-10-16 when 20261016060000 applied live (ledger version
-  // 20261016121253) and the registry high-water moved past it:
-  //   _bind_replay_receipt_20261015 — an internal helper absent from the generated
-  //     client types, so it left the discovered inventory once its migration stopped
-  //     being newer than the high-water. A dead entry would pre-suppress a future RPC
-  //     reusing the name.
+  // Restored 2026-10-16 when src/types/supabase.ts was regenerated from live after
+  // 20261016060000 applied (ledger 20261016121253): the helper is now in the generated
+  // types, so it is discovered again even though its migration is below the high-water.
+  _bind_replay_receipt_20261015:
+    'idempotency infrastructure helper (20261016060000, replay-binding batch 1): stamps the actor and request fingerprint on the receipt its calling wrapper just wrote; every API-role EXECUTE is revoked',
   // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
   // dead exemption silently pre-suppresses any future RPC reusing the name:
   //   _guard_job_commission_split_immutable remains parked with Wave A under

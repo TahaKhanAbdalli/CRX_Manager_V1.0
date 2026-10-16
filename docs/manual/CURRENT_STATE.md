@@ -1,9 +1,9 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-16 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-16 13:07 UTC: 1033 rows / 1026 names,
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-16 13:42 UTC: 1033 rows / 1026 names,
 `max(version)` `20261016121253` = `20261016060000_bind_money_replay_receipts_batch1`, applied 2026-10-16
-12:12:53 UTC by another session; the 06:16 UTC read before it had 1032 rows / 1025 names,
+12:12:53 UTC; the 06:16 UTC read before it had 1032 rows / 1025 names,
 `max(version)` `20261016051944` = `20261016030000_staff_photo_buckets_private`, applied 2026-10-16
 05:19:44 UTC; the 2026-10-15 23:12 UTC read before it had 1031 rows / 1024 names,
 `max(version)` `20261015210630` = `20261015230000_staff_photo_storage_access`, applied 2026-10-15
@@ -25,10 +25,10 @@ ships or quarterly, whichever comes first.
 
 - **Effective ordering high-water: `20261016060000_bind_money_replay_receipts_batch1`**
   (ledger version `20261016121253`, UTC; applied live 2026-10-16 12:12 UTC, PR #942 merged as
-  `982bc0dda`; read-only ledger read 2026-10-16 13:07 UTC: 1033 rows / 1026 names;
-  migration-history row 951, whose applied record is that change's follow-up). Before it,
-  `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, applied 2026-10-16 05:19 UTC,
-  PR #947 merged as `5851eb514`, migration-history row 950), `20261015230000_staff_photo_storage_access`
+  `982bc0dda`; read-only ledger read 2026-10-16 13:42 UTC: 1033 rows / 1026 names;
+  migration-history row 951). Before it, `20261016030000_staff_photo_buckets_private` (ledger
+  `20261016051944`, applied 2026-10-16 05:19 UTC, PR #947 merged as `5851eb514`, row 950),
+  `20261015230000_staff_photo_storage_access`
   (ledger `20261015210630`, applied 2026-10-15 21:06 UTC, PR #929 merged as `cd7b796a4`), `20261015200000_quotes_rep_own_name` (ledger
   `20261015193420`, applied 2026-10-15 19:34 UTC, PR #938 merged as `1673d5b58`), `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`,
   applied 2026-10-15 16:30 UTC, PR #933 merged as `b2203fd82`),
@@ -91,10 +91,9 @@ ships or quarterly, whichever comes first.
   `20261014210000_order_invoices_rep_own_name`, `20261014220000_rup_register_admin_only` and
   `20261015130000_orders_blend_tickets_rep_own_name`, `20261015200000_quotes_rep_own_name` and
   `20261015230000_staff_photo_storage_access`, and on 2026-10-16 `20261016030000_staff_photo_buckets_private`
-  and `20261016060000_bind_money_replay_receipts_batch1`, with `migrations_high_water` `20261016121253`
-  from a 2026-10-16 13:07 UTC ledger read (its retired helper `_bind_replay_receipt_20261015` left the
-  RPC idempotency inventory exemptions at the same time);
-  those migrations changed function bodies, grants, RLS and storage policies, bucket flags, one index and four triggers, none of which the
+  and `20261016060000_bind_money_replay_receipts_batch1`, with `migrations_high_water` `20261016121253`;
+  those migrations changed function bodies, grants, RLS and storage policies, bucket flags, one index and
+  four triggers, none of which the
   registry tracks, and the ledger shows no other apply since the full refresh).
   Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on

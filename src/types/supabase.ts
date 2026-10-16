@@ -11033,6 +11033,16 @@ export type Database = {
         }
         Returns: number
       }
+      _apply_prepay_to_invoice_replay_impl_20261015: {
+        Args: {
+          p_amount_cents: number
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_performed_by?: string
+          p_prepay_credit_id: string
+        }
+        Returns: string
+      }
       _apply_product_cost_basis_change_set_serialized_inner: {
         Args: {
           p_change_set_id: string
@@ -11041,6 +11051,16 @@ export type Database = {
           p_request_fingerprint: string
         }
         Returns: Json
+      }
+      _apply_write_off_replay_impl_20261015: {
+        Args: {
+          p_amount_cents: number
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_performed_by: string
+          p_reason: string
+        }
+        Returns: string
       }
       _approve_return_intent_impl_20260812: {
         Args: {
@@ -11062,6 +11082,23 @@ export type Database = {
         }
         Returns: Json
       }
+      _batch_apply_prepayments_replay_impl_20261015: {
+        Args: {
+          p_allocations: Json
+          p_idempotency_key?: string
+          p_performed_by: string
+        }
+        Returns: Json
+      }
+      _batch_void_invoices_replay_impl_20261015: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_ids: string[]
+          p_performed_by?: string
+          p_void_reason: string
+        }
+        Returns: number
+      }
       _begin_below_cost_money_write: {
         Args: { p_operation: string; p_payload: Json; p_performed_by: string }
         Returns: undefined
@@ -11080,6 +11117,10 @@ export type Database = {
           p_request_fingerprint: string
           p_response: Json
         }
+        Returns: undefined
+      }
+      _bind_replay_receipt_20261015: {
+        Args: { p_fingerprint: string; p_key: string; p_operation: string }
         Returns: undefined
       }
       _bulk_import_order_below_cost_impl_20260810: {
@@ -11316,6 +11357,17 @@ export type Database = {
         }
         Returns: string
       }
+      _create_prepay_check_splits_replay_impl_20261015: {
+        Args: {
+          p_customer_id: string
+          p_expected_total_cents?: number
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_reference_number: string
+          p_splits: Json
+        }
+        Returns: Json
+      }
       _create_quick_delivery_intent_impl_20260802: {
         Args: {
           p_customer_id: string
@@ -11362,6 +11414,10 @@ export type Database = {
         }
         Returns: string[]
       }
+      _customer_has_open_invoice_20261013: {
+        Args: { p_customer_id: string }
+        Returns: boolean
+      }
       _delete_invoices_split_provenance_impl_20260719: {
         Args: {
           p_idempotency_key?: string
@@ -11369,6 +11425,15 @@ export type Database = {
           p_performed_by?: string
         }
         Returns: number
+      }
+      _delete_prepay_credit_replay_impl_20261015: {
+        Args: {
+          p_credit_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
+        }
+        Returns: Json
       }
       _delivery_invoice_overbilling: {
         Args: { p_invoice_id: string }
@@ -11398,6 +11463,18 @@ export type Database = {
           p_idempotency_key?: string
           p_performed_by: string
           p_source_quote_id: string
+        }
+        Returns: Json
+      }
+      _edit_prepay_credit_replay_impl_20261015: {
+        Args: {
+          p_bucket_label?: string
+          p_credit_id: string
+          p_idempotency_key?: string
+          p_new_balance_cents?: number
+          p_notes?: string
+          p_performed_by?: string
+          p_reference_number?: string
         }
         Returns: Json
       }
@@ -11594,6 +11671,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _replay_fingerprint_20261015: {
+        Args: { p_request: Json }
+        Returns: string
+      }
       _require_auth: { Args: never; Returns: string }
       _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
       _restore_quote_version_below_cost_impl_20260810: {
@@ -11640,6 +11721,15 @@ export type Database = {
           p_reason: string
         }
         Returns: undefined
+      }
+      _reverse_write_off_replay_impl_20261015: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
+          p_write_off_id: string
+        }
+        Returns: Json
       }
       _save_field_app_invoice_impl_20260714: {
         Args: {
@@ -11998,6 +12088,15 @@ export type Database = {
           p_order_id: string
           p_performed_by: string
           p_reason?: string
+        }
+        Returns: Json
+      }
+      _void_payment_replay_impl_20261015: {
+        Args: {
+          p_allocation_set_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
         }
         Returns: Json
       }

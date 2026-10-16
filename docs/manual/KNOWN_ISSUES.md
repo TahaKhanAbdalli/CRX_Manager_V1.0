@@ -1,12 +1,12 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-16 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-16 13:07 UTC: 1033 rows / 1026 names; the one change since the 06:16 UTC read
+`execute_sql`, 2026-10-16 13:42 UTC: 1033 rows / 1026 names; the one change since the 06:16 UTC read
 is that `20261016060000_bind_money_replay_receipts_batch1` (ledger `20261016121253`, PR #942 merged as
-`982bc0dda`, applied 12:12:53 UTC by another session) is now applied, which updated the replay-binding
-entry below (its nine batch-1 functions are now bound; recorded from the ledger, live behaviour re-check
-is that change's follow-up). In the 06:16 UTC read (1032 rows / 1025 names), the one change since the
-2026-10-15 23:12 UTC read is that `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, PR #947
+`982bc0dda`) is now applied, which re-certified the replay-binding entry below: batch 1's nine wrappers,
+nine renamed bodies, three helpers and deferred trigger all read live at 13:42 UTC. In the 06:16 UTC read
+(1032 rows / 1025 names), the one change since the 2026-10-15
+23:12 UTC read is that `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, PR #947
 merged as `5851eb514`) is now applied, which re-certified the public photo buckets entry below: all three
 buckets read `public = false` live at 06:16 UTC. In the 23:12 UTC read, the one change since the 19:36 UTC read is that
 `20261015230000_staff_photo_storage_access` (ledger `20261015210630`, PR #929 merged as `cd7b796a4`) is
@@ -73,7 +73,16 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-15 (HIGH on money paths; batch 1 migration 20261016060000 applied live 2026-10-16, ledger 20261016121253; later batches not written) — about 75 live functions replay a saved result matched on the retry key alone
+## OPEN 2026-10-15 (HIGH on money paths; batch 1 LIVE 2026-10-16, batches 2–4 open) — about 75 live functions replay a saved result matched on the retry key alone (about 66 left after batch 1)
+
+**Batch 1 shipped live 2026-10-16.** Migration `20261016060000_bind_money_replay_receipts_batch1`
+applied 12:12:53 UTC (ledger `20261016121253`, migration-history row 951; PR #942 merged as
+`982bc0dda`). The nine batch-1 functions (listed below, out of the unbound table) now refuse a reused key for a different
+caller or request (`IDEMPOTENCY_ACTOR_MISMATCH` / `IDEMPOTENCY_INTENT_MISMATCH`); an exact retry still
+replays. Proof: live postconditions read and the rollback-only live chain
+`smoke-money-replay-binding-batch1.sql` (SMOKE_PASS_ROLLBACK). Gap (CodeRabbit on PR #950): that chain
+checks an exact retry for eight of the nine functions; for `edit_prepay_credit` it checks only the
+mismatch refusal, so its exact-retry replay is not yet proven live. Batches 2–4 below are still open.
 
 **The problem in one line.** When an action is retried, `check_idempotency` (and the copy-pasted
 `SELECT result FROM idempotency_keys WHERE idempotency_key = … AND operation = …` that many functions
@@ -127,8 +136,8 @@ before any inner plain replay, under the same key lock). 63 receipts existed liv
 **Bound by batch 1 (migration `20261016060000`, applied live 2026-10-16, ledger `20261016121253`).**
 The nine HIGH-money functions it covers left the table below: `void_payment`, `delete_prepay_credit`,
 `edit_prepay_credit`, `apply_write_off`, `reverse_write_off`, `create_prepay_check_splits`,
-`apply_prepay_to_invoice`, `batch_apply_prepayments` and `batch_void_invoices`. This record is from the
-ledger; a live behaviour re-check is that change's own follow-up.
+`apply_prepay_to_invoice`, `batch_apply_prepayments` and `batch_void_invoices`. The live re-check is
+recorded in the batch-1 paragraph above.
 
 **Unbound — ranked, with the batch each is fixed in.**
 
