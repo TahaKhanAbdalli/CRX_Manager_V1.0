@@ -265,6 +265,26 @@
         "security"
       ]
     },
+    "money_replay_binding_batch1": {
+      "chain": "smoke-money-replay-binding-batch1.sql",
+      "container_prover": "prove-money-replay-binding-batch1-real-schema.mjs",
+      "description": "20261016060000 (replay-binding batch 1): nine money RPCs replay a stored idempotency receipt only for the person who wrote it and the exact same request. For each of void_payment, delete_prepay_credit, edit_prepay_credit, apply_write_off, reverse_write_off, apply_prepay_to_invoice, create_prepay_check_splits, batch_apply_prepayments and batch_void_invoices, a key reused for a different record (or a changed reason, balance, check number, allocation list or invoice set) is refused with IDEMPOTENCY_INTENT_MISMATCH and the other record is untouched; the exact retry replays the original answer without doing the work twice; batch_void_invoices treats the same invoice set in another order as the same request; a second admin presenting the first admin's key is refused with IDEMPOTENCY_ACTOR_MISMATCH; a call with no key is refused with IDEMPOTENCY_KEY_REQUIRED (the batch prepay path keeps its internal keyless call); every receipt is stamped with the admin and a SHA-256 fingerprint; an unbound legacy receipt is refused, never replayed. Fail-first: step 1 fails before the migration (void_payment hands payment 1's receipt back as success for payment 2). Uses two real active admins; [SMOKE] customer, invoices (explicit invoice numbers) and prepay credits; draws no document number (the container prover checks every document-number sequence); terminal rollback.",
+      "covers": [
+        "void_payment",
+        "delete_prepay_credit",
+        "edit_prepay_credit",
+        "apply_write_off",
+        "reverse_write_off",
+        "apply_prepay_to_invoice",
+        "create_prepay_check_splits",
+        "batch_apply_prepayments",
+        "batch_void_invoices"
+      ],
+      "area": [
+        "billing",
+        "security"
+      ]
+    },
     "quotes_rep_own_name": {
       "chain": "smoke-quotes-rep-own-name.sql",
       "container_only": true,

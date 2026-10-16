@@ -30,7 +30,7 @@ import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
 import SeasonTag from '../components/invoices/SeasonTag';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
 import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
@@ -361,7 +361,13 @@ export default function Invoices() {
           p_performed_by: profile?.id,
           p_idempotency_key: voidKey,
         });
-        if (error) throw error;
+        if (error) {
+          // Refused as another batch's retry key: nothing was voided, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') batchVoidIdem.resetKey();
+          throw error;
+        }
         batchVoidIdem.resetKey();
         return assertRpcResult(data, 'batch_void_invoices');
       },

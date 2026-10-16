@@ -12,6 +12,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
@@ -74,7 +75,13 @@ export default function WriteOffModal({
         p_performed_by: profile?.id,
         p_idempotency_key: key,
       });
-      if (error) throw error;
+      if (error) {
+        // Refused as another request's retry key: nothing was written off, so start the next try fresh.
+        // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+        const bindingRejection = getIdempotencyBindingRejection(error);
+        if (bindingRejection === 'intent' || bindingRejection === 'actor') writeOffIdem.resetKey();
+        throw error;
+      }
       assertRpcResult<string>(data, 'apply_write_off');
       writeOffIdem.resetKey();
       logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile.id, entityType: 'invoice', entityId: invoiceId });

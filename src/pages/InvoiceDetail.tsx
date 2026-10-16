@@ -14,7 +14,7 @@ import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
@@ -1289,7 +1289,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         p_performed_by: profile.id,
         p_idempotency_key: key,
       });
-      if (error) throw error;
+      if (error) {
+        // Refused as another request's retry key: nothing was reversed, so start the next try fresh.
+        // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+        const bindingRejection = getIdempotencyBindingRejection(error);
+        if (bindingRejection === 'intent' || bindingRejection === 'actor') reverseWoIdem.resetKey();
+        throw error;
+      }
       assertRpcResult(data, 'reverse_write_off');
       reverseWoIdem.resetKey();
       await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile.id, entityType: 'invoice', entityId: id });
@@ -2044,7 +2050,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 ) : (
                   isAdmin && (
                     <button
-                      onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
+                      onClick={() => { setReverseWoTarget(wo); setShowReverseWoModal(true); }}
                       className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium shrink-0"
                     >
                       <RotateCcw className="w-3 h-3" />

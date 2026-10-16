@@ -3012,6 +3012,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  _bind_replay_receipt_20261015:
+    'idempotency infrastructure helper (20261016060000, replay-binding batch 1): stamps the actor and request fingerprint on the receipt its calling wrapper just wrote; every API-role EXECUTE is revoked',
   // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
   // dead exemption silently pre-suppresses any future RPC reusing the name:
   //   _guard_job_commission_split_immutable remains parked with Wave A under

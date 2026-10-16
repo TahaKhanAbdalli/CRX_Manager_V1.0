@@ -1,7 +1,9 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-15 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-15 23:12 UTC: 1031 rows / 1024 names,
+**Last verified:** 2026-10-16 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-16 06:16 UTC: 1032 rows / 1025 names,
+`max(version)` `20261016051944` = `20261016030000_staff_photo_buckets_private`, applied 2026-10-16
+05:19:44 UTC; the 2026-10-15 23:12 UTC read before it had 1031 rows / 1024 names,
 `max(version)` `20261015210630` = `20261015230000_staff_photo_storage_access`, applied 2026-10-15
 21:06:30 UTC; the 19:36 UTC read before it had 1030 rows / 1023 names, `max(version)`
 `20261015193420` = `20261015200000_quotes_rep_own_name`, applied 2026-10-15 19:34:20 UTC; the 17:28 UTC read before it had 1029 rows / 1022 names, `max(version)`
@@ -17,12 +19,13 @@ Every other section keeps its own date; nothing below was re-certified by that r
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-15)
+## Current state at a glance (2026-10-16)
 
-- **Effective ordering high-water: `20261015230000_staff_photo_storage_access`**
-  (ledger version `20261015210630`, UTC; applied live 2026-10-15 21:06 UTC on Mason's approval, PR
-  #929 merged as `cd7b796a4`; read-only ledger read 2026-10-15 23:12 UTC: 1031 rows / 1024 names;
-  migration-history row 949). Before it, `20261015200000_quotes_rep_own_name` (ledger
+- **Effective ordering high-water: `20261016030000_staff_photo_buckets_private`**
+  (ledger version `20261016051944`, UTC; applied live 2026-10-16 05:19 UTC, PR #947 merged as
+  `5851eb514`; read-only ledger read 2026-10-16 06:16 UTC: 1032 rows / 1025 names;
+  migration-history row 950). Before it, `20261015230000_staff_photo_storage_access`
+  (ledger `20261015210630`, applied 2026-10-15 21:06 UTC, PR #929 merged as `cd7b796a4`), `20261015200000_quotes_rep_own_name` (ledger
   `20261015193420`, applied 2026-10-15 19:34 UTC, PR #938 merged as `1673d5b58`), `20261015130000_orders_blend_tickets_rep_own_name` (ledger `20261015163041`,
   applied 2026-10-15 16:30 UTC, PR #933 merged as `b2203fd82`),
   `20261014220000_rup_register_admin_only` (ledger `20261015135505`, applied 2026-10-15

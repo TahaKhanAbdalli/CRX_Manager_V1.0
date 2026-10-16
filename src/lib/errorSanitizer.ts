@@ -5,6 +5,14 @@
  */
 
 const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
+  // A retry key is bound to the person and the exact request that first used it; the database
+  // refuses it for anything else and changes nothing.
+  [/^IDEMPOTENCY_INTENT_MISMATCH\b/,
+   'Nothing was changed. This retry belonged to a different, earlier request. Refresh the page to see what that request did, then try again'],
+  [/^IDEMPOTENCY_ACTOR_MISMATCH\b/,
+   'Nothing was changed. This retry belongs to another user. Reload the page and try again'],
+  [/^IDEMPOTENCY_(?:RESULT_INVALID|RECEIPT_MISSING)\b/,
+   'Nothing was changed now: the outcome of this request could not be confirmed. Refresh the page before trying again'],
   [/^GENERIC_FIELD_CUTOVER_(?:IN_PROGRESS|ISOLATION|STALE_CALL)(?::|$)/,
    'No invoice was changed. An invoice update is finishing; wait a moment, then try Save again'],
   [/^FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED(?::|$)/,

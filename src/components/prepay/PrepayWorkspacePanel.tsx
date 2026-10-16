@@ -21,6 +21,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import type { Json } from '../../types/supabase';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { localToday } from '../../lib/dateUtils';
 import { formatCents as fmt } from '../../lib/money';
@@ -207,7 +208,13 @@ export default function PrepayWorkspacePanel() {
           p_performed_by: profile?.id as string,
           p_idempotency_key: key,
         });
-        if (error) throw error;
+        if (error) {
+          // Refused as another batch's retry key: nothing was applied, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') batchApplyIdem.resetKey();
+          throw error;
+        }
         batchApplyIdem.resetKey();
         const result = assertRpcResult<{ applied_count: number; total_applied_cents: number }>(data, 'batch_apply_prepayments');
         toast('success', `Applied ${fmt(result.total_applied_cents)} across ${result.applied_count} allocation(s)`);

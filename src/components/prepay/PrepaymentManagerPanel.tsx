@@ -22,6 +22,7 @@ import { Sentry } from '../../lib/sentry';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -224,7 +225,13 @@ export default function PrepaymentManagerPanel() {
           p_performed_by: profile?.id,
           p_idempotency_key: editKey,
         });
-        if (error) throw error;
+        if (error) {
+          // Refused as another request's retry key: nothing was edited, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') resetScopedKey(editKeysRef.current, editCredit.id);
+          throw error;
+        }
         const result = assertRpcResult<{ success: boolean }>(data, 'edit_prepay_credit');
         if (!result?.success) throw new Error('Edit failed');
         resetScopedKey(editKeysRef.current, editCredit.id);
@@ -262,7 +269,13 @@ export default function PrepaymentManagerPanel() {
           p_performed_by: profile?.id,
           p_idempotency_key: deleteKey,
         });
-        if (error) throw error;
+        if (error) {
+          // Refused as another request's retry key: nothing was deleted, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') resetScopedKey(deleteKeysRef.current, deleteCredit.id);
+          throw error;
+        }
         const result = assertRpcResult<{ success: boolean }>(data, 'delete_prepay_credit');
         if (!result?.success) throw new Error('Delete failed');
         resetScopedKey(deleteKeysRef.current, deleteCredit.id);
@@ -307,10 +320,10 @@ export default function PrepaymentManagerPanel() {
     // customer/reference and submits check B, both calls share the same
     // page-scoped key and the server replays A's cached success without
     // creating check B's credits or updating B's customer balance.
-    // Reset-on-open means each modal-open starts a fresh idempotency
-    // intent. Retries of THE SAME submission still reuse the key correctly
-    // because resetKey() is only called here and in the onSuccess path.
-    splitCheckIdem.resetKey();
+    // Superseded 2026-10-15 (20261016060000): the server now binds each receipt to the actor and
+    // the exact request, so check B under A's retained key is refused (and the key retired) rather
+    // than replayed. The key is therefore NOT reset on open: an unresolved check A reopened and
+    // resubmitted unchanged replays its receipt instead of creating its credits twice.
     setCheckForm({ customer_id: '', reference_number: '', total: '' });
     setBucketSplits([{ label: '', amount: '' }]);
     setShowNewCheck(true);
@@ -364,7 +377,13 @@ export default function PrepaymentManagerPanel() {
           p_performed_by: performedBy,
           p_idempotency_key: splitKey,
         });
-        if (error) throw new Error(error.message);
+        if (error) {
+          // Refused as another request's retry key: no credit was created, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') splitCheckIdem.resetKey();
+          throw new Error(error.message);
+        }
         const result = assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
         splitCheckIdem.resetKey();
         // Audit #27: surface prepay creation in activity feed.

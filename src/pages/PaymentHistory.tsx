@@ -18,6 +18,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { formatCents as fmt } from '../lib/money';
 
 interface AllocationSet {
@@ -137,7 +138,8 @@ export default function PaymentHistory() {
   const openVoid = (payment: AllocationSet) => {
     setVoidPayment(payment);
     setVoidReason('');
-    voidPaymentIdem.resetKey(); // new void intent — fresh key per target
+    // The key is kept across opens: the server binds it to this payment and reason, so another
+    // payment is refused rather than replayed, and an unresolved void retried unchanged replays.
   };
 
   const handleVoid = async () => {
@@ -154,7 +156,13 @@ export default function PaymentHistory() {
           p_performed_by: profile?.id,
           p_idempotency_key: voidPaymentIdem.getKey(),
         });
-        if (error) throw error;
+        if (error) {
+          // Refused as another request's retry key: nothing was voided, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') voidPaymentIdem.resetKey();
+          throw error;
+        }
         const result = assertRpcResult<{ success: boolean; reversed_cents: number; invoices_affected: number }>(data, 'void_payment');
         if (!result?.success) throw new Error('Void failed');
       },

@@ -1,7 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-15 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-15 23:12 UTC; the one change since the 19:36 UTC read is that
+**Last verified: 2026-10-16 (America/Chicago) against the live migration ledger** (read-only
+`execute_sql`, 2026-10-16 06:16 UTC: 1032 rows / 1025 names; the one change since the 2026-10-15
+23:12 UTC read is that `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, PR #947
+merged as `5851eb514`) is now applied, which re-certified the public photo buckets entry below: all three
+buckets read `public = false` live at 06:16 UTC. In the 23:12 UTC read, the one change since the 19:36 UTC read is that
 `20261015230000_staff_photo_storage_access` (ledger `20261015210630`, PR #929 merged as `cd7b796a4`) is
 now applied, which re-certified the public photo buckets entry below. In the 19:36 UTC read, the one
 change since the 17:28 UTC read was that
@@ -65,6 +68,95 @@ with `where name ~ '^[0-9]{14}'`.
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-10-15 (HIGH on money paths; batch 1 written, migration 20261016060000 not applied) — about 75 live functions replay a saved result matched on the retry key alone
+
+**The problem in one line.** When an action is retried, `check_idempotency` (and the copy-pasted
+`SELECT result FROM idempotency_keys WHERE idempotency_key = … AND operation = …` that many functions
+use instead) returns the first call's saved result **without checking who is asking or which record
+the new call names**. A retry that carries a reused key but a different target or amounts gets record
+A's old "done" answer and returns early: record B is silently never touched. Nothing is done twice, so
+nothing is double-charged or double-deducted; the harm is a **false success** on the wrong record.
+PR #933 fixed the one case found then (`create_invoice_from_blend_ticket`); this entry is the
+system-wide inventory (follow-up task_d66d87f4).
+
+**How likely.** Keys are `<operation>:<user>:<random uuid>` (`src/lib/idempotency.ts:19-21`) and the
+receipts table is closed to clients (RLS `USING (false)`), so one user replaying *another user's* key
+needs a leaked key: very unlikely. The realistic path is the **same user** retrying with a key the
+screen kept after a lost response while the target changed. Screens that still keep an unscoped key
+across different targets are listed in the 2026-09-03 F1 entry below (`KNOWN_UNFIXED_SITES`); two of
+them sit on batch-1 functions (`Invoices` batch void → `batch_void_invoices`, `PrepayWorkspacePanel`
+→ `batch_apply_prepayments`).
+
+**Method.** Read-only, 2026-10-15: every live `public` function whose body mentions idempotency
+(279, read from `pg_proc` by `proname`), with the call graph traced from each
+`authenticated`-executable entry point (172) through its `_impl` helpers. Five independent reviewers
+classified every entry point; each "bound" claim below was checked for ORDER (the bound check runs
+before any inner plain replay, under the same key lock). 63 receipts existed live at the time (newest
+2026-10-14).
+
+**Already bound — no action (about 95).** Caller, target and payload are compared before any replay:
+- `check_idempotency_intent` wrappers: the six return RPCs, the three commission payout RPCs (gauntlet
+  row **3.5, CLOSED live 2026-08-11**, re-verified against the live bodies today),
+  `create/update/void_vendor_bill`, `record/void_vendor_payment`, `receive_po_items`,
+  `reverse_receiving_record`, `draw_down_quote`, `transfer_job_to_invoice`, `adjust_inventory`,
+  `create_inventory_hold`, `save_job`, `update_cycle_count_item`, `notify_damaged_receiving`,
+  `soft_delete_customer_document`.
+- Claim helper (`_claim_bound_lifecycle_idempotency`): `cancel_order`, `void_invoice`,
+  `void_invoice_group`, `delete_invoices`, `batch_post_invoices`, `create_split_invoices_from_order`,
+  `generate_finance_charges`.
+- Request-in-result or result-verified: `post_invoice`, `create_invoice_from_order`,
+  `create_invoice_for_unbilled_delivery`, `create_invoice_from_blend_ticket`, `convert_quote_to_order`,
+  `create_quote_version`, `restore_quote_version`, `complete_cycle_count`, `allocate_payment`,
+  `revert_quote_status`, `save_invoice`, `save_quote`, `bulk_import_order`, `create_quick_delivery`,
+  `assign_customers_sales_rep`, `complete_team_note`, the supplier-pricing and vendor-alias family,
+  `upsert_product_supplier_link`, `create_pricing_workbook_export`, `stage_offline_action`,
+  `process_offline_action`, `save_job_applied_record`.
+- Target-bound (a different record is refused) but not caller-bound, so LOW (cross-user only):
+  `reverse_application_record`, `reverse_credit_memo_application`, `unapply_credit_memo`,
+  `unpost_invoice_group`, `stamp_job_printed`, `post_invoice_group`, `resolve_offline_action`,
+  `save_field_app_split_invoice`, `admin_set_application_service_cost`, `save_customer`,
+  `log_customer_fact` and `log_customer_interaction` (actor not in the fingerprint); `stage_supplier_price_import` leaves one minor field (the
+  source document name/type) outside the fingerprint. (`draw_down_quote`, listed above, is fully bound;
+  its `p_below_cost_reason` is approval metadata, deliberately not part of the request identity.)
+
+**Unbound — ranked, with the batch each is fixed in.**
+
+| Batch | Function (what a mismatched retry does today) | Impact |
+|---|---|---|
+| 1 | `void_payment` answers "payment **B** voided" (it echoes the new id) while B stays active | HIGH money |
+| 1 | `delete_prepay_credit`, `edit_prepay_credit` answer "credit **B** deleted/edited" while B is untouched; the replay runs **before** the login and admin checks | HIGH money |
+| 1 | `apply_write_off`, `reverse_write_off` return write-off A's id or result for invoice or write-off B | HIGH money |
+| 1 | `create_prepay_check_splits`, `apply_prepay_to_invoice`, `batch_apply_prepayments` return A's credits or applications; B's prepay is never created or applied | HIGH money |
+| 1 | `batch_void_invoices` returns A's voided count for a different invoice list; none of the new invoices is voided | HIGH money |
+| 2 | `complete_delivery`, `complete_job` (the latter replays before its role check, with no lock and no expiry): B not completed, no stock deduction, no auto-invoice | HIGH money and stock |
+| 2 | `void_order`, `void_delivery`, `cancel_delivery` (replays before its role check), `unpost_invoice`, `transfer_invoice_to_job`, `price_order`, `update_order_items`, `save_field_app_invoice`, `update_field_app_invoice_billing`, `transition_rebate_claim`, `create_rebate_claim`, `close_accounting_period` | HIGH money |
+| 2 | `apply_credit_memo_to_invoice` is bound before its lock, but its after-lock re-check is plain (race window only) | HIGH (race) |
+| 2 | `record_job_pre_notifications`, `record_job_post_notifications` return job A's recipients; `JobDetail.tsx:607-640` then emails job A's customers about job B and overwrites A's audit text | MED, customer-facing |
+| 3 | `release_inventory_hold`, `retire_inventory_item`, `reconcile_negative_inventory`, `manual_inventory_add`, `create_order_from_blend_ticket`, `create_direct_order`, `create_rush_order`, `close_quote_as_applied`, `close_quote_as_short`, `create_application_record_from_blend_ticket`, `batch_cancel_deliveries`, `reverse_completed_cycle_count`, `create_planned_holds` | HIGH stock |
+| 4 | MED: `admin_update_profile` (a role change or deactivation silently skipped), `assign_job_applicator`, `batch_reschedule_deliveries`, `cancel_cycle_count`, `cancel_purchase_order`, `delete_purchase_order`, `submit_purchase_order`, `save_purchase_order` (create path), `confirm_delivery` (replays before its role check), `consolidate_draft_invoices`, `create_blend_ticket`, `create_delivery_with_items`, `create_followup_delivery`, `admin_save_application_service` (create path), `delete_vendor`, `reactivate_vendor`, `save_vendor`, `dispatch_job_locations`, `undispatch_job_locations`, `duplicate_quote`, `generate_rup_sales_records`, `link_blend_ticket_to_order`, `unlink_blend_ticket_from_order`, `link_fields_to_parent`, `unlink_field_from_parent`, `load_recipe_into_job`, `reassign_delivery`, `review_customer_fact`, `supersede_customer_fact`, `save_blend_recipe` (replays before its edit check), `save_blend_ticket`, `save_blend_ticket_fields`, `save_field`, `save_field_polygons`, `set_application_record_lots`, `set_field_boundary`, `set_field_override_acres`, `update_blend_ticket_billing_status`, `update_field_app_applied_info`, `batch_approve_blend_tickets`, `batch_reject_blend_tickets`, `commit_label_draft`, `create_job_from_quote_section`, `create_quote_from_template`, `edit_delivery`, `mark_inventory_row_verified` (replays before login), `reopen_accounting_period`, `reverse_blend_ticket_approval`, `rollover_quote_to_season` (a replay returns `{status: duplicate}` with no quote id, so `QuoteBuilder.tsx:2054` navigates to `/quotes/undefined`; a concurrent first call gets a raw unique violation; when fixed, start from the post-PR #938 body, md5 `eb9b65e556f3054d0751f3a7c08dce3f`, and keep its two `crx.quote_rollover_source` marker lines), `start_job` (replays before its job check) | MED |
+| 4 | LOW: `confirm_job_notification_sent`, `save_field_crop_history`, `save_field_geometry`, `log_failed_notification` (no role check at all), `bulk_create_label_drafts`, `dismiss_watchdog_flag`, `save_quote_template` | LOW |
+
+Disabled today (their first statement raises `PREPAY_BULK_APPLY_DISABLED`):
+`apply_remaining_prepayments` and `batch_apply_all_prepayments`. Both are unbound; fix them only if
+they are re-enabled.
+
+**Fix shape (each batch).** The commission 3.5 pattern. Rename the live body unchanged to an internal
+`_<name>_replay_impl_20261015` (no `authenticated` EXECUTE) and put a public wrapper with the same
+signature in front. The wrapper calls `check_idempotency_intent(key, op, auth.uid(), sha256(target +
+payload))` under the key lock, delegates on a miss or an exact match, and stamps `request_actor_id`
+and `request_fingerprint` on the receipt afterwards. A mismatched retry raises
+`IDEMPOTENCY_ACTOR_MISMATCH` or `IDEMPOTENCY_INTENT_MISMATCH`, which `getIdempotencyBindingRejection`
+already maps to plain English. No money logic is retyped. Proof per batch: a real-schema PostgreSQL 17
+container prover (fails first on today's bodies; an exact retry still replays; every mismatch is
+refused; mutating each comparison turns it red), then a live read-only postcondition check and a
+rollback-only live smoke.
+
+**Found in passing — not replay binding.** `reverse_write_off`'s role test
+`(SELECT role … AND is_active) != 'admin'` and `mark_inventory_row_verified`'s `v_role != 'admin'`
+both evaluate to NULL for a deactivated or missing profile, and NULL lets the call through. Batch 1 closes it for `reverse_write_off` (its wrapper requires an active admin); `mark_inventory_row_verified` stays open.
+
+**Screen side (CodeRabbit on PR #942), fixed in batch 1.** The split-check, reverse-write-off and void-payment dialogs used to mint a fresh key on every open (to stop the old cross-record replay), so reopening one after an uncertain response threw away the unresolved key. With the server binding, a retained key used for a different request is refused and then retired, so those three dialogs now keep their key across opens and an unchanged resubmit replays instead of running twice. Other screens in the 2026-09-03 F1 entry keep their existing behavior.
 
 ## OPEN 2026-10-15 (LOW, proof tooling only) — the Phase 3 return-policy concurrency prover no longer reaches its chain
 
@@ -639,18 +731,19 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   and `FieldStop` silently skips the customer receipt email. Fix: widen the driver branch for assigned open
   stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`),
   `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`).)
-- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 APPLIED LIVE 2026-10-15 21:06 UTC as `20261015230000`, PR #929 merged as `cd7b796a4`; step 2 written as `20261016030000_staff_photo_buckets_private` (migration-history row 950), not applied, Goal 1).** `delivery-photos`,
-  `receiving-photos` and `team-note-attachments` are `public=true` (checked live 2026-10-14). Mason decided on
+- **Public photo buckets (DECIDED 2026-10-13: make private; step 1 of 2 APPLIED LIVE 2026-10-15 21:06 UTC as `20261015230000`, PR #929 merged as `cd7b796a4`; step 2 APPLIED LIVE 2026-10-16 05:19 UTC as `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, migration-history row 950, PR #947 merged as `5851eb514`); all three buckets read `public = false` live 2026-10-16 06:16 UTC, so the step 1 to step 2 window below has closed, Goal 1).** `delivery-photos`,
+  `receiving-photos` and `team-note-attachments` were `public=true` (checked live 2026-10-14) until step 2. Mason decided on
   2026-10-13 that viewing them needs an active staff sign-in every time; an expiring signed URL does not meet that,
   so `createSignedUrl` is not the fix. Step 1 (`20261015230000_staff_photo_storage_access` plus the app's
   `src/hooks/usePrivatePhoto.ts` / `src/components/ui/PrivatePhoto.tsx`): per-request storage read policies by role,
   tightened uploads and deletes, the screens download photos with the user's session instead of the public URL, and
   receipt emails carry no photos (Mason, 2026-10-14). Step 2, a separate migration once step 1 is live and old
-  installed-app copies have updated, sets the three buckets private so old public links stop working. Until step 2
-  applies, anyone holding a URL can still open those photos, and the rows still store public URLs
-  (`delivery_photos.image_url`, `team_note_attachments.file_url`). Type/size are capped (`20260615182721`); paths are
+  installed-app copies have updated, set the three buckets private so old public links stop working. Before step 2
+  applied, anyone holding a URL could open those photos; the rows store public-style URLs
+  (`delivery_photos.image_url`, `team_note_attachments.file_url`), which no longer open without a sign-in now that
+  the buckets are private. Type/size are capped (`20260615182721`); paths are
   built from an ID, an upload timestamp and a per-upload counter, which is not a reliable secrecy safeguard, and once
-  step 1 applies, staff who may view a bucket can also list its paths, so keep the step 1 to step 2 window short. **Accepted limitation (Mason, 2026-10-14, option A):** a staff member who may view a
+  step 1 applied, staff who may view a bucket can also list its paths, which is why the step 1 to step 2 window was kept short (it closed 2026-10-16). **Accepted limitation (Mason, 2026-10-14, option A):** a staff member who may view a
   photo can deliberately mint a temporary signed link to it through the Storage API (Storage checks only the read
   policy); ordinary app use never creates one, and it is no more than saving and forwarding the file. Closing it
   would mean serving photo bytes through an Edge Function, as customer documents are. Found while proving step 1:

@@ -303,7 +303,8 @@ BEGIN
   -- 5. Double-void guard
   -- --------------------------------------------------------------------
   BEGIN
-    PERFORM void_payment(v_set1_id, '[SMOKE] double void', v_admin, NULL);
+    -- A fresh key: since 20261016060000 a keyless call is refused before this guard runs.
+    PERFORM void_payment(v_set1_id, '[SMOKE] double void', v_admin, 'smk-vpp-' || v_suffix || '-dv');
     v_raised := false;
   EXCEPTION WHEN OTHERS THEN
     v_raised := true;
