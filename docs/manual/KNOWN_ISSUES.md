@@ -1,8 +1,12 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-16 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-16 06:16 UTC: 1032 rows / 1025 names; the one change since the 2026-10-15
-23:12 UTC read is that `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, PR #947
+`execute_sql`, 2026-10-16 13:07 UTC: 1033 rows / 1026 names; the one change since the 06:16 UTC read
+is that `20261016060000_bind_money_replay_receipts_batch1` (ledger `20261016121253`, PR #942 merged as
+`982bc0dda`, applied 12:12:53 UTC by another session) is now applied, which updated the replay-binding
+entry below (its nine batch-1 functions are now bound; recorded from the ledger, live behaviour re-check
+is that change's follow-up). In the 06:16 UTC read (1032 rows / 1025 names), the one change since the
+2026-10-15 23:12 UTC read is that `20261016030000_staff_photo_buckets_private` (ledger `20261016051944`, PR #947
 merged as `5851eb514`) is now applied, which re-certified the public photo buckets entry below: all three
 buckets read `public = false` live at 06:16 UTC. In the 23:12 UTC read, the one change since the 19:36 UTC read is that
 `20261015230000_staff_photo_storage_access` (ledger `20261015210630`, PR #929 merged as `cd7b796a4`) is
@@ -69,7 +73,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-15 (HIGH on money paths; batch 1 written, migration 20261016060000 not applied) — about 75 live functions replay a saved result matched on the retry key alone
+## OPEN 2026-10-15 (HIGH on money paths; batch 1 migration 20261016060000 applied live 2026-10-16, ledger 20261016121253; later batches not written) — about 75 live functions replay a saved result matched on the retry key alone
 
 **The problem in one line.** When an action is retried, `check_idempotency` (and the copy-pasted
 `SELECT result FROM idempotency_keys WHERE idempotency_key = … AND operation = …` that many functions
@@ -120,15 +124,16 @@ before any inner plain replay, under the same key lock). 63 receipts existed liv
   source document name/type) outside the fingerprint. (`draw_down_quote`, listed above, is fully bound;
   its `p_below_cost_reason` is approval metadata, deliberately not part of the request identity.)
 
+**Bound by batch 1 (migration `20261016060000`, applied live 2026-10-16, ledger `20261016121253`).**
+The nine HIGH-money functions it covers left the table below: `void_payment`, `delete_prepay_credit`,
+`edit_prepay_credit`, `apply_write_off`, `reverse_write_off`, `create_prepay_check_splits`,
+`apply_prepay_to_invoice`, `batch_apply_prepayments` and `batch_void_invoices`. This record is from the
+ledger; a live behaviour re-check is that change's own follow-up.
+
 **Unbound — ranked, with the batch each is fixed in.**
 
 | Batch | Function (what a mismatched retry does today) | Impact |
 |---|---|---|
-| 1 | `void_payment` answers "payment **B** voided" (it echoes the new id) while B stays active | HIGH money |
-| 1 | `delete_prepay_credit`, `edit_prepay_credit` answer "credit **B** deleted/edited" while B is untouched; the replay runs **before** the login and admin checks | HIGH money |
-| 1 | `apply_write_off`, `reverse_write_off` return write-off A's id or result for invoice or write-off B | HIGH money |
-| 1 | `create_prepay_check_splits`, `apply_prepay_to_invoice`, `batch_apply_prepayments` return A's credits or applications; B's prepay is never created or applied | HIGH money |
-| 1 | `batch_void_invoices` returns A's voided count for a different invoice list; none of the new invoices is voided | HIGH money |
 | 2 | `complete_delivery`, `complete_job` (the latter replays before its role check, with no lock and no expiry): B not completed, no stock deduction, no auto-invoice | HIGH money and stock |
 | 2 | `void_order`, `void_delivery`, `cancel_delivery` (replays before its role check), `unpost_invoice`, `transfer_invoice_to_job`, `price_order`, `update_order_items`, `save_field_app_invoice`, `update_field_app_invoice_billing`, `transition_rebate_claim`, `create_rebate_claim`, `close_accounting_period` | HIGH money |
 | 2 | `apply_credit_memo_to_invoice` is bound before its lock, but its after-lock re-check is plain (race window only) | HIGH (race) |
@@ -753,7 +758,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   it. **Deferred to step 2 (Sol MED on PR #929):** two `team_note_attachments` rows may name the same file in the
   uploader's own folder, so deleting one row removes the file the other names; only the uploader can create that, the
   app never does (each upload gets a fresh name), and 0 rows exist live (2026-10-15). Fixed in step 2
-  (`20261016030000`, once applied) by a unique index on the storage path inside `file_url`.
+  (`20261016030000`, applied 2026-10-16) by the unique index `team_note_attachments_object_path_key` on the
+  storage path inside `file_url`. Mason opened a delivery photo in the app while signed in on 2026-10-16 and it
+  showed, so staff still see photos with the buckets private.
   (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`).)
 - **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
   active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`
