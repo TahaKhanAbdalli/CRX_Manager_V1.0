@@ -82,7 +82,16 @@ caller or request (`IDEMPOTENCY_ACTOR_MISMATCH` / `IDEMPOTENCY_INTENT_MISMATCH`)
 replays. Proof: live postconditions read and the rollback-only live chain
 `smoke-money-replay-binding-batch1.sql` (SMOKE_PASS_ROLLBACK). Gap (CodeRabbit on PR #950): that chain
 checks an exact retry for eight of the nine functions; for `edit_prepay_credit` it checks only the
-mismatch refusal, so its exact-retry replay is not yet proven live. Batches 2–4 below are still open.
+mismatch refusal, so its exact-retry replay is not yet proven live. **Live body re-check 2026-10-18
+11:56 UTC** (read-only `pg_proc` read, migration-history row 951): all nine live wrappers bind the
+caller (`auth.uid()`, forged `p_performed_by` refused) and the request fingerprint through
+`check_idempotency_intent` before any saved result can come back (eight call their saved-result body;
+`batch_apply_prepayments` returns the stored result from the committed receipt on an exact retry). The one keyless call
+left is `apply_prepay_to_invoice` inside `batch_apply_prepayments`, covered by the batch's own bound
+key. `_bind_replay_receipt_20261015`,
+the other batch-1 helpers and the nine renamed bodies have no EXECUTE for anon, authenticated,
+service_role or PUBLIC. None of the nine public functions was found unbound on a keyed call. This is a
+read of the deployed source, not an exercised retry, so the `edit_prepay_credit` gap above stays open. Batches 2–4 below are still open.
 
 **The problem in one line.** When an action is retried, `check_idempotency` (and the copy-pasted
 `SELECT result FROM idempotency_keys WHERE idempotency_key = … AND operation = …` that many functions
