@@ -14,7 +14,13 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
   for (const name of ['select', 'eq', 'gt', 'is', 'in', 'not', 'order', 'limit', 'single', 'maybeSingle']) chain[name] = method;
-  const promise = Promise.resolve(result);
+  // Paged reads ask for one slice at a time; serve the matching slice so the
+  // read ends on an empty page instead of looping on the same rows.
+  chain.range = (from: number, to: number) => buildChain(
+    Array.isArray(result.data) ? { ...result, data: result.data.slice(from, to + 1) } : result,
+  );
+  // Like the server, an unpaged read returns at most 1,000 rows.
+  const promise = Promise.resolve(Array.isArray(result.data) ? { ...result, data: result.data.slice(0, 1000) } : result);
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
   chain.finally = promise.finally.bind(promise);
@@ -197,6 +203,27 @@ describe('Returns loading and retry behavior', () => {
     expect(calls[1][1].p_idempotency_key).not.toBe(calls[0][1].p_idempotency_key);
     expect(calls[1][1].p_return.notes).toBe('corrected payload');
   });
+
+  it('lists every return past the 1,000-row server cap', async () => {
+    const returns = Array.from({ length: 1500 }, (_, i) => ({
+      id: `return-${String(i).padStart(4, '0')}`, return_number: `RMA-PAGED-${i + 1}`, customer: { farm_name: 'Farm P' },
+      order: null, requested_by: null, items: [], status: 'requested',
+      reason: 'defective', total_credit_cents: 0, requested_at: '2026-07-25T00:00:00Z',
+    }));
+    mockFrom.mockImplementation((table: string) => table === 'returns'
+      ? buildChain({ data: returns, error: null })
+      : buildChain({ data: [], error: null }));
+
+    render(<Returns />);
+    expect(await screen.findByText('RMA-PAGED-1500', {}, { timeout: 10000 })).toBeInTheDocument();
+    expect(screen.getByText('RMA-PAGED-1')).toBeInTheDocument();
+    expect(screen.getByText('RMA-PAGED-1001')).toBeInTheDocument();
+    // Every row once: a read that drops or repeats rows mid-list fails here.
+    const shown = screen.getAllByText(/^RMA-PAGED-\d+$/).map((el) => el.textContent);
+    expect(shown).toHaveLength(1500);
+    expect(new Set(shown).size).toBe(1500);
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
+  }, 30000);
 
   it('scopes Cancel Return keys to the exact normalized reason', async () => {
     const returns = [{

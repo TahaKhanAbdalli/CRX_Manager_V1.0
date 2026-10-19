@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { DollarSign, XCircle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -14,6 +14,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
@@ -66,18 +67,24 @@ export default function PaymentHistory() {
   const [voidReason, setVoidReason] = useState('');
   const [savingVoid, setSavingVoid] = useState(false);
 
+  // A refresh after voiding a payment is a multi-page read; an older, slower
+  // load must not overwrite the newer list, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchPayments = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('allocation_sets')
       .select(`
         id, customer_id, total_payment_cents, total_allocated_cents,
         payment_method, check_number, reference_number, payment_date,
         season, is_active, notes, created_at,
         customers!allocation_sets_customer_id_fkey ( farm_name )
-      `)
+      `, { count: 'exact' })
       .order('created_at', { ascending: false })
-      .limit(200);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       toast('error', 'Failed to load payment history');

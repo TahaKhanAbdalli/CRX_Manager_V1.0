@@ -932,7 +932,10 @@ describe('commission payout intent-binding callers', () => {
     const fetchStart = page.indexOf('const fetchPayments = useCallback(');
     const fetchFn = page.slice(fetchStart, page.indexOf('}, [', fetchStart));
     expect(fetchFn, 'fetchPayments can still reject into a recovery handler').toContain('} catch (err) {');
-    expect(fetchFn, 'the loading flag is not cleared on every path').toContain('} finally {\n      setLoading(false);\n    }');
+    // The newest load always reaches this finally and clears the flag; a load a
+    // newer one has overtaken leaves it to that one (PR #959), so an old load
+    // finishing first cannot drop the spinner over a list still being replaced.
+    expect(fetchFn, 'the loading flag is not cleared on every path').toContain('} finally {\n      if (seq === fetchPaymentsSeq.current) setLoading(false);\n    }');
     expect(fetchFn).toContain("Sentry.captureException(err, { extra: { context: 'load_commission_payments' } });");
     // One clear, in the finally — a second inline clear would mean some path
     // still owns it, which is how the flag got stranded in the first place.

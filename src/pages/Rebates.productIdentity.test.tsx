@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   toast: vi.fn(),
   insertedProgram: null as Record<string, unknown> | null,
+  ranges: [] as Array<[number, number]>,
 }));
 
 const siblings = [
@@ -55,6 +56,11 @@ function query(data: unknown) {
     mocks.insertedProgram = payload;
     return builder;
   });
+  // Paged reads ask for one slice at a time and stop at an empty page.
+  builder.range = vi.fn((from: number, to: number) => {
+    mocks.ranges.push([from, to]);
+    return query(Array.isArray(data) ? data.slice(from, to + 1) : data);
+  });
   builder.then = (resolve: (value: unknown) => void) =>
     Promise.resolve({ data, error: null }).then(resolve);
   return builder;
@@ -96,6 +102,7 @@ describe('Rebates Product identity writers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.insertedProgram = null;
+    mocks.ranges = [];
     mocks.rpc.mockResolvedValue({
       data: { claim_id: 'claim-1', claim_number: 'RC-1' },
       error: null,
@@ -164,4 +171,25 @@ describe('Rebates Product identity writers', () => {
       expect.objectContaining({ p_product_id: 'product-b' }),
     ));
   });
+
+  it('offers every order in the claim dialog, past the 1,000-row page size', async () => {
+    const manyOrders = Array.from({ length: 1500 }, (_, i) => ({
+      id: `order-${i}`,
+      order_number: `ORD-${String(i).padStart(4, '0')}`,
+      customer_id: null,
+    }));
+    const base = mocks.from.getMockImplementation()!;
+    mocks.from.mockImplementation((table: string) => (table === 'orders' ? query(manyOrders) : base(table)));
+
+    render(<Rebates />);
+    fireEvent.click(await screen.findByRole('button', { name: /^claims$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /new claim/i }));
+    const dialog = screen.getByRole('dialog', { name: /new rebate claim/i });
+    const orderSelect = within(dialog).getAllByRole('combobox')[2];
+
+    // 1,500 orders plus the "Optional..." placeholder, including one only on page two.
+    expect(within(orderSelect).getAllByRole('option')).toHaveLength(1501);
+    expect(within(orderSelect).getByRole('option', { name: 'ORD-1499' })).toBeInTheDocument();
+    expect(mocks.ranges).toEqual(expect.arrayContaining([[0, 999], [950, 1949]]));
+  }, 30000);
 });

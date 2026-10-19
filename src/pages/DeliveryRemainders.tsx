@@ -2,7 +2,7 @@
  * DeliveryRemainders — Shows all pending delivery remainder items across all customers.
  * Allows creating follow-up deliveries from grouped remainders.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Truck, Package } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -12,6 +12,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import HelpTip from '../components/ui/HelpTip';
@@ -48,18 +49,26 @@ export default function DeliveryRemainders() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [creating, setCreating] = useState<string | null>(null);
 
+  // A refresh after creating a follow-up delivery is a multi-page read; an older,
+  // slower load must not overwrite the newer list, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchRemainders = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('delivery_remainders')
-      .select(`
-        *,
-        customer:customers!delivery_remainders_customer_id_fkey(farm_name),
-        product:products!delivery_remainders_product_id_fkey(product_name),
-        original_delivery:deliveries!delivery_remainders_original_delivery_id_fkey(delivery_number),
-        order:orders!delivery_remainders_order_id_fkey(order_number)
-      `)
-      .order('created_at', { ascending: false })
-      .limit(500);
+    const seq = ++fetchSeq.current;
+    const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      supabase
+        .from('delivery_remainders')
+        .select(`
+          *,
+          customer:customers!delivery_remainders_customer_id_fkey(farm_name),
+          product:products!delivery_remainders_product_id_fkey(product_name),
+          original_delivery:deliveries!delivery_remainders_original_delivery_id_fkey(delivery_number),
+          order:orders!delivery_remainders_order_id_fkey(order_number)
+        `, { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    );
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_delivery_remainders' } });

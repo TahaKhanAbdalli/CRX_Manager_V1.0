@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, X, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -59,31 +60,40 @@ export function BlendTickets() {
   const canBulkAction = role === 'admin' || role === 'sales_rep';
   const { isProcessing, processedCount } = useOCRProcessor(true);
 
+  // Each OCR completion and every refresh re-reads both lists page by page; an
+  // older, slower load must not overwrite a newer one, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const loadData = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     try {
+      // Read every page of both lists: a single request is silently cut off at
+      // the server's row cap.
       const [ticketsResult, customersResult] = await Promise.all([
         // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
         // also dropped the email field — UI only renders uploader.full_name
         // (line ~437) so PII is unused on this page. Resolved via
         // profile_public_view post-fetch below.
-        supabase
+        fetchAllRows((from, to) => supabase
           .from('blend_tickets')
           .select(`
             *,
             customer:customers(id, farm_name),
             field:fields(id, field_name),
             images:blend_ticket_images(count)
-          `)
+          `, { count: 'exact' })
           .is('deleted_at', null)
           .order('created_at', { ascending: false })
-          .limit(500),
-        supabase
+          .order('id')
+          .range(from, to)),
+        fetchAllRows((from, to) => supabase
           .from('customers')
-          .select('*')
+          .select('*', { count: 'exact' })
           .eq('is_active', true)
           .order('farm_name')
-          .limit(500)
+          .order('id')
+          .range(from, to)),
       ]);
+      if (seq !== fetchSeq.current) return;
 
       if (ticketsResult.error) throw ticketsResult.error;
       if (customersResult.error) throw customersResult.error;
@@ -105,10 +115,12 @@ export function BlendTickets() {
       ].filter(Boolean) as string[])];
       const profMap: Record<string, { id: string; full_name: string }> = {};
       if (profIds.length > 0) {
-        const { data: profRows } = await supabase
+        const { data: profRows } = await fetchAllRowsForIds(profIds, (idChunk, from, to) => supabase
           .from('profile_public_view')
-          .select('id, full_name')
-          .in('id', profIds);
+          .select('id, full_name', { count: 'exact' })
+          .in('id', idChunk)
+          .order('id')
+          .range(from, to));
         ((profRows || []) as { id: string; full_name: string }[]).forEach((p) => {
           profMap[p.id] = p;
         });
@@ -120,13 +132,15 @@ export function BlendTickets() {
         salesman: t.salesman_id ? profMap[t.salesman_id] || null : null,
       })) as BlendTicket[];
 
+      if (seq !== fetchSeq.current) return;
       setTickets(enriched);
       setCustomers((customersResult.data || []) as Customer[]);
     } catch (error) {
+      if (seq !== fetchSeq.current) return;
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_blend_tickets' } });
       toast('error', 'Failed to load blend tickets. Please try again.');
     } finally {
-      setLoading(false);
+      if (seq === fetchSeq.current) setLoading(false);
     }
   }, [toast]);
 

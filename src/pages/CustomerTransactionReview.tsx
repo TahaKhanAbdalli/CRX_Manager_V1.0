@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -11,6 +11,8 @@ import Badge from '../components/ui/Badge';
 import ReportShell from '../components/reports/ReportShell';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows, PAGE_SIZE } from '../lib/pagedRead';
+import { isLedgerContinuous, isSameTransaction } from '../lib/transactionLedger';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import type { CustomerTransactionRow } from '../types';
@@ -27,28 +29,86 @@ export default function CustomerTransactionReview() {
   const [endDate, setEndDate] = useState('');
   const [data, setData] = useState<CustomerTransactionRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // A failed read must not look like a customer with no transactions.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
-    supabase
+    fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
       .from('customers')
-      .select('id, farm_name')
+      .select('id, farm_name', { count: 'exact' })
       .eq('is_active', true)
       .order('farm_name')
-      .limit(500)
-      .then(({ data: rows }) => setCustomers((rows || []) as { id: string; farm_name: string }[]));
-  }, []);
+      .order('id')
+      .range(from, to))
+      .then(({ data: rows, error }) => {
+        if (error) toast('error', 'Failed to load the customer list. Reload to try again.');
+        setCustomers(rows || []);
+      });
+  }, [toast]);
 
+  // A multi-page read can finish after a newer one started for another customer
+  // or date range; only the latest request may set the rows and totals.
+  const fetchSeq = useRef(0);
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data: rows, error } = await supabase.rpc('get_customer_transaction_review', {
-      p_customer_id: customerId,
-      p_start_date: startDate,
-      p_end_date: endDate,
-    });
-    if (error) {
-      toast('error', `Failed to load transactions: ${error.message}`);
+    // The RPC returns its rows in a fixed unique order (date, type, reference,
+    // source row id) with each running balance computed over the whole range,
+    // so paging keeps every row and every balance. One read stopped at the
+    // server's 1,000-row cap and showed short totals. Its rows have no id, so a
+    // transaction added or removed between pages could repeat or drop a row;
+    // the running-balance chain catches that, and the read is tried once more.
+    let loaded: CustomerTransactionRow[] | null = null;
+    let failure: string | null = null;
+    for (let attempt = 1; attempt <= 2 && loaded === null; attempt += 1) {
+      const result = await fetchAllRows<CustomerTransactionRow>((from, to) => supabase
+        .rpc('get_customer_transaction_review', {
+          p_customer_id: customerId,
+          p_start_date: startDate,
+          p_end_date: endDate,
+        }, { count: 'exact' })
+        .range(from, to));
+      if (seq !== fetchSeq.current) return;
+      if (result.error) {
+        failure = result.error.message;
+        break;
+      }
+      const rows = assertRpcResult<CustomerTransactionRow[]>(result.data, 'get_customer_transaction_review');
+      if (!isLedgerContinuous(rows)) {
+        failure = 'transactions changed while loading';
+        continue;
+      }
+      // A read that took more than one page could still keep a transaction
+      // deleted after its page was read and stop before the real last row, with
+      // the chain intact. The server's current last row must be ours.
+      if (rows.length > PAGE_SIZE) {
+        const tail = await supabase
+          .rpc('get_customer_transaction_review', {
+            p_customer_id: customerId,
+            p_start_date: startDate,
+            p_end_date: endDate,
+          }, { count: 'exact' })
+          .range(rows.length - 1, rows.length - 1);
+        if (seq !== fetchSeq.current) return;
+        if (tail.error) {
+          failure = tail.error.message;
+          break;
+        }
+        const tailRows = assertRpcResult<CustomerTransactionRow[]>(tail.data, 'get_customer_transaction_review');
+        if (tail.count !== rows.length || tailRows.length !== 1 || !isSameTransaction(tailRows[0], rows[rows.length - 1])) {
+          failure = 'transactions changed while loading';
+          continue;
+        }
+      }
+      loaded = rows;
+    }
+    if (loaded === null) {
+      setData([]);
+      setLoadFailed(true);
+      toast('error', `Failed to load transactions: ${failure}`);
     } else {
-      setData(assertRpcResult<CustomerTransactionRow[]>(rows, 'get_customer_transaction_review'));
+      setLoadFailed(false);
+      setData(loaded);
     }
     setLoading(false);
   }, [customerId, startDate, endDate, toast]);
@@ -196,8 +256,10 @@ export default function CustomerTransactionReview() {
             <DataTable
               data={data as unknown as Record<string, unknown>[]}
               columns={columns as unknown as Column<Record<string, unknown>>[]}
-              emptyTitle="No transactions"
-              emptyDescription={!customerId ? 'Select a customer and date range' : undefined}
+              emptyTitle={loadFailed ? 'Transactions could not be loaded' : 'No transactions'}
+              emptyDescription={loadFailed
+                ? 'The totals are not shown because the read did not finish. Change the dates or reload to try again.'
+                : !customerId ? 'Select a customer and date range' : undefined}
               loading={loading}
             />
           </div>

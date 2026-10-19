@@ -331,6 +331,46 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(screen.queryByRole('button', { name: /Post \d+ Selected/ })).not.toBeInTheDocument();
   });
 
+  it('reads every invoice past the 1,000-row server cap, so the totals count all 1,500', async () => {
+    const manyPosted = Array.from({ length: 1500 }, (_, i) => invoice({
+      invoice_number: `POSTED-${i}`, status: 'posted', season: 2027,
+      invoice_date: '2026-10-05', created_at: '2026-10-05T15:00:00+00:00',
+    }));
+    const queries: Array<ReturnType<typeof buildInMemoryQuery>> = [];
+    mockFrom.mockImplementation((table: string) => {
+      const query = buildInMemoryQuery(table === 'invoices' ? manyPosted : []);
+      if (table === 'invoices') queries.push(query);
+      return query;
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+
+    // 1,500 posted invoices x $100.00 each: a read stopped at 1,000 rows would show $100,000.00.
+    const outstanding = (await screen.findByText('unpaid balance on posted and overdue invoices', {}, { timeout: 10000 })).parentElement!;
+    await waitFor(() => expect(outstanding).toHaveTextContent('$150,000.00'), { timeout: 10000 });
+    expect(screen.getByText(/posted invoices \(including overdue\)/)).toHaveTextContent('1500 posted invoices (including overdue)');
+    expect(queries.map((q) => (q.range as ReturnType<typeof vi.fn>).mock.calls[0])).toEqual([[0, 999], [950, 1949], [1450, 2449]]);
+    expect(queries.every((q) => (q.order as ReturnType<typeof vi.fn>).mock.calls.some(([column]) => column === 'id'))).toBe(true);
+    expect(mockToast).not.toHaveBeenCalled();
+    // Rendering 1,500 rows takes several seconds on the CI runners (5.9s seen).
+  }, 30000);
+
+  it('keeps the list but reports it once when the salesperson labels cannot be loaded', async () => {
+    const withSalesman = ROWS.map((r) => ({ ...r, salesman_id: 'rep-1' }));
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'profile_public_view') return buildInMemoryQuery(table === 'invoices' ? withSalesman : []);
+      const failing: Record<string, unknown> = {};
+      for (const method of ['select', 'in', 'order', 'range']) failing[method] = vi.fn(() => failing);
+      failing.then = (resolve: (value: unknown) => unknown) =>
+        Promise.resolve({ data: null, error: { message: 'labels unavailable' } }).then(resolve);
+      return failing;
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some salesperson or order labels could not be loaded.'));
+    expect(mockToast).toHaveBeenCalledTimes(1);
+  });
+
   it('a prior-season draft ticked by hand is named as not from this season in the Post confirm', async () => {
     render(<MemoryRouter><Invoices /></MemoryRouter>);
     await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));

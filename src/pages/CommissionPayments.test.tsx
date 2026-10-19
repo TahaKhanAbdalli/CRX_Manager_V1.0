@@ -16,11 +16,22 @@ function buildChain(result: { data?: unknown; error?: unknown; count?: number | 
   for (const name of ['select', 'eq', 'in', 'order', 'limit', 'maybeSingle']) {
     self[name] = method;
   }
+  // Paged reads ask for one slice at a time and stop at an empty page.
+  self.range = (from: number, to: number) => buildChain(
+    Array.isArray(result.data) ? { ...result, data: result.data.slice(from, to + 1) } : result,
+  );
   const promise = Promise.resolve(result);
   self.then = promise.then.bind(promise);
   self.catch = promise.catch.bind(promise);
   self.finally = promise.finally.bind(promise);
   return self;
+}
+
+// commission_payment_items rows, `perPayment` linked items for each payment id.
+function itemRows(paymentIds: string[], perPayment: number) {
+  return paymentIds.flatMap((paymentId) =>
+    Array.from({ length: perPayment }, (_, i) => ({ id: `${paymentId}-item-${i}`, commission_payment_id: paymentId })),
+  );
 }
 
 vi.mock('../lib/db', () => ({
@@ -75,46 +86,34 @@ const paymentBase = {
 };
 
 describe('CommissionPayments item-count verification', () => {
+  const twoPayments = [
+    { ...paymentBase, id: 'payment-a', payment_number: 'CP-A' },
+    { ...paymentBase, id: 'payment-b', payment_number: 'CP-B' },
+  ];
+
   beforeEach(() => {
     vi.clearAllMocks();
-    let itemCountCall = 0;
+  });
+
+  it('keeps all rows visible and disables Post on every row when the item read fails', async () => {
     mockFrom.mockImplementation((table: string) => {
-      if (table === 'commission_payments') {
-        return buildChain({
-          data: [
-            { ...paymentBase, id: 'payment-unverified', payment_number: 'CP-UNVERIFIED' },
-            { ...paymentBase, id: 'payment-valid', payment_number: 'CP-VALID' },
-          ],
-          error: null,
-        });
-      }
+      if (table === 'commission_payments') return buildChain({ data: twoPayments, error: null });
       if (table === 'profile_public_view') {
         return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
       }
       if (table === 'commission_payment_items') {
-        itemCountCall += 1;
-        return itemCountCall === 1
-          ? buildChain({ count: null, error: { message: 'count query failed' } })
-          : buildChain({ count: 2, error: null });
+        return buildChain({ data: null, error: { message: 'count query failed' } });
       }
       return buildChain({ data: [], error: null });
     });
-  });
-
-  it('keeps all rows visible and disables Post only for the unverified count', async () => {
     render(<CommissionPayments />);
 
-    const unverifiedPayment = await screen.findByText('CP-UNVERIFIED');
-    const validPayment = await screen.findByText('CP-VALID');
-    const unverifiedRow = unverifiedPayment.closest('tr');
-    const validRow = validPayment.closest('tr');
-
-    expect(unverifiedRow).not.toBeNull();
-    expect(validRow).not.toBeNull();
-    expect(within(unverifiedRow!).getByText('Count unavailable')).toBeInTheDocument();
-    expect(within(unverifiedRow!).getByRole('button', { name: 'Post' })).toBeDisabled();
-    expect(within(validRow!).getByText('2 commission(s)')).toBeInTheDocument();
-    expect(within(validRow!).getByRole('button', { name: 'Post' })).toBeEnabled();
+    for (const paymentNumber of ['CP-A', 'CP-B']) {
+      const row = (await screen.findByText(paymentNumber)).closest('tr');
+      expect(row).not.toBeNull();
+      expect(within(row!).getByText('Count unavailable')).toBeInTheDocument();
+      expect(within(row!).getByRole('button', { name: 'Post' })).toBeDisabled();
+    }
 
     await waitFor(() => {
       expect(mockToast).toHaveBeenCalledWith(
@@ -125,13 +124,75 @@ describe('CommissionPayments item-count verification', () => {
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'count query failed' }),
       expect.objectContaining({
-        extra: expect.objectContaining({
-          context: 'load_commission_payment_item_count',
-          paymentId: 'payment-unverified',
-        }),
+        extra: expect.objectContaining({ context: 'load_commission_payment_item_count' }),
       }),
     );
   });
+
+  it('counts each payment\'s own linked items and enables Post only where there are some', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') return buildChain({ data: twoPayments, error: null });
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      if (table === 'commission_payment_items') {
+        return buildChain({ data: itemRows(['payment-a'], 3), error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    render(<CommissionPayments />);
+
+    const rowA = (await screen.findByText('CP-A')).closest('tr');
+    const rowB = (await screen.findByText('CP-B')).closest('tr');
+    expect(within(rowA!).getByText('3 commission(s)')).toBeInTheDocument();
+    expect(within(rowA!).getByRole('button', { name: 'Post' })).toBeEnabled();
+    expect(within(rowB!).getByText('0 commission(s)')).toBeInTheDocument();
+    expect(within(rowB!).queryByRole('button', { name: 'Post' })).toBeNull();
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
+  it('lists every payment past the 1,000-row page size, each with its own count', async () => {
+    const many = Array.from({ length: 1500 }, (_, i) => ({
+      ...paymentBase,
+      id: `payment-${i}`,
+      payment_number: `CP-${String(i).padStart(4, '0')}`,
+    }));
+    const requestedRanges: Array<[number, number]> = [];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        const chain = buildChain({ data: many, error: null });
+        const range = chain.range as (from: number, to: number) => Record<string, unknown>;
+        chain.range = (from: number, to: number) => { requestedRanges.push([from, to]); return range(from, to); };
+        return chain;
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      if (table === 'commission_payment_items') {
+        // Honour the id-chunk filter, so a count that leaks across chunks fails.
+        const items = itemRows(['payment-1499', 'payment-0'], 2);
+        const chain = buildChain({ data: items, error: null });
+        chain.in = (_col: string, ids: string[]) => buildChain({
+          data: items.filter((it) => ids.includes(it.commission_payment_id)),
+          error: null,
+        });
+        return chain;
+      }
+      return buildChain({ data: [], error: null });
+    });
+    render(<CommissionPayments />);
+
+    // The last payment only exists on the second page of the read.
+    const lastRow = (await screen.findByText('CP-1499', {}, { timeout: 10000 })).closest('tr');
+    expect(requestedRanges.slice(0, 2)).toEqual([[0, 999], [950, 1949]]);
+    // Every payment once, and each row carries only its own items.
+    const shown = screen.getAllByText(/^CP-\d{4}$/).map((el) => el.textContent);
+    expect(shown).toHaveLength(1500);
+    expect(new Set(shown).size).toBe(1500);
+    expect(within(lastRow!).getByText('2 commission(s)')).toBeInTheDocument();
+    expect(within(screen.getByText('CP-0000').closest('tr')!).getByText('2 commission(s)')).toBeInTheDocument();
+    expect(within(screen.getByText('CP-0001').closest('tr')!).getByText('0 commission(s)')).toBeInTheDocument();
+  }, 30000);
 });
 
 // Section 07 gauntlet finding 2: the retained retry key is now bound to one
@@ -152,7 +213,7 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
         return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
       }
       if (table === 'commission_payment_items') {
-        return buildChain({ count: 2, error: null });
+        return buildChain({ data: itemRows(['payment-1', 'payment-2'], 2), error: null });
       }
       return buildChain({ data: [], error: null });
     });
@@ -235,10 +296,9 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
         const method = (..._args: unknown[]) => self;
         for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
         self.maybeSingle = () => Promise.resolve(readback);
-        const list = Promise.resolve({
-          data: [{ ...paymentBase, id: 'payment-1', payment_number: 'CP-0001' }],
-          error: null,
-        });
+        const listRows = [{ ...paymentBase, id: 'payment-1', payment_number: 'CP-0001' }];
+        self.range = (from: number, to: number) => buildChain({ data: listRows.slice(from, to + 1), error: null });
+        const list = Promise.resolve({ data: listRows, error: null });
         self.then = list.then.bind(list);
         self.catch = list.catch.bind(list);
         self.finally = list.finally.bind(list);
@@ -248,7 +308,7 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
         return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
       }
       if (table === 'commission_payment_items') {
-        return buildChain({ count: 2, error: null });
+        return buildChain({ data: itemRows(['payment-1', 'payment-2'], 2), error: null });
       }
       return buildChain({ data: [], error: null });
     };
@@ -353,7 +413,7 @@ describe('CommissionPayments uncertain-response retry', () => {
         return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
       }
       if (table === 'commission_payment_items') {
-        return buildChain({ count: 2, error: null });
+        return buildChain({ data: itemRows(['payment-1', 'payment-2'], 2), error: null });
       }
       return buildChain({ data: [], error: null });
     });
@@ -520,6 +580,7 @@ describe('CommissionPayments create-payment key scoping', () => {
         for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
         // The read-back of the payment this click just created.
         self.maybeSingle = () => Promise.resolve({ data: null, error: { message: 'permission denied' } });
+        self.range = () => buildChain({ data: [], error: null });
         const list = Promise.resolve({ data: [], error: null });
         self.then = list.then.bind(list);
         self.catch = list.catch.bind(list);
@@ -605,6 +666,7 @@ describe('CommissionPayments create-payment key scoping', () => {
           data: { payment_number: 'CP-9001', total_amount: 100, status: 'voided' },
           error: null,
         });
+        self.range = () => buildChain({ data: [], error: null });
         const list = Promise.resolve({ data: [], error: null });
         self.then = list.then.bind(list);
         self.catch = list.catch.bind(list);

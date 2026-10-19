@@ -105,8 +105,15 @@ function tierSplitLines() {
 }
 
 async function printPickList(): Promise<PickListData[]> {
-  mockFrom.mockImplementation((table: string) =>
-    buildChain({ data: tables.data[table] ?? [], error: null }));
+  mockFrom.mockImplementation((table: string) => {
+    const rows = tables.data[table] ?? [];
+    const chain = buildChain({ data: rows, error: null });
+    // The page reads every row page by page; serve each .range() as a slice so
+    // the read ends on an empty page however many times the table is asked.
+    chain.range = vi.fn((from: number, to: number) =>
+      Promise.resolve({ data: rows.slice(from, to + 1), error: null }));
+    return chain;
+  });
 
   render(<MemoryRouter><Orders /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: /Print Pick Lists/i }));

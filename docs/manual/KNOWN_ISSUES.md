@@ -822,18 +822,25 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   cancelled; open ones show from every season, see `src/lib/invoiceSeasonWindow.ts` — so the UTC cut can
   only move a closed invoice on or off the list.)
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
-- **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
-  number of rows and filter in the browser.
-  - Main list query caps (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`):
-    - 2000: Invoices.
-    - 1000: Customers.
-    - 500: Orders, Deliveries, Application Records (the compliance history), Blend Tickets, Jobs, Quotes,
-      Purchase Orders, Field Setup, Delivery Remainders and Customer Transaction Review.
-    - 200: Payment History and Notifications.
+- **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load all
+  their rows and filter in the browser.
+  - **Fixed 2026-10-18 (Goal 4, part 1):** these pages now read every row, page by page, through
+    `src/lib/pagedRead.ts` (`fetchAllRows`; `fetchAllRowsForIds` for follow-up lookups keyed on the
+    list's ids, sent in chunks of 200), and a failed page shows the error instead of a short list:
+    Invoices, Orders, Quotes, Blend Tickets, Purchase Orders (and its outstanding items), Vendor Bills,
+    Returns, Vendors, Application Records, Delivery Remainders, Customer Transaction Review,
+    Commission Payments (payments and unpaid commissions), Payment History, To Ship and Rebates.
+  - **Deliberately left for a follow-up PR — do not forget:** Deliveries (`Deliveries.tsx`, 500) and
+    Reports (`Reports.tsx` and `SalesReports.tsx`: the 500-row price list and posted applications, and
+    the 500-product and 1,000-customer pickers). Open PRs #954, #955 and #957 were changing those files
+    on 2026-10-18, so they get the same fix once those land.
+  - Still capped (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`; the pages
+    fixed above are removed):
+    - 1000: Customers (shows a banner).
+    - 500: Deliveries, Jobs (shows a banner) and Field Setup.
+    - 200: Notifications.
   - Pages that cap one of several queries:
     - Crop Programs: its product list, 500.
-    - Commission Payments: payment history 200 and unpaid commissions 500.
-    - To Ship: deliveries and purchase orders 500, open orders 2,000, order lines 5,000.
     - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
       `.range()` and are not capped.
     - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
@@ -847,8 +854,32 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     200 most recent completed jobs. Past those counts a record silently cannot be chosen there.
   - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
-  - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
-    Application Records stop silently, and the other pages were not checked for a warning.
+  - Jobs and Customers show a banner when capped. Deliveries stops silently.
+  - Paging is by position, so records changing during a long load are handled three ways:
+    - repeats are dropped by `id`, and each page re-reads a 50-row overlap;
+    - every list read asks the server for its exact count (`{ count: 'exact' }`, enforced by
+      `src/lib/pagedReadCallSites.test.ts`). A read whose distinct rows differ from the count changed
+      mid-read, so it is repeated up to three times and then shown as an error, never as a wrong
+      list. This covers a record whose sort date is edited into the part already read, and a burst
+      of inserts;
+    - Customer Transaction Review's function rows have no `id`, so its running-balance chain is also
+      checked (`src/lib/transactionLedger.ts`).
+  - A list that keeps growing as fast as it is read stops after twice its starting size plus one
+    page and is reported as changed. Customer Transaction Review also checks that the server's
+    current last row is its own last row whenever it read more than one page.
+  - **Still open (accepted residual, 2026-10-18; both review models rated it HIGH):** an insert and
+    a delete landing between two page reads of the same load can keep the count equal while
+    swapping one row, so the list can show a just-deleted record and miss a just-added one until the
+    next refresh. This needs more than 1,000 rows in the list plus both changes in that window.
+    Live volumes on 2026-10-18 were at most 151 rows. The fix is a consistent snapshot (cursor
+    paging or a database-side read), which is the later Goal 4 step along with server-side search.
+  - Deferred from the same reviews:
+    - Every page asks for an exact count, which costs one counting pass per page. That is fine at
+      today's sizes, but loading around 100,000 rows would count the table about 100 times. Server
+      paging replaces full-list loads.
+    - On Commission Payments, a refresh overtaken by a newer one reports success even if the newer
+      one then fails; the newer refresh still reports its own failure. Its loader is pinned by
+      `commissionPayoutIntentBindingMigration.test.ts`.
   - On a capped query, records past the cap are missing from that page and its browser-side filters.
     Revisit before volumes near the caps.
   `SelectLocationsModal` still splits map and list 50/50 on tablets.

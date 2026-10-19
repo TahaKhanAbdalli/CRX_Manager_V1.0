@@ -206,6 +206,8 @@ Admin reassignment still works throughout.
 - List pages get real paging and search.
 - Every list, picker, report, export and integrity check that stops at a row limit is listed first, including server-side limits and the 200-row payment history.
 
+**Progress, 2026-10-18 (part 1, screen-only):** fifteen list pages now read every record instead of stopping at a row cap. **Still to do:** Deliveries, Reports and Sales Reports were deliberately skipped because open PRs #954, #955 and #957 change them; give them the same fix once those land. The list in `docs/manual/KNOWN_ISSUES.md` (list-page row caps) is current.
+
 **Done when:** with test data past the old limits (for example 5,000 invoices, more than 5,000 invoice lines, and a 200+ payment history):
 - every money total matches a database sum to the exact cent;
 - every record-based integrity check matches a direct database count;

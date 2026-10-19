@@ -18,6 +18,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeError, supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { fetchAllRows } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -125,9 +126,9 @@ export default function Rebates() {
 
   const fetchLookups = async () => {
     const [prodRes, custRes, ordRes] = await Promise.all([
-      supabase.from('products').select('id, product_name, sku, vendor, manufacturer, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name'),
-      supabase.from('customers').select('id, farm_name').order('farm_name'),
-      supabase.from('orders').select('id, order_number, customer_id').is('deleted_at', null).order('order_date', { ascending: false }).limit(200),
+      fetchAllRows((from, to) => supabase.from('products').select('id, product_name, sku, vendor, manufacturer, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)', { count: 'exact' }).eq('is_active', true).order('product_name').order('id').range(from, to)),
+      fetchAllRows((from, to) => supabase.from('customers').select('id, farm_name', { count: 'exact' }).order('farm_name').order('id').range(from, to)),
+      fetchAllRows((from, to) => supabase.from('orders').select('id, order_number, customer_id', { count: 'exact' }).is('deleted_at', null).order('order_date', { ascending: false }).order('id').range(from, to)),
     ]);
     if (prodRes.error) {
       toast('error', 'Failed to load Products. Retry before saving a rebate.');
@@ -145,12 +146,20 @@ export default function Rebates() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Both tab loaders are multi-page reads sharing one spinner; an older, slower load
+  // (a refresh after a save, or the other tab's) must not overwrite newer state or
+  // clear the spinner early, so they share one sequence and only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchPrograms = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('rebate_programs')
-      .select('*, product:products(product_name)')
-      .order('start_date', { ascending: false });
+      .select('*, product:products(product_name)', { count: 'exact' })
+      .order('start_date', { ascending: false })
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       toast('error', 'Failed to load rebate programs');
@@ -165,11 +174,15 @@ export default function Rebates() {
   }, [toast]);
 
   const fetchClaims = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data, error } = await supabase
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('rebate_claims')
-      .select('*, program:rebate_programs(program_name, manufacturer), customer:customers(farm_name), product:products(product_name), order:orders(order_number)')
-      .order('created_at', { ascending: false });
+      .select('*, program:rebate_programs(program_name, manufacturer), customer:customers(farm_name), product:products(product_name), order:orders(order_number)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       toast('error', 'Failed to load rebate claims');

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { parseLocalDate } from '../lib/dateUtils';
 import {
@@ -24,6 +24,7 @@ import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { formatUSD as fmt } from '../lib/money';
@@ -75,12 +76,19 @@ export default function PurchaseOrders() {
   const canManagePO = role === 'admin' || role === 'sales_rep';
   const canBulkAction = canManagePO;
 
+  // A refresh after a receive/cancel/delete is a multi-page read; an older,
+  // slower load must not overwrite the newer list, so only the latest may set state.
+  const fetchPOsSeq = useRef(0);
   const fetchPOs = useCallback(async () => {
-    const { data, error } = await supabase
+    const seq = ++fetchPOsSeq.current;
+    // Read every page: a single request is silently cut off at the server's row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('purchase_orders')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchPOsSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_purchase_orders' } });
       toast('error', 'Failed to load purchase orders. Please try again.');
@@ -91,9 +99,14 @@ export default function PurchaseOrders() {
     setLoading(false);
   }, [toast]);
 
+  // Same stale-load guard: only the latest outstanding-items read may set state.
+  const fetchOutstandingSeq = useRef(0);
   const fetchOutstandingItems = useCallback(async () => {
+    const seq = ++fetchOutstandingSeq.current;
     setOutstandingLoading(true);
-    const { data, error } = await supabase
+    // No explicit limit here still meant the server's silent row cap, and these rows
+    // feed the outstanding-value totals, so read every page.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('purchase_order_items')
       .select(`
         id,
@@ -106,8 +119,11 @@ export default function PurchaseOrders() {
         unit_size,
         product:products(product_name),
         purchase_orders!inner(po_number, vendor, status, expected_delivery_date)
-      `)
-      .not('purchase_orders.status', 'in', '("cancelled","fully_received")');
+      `, { count: 'exact' })
+      .not('purchase_orders.status', 'in', '("cancelled","fully_received")')
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchOutstandingSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_outstanding_items' } });
       toast('error', 'Failed to load outstanding items.');
@@ -147,11 +163,12 @@ export default function PurchaseOrders() {
     fetchPOs();
   }, [fetchPOs]);
 
+  // Load each time the tab is opened, so it is current and a failure can be
+  // retried. Keying on "no items yet" re-ran the read forever when there were
+  // none or the read failed (a toast every pass).
   useEffect(() => {
-    if (activeTab === 'outstanding' && outstandingItems.length === 0 && !outstandingLoading) {
-      fetchOutstandingItems();
-    }
-  }, [activeTab, outstandingItems.length, outstandingLoading, fetchOutstandingItems]);
+    if (activeTab === 'outstanding') fetchOutstandingItems();
+  }, [activeTab, fetchOutstandingItems]);
 
   /* ─── Summary stats ─── */
   const counts = useMemo(() => {

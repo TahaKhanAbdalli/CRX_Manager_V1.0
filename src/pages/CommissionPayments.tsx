@@ -4,7 +4,7 @@
  *
  * Sprint 10: Commission Payment Lifecycle
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useRef } from 'react';
 import { DollarSign, Send, Plus, Check, Clock, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -16,6 +16,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
@@ -157,59 +158,82 @@ export default function CommissionPayments() {
   // but the refresh failed" message with no message at all, and leave `loading`
   // stuck true with the spinner up. Returning false instead keeps the caller's
   // own explanation on screen and tells it the list is stale.
+  // A multi-page load started before a post can finish after the refresh the
+  // post triggered; only the newest load may replace the list.
+  const fetchPaymentsSeq = useRef(0);
   const fetchPayments = useCallback(async ({ quiet = false } = {}): Promise<boolean> => {
+    const seq = ++fetchPaymentsSeq.current;
     setLoading(true);
     try {
       // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
-      const { data, error } = await supabase
+      const { data, error } = await fetchAllRows((from, to) => supabase
         .from('commission_payments')
-        .select('*')
+        .select('*', { count: 'exact' })
         .order('created_at', { ascending: false })
-        .limit(200);
+        .order('id')
+        .range(from, to));
 
+      // Superseded: the newer load sets the list and reports its own outcome,
+      // so an older load's failure must not toast over it.
+      if (seq !== fetchPaymentsSeq.current) return true;
       if (error) {
         if (!quiet) toast('error', 'Failed to load commission payments');
         return false;
       }
 
+      const paymentRows = (data || []) as Array<Record<string, unknown> & { id: string; recipient_id?: string | null }>;
       const recipientIds = [...new Set(
-        ((data || []) as Array<{ recipient_id?: string | null }>)
+        paymentRows
           .map((p) => p.recipient_id)
           .filter(Boolean) as string[]
       )];
       const recipientMap: Record<string, string> = {};
       if (recipientIds.length > 0) {
-        const { data: recipients } = await supabase
+        const { data: recipients } = await fetchAllRowsForIds(recipientIds, (idChunk, from, to) => supabase
           .from('profile_public_view')
-          .select('id, full_name')
-          .in('id', recipientIds);
+          .select('id, full_name', { count: 'exact' })
+          .in('id', idChunk)
+          .order('id')
+          .range(from, to));
         (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
       }
 
-      // Get item counts
-      const rows: CommissionPaymentRow[] = [];
-      let hasUnverifiedItemCount = false;
-      for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
-        const { count, error: itemCountError } = await supabase
+      // Item counts. One paged read of the linked item ids for every payment,
+      // counted here, replaces a count request per payment — the list is no
+      // longer capped, so per-row requests would grow with the whole history.
+      // If that read fails, every count is unverified and Post stays disabled.
+      const paymentIds = paymentRows.map((p) => p.id);
+      const itemCounts = new Map<string, number>();
+      let itemCountError: { message: string } | null = null;
+      if (paymentIds.length > 0) {
+        const { data: items, error: itemsError } = await fetchAllRowsForIds(paymentIds, (idChunk, from, to) => supabase
           .from('commission_payment_items')
-          .select('*', { count: 'exact', head: true })
-          .eq('commission_payment_id', p.id as string);
-
-        if (itemCountError || count === null) {
-          hasUnverifiedItemCount = true;
+          .select('id, commission_payment_id', { count: 'exact' })
+          .in('commission_payment_id', idChunk)
+          .order('id')
+          .range(from, to));
+        if (itemsError || !items) {
+          itemCountError = itemsError ?? { message: 'Commission item count was unavailable' };
           Sentry.captureException(
-            itemCountError ?? new Error('Commission item count was unavailable'),
-            { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
+            itemsError ?? new Error(itemCountError.message),
+            { extra: { context: 'load_commission_payment_item_count', paymentCount: paymentIds.length } },
           );
+        } else {
+          for (const item of items as Array<{ commission_payment_id: string }>) {
+            itemCounts.set(item.commission_payment_id, (itemCounts.get(item.commission_payment_id) ?? 0) + 1);
+          }
         }
-
-        rows.push({
-          ...p,
-          recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
-          item_count: itemCountError || count === null ? null : count,
-        } as CommissionPaymentRow);
       }
 
+      const hasUnverifiedItemCount = itemCountError !== null;
+      const rows: CommissionPaymentRow[] = paymentRows.map((p) => ({
+        ...p,
+        recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
+        item_count: itemCountError ? null : itemCounts.get(p.id) ?? 0,
+      } as CommissionPaymentRow));
+
+      // Superseded: the newer load sets the list and reports its own outcome.
+      if (seq !== fetchPaymentsSeq.current) return true;
       setPayments(rows);
       if (hasUnverifiedItemCount) {
         toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
@@ -220,10 +244,11 @@ export default function CommissionPayments() {
       return true;
     } catch (err) {
       Sentry.captureException(err, { extra: { context: 'load_commission_payments' } });
+      if (seq !== fetchPaymentsSeq.current) return true;
       if (!quiet) toast('error', 'Failed to load commission payments');
       return false;
     } finally {
-      setLoading(false);
+      if (seq === fetchPaymentsSeq.current) setLoading(false);
     }
   }, [toast]);
 
@@ -231,25 +256,34 @@ export default function CommissionPayments() {
     fetchPayments();
   }, [fetchPayments]);
 
+  // A multi-page load can finish after a newer one (reopening the dialog after
+  // a payment posted); an older load must not put a now-paid commission back
+  // into the unpaid list and its totals, so only the newest load may set them.
+  const fetchUnpaidSeq = useRef(0);
   const fetchUnpaid = async () => {
+    const seq = ++fetchUnpaidSeq.current;
     // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     // commissions.order_number / customer_name are denormalized columns that
     // _insert_commissions_for_order never populates (always NULL), so the payout
     // modal showed a blank order # and blank customer. Select the FK ids instead and
     // resolve order # / farm name live (same pattern as recipient resolution below).
-    const { data, error } = await supabase
+    // Every pending commission, paged: the pay-selection list and its totals
+    // must not silently drop the oldest ones past a row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('commissions')
       .select(`
         id, order_id, job_id, customer_id, order_date, commission_amount,
         recipient_user_id
-      `)
+      `, { count: 'exact' })
       // Only PENDING commissions are payable. `.neq('status','paid')` also leaked
       // CANCELLED commissions (lifecycle: pending → paid → cancelled) into the
       // pay-selection list and the unpaid totals. (overnight-bug-hunt finding)
       .eq('status', 'pending')
       .order('order_date', { ascending: false })
-      .limit(500);
+      .order('id')
+      .range(from, to));
 
+    if (seq !== fetchUnpaidSeq.current) return;
     if (error) {
       toast('error', 'Failed to load unpaid commissions: ' + error.message);
       return;
@@ -269,19 +303,25 @@ export default function CommissionPayments() {
 
     const recipientMap: Record<string, string> = {};
     if (recipientUserIds.length > 0) {
-      const { data: recipients } = await supabase
+      const { data: recipients } = await fetchAllRowsForIds(recipientUserIds, (idChunk, from, to) => supabase
         .from('profile_public_view')
-        .select('id, full_name')
-        .in('id', recipientUserIds);
+        .select('id, full_name', { count: 'exact' })
+        .in('id', idChunk)
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchUnpaidSeq.current) return;
       (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
     }
 
     const orderMap: Record<string, string> = {};
     if (orderIds.length > 0) {
-      const { data: orders } = await supabase
+      const { data: orders } = await fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
         .from('orders')
-        .select('id, order_number')
-        .in('id', orderIds);
+        .select('id, order_number', { count: 'exact' })
+        .in('id', idChunk)
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchUnpaidSeq.current) return;
       (orders || []).forEach((o: { id: string | null; order_number: string | null }) => { if (o.id) orderMap[o.id] = o.order_number ?? ''; });
     }
 
@@ -289,19 +329,25 @@ export default function CommissionPayments() {
     // resolve their job_number so the source column isn't blank.
     const jobMap: Record<string, string> = {};
     if (jobIds.length > 0) {
-      const { data: jobs } = await supabase
+      const { data: jobs } = await fetchAllRowsForIds(jobIds, (idChunk, from, to) => supabase
         .from('jobs')
-        .select('id, job_number')
-        .in('id', jobIds);
+        .select('id, job_number', { count: 'exact' })
+        .in('id', idChunk)
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchUnpaidSeq.current) return;
       (jobs || []).forEach((j: { id: string | null; job_number: string | null }) => { if (j.id) jobMap[j.id] = j.job_number ?? ''; });
     }
 
     const customerMap: Record<string, string> = {};
     if (customerIds.length > 0) {
-      const { data: customers } = await supabase
+      const { data: customers } = await fetchAllRowsForIds(customerIds, (idChunk, from, to) => supabase
         .from('customers')
-        .select('id, farm_name')
-        .in('id', customerIds);
+        .select('id, farm_name', { count: 'exact' })
+        .in('id', idChunk)
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchUnpaidSeq.current) return;
       (customers || []).forEach((c: { id: string | null; farm_name: string | null }) => { if (c.id) customerMap[c.id] = c.farm_name ?? ''; });
     }
 

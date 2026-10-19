@@ -9,7 +9,7 @@
  * Read-only. Frontend queries against existing data — zero DB changes.
  * Act-in-place buttons (schedule delivery / reorder) are a separate review-gated build.
  */
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Package, Search, AlertTriangle, CheckCircle2, Truck, Users, DollarSign, Inbox } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -18,6 +18,7 @@ import HelpTip from '../components/ui/HelpTip';
 import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 import type { InventoryPositionRow } from '../types';
 
@@ -104,33 +105,58 @@ export default function ToShip() {
   });
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [pos, setPos] = useState<PORow[]>([]);
+  // A failed read must not look like an empty section; these stay set until a
+  // newer load reads that section successfully.
+  const [deliveriesFailed, setDeliveriesFailed] = useState(false);
+  const [posFailed, setPosFailed] = useState(false);
 
+  // A load is several multi-page reads; an older, slower load must not overwrite
+  // a newer one, so only the latest may set state (checked after every await).
+  const fetchSeq = useRef(0);
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
     // 0. Open deliveries (scheduled / in progress) — independent of order demand
-    const { data: delivRaw } = await supabase
+    const { data: delivRaw, error: dErr } = await fetchAllRows((from, to) => supabase
       .from('deliveries')
-      .select('id, delivery_number, scheduled_date, status, assigned_driver, customer:customers(farm_name), order:orders(order_number)')
+      .select('id, delivery_number, scheduled_date, status, assigned_driver, customer:customers(farm_name), order:orders(order_number)', { count: 'exact' })
       .in('status', ['scheduled', 'in_progress'])
       .order('scheduled_date', { ascending: true })
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
+    // A failed read must not look like "no deliveries scheduled".
+    if (dErr) {
+      Sentry.captureException(dErr, { tags: { source: 'fetch', action: 'to_ship_open_deliveries' } });
+      toast('error', 'Failed to load open deliveries. The Deliveries list is incomplete.');
+    }
+    setDeliveriesFailed(Boolean(dErr));
     setDeliveries((delivRaw || []) as unknown as DeliveryRow[]);
 
     // 0b. Open purchase orders (inbound stock on the way)
-    const { data: poRaw } = await supabase
+    const { data: poRaw, error: pErr } = await fetchAllRows((from, to) => supabase
       .from('purchase_orders')
-      .select('id, po_number, vendor, status, expected_delivery_date, items:purchase_order_items(id, product_name, product_id, quantity_ordered, quantity_received, unit_size)')
+      .select('id, po_number, vendor, status, expected_delivery_date, items:purchase_order_items(id, product_name, product_id, quantity_ordered, quantity_received, unit_size)', { count: 'exact' })
       .in('status', ['submitted', 'partially_received'])
       .order('expected_delivery_date', { ascending: true, nullsFirst: false })
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
+    if (pErr) {
+      Sentry.captureException(pErr, { tags: { source: 'fetch', action: 'to_ship_inbound_pos' } });
+      toast('error', 'Failed to load inbound purchase orders. The Inbound list is incomplete.');
+    }
+    setPosFailed(Boolean(pErr));
     setPos((poRaw || []) as unknown as PORow[]);
 
     // 1. Open orders (the booking still owes product)
-    const { data: ordersRaw, error: oErr } = await supabase
+    const { data: ordersRaw, error: oErr } = await fetchAllRows((from, to) => supabase
       .from('orders')
-      .select('id, order_number, order_date, customer_id, customer:customers(farm_name, assigned_tier)')
+      .select('id, order_number, order_date, customer_id, customer:customers(farm_name, assigned_tier)', { count: 'exact' })
       .in('status', OPEN_STATUSES)
-      .limit(2000);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
     if (oErr) {
       Sentry.captureException(oErr, { tags: { source: 'fetch', action: 'load_to_ship_orders' } });
       toast('error', 'Failed to load open orders');
@@ -148,12 +174,14 @@ export default function ToShip() {
     }
 
     // 2. Open lines on those orders
-    const { data: itemsRaw, error: iErr } = await supabase
+    const { data: itemsRaw, error: iErr } = await fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
       .from('order_items')
-      .select('id, order_id, product_id, product_name, price_per_unit, quantity_remaining, unit_size')
-      .in('order_id', orderIds)
+      .select('id, order_id, product_id, product_name, price_per_unit, quantity_remaining, unit_size', { count: 'exact' })
+      .in('order_id', idChunk)
       .gt('quantity_remaining', 0)
-      .limit(5000);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
     if (iErr) {
       Sentry.captureException(iErr, { tags: { source: 'fetch', action: 'load_to_ship_items' } });
       toast('error', 'Failed to load open order lines');
@@ -189,6 +217,7 @@ export default function ToShip() {
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'to_ship_inventory_position' } });
     }
+    if (seq !== fetchSeq.current) return;
 
     const built: OpenLine[] = items.map((it) => {
       const o = orderMap.get(it.order_id);
@@ -662,7 +691,11 @@ export default function ToShip() {
                   </tbody>
                 </table>
                 {visibleDeliveries.length === 0 && (
-                  <p className="text-center text-secondary py-8 text-sm">No open deliveries.</p>
+                  deliveriesFailed ? (
+                    <p role="alert" className="text-center text-red-600 py-8 text-sm">Open deliveries could not be loaded. Reload to try again.</p>
+                  ) : (
+                    <p className="text-center text-secondary py-8 text-sm">No open deliveries.</p>
+                  )
                 )}
               </div>
             </Card>
@@ -728,7 +761,11 @@ export default function ToShip() {
                 );
               })}
               {visiblePOs.length === 0 && (
-                <Card><p className="text-center text-secondary py-8 text-sm">No inbound purchase orders.</p></Card>
+                posFailed ? (
+                  <Card><p role="alert" className="text-center text-red-600 py-8 text-sm">Inbound purchase orders could not be loaded. Reload to try again.</p></Card>
+                ) : (
+                  <Card><p className="text-center text-secondary py-8 text-sm">No inbound purchase orders.</p></Card>
+                )
               )}
             </div>
           </>

@@ -85,6 +85,7 @@ export interface InMemoryQueryLog {
 export function buildInMemoryQuery(rows: Row[], log?: InMemoryQueryLog) {
   const predicates: Predicate[] = [];
   let headCount = false;
+  let countRequested = false;
   let limit: number | null = null;
   let offset = 0;
   let rangeEnd: number | null = null;
@@ -93,6 +94,7 @@ export function buildInMemoryQuery(rows: Row[], log?: InMemoryQueryLog) {
 
   chain.select = vi.fn((_columns?: string, options?: { count?: string; head?: boolean }) => {
     headCount = Boolean(options?.head);
+    countRequested = Boolean(options?.count);
     return chain;
   });
   chain.eq = vi.fn((c: string, v: unknown) => { predicates.push((r) => cell(r, c) === String(v)); return chain; });
@@ -124,11 +126,19 @@ export function buildInMemoryQuery(rows: Row[], log?: InMemoryQueryLog) {
   const result = () => {
     // Order is the input order (order() is a no-op): tests pass rows already in query order.
     let matched = rows.filter((r) => predicates.every((p) => p(r)));
+    // Like PostgREST: a requested count is every matching row, not just the
+    // page, and no count is sent unless the select asked for one.
+    const count = countRequested ? matched.length : null;
+    // PostgREST can refuse a counted range that starts at or past the end of a
+    // non-empty result (PGRST103 / 416); model that so a pager that asks for it fails here.
+    if (countRequested && rangeEnd !== null && offset > 0 && offset >= matched.length) {
+      return { data: null, error: { message: 'Requested range not satisfiable', code: 'PGRST103' }, count: null };
+    }
     if (rangeEnd !== null) matched = matched.slice(offset, rangeEnd + 1);
     if (limit !== null) matched = matched.slice(0, limit);
     return headCount
-      ? { data: null, error: null, count: matched.length }
-      : { data: matched, error: null, count: matched.length };
+      ? { data: null, error: null, count }
+      : { data: matched, error: null, count };
   };
   chain.then = (resolve: (value: ReturnType<typeof result>) => unknown, reject?: (reason: unknown) => unknown) =>
     Promise.resolve().then(result).then(resolve, reject);

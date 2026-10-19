@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -257,13 +258,20 @@ export default function Quotes() {
     }
   };
 
+  // A refresh after a convert/duplicate/delete is a multi-page read; an older,
+  // slower load must not overwrite the newer list, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchQuotes = useCallback(async () => {
-    const { data, error } = await supabase
+    const seq = ++fetchSeq.current;
+    // Read every page: a single request is silently cut off at the server's row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('quotes')
-      .select('*, customer:customers(farm_name)')
+      .select('*, customer:customers(farm_name)', { count: 'exact' })
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quotes' } });
       toast('error', 'Failed to load quotes. Please try again.');
@@ -280,19 +288,33 @@ export default function Quotes() {
 
     // quote_items only carries product_id, so join through products for the name (F1: search by product).
     const quoteIds = quoteList.map((q) => q.id);
+    // The list still loads without product names, but a product search would then
+    // silently miss quotes, so a failed lookup is reported once below.
+    let productNamesFailed = false;
     if (quoteIds.length > 0) {
-      const { data: itemRows, error: itemErr } = await supabase
+      // Chunked and paged: a full quote list has more ids than one URL holds and
+      // more item rows than the server's row cap.
+      const { data: itemRows, error: itemErr } = await fetchAllRowsForIds(quoteIds, (idChunk, from, to) => supabase
         .from('quote_items')
-        .select('quote_id, product_id')
-        .in('quote_id', quoteIds);
+        .select('id, quote_id, product_id', { count: 'exact' })
+        .in('quote_id', idChunk)
+        .order('id')
+        .range(from, to));
       if (itemErr) {
         Sentry.captureException(itemErr, { tags: { source: 'fetch', action: 'load_quote_items' } });
+        productNamesFailed = true;
       } else if (itemRows && itemRows.length > 0) {
         const productIds = [...new Set(itemRows.map((r) => r.product_id).filter(Boolean) as string[])];
-        const { data: prodRows } = await supabase
+        const { data: prodRows, error: prodErr } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => supabase
           .from('products')
-          .select('id, product_name')
-          .in('id', productIds.length > 0 ? productIds : ['__none__']);
+          .select('id, product_name', { count: 'exact' })
+          .in('id', idChunk)
+          .order('id')
+          .range(from, to));
+        if (prodErr) {
+          Sentry.captureException(prodErr, { tags: { source: 'fetch', action: 'load_quote_products' } });
+          productNamesFailed = true;
+        }
         const nameById: Record<string, string> = {};
         (prodRows || []).forEach((p) => { nameById[p.id] = p.product_name; });
         const namesByQuote: Record<string, Set<string>> = {};
@@ -306,8 +328,12 @@ export default function Quotes() {
       }
     }
 
+    if (seq !== fetchSeq.current) return;
     setQuotes(quoteList);
     setLoading(false);
+    if (productNamesFailed) {
+      toast('error', 'Product names could not be loaded, so searching by product may miss quotes. Reload to try again.');
+    }
   }, [toast]);
 
   useEffect(() => {
@@ -391,9 +417,15 @@ export default function Quotes() {
       // (job_product_draws) and the FK only cascades on HARD deletes, so a quote with
       // a live job draw must be skipped here too — else it's hidden while its booking
       // stays consumed by a schedulable/invoiceable job.
+      // Read every draw row (ids in chunks): a selection can be the whole list, and a
+      // draw missed past the row cap would let a drawn booking be deleted.
       const [orderDrawnRes, jobDrawnRes] = await Promise.all([
-        supabase.from('quote_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
-        supabaseUntyped.from('job_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
+        fetchAllRowsForIds(ids, (idChunk, from, to) => supabase
+          .from('quote_product_draws').select('id, quote_id', { count: 'exact' }).in('quote_id', idChunk).gt('quantity_drawn', 0)
+          .order('id').range(from, to)),
+        fetchAllRowsForIds<{ id: string; quote_id: string }, string>(ids, (idChunk, from, to) => supabaseUntyped
+          .from('job_product_draws').select('id, quote_id', { count: 'exact' }).in('quote_id', idChunk).gt('quantity_drawn', 0)
+          .order('id').range(from, to)),
       ]);
       if (orderDrawnRes.error) throw orderDrawnRes.error;
       if (jobDrawnRes.error) throw jobDrawnRes.error;

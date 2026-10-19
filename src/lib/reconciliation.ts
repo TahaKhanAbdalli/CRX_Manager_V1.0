@@ -16,6 +16,7 @@
  */
 
 import { supabase } from './db';
+import { fetchAllRows } from './pagedRead';
 import { fetchBilledOutsideCrxDeliveryIds } from './deliveryExternalBilling';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -695,36 +696,16 @@ export function checkCustomerARConsistency(
 
 // ─── DB Wrapper ───────────────────────────────────────────────────
 
+// A ledger recompute over a partial read reports false discrepancies (or hides
+// real ones), so every check reads its rows with the shared pager.
+export { fetchAllRows };
+
 /**
  * Runs all reconciliation checks against the live database.
  *
  * Returns a structured report with pass/fail per check and
  * details on every discrepancy found.
  */
-const RECONCILIATION_PAGE_SIZE = 1000;
-
-/**
- * Read every row of a query, page by page. One request is silently cut off at
- * the PostgREST row cap, and a ledger recompute over a partial read reports
- * false discrepancies (or hides real ones). Each page must be ordered on a
- * unique column; the loop advances by the rows actually returned, so a server
- * cap below the requested page size still reads everything.
- */
-export async function fetchAllRows<T>(
-  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
-): Promise<{ data: T[] | null; error: { message: string } | null }> {
-  const rows: T[] = [];
-  for (let from = 0; ;) {
-    const { data, error } = await fetchPage(from, from + RECONCILIATION_PAGE_SIZE - 1);
-    if (error) return { data: null, error };
-    const page = data ?? [];
-    if (page.length === 0) break;
-    rows.push(...page);
-    from += page.length;
-  }
-  return { data: rows, error: null };
-}
-
 export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   const checks: CheckResult[] = [];
 
@@ -733,13 +714,13 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [ordersRes, itemsRes] = await Promise.all([
       fetchAllRows((from, to) => supabase
         .from('orders')
-        .select('id, order_number, total_price')
+        .select('id, order_number, total_price', { count: 'exact' })
         .not('total_price', 'is', null)
         .order('id')
         .range(from, to)),
       fetchAllRows((from, to) => supabase
         .from('order_items')
-        .select('order_id, total_price')
+        .select('id, order_id, total_price', { count: 'exact' })
         .order('id')
         .range(from, to)),
     ]);
@@ -772,13 +753,13 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invRes, txRes] = await Promise.all([
       fetchAllRows((from, to) => supabase
         .from('inventory')
-        .select('id, product_id, quantity_available, products(product_name)')
+        .select('id, product_id, quantity_available, products(product_name)', { count: 'exact' })
         .not('quantity_available', 'is', null)
         .order('id')
         .range(from, to)),
       fetchAllRows((from, to) => supabase
         .from('inventory_transactions')
-        .select('id, product_id, transaction_type, quantity')
+        .select('id, product_id, transaction_type, quantity', { count: 'exact' })
         .order('id')
         .range(from, to)),
     ]);
@@ -816,14 +797,14 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invoiceRes, allocRes] = await Promise.all([
       fetchAllRows((from, to) => supabase
         .from('invoices')
-        .select('id, invoice_number, order_id, invoice_type, status, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents')
+        .select('id, invoice_number, order_id, invoice_type, status, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents', { count: 'exact' })
         .not('status', 'in', '("voided","cancelled")')
         .is('deleted_at', null)
         .order('id')
         .range(from, to)),
       fetchAllRows((from, to) => supabase
         .from('invoice_line_allocations')
-        .select('invoice_id, amount_cents')
+        .select('id, invoice_id, amount_cents', { count: 'exact' })
         .order('id')
         .range(from, to)),
     ]);
@@ -938,12 +919,12 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [deliveryItemsRes, invoiceItemsRes, externalBillingRes] = await Promise.all([
       fetchAllRows((from, to) => supabase
         .from('delivery_items')
-        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status, deleted_at)')
+        .select('id, delivery_id, product_id, quantity_delivered, deliveries(order_id, status, deleted_at)', { count: 'exact' })
         .order('id')
         .range(from, to)),
       fetchAllRows((from, to) => supabase
         .from('invoice_items')
-        .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)')
+        .select('id, product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)', { count: 'exact' })
         .order('id')
         .range(from, to)),
       fetchBilledOutsideCrxDeliveryIds(),
@@ -995,12 +976,12 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invPrebookRes, orderItemsRes] = await Promise.all([
       fetchAllRows((from, to) => supabase
         .from('inventory')
-        .select('id, product_id, quantity_prebooked')
+        .select('id, product_id, quantity_prebooked', { count: 'exact' })
         .order('id')
         .range(from, to)),
       fetchAllRows((from, to) => supabase
         .from('order_items')
-        .select('product_id, quantity_remaining, orders(status, deleted_at)')
+        .select('id, product_id, quantity_remaining, orders(status, deleted_at)', { count: 'exact' })
         .gt('quantity_remaining', 0)
         .order('id')
         .range(from, to)),

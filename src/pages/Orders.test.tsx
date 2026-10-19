@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { buildPaginatedQueryChain as buildChain, type QueryResult } from '../test-utils/supabaseChain';
+import { buildInMemoryQuery } from '../test-utils/inMemoryQuery';
 
 const {
   mockFrom,
@@ -54,10 +55,12 @@ vi.mock('../components/ui/PageHeader', () => ({
   default: ({ actions }: { actions?: ReactNode }) => <div>{actions}</div>,
 }));
 vi.mock('../components/ui/DataTable', () => ({
-  default: ({ data }: { data: Array<{ id: string; invoiced_pct: number | null }> }) => (
+  default: ({ data }: { data: Array<{ id: string; invoiced_pct: number | null; fulfillment_pct: number }> }) => (
     <div>
       orders table
+      <span>{`${data.length} orders`}</span>
       {data.map((row) => <span key={row.id}>{row.invoiced_pct == null ? 'Invoiced unavailable' : `Invoiced ${row.invoiced_pct}%`}</span>)}
+      {data.map((row) => <span key={`${row.id}-fulfilled`}>{`${row.id} fulfilled ${row.fulfillment_pct}%`}</span>)}
     </div>
   ),
 }));
@@ -71,6 +74,14 @@ vi.mock('../components/customers/CustomerDrawer', () => ({ default: () => null }
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 
 import Orders from './Orders';
+
+/** A table read page by page: each .range(from, to) returns that slice of the rows. */
+function pagedChain(rows: unknown[]) {
+  const chain = buildChain({ data: rows, error: null });
+  chain.range = vi.fn((from: number, to: number) =>
+    Promise.resolve({ data: rows.slice(from, to + 1), error: null }));
+  return chain;
+}
 
 function renderPage() {
   return render(<MemoryRouter><Orders /></MemoryRouter>);
@@ -159,14 +170,11 @@ describe('Orders bulk-delete lifecycle guard', () => {
     });
     mockFrom.mockImplementation((table: string) => {
       if (table === 'orders') {
-        return buildChain({
-          data: [{
-            id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
-            status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
-            customer: { farm_name: 'Test Farm', parent_customer_id: null },
-          }],
-          error: null,
-        });
+        return pagedChain([{
+          id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
+          status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
+          customer: { farm_name: 'Test Farm', parent_customer_id: null },
+        }]);
       }
       if (table === 'invoices') return invoiceQuery;
       return buildChain({ data: [], error: null });
@@ -181,14 +189,11 @@ describe('Orders bulk-delete lifecycle guard', () => {
   it('shows invoice coverage as unavailable when the coverage query fails', async () => {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'orders') {
-        return buildChain({
-          data: [{
-            id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
-            status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
-            customer: { farm_name: 'Test Farm', parent_customer_id: null },
-          }],
-          error: null,
-        });
+        return pagedChain([{
+          id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
+          status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
+          customer: { farm_name: 'Test Farm', parent_customer_id: null },
+        }]);
       }
       if (table === 'invoices') return buildChain({ data: null, error: { message: 'coverage unavailable' } });
       return buildChain({ data: [], error: null });
@@ -202,4 +207,45 @@ describe('Orders bulk-delete lifecycle guard', () => {
       'Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.',
     );
   });
+
+  it('loads all 1,500 orders and their items, past the 1,000-row server cap', async () => {
+    const manyOrders = Array.from({ length: 1500 }, (_, i) => ({
+      id: `order-${i}`, order_number: `ORD-${i}`, customer_id: 'customer-1',
+      status: 'confirmed', order_date: '2026-04-01', total_price: 100,
+      customer: { farm_name: 'Test Farm', parent_customer_id: null },
+    }));
+    // One line per order, half delivered. The in-memory query applies the page's
+    // .in('order_id', chunk) filter, so each order's fulfillment proves its item was read.
+    const items = manyOrders.map((o) => ({
+      order_id: o.id, total_units_needed: 10, quantity_delivered: 5, price_per_unit: 10, product_name: 'Widget',
+    }));
+    const orders = pagedChain(manyOrders);
+    const itemChunks: unknown[][] = [];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return orders;
+      if (table === 'order_items') {
+        const query = buildInMemoryQuery(items);
+        const filterIn = query.in as (column: string, values: unknown[]) => unknown;
+        query.in = vi.fn((column: string, values: unknown[]) => {
+          itemChunks.push(values);
+          return filterIn(column, values);
+        });
+        return query;
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('1500 orders')).toBeInTheDocument();
+    expect(screen.getByText('order-0 fulfilled 50%')).toBeInTheDocument();
+    expect(screen.getByText('order-1499 fulfilled 50%')).toBeInTheDocument();
+    expect(orders.range.mock.calls).toEqual([[0, 999], [950, 1949], [1450, 2449]]);
+    expect(orders.order).toHaveBeenCalledWith('id');
+    expect(orders.limit).not.toHaveBeenCalled();
+    // The order ids go out in URL-sized chunks, never one 1,500-id list.
+    expect(Math.max(...itemChunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(200);
+    expect(new Set(itemChunks.flat()).size).toBe(1500);
+    expect(mockToast).not.toHaveBeenCalled();
+  }, 30000);
 });

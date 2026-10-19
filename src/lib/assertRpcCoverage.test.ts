@@ -38,8 +38,11 @@ const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*
 // applies exactly as for the direct form. The runner name is deliberately
 // generic (`\w+`): any single-arg arrow returning a literal-named supabase.rpc
 // call is a real capture, and matching more call sites only tightens the guard.
+// The runner may carry a type argument and its arrow several parameters:
+// `fetchAllRows<Row>((from, to) => supabase.rpc(...).range(from, to))` pages an
+// RPC and resolves to its rows, so it is a capture too (2026-10-18).
 const RPC_WRAPPED_CAPTURE_PATTERN =
-  /=\s*await\s+\w+\s*\(\s*(?:async\s*)?\(?\s*\w+\s*\)?\s*=>\s*supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+  /=\s*await\s+\w+\s*(?:<[^>()]*>)?\s*\(\s*(?:async\s*)?\(?\s*\w+(?:\s*,\s*\w+)*\s*\)?\s*=>\s*supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
 
 // The same wrapped capture, but with a BLOCK-bodied callback:
 // `= await someRunner((reason) => { …guard…; return supabase.rpc('name', …) })`.

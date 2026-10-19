@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useRef } from 'react';
 
 
 import Card from '../components/ui/Card';
@@ -8,6 +8,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import Button from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { useAuth } from '../contexts/AuthContext';
 import LotsEditorModal from '../components/LotsEditorModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
@@ -59,38 +60,54 @@ export default function ApplicationRecords() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
 
-  const fetchCustomers = async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, farm_name')
-      .eq('is_active', true)
-      .order('farm_name');
+  const fetchCustomers = useCallback(async () => {
+    const { data, error } = await fetchAllRows<{ id: string; farm_name: string }>((from, to) =>
+      supabase
+        .from('customers')
+        .select('id, farm_name', { count: 'exact' })
+        .eq('is_active', true)
+        .order('farm_name')
+        .order('id')
+        .range(from, to),
+    );
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_application_record_customers' } });
+      toast('error', 'Failed to load the customer filter list');
+    }
     setCustomers((data || []) as { id: string; farm_name: string }[]);
-  };
+  }, [toast]);
 
+  // A long "All" read can finish after a narrower filter's; only the latest
+  // request may set the list.
+  const fetchSeq = useRef(0);
   const fetchRecords = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
     // U10 (2026-07-06): prefer the applicator_name snapshot column (as-of-application,
     // immune to later profile edits) and only fall back to the profiles join for old
     // rows where it's NULL. `select('*', ...)` below already includes the snapshot cols.
-    let query = supabase
-      .from('application_records')
-      .select(`
-        *,
-        customer:customers(farm_name),
-        field:fields(field_name),
-        vehicle:vehicles(vehicle_name)
-      `)
-      .order('application_date', { ascending: false })
-      .limit(500);
+    const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) => {
+      let query = supabase
+        .from('application_records')
+        .select(`
+          *,
+          customer:customers(farm_name),
+          field:fields(field_name),
+          vehicle:vehicles(vehicle_name)
+        `, { count: 'exact' });
 
-    if (startDate) query = query.gte('application_date', startDate);
-    if (endDate) query = query.lte('application_date', endDate);
-    if (customerFilter) query = query.eq('customer_id', customerFilter);
+      if (startDate) query = query.gte('application_date', startDate);
+      if (endDate) query = query.lte('application_date', endDate);
+      if (customerFilter) query = query.eq('customer_id', customerFilter);
 
-    const { data, error } = await query;
+      return query
+        .order('application_date', { ascending: false })
+        .order('id')
+        .range(from, to);
+    });
 
+    if (seq !== fetchSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_application_records' } });
       toast('error', 'Failed to load application records');
@@ -116,12 +133,20 @@ export default function ApplicationRecords() {
     )];
     const applicatorMap: Record<string, string> = {};
     if (applicatorIds.length > 0) {
-      const { data: applicators } = await supabase
-        .from('profile_public_view')
-        .select('id, full_name')
-        .in('id', applicatorIds);
+      // A failed name lookup stays non-fatal: names fall back to '-'.
+      const { data: applicators } = await fetchAllRowsForIds<{ id: string | null; full_name: string | null }, string>(
+        applicatorIds,
+        (idChunk, from, to) =>
+          supabase
+            .from('profile_public_view')
+            .select('id, full_name', { count: 'exact' })
+            .in('id', idChunk)
+            .order('id')
+            .range(from, to),
+      );
       (applicators || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) applicatorMap[a.id] = a.full_name || '-'; });
     }
+    if (seq !== fetchSeq.current) return;
 
     const rows: AppRecordRow[] = typedRows.map((r) => ({
       ...r,
@@ -137,7 +162,7 @@ export default function ApplicationRecords() {
 
   useEffect(() => {
     fetchCustomers();
-  }, []);
+  }, [fetchCustomers]);
 
   useEffect(() => {
     fetchRecords();

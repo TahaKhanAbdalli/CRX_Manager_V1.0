@@ -22,6 +22,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
@@ -68,11 +69,13 @@ export default function Vendors() {
   const fetchVendors = useCallback(async () => {
     const seq = ++fetchSeq.current;
     setLoading(true);
-    let query = supabase.from('vendors').select('*');
-    query = showInactive
-      ? query.not('deleted_at', 'is', null)
-      : query.is('deleted_at', null);
-    const { data, error } = await query.order('name', { ascending: true });
+    const { data, error } = await fetchAllRows((from, to) => {
+      const base = supabase.from('vendors').select('*', { count: 'exact' });
+      const filtered = showInactive
+        ? base.not('deleted_at', 'is', null)
+        : base.is('deleted_at', null);
+      return filtered.order('name', { ascending: true }).order('id').range(from, to);
+    });
     if (seq !== fetchSeq.current) return;
     if (error) {
       toast('error', 'Failed to load vendors');
