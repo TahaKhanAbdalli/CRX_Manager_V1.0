@@ -289,21 +289,16 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
   'src/pages/PaymentAllocation.tsx': ['allocatePaymentIdem.resetKey'],
   'src/pages/Quotes.tsx': ['duplicateQuoteIdem.resetKey'],
   'src/pages/FieldSetup.tsx': ['saveFieldIdem.resetKey'],
-  // Reverted after round 3: FieldStop does NOT remount stop-to-stop (App.tsx:285 has
-  // no key), so retaining an unscoped complete_delivery key could replay stop A's
-  // receipt against stop B.
-  'src/pages/FieldStop.tsx': ['completeIdem.resetKey'],
   // OrderDetail is mostly FIXED — this pins the ONE site deliberately left in main's
   // order: void_order sends order.id plus a free-text reason, so it needs payload
   // binding rather than route-id scoping.
   'src/pages/OrderDetail.tsx': ['voidOrderIdem.resetKey'],
   // DeliveryDetail is partly fixed: create_followup_delivery is route-bound and was
-  // reordered; complete/cancel/void send mutable payload fields (signature, quantities,
-  // issue notes, free-text reasons) that a route-id scope does not bind, so they stay
-  // in main's order pending fingerprintIntentPayload (Codex round-4 HIGH/MEDIUM).
+  // reordered; complete_delivery is payload-bound (fingerprintIntentPayload) and was
+  // reordered (Goal 5, PR #955). cancel/void send free-text reasons a route-id scope
+  // does not bind, so they stay in main's order pending payload binding.
   'src/pages/DeliveryDetail.tsx': [
     'cancelIdem.resetKey',
-    'completeIdem.resetKey',
     'voidIdem.resetKey',
   ],
   // ALIASED-RESET CLASS, invisible until this guard learned to resolve destructured

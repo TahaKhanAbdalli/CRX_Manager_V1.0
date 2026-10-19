@@ -17,6 +17,7 @@ import {
   List,
   CalendarDays,
   PanelRightOpen,
+  WifiOff,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
@@ -30,16 +31,20 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { hasSignal, NO_SIGNAL_AFTER_START_MESSAGE, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRef } from '../hooks/useLatestRef';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { getIdempotencyBindingRejection } from '../lib/idempotency';
+import { digestIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
+import { completedAtForDeliveredOn, isValidDeliveredOn } from '../lib/paperTicket';
 import { notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
+import { localToday, parseLocalDate, formatLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { findShortDeliveries } from '../lib/inventoryShortage';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
@@ -56,6 +61,8 @@ interface DeliveryRow extends Delivery {
 
 /* ─── Helpers ─── */
 const today = () => localToday();
+// Completion dates use the business day in America/Chicago, the day the server dates the delivery.
+const businessToday = () => todayInBusinessTz();
 const addDays = (d: string, n: number) => {
   const dt = parseLocalDate(d);
   dt.setDate(dt.getDate() + n);
@@ -115,17 +122,30 @@ export default function Deliveries() {
   const batchCancelIdem = useIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
   const batchRescheduleIdem = useIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
+  const isOnline = useOnlineStatus();
   // F3 act-from-list: complete an in_progress delivery in place (signed-by popup).
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const [completeTarget, setCompleteTarget] = useState<DeliveryRow | null>(null);
+  const completeTargetRef = useLatestRef(completeTarget);
+  // Bumped on every open and close of the complete dialog, so a request started in an
+  // earlier dialog session can never submit or close a later one.
+  const completeDialogGenRef = useRef(0);
+  const closeCompleteDialog = () => {
+    completeDialogGenRef.current += 1;
+    setCompleteTarget(null);
+    setSignedBy('');
+    setDeliveredOnDate(businessToday());
+  };
   // Send the in-app completion notification at most once per delivery. complete_delivery
   // is idempotent but returns no replay marker, so a same-key retry after a lost
   // response replays its cached success; the stable delivery id avoids duplicate
   // driver/admin notifications on that replay (Codex P2).
   const notifiedCompletionFor = useRef<Set<string>>(new Set());
   const [signedBy, setSignedBy] = useState('');
-  const [deliveredOnDate, setDeliveredOnDate] = useState(today());
+  const [deliveredOnDate, setDeliveredOnDate] = useState(businessToday());
+  // The dialog's editable inputs, compared after each signal check (see handleCompleteConfirm).
+  const completeInputsRef = useLatestRef(JSON.stringify([signedBy.trim(), deliveredOnDate]));
   const [completing, setCompleting] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -405,15 +425,56 @@ export default function Deliveries() {
   // F3 act-from-list: complete a delivery in full, in place. Scheduled deliveries
   // are confirmed first; p_quantities omitted = deliver in full. Partial deliveries,
   // signature image, and issue flags stay on the detail page.
+  // Goal 5: completing needs a signal. It is checked before the start step and again
+  // between start and complete, so a lost signal stops before anything else changes.
   const handleCompleteConfirm = async () => {
     if (!completeTarget || !profile) return;
     if (!signedBy.trim()) { toast('error', 'Please enter a signature name'); return; }
+    // The date is required: an empty date would silently date the delivery and invoice to today.
+    if (!isValidDeliveredOn(deliveredOnDate)) {
+      toast('error', 'Enter the delivery date (today or earlier)');
+      return;
+    }
     const target = completeTarget;
-    const idemKey = completeIdem.getKey();
+    // Captured before any await, so a cancel during the hashing or a signal check is seen.
+    const dialogGen = completeDialogGenRef.current;
+    const completeParams = {
+      p_delivery_id: target.id,
+      p_signed_by: signedBy.trim(),
+      p_performed_by: profile.id,
+      // Midday in Chicago, so the server's America/Chicago date is the selected date.
+      ...(deliveredOnDate && deliveredOnDate !== businessToday()
+        ? { p_completed_at: completedAtForDeliveredOn(deliveredOnDate) }
+        : {}),
+    };
+    // check_idempotency replays by key and operation only: bind the key to this exact
+    // payload so a retry with an edited signer or date mints a fresh key instead of
+    // replaying an earlier attempt's receipt (complete_delivery refuses a completed delivery).
+    // Fingerprint the date the driver chose, not the completion time derived from it:
+    // "today" sends no p_completed_at but becomes a past date after midnight, and an
+    // exact retry across midnight must keep its key to replay the saved result.
+    // complete_delivery replays on the key alone, so the scope uses the collision-resistant
+    // SHA-256 digest (digestIntentPayload), never the 64-bit FNV fingerprint (see idempotency.ts).
+    const completeScope = `complete:${await digestIntentPayload({
+      ...completeParams,
+      p_completed_at: undefined,
+      delivered_on: deliveredOnDate,
+    })}`;
+    const idemKey = completeIdem.getKeyFor(completeScope);
     let confirmed = false;
+    // The signal checks take a few seconds; if the dialog was cancelled or switched to
+    // another delivery meanwhile, stop before sending the next server call.
+    const stillOpenForTarget = () =>
+      completeDialogGenRef.current === dialogGen && completeTargetRef.current?.id === target.id;
+    // An edit to the signer or date during a check must not be dropped in favour of the old values.
+    const inputsAtSubmit = JSON.stringify([signedBy.trim(), deliveredOnDate]);
+    const inputsUnchanged = () => completeInputsRef.current === inputsAtSubmit;
     // Route through runCriticalAction for parity with this page's other mutations.
-    const completed = await runCriticalAction({
+    const outcome = await runCriticalAction<'completed' | 'no_signal' | 'cancelled' | 'changed'>({
       action: async () => {
+        if (!(await hasSignal())) return 'no_signal';
+        if (!stillOpenForTarget()) return 'cancelled';
+        if (!inputsUnchanged()) return 'changed';
         if (target.status === 'scheduled') {
           const { data, error } = await supabase.rpc('confirm_delivery', {
             p_delivery_id: target.id,
@@ -423,30 +484,48 @@ export default function Deliveries() {
           assertRpcResult(data, 'confirm_delivery');
           confirmIdem.resetKey();
           confirmed = true;
+          if (!(await hasSignal())) return 'no_signal';
+          if (!stillOpenForTarget()) return 'cancelled';
+          if (!inputsUnchanged()) return 'changed';
         }
 
         // completeIdem is intentionally retained until onSuccess, so a retry after a
         // lost response replays the same complete_delivery request idempotently.
+        // Work out the completion time now, after the signal and route checks: if midnight passed
+        // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
         const { data, error } = await supabase.rpc('complete_delivery', {
-          p_delivery_id: target.id,
-          p_signed_by: signedBy.trim(),
-          p_performed_by: profile.id,
+          ...completeParams,
+          p_completed_at: deliveredOnDate && deliveredOnDate !== businessToday()
+            ? completedAtForDeliveredOn(deliveredOnDate)
+            : undefined,
           p_idempotency_key: idemKey,
-          // Use local midday so the ISO timestamp stays on the selected delivery date.
-          ...(deliveredOnDate && deliveredOnDate !== today()
-            ? { p_completed_at: new Date(deliveredOnDate + 'T12:00:00').toISOString() }
-            : {}),
         });
         if (error) throw error;
         assertRpcResult(data, 'complete_delivery');
-        return true;
+        return 'completed';
       },
       toast,
       setLoading: setCompleting,
-      successMessage: `Delivery ${target.delivery_number} completed`,
       sentryTag: 'complete_delivery',
-      onSuccess: () => {
-        completeIdem.resetKey();
+      onSuccess: (result) => {
+        if (result === 'changed') {
+          toast('warning', confirmed
+            ? `Details changed while checking for signal. Delivery ${target.delivery_number} is now In Progress but was NOT completed: check the details and tap Mark Complete again.`
+            : 'Details changed while checking for signal. Nothing was changed; check them and tap again.');
+          return;
+        }
+        if (result === 'cancelled') {
+          toast('warning', confirmed
+            ? `Cancelled. Delivery ${target.delivery_number} was started and is now In Progress, but it was NOT completed: no stock was taken and nothing was billed.`
+            : 'Cancelled. Nothing was changed.');
+          return;
+        }
+        if (result !== 'completed') {
+          toast('error', confirmed ? NO_SIGNAL_AFTER_START_MESSAGE : NO_SIGNAL_MESSAGE);
+          return;
+        }
+        toast('success', `Delivery ${target.delivery_number} completed`);
+        completeIdem.resetKeyFor(completeScope);
         // Fire the same in-app completion notification the detail page sends
         // (driver/admins/sales) — once per delivery so a same-key RPC replay after
         // a lost response can't duplicate it. The customer EMAIL receipt is sent
@@ -456,21 +535,28 @@ export default function Deliveries() {
           notifiedCompletionFor.current.add(target.id);
           notifyDeliveryCompleted(target.id, target.delivery_number, target.customer_name, target.assigned_driver, target.order_id, false).catch(() => { /* non-critical */ });
         }
-        setCompleteTarget(null);
-        setSignedBy('');
-        setDeliveredOnDate(today());
+        // Close only the dialog session this request came from.
+        if (completeDialogGenRef.current === dialogGen) closeCompleteDialog();
         fetchDeliveries();
       },
     });
 
-    if (!completed && confirmed) {
+    if (outcome !== 'completed' && confirmed) {
       // Confirm succeeded so the delivery is now in_progress; keep the modal open
       // with the SAME retained complete-key (completeIdem only resets on success)
       // so a retry replays idempotently. If the failed call actually committed
       // server-side, the replay returns the cached result and onSuccess (including
       // the completion notification) still fires.
-      setCompleteTarget((prev) => (prev && prev.id === target.id ? { ...prev, status: 'in_progress' } : prev));
-      await fetchDeliveries();
+      if (completeDialogGenRef.current === dialogGen) {
+        setCompleteTarget((prev) => (prev && prev.id === target.id ? { ...prev, status: 'in_progress' } : prev));
+      }
+      // Without signal the reload would only add a second "failed to load" message,
+      // so show the started delivery as In Progress in the table directly.
+      if (outcome === 'no_signal') {
+        setDeliveries((prev) => prev.map((row) => (row.id === target.id ? { ...row, status: 'in_progress' } : row)));
+      } else {
+        await fetchDeliveries();
+      }
     }
   };
 
@@ -1145,9 +1231,10 @@ export default function Deliveries() {
               e.stopPropagation();
               completeIdem.resetKey();
               if (row.status === 'scheduled') confirmIdem.resetKey();
+              completeDialogGenRef.current += 1;
               setCompleteTarget(row);
               setSignedBy('');
-              setDeliveredOnDate(today());
+              setDeliveredOnDate(businessToday());
             }}
             title={row.status === 'scheduled' ? 'Mark this delivery delivered' : 'Mark this delivery complete'}
             aria-label={`Mark delivery ${row.delivery_number} ${row.status === 'scheduled' ? 'delivered' : 'complete'}`}
@@ -1519,18 +1606,26 @@ export default function Deliveries() {
 
       <Modal
         open={!!completeTarget}
-        onClose={() => { setCompleteTarget(null); setSignedBy(''); setDeliveredOnDate(today()); }}
+        onClose={closeCompleteDialog}
         title={completeTarget?.status === 'scheduled' ? 'Mark Delivered' : 'Mark Delivery Complete'}
       >
         <div className="space-y-4">
           <p className="text-sm text-secondary">
             Complete delivery <span className="font-medium text-nav-dark">{completeTarget?.delivery_number}</span> for{' '}
             <span className="font-medium text-nav-dark">{completeTarget?.customer_name}</span> — all items delivered in full.
-            For a partial delivery, or to email the customer their receipt, open the delivery instead.
+            For a partial delivery or to email the customer their receipt, open the delivery instead.
+            If the customer signed a paper ticket, the assigned driver completes it from their own
+            delivery screen with a photo of the signed ticket.
           </p>
           {completeTarget?.status === 'scheduled' && (
             <p className="text-sm text-secondary">
               This will confirm and complete the delivery in one step. Inventory is deducted and a draft invoice is created.
+            </p>
+          )}
+          {!isOnline && (
+            <p role="alert" className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <WifiOff className="w-4 h-4 mt-0.5 shrink-0" />
+              No signal. A delivery can only be completed with signal; nothing is saved offline.
             </p>
           )}
           <div>
@@ -1551,13 +1646,13 @@ export default function Deliveries() {
               type="date"
               value={deliveredOnDate}
               onChange={(e) => setDeliveredOnDate(e.target.value)}
-              max={todayStr}
+              max={businessToday()}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
             <p className="mt-1 text-xs text-secondary">Recording a delivery that already happened? Set the real date — it becomes the invoice date.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => { setCompleteTarget(null); setSignedBy(''); setDeliveredOnDate(today()); }}>Cancel</Button>
+            <Button variant="ghost" onClick={closeCompleteDialog}>Cancel</Button>
             <Button icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleCompleteConfirm} loading={completing} disabled={!signedBy.trim()}>
               {completeTarget?.status === 'scheduled' ? 'Mark Delivered' : 'Mark Complete'}
             </Button>

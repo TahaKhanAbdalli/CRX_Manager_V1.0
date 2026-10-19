@@ -17,19 +17,23 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useLatestRef } from '../hooks/useLatestRef';
+import { digestIntentPayload } from '../lib/idempotency';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
+import { RECEIPT_NO_EMAIL_MESSAGE, RECEIPT_NOT_SENT_MESSAGE } from '../lib/deliveryCompletionEmail';
 import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { getOfflineStorageErrorMessage, queueAction } from '../lib/offlineQueue';
+import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
+import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt } from '../lib/paperTicket';
 import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
-import { parseLocalDate } from '../lib/dateUtils';
+import { parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
 import { activeInvoiceCoversDelivery } from '../lib/deliveryInvoiceCoverage';
@@ -104,6 +108,7 @@ export default function DeliveryDetail() {
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const paperTicketInputRef = useRef<HTMLInputElement>(null);
 
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [items, setItems] = useState<DeliveryItem[]>([]);
@@ -131,6 +136,9 @@ export default function DeliveryDetail() {
   // Driver completion state
   const [signedBy, setSignedBy] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+  // Goal 5 paper fallback: a photo of the signed paper ticket replaces the on-screen signature.
+  const [usePaperTicket, setUsePaperTicket] = useState(false);
+  const [paperDeliveredOn, setPaperDeliveredOn] = useState(todayInBusinessTz());
   const [completing, setCompleting] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
@@ -174,6 +182,31 @@ export default function DeliveryDetail() {
 
   // Complete delivery confirm state
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+
+  // A follow-up delivery reuses this page. Before paint, drop everything the previous
+  // delivery's completion could use: its items and quantities, signer, signature, issue,
+  // paper mode, photos and an open confirm box. Until the new delivery's items load,
+  // completion has nothing to submit (fails closed).
+  useLayoutEffect(() => {
+    // Hide the previous delivery entirely (spinner) until this route's record loads, so no
+    // action (complete, cancel, void...) can be taken while the old details are on screen.
+    setDelivery(null);
+    setLoading(true);
+    setItems([]);
+    setDeliveryQtys({});
+    setSignedBy('');
+    setSignatureDataUrl(null);
+    setDriverIssueType('none');
+    setDriverIssueNotes('');
+    setCompleteConfirmOpen(false);
+    setUsePaperTicket(false);
+    setPaperDeliveredOn(todayInBusinessTz());
+    setPhotos([]);
+  }, [id]);
+
+  // Completion may only use a delivery and item set that belong to the route on screen.
+  const completionStateMatchesRoute = () =>
+    !!delivery && delivery.id === id && items.length > 0 && items.every((item) => item.delivery_id === id);
 
   // Office re-bill state for a completed delivery with no active covering invoice.
   const [createInvoiceConfirmOpen, setCreateInvoiceConfirmOpen] = useState(false);
@@ -247,11 +280,15 @@ export default function DeliveryDetail() {
   const fetchDelivery = useCallback(async () => {
     // Never carry the previous delivery's billed-outside-CRX badge onto this one.
     setBilledOutsideCrxReason(null);
+    // This page is reused across deliveries: a slow load for the previous one must
+    // never publish its items, quantities or photos onto the delivery now on screen.
+    const isStale = () => signatureRouteIdRef.current !== id;
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
       .eq('id', id!)
       .maybeSingle();
+    if (isStale()) return;
 
     if (delError) {
       toast('error', sanitizeError(delError));
@@ -277,6 +314,7 @@ export default function DeliveryDetail() {
             : Promise.resolve({ data: null }),
           supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
         ]);
+        if (isStale()) return;
 
         if (itemsRes.error) {
           Sentry.captureException(itemsRes.error, { extra: { context: 'load_delivery_items', deliveryId: del.id } });
@@ -326,6 +364,7 @@ export default function DeliveryDetail() {
               .eq('delivery_id', del.id)
               .maybeSingle(),
           ]);
+          if (isStale()) return;
           if (externalBillingRes.error) {
             // Fail OPEN like the split-billing read above: keep the button; the server's
             // DELIVERY_BILLED_OUTSIDE_CRX guard still refuses, in plain English.
@@ -378,6 +417,7 @@ export default function DeliveryDetail() {
           const { data: sibDels } = await supabase
             .from('deliveries').select('id, delivery_number')
             .eq('order_id', del.order_id).order('delivery_number');
+          if (isStale()) return;
           setSiblingDeliveries((sibDels || []).map((d: Record<string, unknown>) => ({
             id: d.id as string, delivery_number: d.delivery_number as string,
           })));
@@ -389,6 +429,7 @@ export default function DeliveryDetail() {
               const { data: qData } = await supabase
                 .from('quotes').select('id, quote_number')
                 .eq('id', parentOrderData.quote_id).maybeSingle();
+              if (isStale()) return;
               setParentQuote(qData as { id: string; quote_number: string } | null);
             } else { setParentQuote(null); }
           }
@@ -405,6 +446,7 @@ export default function DeliveryDetail() {
             .from('delivery_remainders')
             .select('*, product:products(product_name)')
             .eq('original_delivery_id', id!);
+          if (isStale()) return;
           if (remError) {
             toast('error', sanitizeError(remError));
           } else {
@@ -425,6 +467,7 @@ export default function DeliveryDetail() {
           }
         }
       } catch {
+        if (isStale()) return;
         toast('error', 'Failed to load delivery details. Please refresh.');
       }
     }
@@ -497,6 +540,10 @@ export default function DeliveryDetail() {
   };
 
   const isPartialDelivery = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) < item.quantity);
+  // Everything the driver can still edit while the signal check runs. Compared after the check so
+  // an edit made during it is never silently dropped in favour of the values captured at confirm.
+  const completionInputs = JSON.stringify([signedBy, deliveryQtys, driverIssueType, driverIssueNotes, usePaperTicket, paperDeliveredOn, signatureDataUrl, emailOnComplete]);
+  const completionInputsRef = useLatestRef(completionInputs);
   const hasAnyQty = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) > 0);
 
   // ── Edit Mode ──────────────────────────────────────────────────────────
@@ -766,12 +813,16 @@ export default function DeliveryDetail() {
 
   // ── Photo Upload ───────────────────────────────────────────────────────
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>, caption?: string) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !profile || !delivery) return;
 
-    if (photos.length + files.length > 10) {
+    if (!caption && countOrdinaryPhotos(photos) + files.length > MAX_ORDINARY_DELIVERY_PHOTOS) {
       toast('error', 'Maximum 10 photos per delivery');
+      return;
+    }
+    if (caption === PAPER_TICKET_PHOTO_CAPTION && countPaperTicketPhotos(photos) + files.length > MAX_PAPER_TICKET_PHOTOS) {
+      toast('error', 'Maximum 2 ticket photos per delivery');
       return;
     }
 
@@ -804,12 +855,19 @@ export default function DeliveryDetail() {
           uploaded_by: profile.id,
           file_size: file.size,
           sort_order: photos.length + uploadCount,
+          ...(caption ? { caption } : {}),
         }).select();
         if (photoResult.error) {
           toast('error', `Photo saved to storage but DB record failed: ${photoResult.error.message}`);
           continue;
         }
         checkMutationResult(photoResult, 'Insert delivery photo');
+        // Show the saved row now, so a required ticket photo does not depend on the
+        // refresh read below succeeding.
+        const inserted = (photoResult.data || []) as DeliveryPhoto[];
+        if (signatureRouteIdRef.current === id) {
+          setPhotos((prev) => [...prev, ...inserted.filter((row) => !prev.some((p) => p.id === row.id))]);
+        }
 
         uploadCount++;
       } catch (err) {
@@ -820,10 +878,22 @@ export default function DeliveryDetail() {
 
     if (uploadCount > 0) {
       toast('success', `${uploadCount} photo${uploadCount > 1 ? 's' : ''} uploaded`);
-      fetchDelivery();
+      // Refresh only the photos. A full fetchDelivery() resets the driver's edited
+      // partial quantities to full, and the paper-ticket photo is taken right before
+      // Complete, so a short delivery would be recorded as full.
+      const uploadDeliveryId = id;
+      const { data: refreshedPhotos, error: photosErr } = await supabase
+        .from('delivery_photos').select('*').eq('delivery_id', uploadDeliveryId!).order('sort_order');
+      if (photosErr) {
+        Sentry.captureException(photosErr, { extra: { context: 'Refresh delivery photos after upload' } });
+        toast('error', 'Photo saved, but the photo list could not refresh. Reopen the delivery to see it.');
+      } else if (signatureRouteIdRef.current === uploadDeliveryId) {
+        setPhotos((refreshedPhotos || []) as DeliveryPhoto[]);
+      }
     }
     setUploadingPhoto(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (paperTicketInputRef.current) paperTicketInputRef.current.value = '';
   };
 
   // ── Follow-up Delivery ─────────────────────────────────────────────────
@@ -884,6 +954,10 @@ export default function DeliveryDetail() {
   // ── Complete Delivery (Driver) ─────────────────────────────────────────
 
   const requestComplete = () => {
+    if (!completionStateMatchesRoute()) {
+      toast('error', 'This delivery is still loading. Please try again in a moment.');
+      return;
+    }
     if (!signedBy.trim()) {
       toast('error', 'Please enter a signature name');
       return;
@@ -893,20 +967,54 @@ export default function DeliveryDetail() {
       toast('error', 'At least one item must have a quantity greater than 0');
       return;
     }
+    if (usePaperTicket && !hasPaperTicketPhoto(photos)) {
+      toast('error', 'Take a photo of the signed paper ticket before completing');
+      return;
+    }
+    if (usePaperTicket && !isValidPaperDeliveredOn(paperDeliveredOn)) {
+      toast('error', 'Enter the delivery date from the paper ticket (today or earlier)');
+      return;
+    }
     setCompleteConfirmOpen(true);
   };
 
   const handleComplete = async () => {
     if (!delivery || !profile) return;
     setCompleteConfirmOpen(false);
+    if (!completionStateMatchesRoute()) {
+      toast('error', 'This delivery is still loading. Please try again in a moment.');
+      return;
+    }
     setCompleting(true);
 
     const quantitiesJson = isPartialDelivery
       ? Object.fromEntries(items.map((item) => [item.id, deliveryQtys[item.id] ?? item.quantity]))
       : null;
 
-    const idemKey = completeIdem.getKey();
-    const completedAt = new Date().toISOString();
+    const intentParams = {
+      p_delivery_id: id!,
+      p_signed_by: signedBy,
+      p_performed_by: profile.id,
+      ...(quantitiesJson ? { p_quantities: quantitiesJson } : {}),
+      ...(driverIssueType !== 'none' ? { p_issue_type: driverIssueType } : {}),
+      ...(driverIssueNotes.trim() ? { p_issue_notes: driverIssueNotes.trim() } : {}),
+      ...(usePaperTicket && paperDeliveredAt(paperDeliveredOn) ? { p_completed_at: paperDeliveredAt(paperDeliveredOn) } : {}),
+    };
+    // check_idempotency replays a saved result by key and operation only, so bind the
+    // key to this exact payload: an edited retry (signer, quantities, issue, ticket date)
+    // mints a fresh key and can never be answered with an earlier attempt's receipt.
+    // A fresh key cannot complete twice: complete_delivery refuses a non-in_progress delivery.
+    // Fingerprint the date the driver chose, not the completion time derived from it:
+    // "today" sends no p_completed_at but becomes a past date after midnight, and an
+    // exact retry across midnight must keep its key to replay the saved result.
+    // complete_delivery replays on the key alone, so the scope uses the collision-resistant
+    // SHA-256 digest (digestIntentPayload), never the 64-bit FNV fingerprint (see idempotency.ts).
+    const completeScope = `complete:${await digestIntentPayload({
+      ...intentParams,
+      p_completed_at: undefined,
+      delivered_on: usePaperTicket ? paperDeliveredOn : null,
+    })}`;
+    const idemKey = completeIdem.getKeyFor(completeScope);
     const rpcParams: {
       p_delivery_id: string;
       p_signed_by: string;
@@ -916,60 +1024,45 @@ export default function DeliveryDetail() {
       p_quantities?: Json;
       p_issue_type?: string;
       p_issue_notes?: string;
-    } = {
-      p_delivery_id: id!,
-      p_signed_by: signedBy,
-      p_performed_by: profile.id,
-      p_idempotency_key: idemKey,
-      ...(quantitiesJson ? { p_quantities: quantitiesJson } : {}),
-      ...(driverIssueType !== 'none' ? { p_issue_type: driverIssueType } : {}),
-      ...(driverIssueNotes.trim() ? { p_issue_notes: driverIssueNotes.trim() } : {}),
-    };
+    } = { ...intentParams, p_idempotency_key: idemKey };
 
-    if (!isOnline) {
-      try {
-        const offlineRpcParams = { ...rpcParams, p_completed_at: completedAt };
-        await queueAction({
-          operation: 'complete_delivery',
-          params: offlineRpcParams,
-          createdAt: new Date().toISOString(),
-          retryCount: 0,
-          ownerUserId: profile.id,
-          status: 'pending',
-          entityTable: 'deliveries',
-          entityId: delivery.id,
-          snapshotAt: delivery.updated_at ?? undefined,
-        });
-        completeIdem.resetKey();
-        toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
-      } catch (error) {
-        toast('error', getOfflineStorageErrorMessage(error));
-      }
+    // Goal 5: completing a delivery needs a signal. Nothing is queued to sync later;
+    // without a reachable server the delivery stays exactly as it was.
+    if (!(await hasSignal())) {
+      toast('error', NO_SIGNAL_MESSAGE);
+      setCompleting(false);
+      return;
+    }
+    // The signal check can take a few seconds; never complete a delivery the user has left.
+    if (signatureRouteIdRef.current !== id) {
+      toast('error', 'This delivery changed before it was completed. Nothing was saved; please retry.');
+      setCompleting(false);
+      return;
+    }
+    if (completionInputsRef.current !== completionInputs) {
+      toast('error', 'Details changed while checking for signal. Nothing was saved; check them and tap Complete Delivery again.');
       setCompleting(false);
       return;
     }
 
     try {
-      const { data: completeResult, error } = await supabase.rpc('complete_delivery', rpcParams);
+      // Work out the completion time now, after the signal and route checks: if midnight passed
+      // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
+      const { data: completeResult, error } = await supabase.rpc('complete_delivery', {
+        ...rpcParams,
+        p_completed_at: usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined,
+      });
       if (error) throw error;
-      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order, and this is
-      // the strongest case on the page. complete_delivery sends p_signed_by,
-      // p_quantities, p_issue_type and p_issue_notes, all live UI state the driver can
-      // change before retrying. check_idempotency returns the cached result by key and
-      // operation WITHOUT looking at the new payload, so a retained key after an
-      // ambiguous reply would apply the first payload's quantities and signature while
-      // the screen reports the edited ones — silently wrong stock and a wrong signer on
-      // a delivery record. This is the same payload-binding defect that invalidated the
-      // FieldStop fix; it needs fingerprintIntentPayload, not a reorder (Codex round-4
-      // HIGH).
-      completeIdem.resetKey();
+      // Retire the payload-bound key only after a confirmed result: an empty reply
+      // keeps it, so retrying the same payload replays the server's saved receipt.
       assertRpcResult(completeResult, 'complete_delivery');
+      completeIdem.resetKeyFor(completeScope);
 
       // Upload signature image if provided. The delivery has ALREADY completed
       // (complete_delivery succeeded above), so a failed upload must NOT abort
       // the success flow — track it and warn accurately instead.
       let signatureUploadFailed = false;
-      if (signatureDataUrl) {
+      if (signatureDataUrl && !usePaperTicket) {
         try {
           const base64Data = signatureDataUrl.split(',')[1];
           const byteCharacters = atob(base64Data);
@@ -1029,7 +1122,7 @@ export default function DeliveryDetail() {
         // that says the delivery completed — skip the redundant success toast.
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
-      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
+      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${usePaperTicket ? ' (signed paper ticket photo)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
 
       // F15: Notify about delivery remainders
       if (isPartialDelivery) {
@@ -1063,6 +1156,8 @@ export default function DeliveryDetail() {
       );
 
       // === Email customer when delivery is completed (opt-out via checkbox) ===
+      // Same opt-in as an on-screen signature. The customer keeps the signed paper ticket; a
+      // guaranteed email needs a server-side receipt queue (open in the Goal 5 plan).
       if (emailOnComplete && customer?.email) {
         try {
           const deliveredItems = items
@@ -1086,6 +1181,10 @@ export default function DeliveryDetail() {
             ? '<p style="color:#d97706;font-size:13px;font-weight:600;margin-top:8px;">This was a partial delivery. Remaining items will be delivered separately.</p>'
             : '';
 
+          // A paper-ticket receipt shows the day on the ticket, matching the backdated delivery.
+          const receiptDate = usePaperTicket && isValidPaperDeliveredOn(paperDeliveredOn)
+            ? parseLocalDate(paperDeliveredOn).toLocaleDateString()
+            : new Date().toLocaleDateString();
           const html = buildEmailHtml(`
             <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Completed</h2>
             <p style="color:#475569;font-size:14px;line-height:1.6;">
@@ -1101,7 +1200,7 @@ export default function DeliveryDetail() {
               </tr>
               <tr>
                 <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Date</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date().toLocaleDateString()}</td>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${receiptDate}</td>
               </tr>
             </table>
             <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
@@ -1131,8 +1230,11 @@ export default function DeliveryDetail() {
           });
         } catch (emailErr) {
           Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Delivery completion email failed — delivery already succeeded' } });
-          // Delivery already succeeded — don't show error for email
+          // The delivery already succeeded; say plainly that the receipt did not go out.
+          toast('warning', RECEIPT_NOT_SENT_MESSAGE);
         }
+      } else if (usePaperTicket && emailOnComplete) {
+        toast('warning', RECEIPT_NO_EMAIL_MESSAGE);
       }
 
       fetchDelivery();
@@ -1289,6 +1391,23 @@ export default function DeliveryDetail() {
   // ═══════════════════════════════════════════════════════════════════════
   // DRIVER VIEW (dark mobile UI)
   // ═══════════════════════════════════════════════════════════════════════
+
+  // Shared by both layouts. The driver layout used to omit it, so a driver's
+  // Complete Delivery tap opened nothing (found during the Goal 5 offline check).
+  const completeConfirmModal = (
+    <ConfirmModal
+      open={completeConfirmOpen}
+      onClose={() => setCompleteConfirmOpen(false)}
+      onConfirm={handleComplete}
+      title="Complete Delivery"
+      message={isPartialDelivery
+        ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
+        : 'Complete this delivery? This will update inventory and cannot be undone.'}
+      confirmLabel="Complete Delivery"
+      variant="warning"
+      loading={completing}
+    />
+  );
 
   if (isDriver) {
     return (
@@ -1485,7 +1604,7 @@ export default function DeliveryDetail() {
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-white font-semibold">Delivery Photos<HelpTip text="Take up to 10 photos as proof of delivery — product condition, drop location, etc. They stay on the delivery record for staff; they are not sent to the customer." className="ml-1" /></h3>
-                <span className="text-sm text-gray-400">{photos.length}/10</span>
+                <span className="text-sm text-gray-400">{countOrdinaryPhotos(photos)}/{MAX_ORDINARY_DELIVERY_PHOTOS}</span>
               </div>
               {photos.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
@@ -1501,7 +1620,7 @@ export default function DeliveryDetail() {
                   ))}
                 </div>
               )}
-              {photos.length < 10 && (
+              {countOrdinaryPhotos(photos) < MAX_ORDINARY_DELIVERY_PHOTOS && (
                 <>
                   <input
                     ref={fileInputRef}
@@ -1586,17 +1705,75 @@ export default function DeliveryDetail() {
                   className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green"
                 />
               </div>
-              <div className="flex items-center gap-1 mb-1">
-                <span className="text-sm font-medium text-gray-400">Customer Signature</span>
-                <HelpTip text="Have the customer sign with their finger or mouse. This saves as part of the delivery record for your files." className="ml-1" />
-              </div>
-              <div className="bg-gray-700 rounded-lg p-3">
-                <SignatureCanvas
-                  onSignatureChange={setSignatureDataUrl}
-                  label=""
-                  height={120}
+              <div className="flex items-center gap-1">
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={usePaperTicket}
+                  onChange={(e) => {
+                    setUsePaperTicket(e.target.checked);
+                    if (e.target.checked) setSignatureDataUrl(null);
+                  }}
+                  className="w-4 h-4 rounded border-gray-600 text-crx-green focus:ring-crx-green bg-gray-700"
                 />
+                Customer signed a paper ticket (no signal at the site)
+              </label>
+              {/* Outside the label, so opening help never toggles paper mode. */}
+              <HelpTip text="Use this when there was no signal at the customer and they signed a paper delivery ticket. Take a photo of the signed ticket instead of an on-screen signature." className="ml-1" />
               </div>
+              {usePaperTicket ? (
+                <div className="bg-gray-700 rounded-lg p-3 space-y-2">
+                  <input
+                    ref={paperTicketInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) => handlePhotoUpload(e, PAPER_TICKET_PHOTO_CAPTION)}
+                    className="hidden"
+                  />
+                  {hasPaperTicketPhoto(photos) ? (
+                    <p className="flex items-center gap-2 text-sm text-green-300">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" /> Photo of the signed ticket saved
+                    </p>
+                  ) : (
+                    <p className="text-sm text-yellow-300">A photo of the signed paper ticket is required.</p>
+                  )}
+                  <div>
+                    <label htmlFor="paper-delivered-on" className="block text-sm font-medium text-gray-400 mb-1">Delivered on (date on the ticket)</label>
+                    <input
+                      id="paper-delivered-on"
+                      type="date"
+                      value={paperDeliveredOn}
+                      max={todayInBusinessTz()}
+                      onChange={(e) => setPaperDeliveredOn(e.target.value)}
+                      className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => paperTicketInputRef.current?.click()}
+                    disabled={uploadingPhoto || !isOnline || countPaperTicketPhotos(photos) >= MAX_PAPER_TICKET_PHOTOS}
+                    className="w-full py-3 flex items-center justify-center gap-2 text-white border border-gray-600 rounded-lg active:bg-gray-600 disabled:opacity-50 transition-colors"
+                  >
+                    <Camera className="w-5 h-5" />
+                    {uploadingPhoto ? 'Uploading...' : 'Take Photo of Signed Ticket'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-sm font-medium text-gray-400">Customer Signature</span>
+                    <HelpTip text="Have the customer sign with their finger or mouse. This saves as part of the delivery record for your files." className="ml-1" />
+                  </div>
+                  <div className="bg-gray-700 rounded-lg p-3">
+                    <SignatureCanvas
+                      onSignatureChange={setSignatureDataUrl}
+                      label=""
+                      height={120}
+                    />
+                  </div>
+                </>
+              )}
               {customer?.email && (
                 <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                   <input
@@ -1612,7 +1789,7 @@ export default function DeliveryDetail() {
               {!isOnline && (
                 <div className="flex items-center gap-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
                   <WifiOff className="h-4 w-4 shrink-0" />
-                  <span>You are offline. Delivery will be saved locally and synced when you reconnect.</span>
+                  <span>No signal. A delivery can only be completed with signal; nothing is saved offline. If the customer is signing now, use a paper ticket and complete it here once you have signal.</span>
                 </div>
               )}
               <button
@@ -1620,13 +1797,14 @@ export default function DeliveryDetail() {
                 disabled={completing}
                 className="w-full py-4 bg-crx-green text-white text-lg font-semibold rounded-xl active:bg-crx-green-hover disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
-                {!isOnline && <WifiOff className="w-5 h-5" />}
                 <CheckCircle2 className="w-6 h-6" />
-                {completing ? 'Saving...' : isOnline ? 'Complete Delivery' : 'Save Offline'}
+                {completing ? 'Completing...' : 'Complete Delivery'}
               </button>
             </div>
           )}
         </div>
+
+        {completeConfirmModal}
 
         {/* Start Delivery Modal (driver view) */}
         <StartDeliveryModal
@@ -2372,6 +2550,13 @@ export default function DeliveryDetail() {
             </label>
           )}
 
+          {!isOnline && (
+            <p role="alert" className="flex items-start gap-2 mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <WifiOff className="w-4 h-4 mt-0.5 shrink-0" />
+              No signal. A delivery can only be completed with signal; nothing is saved offline.
+            </p>
+          )}
+
           <div className="flex justify-end">
             <Button
               onClick={requestComplete}
@@ -2447,7 +2632,7 @@ export default function DeliveryDetail() {
           <h3 className="text-lg font-semibold font-heading text-nav-dark">
             Delivery Photos {photos.length > 0 && `(${photos.length})`}
           </h3>
-          {canUploadPhoto && photos.length < 10 && (
+          {canUploadPhoto && countOrdinaryPhotos(photos) < MAX_ORDINARY_DELIVERY_PHOTOS && (
             <>
               <input
                 ref={fileInputRef}
@@ -2669,19 +2854,7 @@ export default function DeliveryDetail() {
         loading={reassigning}
       />
 
-      {/* Complete delivery confirm modal */}
-      <ConfirmModal
-        open={completeConfirmOpen}
-        onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={handleComplete}
-        title="Complete Delivery"
-        message={isPartialDelivery
-          ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
-          : 'Complete this delivery? This will update inventory and cannot be undone.'}
-        confirmLabel="Complete Delivery"
-        variant="warning"
-        loading={completing}
-      />
+      {completeConfirmModal}
     </div>
   );
 }

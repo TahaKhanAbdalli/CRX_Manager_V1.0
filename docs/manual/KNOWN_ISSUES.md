@@ -77,6 +77,39 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-10-19 (MED) — a driver's completion receipt can be skipped when the customer row is hidden from them
+
+The customer receipt email after a delivery (including Goal 5's paper-ticket path, where it follows the
+same opt-in as an on-screen signature) is sent by the phone, and the delivery page and the field stop
+read the customer through the client. Under the current
+`customers_select` policy, an assigned driver may not see the customer of a stop whose
+`scheduled_date` is NULL or older than yesterday, so the page has no email and no receipt is sent.
+Since PR #955, on a **paper-ticket** completion the driver is told no receipt was sent from the phone
+and that the office can send it with **Email Confirmation**. A normal on-screen-signature completion
+still skips the receipt without a warning in this case (unchanged from before Goal 5). **Fix:** read the receipt recipient through an
+authorized RPC (or widen the policy for an assigned driver's open delivery); a server-side receipt
+queue would also cover it. Found by the Codex GitHub review on #955. Source:
+`src/pages/DeliveryDetail.tsx`, `src/pages/FieldStop.tsx` (receipt send after completion).
+
+## OPEN 2026-10-18 (MED) — the Deliveries list can leave a scheduled delivery In Progress if signal drops between its two steps
+
+Goal 5 (completing a delivery needs a signal) shipped as an app-only change. The Deliveries list's
+**Mark Delivered** on a *scheduled* delivery makes two server calls: `confirm_delivery` (scheduled →
+in_progress) and then `complete_delivery`. The app checks for a real connection before the first and
+again between them, but signal lost in the instant after the first call answers still leaves the
+delivery **In Progress**. Stock and billing are unchanged (only `complete_delivery` deducts stock and
+creates the draft invoice) and the driver is told exactly that ("Signal dropped after this delivery
+was started…"); the dialog stays open as **Mark Complete** for the retry. Seen in the browser preview
+against a local test database on 2026-10-18. **Fix:** one server call that starts and completes in a
+single transaction. That touches `complete_delivery`, which replay-binding batch 2 (PR #951) owned, so
+it waited for that batch. Mason chose 2026-10-18 to ship Goal 5 with this gap and build the combined
+call after #951 lands; batch 2 went live 2026-10-19, so the combined call is now unblocked. That call
+should also take the chosen business date, so a "today" completion whose request reaches the server
+just after Chicago midnight keeps the chosen day (today the app omits `p_completed_at` for "today",
+and sending a client timestamp would either stamp completions at noon or fail on a fast phone clock).
+Source:
+`src/pages/Deliveries.tsx` `handleCompleteConfirm`, `src/lib/connectivity.ts`.
+
 ## OPEN 2026-10-15 (HIGH on money paths; batch 1 LIVE 2026-10-16; batch 2 (the stock row) LIVE 2026-10-19; batches 3–4 open) — about 75 live functions replay a saved result matched on the retry key alone (74 left after batches 1 and 2, counted from the table below)
 
 **Batch 1 shipped live 2026-10-16.** Migration `20261016060000_bind_money_replay_receipts_batch1`

@@ -12,6 +12,7 @@
  */
 import { sendEmail, buildEmailHtml } from './emailService';
 import { Sentry } from './sentry';
+import { parseLocalDate } from './dateUtils';
 
 export interface CompletionEmailItem {
   /** Product name */
@@ -31,6 +32,8 @@ export interface DeliveryCompletionEmailParams {
   items: CompletionEmailItem[];
   isPartial: boolean;
   signedBy: string;
+  /** YYYY-MM-DD the delivery happened (paper-ticket path); defaults to today. */
+  deliveredOn?: string;
 }
 
 /**
@@ -40,8 +43,19 @@ export interface DeliveryCompletionEmailParams {
  * warning level) because the delivery itself has already succeeded — a failed
  * receipt email must never surface as a completion error.
  */
-export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmailParams): Promise<void> {
-  const { customerEmail, contactName, deliveryNumber, deliveryId, customerId, items, isPartial, signedBy } = params;
+// Returns false when the email could not be sent (the delivery itself already completed),
+// so the caller can tell the driver instead of failing silently.
+export const RECEIPT_NOT_SENT_MESSAGE =
+  'Delivery completed, but the customer receipt email did not send. Ask the office to send it with Email Confirmation on this delivery.';
+
+// Paper-ticket path: this phone had no customer email to send a receipt to (none on file, or the
+// customer record is not visible to this driver). Say so rather than skip it silently.
+export const RECEIPT_NO_EMAIL_MESSAGE =
+  'Delivery completed, but no customer receipt was sent from this phone (no customer email available here). Ask the office to send it with Email Confirmation on this delivery.';
+
+export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmailParams): Promise<boolean> {
+  const { customerEmail, contactName, deliveryNumber, deliveryId, customerId, items, isPartial, signedBy, deliveredOn } = params;
+  const receiptDate = deliveredOn ? parseLocalDate(deliveredOn).toLocaleDateString() : new Date().toLocaleDateString();
 
   try {
     const deliveredItems = items
@@ -74,7 +88,7 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
         </tr>
         <tr>
           <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Date</td>
-          <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date().toLocaleDateString()}</td>
+          <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${receiptDate}</td>
         </tr>
       </table>
       <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
@@ -102,10 +116,12 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
       resource_id: deliveryId,
       idempotency_key: `delivery-completed-${deliveryId}`,
     });
+    return true;
   } catch (emailErr) {
     Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), {
       level: 'warning',
       extra: { context: 'Field Mode delivery completion email failed — delivery already succeeded' },
     });
+    return false;
   }
 }
