@@ -13,6 +13,11 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Nothing was changed. This retry belongs to another user. Reload the page and try again'],
   [/^IDEMPOTENCY_(?:RESULT_INVALID|RECEIPT_MISSING)\b/,
    'Nothing was changed now: the outcome of this request could not be confirmed. Refresh the page before trying again'],
+  // A completion retried under a fresh key after an earlier attempt already completed the record.
+  [/^Delivery must be in_progress to complete \(current status: completed\)/,
+   'This delivery is already completed. Refresh the page to see it'],
+  [/^Job must be in_progress before completion\. Current status: completed\./,
+   'This job is already completed. Refresh the page to see it'],
   [/^GENERIC_FIELD_CUTOVER_(?:IN_PROGRESS|ISOLATION|STALE_CALL)(?::|$)/,
    'No invoice was changed. An invoice update is finishing; wait a moment, then try Save again'],
   [/^FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED(?::|$)/,

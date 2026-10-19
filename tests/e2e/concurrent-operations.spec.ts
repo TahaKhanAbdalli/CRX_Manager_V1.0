@@ -245,6 +245,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
       p_delivery_id: delId,
       p_signed_by: 'E2E Test',
       p_performed_by: userId,
+      // A fresh key per call: complete_delivery refuses a keyless call since 20261019200000.
+      p_idempotency_key: `e2e-complete_delivery-${crypto.randomUUID()}`,
     }).catch(e => {
       console.log(`✓ Over-delivery correctly blocked or handled: ${e}`);
       return { error: String(e) };
@@ -549,6 +551,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
       p_delivery_id: delId,
       p_signed_by: 'E2E Test',
       p_performed_by: userId,
+      // A fresh key per call: complete_delivery refuses a keyless call since 20261019200000.
+      p_idempotency_key: `e2e-complete_delivery-${crypto.randomUUID()}`,
     }).catch(e => console.log(`complete delivery: ${e}`));
 
     // Check inventory — should be 25 - 20 = 5 available
@@ -621,6 +625,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
       p_delivery_id: delId,
       p_signed_by: 'E2E Test',
       p_performed_by: userId,
+      // A fresh key per call: complete_delivery refuses a keyless call since 20261019200000.
+      p_idempotency_key: `e2e-complete_delivery-${crypto.randomUUID()}`,
     }).catch(_e => null);
 
     console.log(`First complete: ${JSON.stringify(firstComplete)}`);
@@ -630,6 +636,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
       p_delivery_id: delId,
       p_signed_by: 'E2E Test Again',
       p_performed_by: userId,
+      // A fresh key per call: complete_delivery refuses a keyless call since 20261019200000.
+      p_idempotency_key: `e2e-complete_delivery-${crypto.randomUUID()}`,
     }).catch(e => {
       console.log(`✓ Double-complete handled: ${e}`);
       return { error: String(e) };

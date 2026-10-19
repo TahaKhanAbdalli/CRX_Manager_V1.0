@@ -25,9 +25,9 @@ import { useToast } from '../components/ui/Toast';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useLatestRef } from '../hooks/useLatestRef';
-import { digestIntentPayload } from '../lib/idempotency';
+import { digestIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
-import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt } from '../lib/paperTicket';
+import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt, completedAtForKey } from '../lib/paperTicket';
 import { compressImage } from '../lib/imageCompression';
 import { todayInBusinessTz } from '../lib/dateUtils';
 import { logActivity } from '../lib/activityLogger';
@@ -76,6 +76,8 @@ export default function FieldStop() {
   const isOnline = useOnlineStatus();
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
+  // Retry key -> the p_completed_at its first send carried (see completedAtForKey).
+  const sentCompletedAt = useRef(new Map<string, string | undefined>());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const paperTicketInputRef = useRef<HTMLInputElement>(null);
   // Latest stop id the route is showing — older in-flight fetches bail (H3 stale guard).
@@ -367,7 +369,9 @@ export default function FieldStop() {
       // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
       const { data: result, error } = await supabase.rpc('complete_delivery', {
         ...rpcParams,
-        p_completed_at: usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined,
+        // A retry of this key resends the first send's value (completedAtForKey).
+        p_completed_at: completedAtForKey(sentCompletedAt.current, rpcParams.p_idempotency_key, () => (
+          usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined)),
       });
       if (error) throw error;
       assertRpcResult(result, 'complete_delivery');
@@ -454,6 +458,14 @@ export default function FieldStop() {
 
       setStep('done');
     } catch (error: unknown) {
+      // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
+      // used) retires the key; nothing ran for THIS request. Safe for a completion even if an earlier
+      // attempt committed: the next try runs fresh and the body refuses a record no longer in_progress.
+      // Reload so a completion an earlier attempt already committed shows instead of a stale form.
+      if (getIdempotencyBindingRejection(error)) {
+        completeIdem.resetKeyFor(completeScope);
+        fetchStop();
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'complete_delivery' } });
       toast('error', sanitizeError(error));
     }

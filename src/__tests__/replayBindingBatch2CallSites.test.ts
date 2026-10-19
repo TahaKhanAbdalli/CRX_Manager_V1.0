@@ -26,8 +26,10 @@ const SITES: Record<string, number> = {
 
 const INTENT_OR_ACTOR_RESET =
   /const bindingRejection = getIdempotencyBindingRejection\(\w+\);\s*\n\s*if \(bindingRejection === 'intent' \|\| bindingRejection === 'actor'\) \S*reset\S*\(/g;
-// Any reset guarded by the bare helper result (truthy for 'receipt' too).
-const BARE_HELPER_RESET = /if\s*\(\s*getIdempotencyBindingRejection\([^)]*\)\s*\)\s*\{?\s*\S*reset\S*\(/;
+// Any reset guarded by the bare helper result (truthy for 'receipt' too). The delivery and job
+// completion keys (completeIdem, completeJobIdem) are exempt: batch 3a (20261019200000) resets them on
+// any binding refusal on purpose, pinned by replayBindingBatch3aCallSites.test.ts.
+const BARE_HELPER_RESET = /if\s*\(\s*getIdempotencyBindingRejection\([^)]*\)\s*\)\s*\{?\s*(?!complete(?:Job)?Idem\.)\S*reset\S*\(/;
 
 const read = (file: string) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 
@@ -135,6 +137,8 @@ describe('replay-binding batch 2 call sites keep the key on a receipt refusal', 
     expect(good.match(INTENT_OR_ACTOR_RESET)?.length).toBe(1);
     expect(BARE_HELPER_RESET.test(good)).toBe(false);
     expect(BARE_HELPER_RESET.test(bad)).toBe(true);
+    expect(BARE_HELPER_RESET.test('if (getIdempotencyBindingRejection(error)) completeIdem.resetKey();')).toBe(false);
+    expect(BARE_HELPER_RESET.test('if (getIdempotencyBindingRejection(error)) batchCancelIdem.resetKey();')).toBe(true);
   });
 });
 

@@ -515,28 +515,14 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_signed_by is text signature-name data, not user identity. Actual p_performed_by rejects non-null mismatch against auth.uid()-bound v_actor; active admin/sales_rep or assigned-driver authorization precedes writes and is repeated by owner-only delegate. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
-      "dated": "2026-09-12",
+      "justification": "Re-pinned 2026-10-19 after 20261019200000 (replay-binding batch 3a, ledger 20261019205246) made complete_delivery a same-signature SECURITY DEFINER wrapper; live body read back post-apply. Matched p_signed_by is text signature-name data, not user identity. The wrapper requires a key, binds v_actor from auth.uid(), refuses a non-null p_performed_by that differs from it (ACTOR_MISMATCH) before any work, fingerprints the request and delegates to the renamed body _complete_delivery_replay_impl_20261015 (unchanged md5 a1e9a043..., postgres-only EXECUTE), whose admin/sales_rep or assigned-driver authorization still precedes writes. Original review 2026-09-12. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-10-19",
       "suspect_param": "p_signed_by",
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
         "public._complete_delivery_period_preflight_impl(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "9f7bf84ab636a8f7971cfa76b1244f95",
-        "public.complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "8d196ef3dcdea365519f69e2ae55aec5"
-      }
-    },
-    {
-      "predicate": "actor-forgery",
-      "violation_key": "complete_job(p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds v_actor from auth.uid() (3), strictly rejects p_performed_by IS DISTINCT FROM v_actor before writes (38-41), authorizes bound role/applicator (74-127); subsequent forwarding is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
-      "dated": "2026-09-12",
-      "suspect_param": "p_performed_by",
-      "reviewed_contracts": {
-        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public._is_dispatched_to_me(p_job_id uuid)": "e85f1e55bfdc46de230145cf80e4a894",
-        "public.complete_job(p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text)": "46ca21c73268b7916785ad56a6843660",
-        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
-        "public.is_applicator()": "f6cbd3d4daceee70e8532189ab2aff57",
-        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
+        "public.complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "56d34c7ffcb9b80c42d492c0e5b59f55",
+        "public._complete_delivery_replay_impl_20261015(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "2d068d077de57dbbb22f338492d8389f"
       }
     },
     {

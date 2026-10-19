@@ -306,6 +306,24 @@
         "security"
       ]
     },
+    "delivery_job_replay_binding_batch3a": {
+      "chain": "smoke-delivery-job-replay-binding-batch3a.sql",
+      "container_only": true,
+      "container_prover": "prove-delivery-job-replay-binding-batch3a-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-delivery-job-replay-binding-batch3a-real-schema.mjs, never through run-smoke.mjs against the live database: completing a delivery on an order writes its automatic draft invoice, whose customer-visible invoice number is drawn by next_invoice_number() from a non-transactional sequence that a rollback does not return (the prover reports which document-number sequences the chain moved), and the chain plants [SMOKE] customers, products, inventory, orders, deliveries and jobs, which the LIVE-DATA GUARD refuses. 20261019200000 (replay-binding batch 3a): complete_delivery and complete_job replay a stored idempotency receipt only for the person who wrote it and the exact same request. complete_delivery: a key reused for a different delivery is refused with IDEMPOTENCY_INTENT_MISMATCH and that delivery stays in_progress; the exact retry returns the identical result and moves no extra stock; edited quantities, signer, issue notes or completion time on the same key are refused; the same completion instant re-sent under another session TimeZone replays (the fingerprint uses its epoch); a keyless call is refused with IDEMPOTENCY_KEY_REQUIRED (22023) and changes nothing; a second active admin presenting the key for the identical request is refused with IDEMPOTENCY_ACTOR_MISMATCH and the error discloses nothing of the stored result. complete_job: another job on the same key is refused and stays in_progress; edited applied info is refused; the exact retry replays with one application record; keyless is refused; a NULL p_performed_by is refused. The offline path (stage_offline_action + process_offline_action) completes one delivery and one job once, and processing again returns succeeded with the same result and no second piece of work. Every fresh receipt is stamped with the admin and a SHA-256 fingerprint. Fail-first: step a fails before the migration (complete_delivery hands delivery A's receipt back as success for delivery B). Uses two real active admins; terminal rollback.",
+      "covers": [
+        "complete_delivery",
+        "complete_job",
+        "process_offline_action",
+        "stage_offline_action"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "idempotency",
+        "security"
+      ]
+    },
     "stock_replay_binding_batch2": {
       "chain": "smoke-stock-replay-binding-batch2.sql",
       "container_only": true,

@@ -1,7 +1,10 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-19 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-19 18:35 UTC: 1035 rows / 1028 names; the one change since the 12:50 UTC read is that the
+`execute_sql`, 2026-10-19 20:55 UTC: 1036 rows / 1029 names; the one change since the 18:35 UTC read is that
+replay-binding batch 3a `20261019200000` (ledger `20261019205246`, PR #954) is now applied, which re-certified the
+replay-binding entry below (both wrappers, both renamed bodies and the 24-operation guard read live); at 18:35 UTC:
+1035 rows / 1028 names; the one change since the 12:50 UTC read is that the
 cost/margin step-1 migration `20261019010000` (ledger `20261019182757`, PR #957 merged as `8124ae21c`) is now applied,
 which re-certified the cost/margin entry below with a live per-role check; at 01:08 UTC: 1034 rows / 1027 names; the one change since the 2026-10-16 13:42 UTC read
 is that `20261016140000_bind_stock_replay_receipts_batch2` (ledger `20261019010324`, PR #951 merged as
@@ -214,13 +217,17 @@ The nine HIGH-money functions it covers left the table below: `void_payment`, `d
 `apply_prepay_to_invoice`, `batch_apply_prepayments` and `batch_void_invoices`. The live re-check is
 recorded in the batch-1 paragraph above.
 
+**Bound by batch 3a (migration `20261019200000`, applied live 2026-10-19 20:52:46 UTC (3:52 PM Central), ledger `20261019205246`).** The table's batch-3 money group is
+split into smaller PRs; this first cut bound `complete_delivery` and `complete_job`, which left the table below, and
+extended the same commit-time guard (24 operations). Both now require a retry key, and a retry replays a saved
+result only for the same person and the exact same request. `cancel_delivery` goes in a later cut.
+
 **Bound by batch 2 (migration `20261016140000`, applied live 2026-10-19, ledger `20261019010324`).** The thirteen HIGH-stock functions it covers left the table below: `release_inventory_hold`, `retire_inventory_item`, `reconcile_negative_inventory`, `manual_inventory_add`, `create_order_from_blend_ticket`, `create_direct_order`, `create_rush_order`, `close_quote_as_applied`, `close_quote_as_short`, `create_application_record_from_blend_ticket`, `batch_cancel_deliveries`, `reverse_completed_cycle_count` and `create_planned_holds`. The live re-check is recorded in the batch-2 paragraph below the table.
 
-**Unbound — ranked, with the batch each is fixed in.** Counting the names in the table, the rows after batches 1 and 2 list 74 functions (17 in batch 3, then 50 and 7 in batch 4; a row can name a function whose create path alone is unbound; after batch 1 alone they listed 87). The heading's "about 75" is the first estimate, kept so references to this entry still match; read the table, not the heading, for the remaining work.
+**Unbound — ranked, with the batch each is fixed in.** Counting the names in the table, the rows after batches 1, 2 and 3a list 72 functions (15 in batch 3, then 50 and 7 in batch 4; a row can name a function whose create path alone is unbound; after batches 1 and 2 they listed 74, after batch 1 alone 87). The heading's "about 75" is the first estimate, kept so references to this entry still match; read the table, not the heading, for the remaining work.
 
 | Batch | Function (what a mismatched retry does today) | Impact |
 |---|---|---|
-| 3 | `complete_delivery`, `complete_job` (the latter replays before its role check, with no lock and no expiry): B not completed, no stock deduction, no auto-invoice | HIGH money and stock |
 | 3 | `void_order`, `void_delivery`, `cancel_delivery` (replays before its role check), `unpost_invoice`, `transfer_invoice_to_job`, `price_order`, `update_order_items`, `save_field_app_invoice`, `update_field_app_invoice_billing`, `transition_rebate_claim`, `create_rebate_claim`, `close_accounting_period` | HIGH money |
 | 3 | `apply_credit_memo_to_invoice` is bound before its lock, but its after-lock re-check is plain (race window only) | HIGH (race) |
 | 3 | `record_job_pre_notifications`, `record_job_post_notifications` return job A's recipients; `JobDetail.tsx:607-640` then emails job A's customers about job B and overwrites A's audit text | MED, customer-facing |

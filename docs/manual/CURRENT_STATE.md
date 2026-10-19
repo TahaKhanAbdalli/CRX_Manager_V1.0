@@ -1,7 +1,11 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-19 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 18:35 UTC: 1035 rows / 1028 names, `max(version)`
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 20:55 UTC: 1036 rows / 1029 names, `max(version)`
+`20261019205246` = `20261019200000_bind_delivery_job_replay_receipts_batch3a` (replay-binding batch 3a, PR #954),
+applied 2026-10-19 20:52:46 UTC on Mason's own `I approve`: `complete_delivery` and `complete_job` now replay a
+saved result only for the same person and the exact same request, and both require a retry key. The 18:35 UTC read
+before it had 1035 rows / 1028 names, `max(version)`
 `20261019182757` = `20261019010000_cost_margin_admin_only_rpc_leaks` (PR #957, merged as `8124ae21c`), applied
 2026-10-19 18:27:57 UTC on Mason's own `I approve`. Cost and margin are now admin-only in the database functions
 (Goal 1 part 3, step 1 of 3): a read-only live per-role check (rolled back, run on Mason's REAL-DATA-OK) passed —

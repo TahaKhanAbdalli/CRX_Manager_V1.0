@@ -38,7 +38,7 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { digestIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
-import { completedAtForDeliveredOn, isValidDeliveredOn } from '../lib/paperTicket';
+import { completedAtForDeliveredOn, completedAtForKey, isValidDeliveredOn } from '../lib/paperTicket';
 import { notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
@@ -126,6 +126,8 @@ export default function Deliveries() {
   // F3 act-from-list: complete an in_progress delivery in place (signed-by popup).
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
+  // Retry key -> the p_completed_at its first send carried (see completedAtForKey).
+  const sentCompletedAt = useRef(new Map<string, string | undefined>());
   const [completeTarget, setCompleteTarget] = useState<DeliveryRow | null>(null);
   const completeTargetRef = useLatestRef(completeTarget);
   // Bumped on every open and close of the complete dialog, so a request started in an
@@ -462,6 +464,7 @@ export default function Deliveries() {
     })}`;
     const idemKey = completeIdem.getKeyFor(completeScope);
     let confirmed = false;
+    let bindingRejected = false;
     // The signal checks take a few seconds; if the dialog was cancelled or switched to
     // another delivery meanwhile, stop before sending the next server call.
     const stillOpenForTarget = () =>
@@ -489,18 +492,29 @@ export default function Deliveries() {
           if (!inputsUnchanged()) return 'changed';
         }
 
-        // completeIdem is intentionally retained until onSuccess, so a retry after a
+        // completeIdem is intentionally retained until onSuccess (or a binding refusal below), so a retry after a
         // lost response replays the same complete_delivery request idempotently.
         // Work out the completion time now, after the signal and route checks: if midnight passed
         // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
         const { data, error } = await supabase.rpc('complete_delivery', {
           ...completeParams,
-          p_completed_at: deliveredOnDate && deliveredOnDate !== businessToday()
-            ? completedAtForDeliveredOn(deliveredOnDate)
-            : undefined,
+          // A retry of this key resends the first send's value (completedAtForKey).
+          p_completed_at: completedAtForKey(sentCompletedAt.current, idemKey, () => (
+            deliveredOnDate && deliveredOnDate !== businessToday()
+              ? completedAtForDeliveredOn(deliveredOnDate)
+              : undefined)),
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
+          // used) retires the key; nothing ran for THIS request. Safe for a completion even if an earlier
+          // attempt committed: the next try runs fresh and the body refuses a record no longer in_progress.
+          if (getIdempotencyBindingRejection(error)) {
+            completeIdem.resetKeyFor(completeScope);
+            bindingRejected = true;
+          }
+          throw error;
+        }
         assertRpcResult(data, 'complete_delivery');
         return 'completed';
       },
@@ -541,9 +555,15 @@ export default function Deliveries() {
       },
     });
 
-    if (outcome !== 'completed' && confirmed) {
+    if (outcome !== 'completed' && bindingRejected) {
+      // The key was refused and retired: close the modal and reload, so a completion an earlier
+      // attempt already committed shows in the list instead of a stale, still-actionable modal.
+      if (completeDialogGenRef.current === dialogGen) closeCompleteDialog();
+      await fetchDeliveries();
+    } else if (outcome !== 'completed' && confirmed) {
       // Confirm succeeded so the delivery is now in_progress; keep the modal open
-      // with the SAME retained complete-key (completeIdem only resets on success)
+      // with the SAME retained complete-key (completeIdem resets only on success or a
+      // binding refusal)
       // so a retry replays idempotently. If the failed call actually committed
       // server-side, the replay returns the cached result and onSuccess (including
       // the completion notification) still fires.

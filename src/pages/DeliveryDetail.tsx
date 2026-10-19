@@ -18,7 +18,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useLatestRef } from '../hooks/useLatestRef';
-import { digestIntentPayload } from '../lib/idempotency';
+import { digestIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
@@ -30,7 +30,7 @@ import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
-import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt } from '../lib/paperTicket';
+import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt, completedAtForKey } from '../lib/paperTicket';
 import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
@@ -104,6 +104,8 @@ export default function DeliveryDetail() {
   const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '', id ?? '');
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
+  // Retry key -> the p_completed_at its first send carried (see completedAtForKey).
+  const sentCompletedAt = useRef(new Map<string, string | undefined>());
   const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
@@ -1050,11 +1052,14 @@ export default function DeliveryDetail() {
       // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
       const { data: completeResult, error } = await supabase.rpc('complete_delivery', {
         ...rpcParams,
-        p_completed_at: usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined,
+        // A retry of this key resends the first send's value (completedAtForKey).
+        p_completed_at: completedAtForKey(sentCompletedAt.current, idemKey, () => (
+          usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined)),
       });
       if (error) throw error;
       // Retire the payload-bound key only after a confirmed result: an empty reply
       // keeps it, so retrying the same payload replays the server's saved receipt.
+      // A replay-binding refusal (another person's key or an unusable receipt) is retired in the catch.
       assertRpcResult(completeResult, 'complete_delivery');
       completeIdem.resetKeyFor(completeScope);
 
@@ -1239,6 +1244,14 @@ export default function DeliveryDetail() {
 
       fetchDelivery();
     } catch (error: unknown) {
+      // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
+      // used) retires the key; nothing ran for THIS request. Safe for a completion even if an earlier
+      // attempt committed: the next try runs fresh and the body refuses a record no longer in_progress.
+      // Reload so a completion an earlier attempt already committed shows instead of a stale form.
+      if (getIdempotencyBindingRejection(error)) {
+        completeIdem.resetKeyFor(completeScope);
+        fetchDelivery();
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'complete_delivery' } });
       toast('error', sanitizeError(error));
     }

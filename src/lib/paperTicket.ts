@@ -46,6 +46,20 @@ export function paperDeliveredAt(deliveredOn: string): string | undefined {
   return completedAtForDeliveredOn(deliveredOn);
 }
 
+// The completion time sent under one retry key: worked out on the key's first send and
+// reused by every retry of that key. Since 20261019200000, complete_delivery replays a
+// saved result only for the exact same request, p_completed_at included. A "today"
+// completion sends none, but after midnight "today" is a past date that would send one,
+// so recomputing on a retry across midnight would turn the replay into a refusal.
+export function completedAtForKey(
+  sent: Map<string, string | undefined>,
+  key: string,
+  compute: () => string | undefined,
+): string | undefined {
+  if (!sent.has(key)) sent.set(key, compute());
+  return sent.get(key);
+}
+
 // Ticket photos do not count toward the 10-photo limit, so a delivery that already has
 // 10 ordinary photos can still be completed on the paper-ticket path.
 export const MAX_ORDINARY_DELIVERY_PHOTOS = 10;
