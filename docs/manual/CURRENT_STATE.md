@@ -1,7 +1,9 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-16 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-16 13:42 UTC: 1033 rows / 1026 names,
+**Last verified:** 2026-10-18 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 01:08 UTC: 1034 rows / 1027 names,
+`max(version)` `20261019010324` = `20261016140000_bind_stock_replay_receipts_batch2`, applied 2026-10-19
+01:03:24 UTC; the 2026-10-16 13:42 UTC read before it had 1033 rows / 1026 names,
 `max(version)` `20261016121253` = `20261016060000_bind_money_replay_receipts_batch1`, applied 2026-10-16
 12:12:53 UTC; the 06:16 UTC read before it had 1032 rows / 1025 names,
 `max(version)` `20261016051944` = `20261016030000_staff_photo_buckets_private`, applied 2026-10-16
@@ -21,12 +23,13 @@ Every other section keeps its own date; nothing below was re-certified by that r
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-16)
+## Current state at a glance (2026-10-18)
 
-- **Effective ordering high-water: `20261016060000_bind_money_replay_receipts_batch1`**
-  (ledger version `20261016121253`, UTC; applied live 2026-10-16 12:12 UTC, PR #942 merged as
-  `982bc0dda`; read-only ledger read 2026-10-16 13:42 UTC: 1033 rows / 1026 names;
-  migration-history row 951). Before it, `20261016030000_staff_photo_buckets_private` (ledger
+- **Effective ordering high-water: `20261016140000_bind_stock_replay_receipts_batch2`**
+  (ledger version `20261019010324`, UTC; applied live 2026-10-19 01:03 UTC, PR #951 merged as
+  `d51d67c0b`; read-only ledger read 2026-10-19 01:08 UTC: 1034 rows / 1027 names;
+  migration-history row 952). Before it, `20261016060000_bind_money_replay_receipts_batch1`
+  (ledger `20261016121253`, applied 2026-10-16 12:12 UTC, PR #942 merged as `982bc0dda`, row 951), `20261016030000_staff_photo_buckets_private` (ledger
   `20261016051944`, applied 2026-10-16 05:19 UTC, PR #947 merged as `5851eb514`, row 950),
   `20261015230000_staff_photo_storage_access`
   (ledger `20261015210630`, applied 2026-10-15 21:06 UTC, PR #929 merged as `cd7b796a4`), `20261015200000_quotes_rep_own_name` (ledger
@@ -78,7 +81,8 @@ ships or quarterly, whichever comes first.
   PR #929 (merged as `cd7b796a4`; 2026-10-15 UTC), `20261015230000_staff_photo_storage_access`
   (`20261015210630`); then, from PR #947 (merged as `5851eb514`; 2026-10-16 UTC),
   `20261016030000_staff_photo_buckets_private` (`20261016051944`); then, from PR #942 (merged as
-  `982bc0dda`; 2026-10-16 UTC), `20261016060000_bind_money_replay_receipts_batch1` (`20261016121253`).
+  `982bc0dda`; 2026-10-16 UTC), `20261016060000_bind_money_replay_receipts_batch1` (`20261016121253`); then, from
+  PR #951 (merged as `d51d67c0b`; 2026-10-19 UTC), `20261016140000_bind_stock_replay_receipts_batch2` (`20261019010324`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -91,7 +95,8 @@ ships or quarterly, whichever comes first.
   `20261014210000_order_invoices_rep_own_name`, `20261014220000_rup_register_admin_only` and
   `20261015130000_orders_blend_tickets_rep_own_name`, `20261015200000_quotes_rep_own_name` and
   `20261015230000_staff_photo_storage_access`, and on 2026-10-16 `20261016030000_staff_photo_buckets_private`
-  and `20261016060000_bind_money_replay_receipts_batch1`, with `migrations_high_water` `20261016121253`;
+  and `20261016060000_bind_money_replay_receipts_batch1`, and on 2026-10-19 `20261016140000_bind_stock_replay_receipts_batch2`,
+  with `migrations_high_water` `20261019010324`;
   those migrations changed function bodies, grants, RLS and storage policies, bucket flags, one index and
   four triggers, none of which the
   registry tracks, and the ledger shows no other apply since the full refresh).
