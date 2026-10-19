@@ -1,6 +1,6 @@
 # Migration History (latest entry 954)
 
-> **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
+> **LATEST LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 

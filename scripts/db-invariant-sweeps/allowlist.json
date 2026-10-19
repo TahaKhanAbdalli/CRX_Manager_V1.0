@@ -741,6 +741,18 @@
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
         "public.cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)": "21da58c0c8f22d933ddd6938f5927194"
       }
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "apply_prepay_to_invoice(p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-10-19 of the replay-binding batch-1 wrapper (migration 20261016060000, live ledger 20261016121253), its private body, and the only keyless caller. Why it is flagged: when p_idempotency_key is NULL and the transaction-local setting crx.batch_apply_prepayments_internal = '1', the wrapper returns public._apply_prepay_to_invoice_replay_impl_20261015(..., p_performed_by, NULL) before reaching its own ACTOR_MISMATCH refusal, so the forwarding arm fires. Why it is not a hole: the private body is SECURITY DEFINER with EXECUTE granted to postgres only (authenticated, anon and service_role cannot call it), and its first statements bind v_actor := auth.uid(), raise AUTH_REQUIRED on NULL, raise ACTOR_MISMATCH when p_performed_by IS NOT NULL AND IS DISTINCT FROM v_actor, and then gate on the active admin/sales_rep role read from profiles WHERE id = v_actor. After that check p_performed_by is never read again: no row, audit entry or receipt takes it (the financial_audit_log actor_role comes from v_actor's profile). So on the keyless branch a supplied actor either equals the caller or is refused, exactly as on the keyed branch, no matter who set the flag; the flag only waives the key requirement, which is an idempotency question, not an actor one. The only live keyless caller, public._batch_apply_prepayments_impl, calls apply_prepay_to_invoice with three arguments (p_performed_by NULL) and is reached only through batch_apply_prepayments, which itself raises ACTOR_MISMATCH (NULL refused) and requires is_admin() before setting the flag with set_config(..., true). This is scanner noise, not an accepted actor-forgery hole. Pins cover the wrapper, the private body that does the actor check, and auth.uid(); any change to either function's definition, owner or EXECUTE grants un-matches this exception and the flag comes back for a fresh review. The batch caller is not pinned because the proof does not depend on it (the private body refuses a forged actor whoever sets the flag). Clean end-state, optional: a later edit of the wrapper may move its actor check above the keyless branch and delete this entry.",
+      "dated": "2026-10-19",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._apply_prepay_to_invoice_replay_impl_20261015(p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid, p_idempotency_key text)": "fb2d491e40711c44b1769031957390b2",
+        "public.apply_prepay_to_invoice(p_prepay_credit_id uuid, p_invoice_id uuid, p_amount_cents bigint, p_performed_by uuid, p_idempotency_key text)": "a528b93f615452f1cbff855e85c4e524"
+      }
     }
   ]
 }
