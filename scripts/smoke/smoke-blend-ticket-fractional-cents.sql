@@ -141,10 +141,13 @@ BEGIN
   ----------------------------------------------------------------------------
   -- 3. Auth gate: no JWT at all must raise AUTH_REQUIRED before anything runs
   ----------------------------------------------------------------------------
+  -- Each gate probe sends its own fresh retry key: since 20261016140000 a keyless call is
+  -- refused with IDEMPOTENCY_KEY_REQUIRED before the gate under test is reached.
   PERFORM set_config('request.jwt.claims', '', true);
   BEGIN
     PERFORM create_order_from_blend_ticket(
-      v_ticket_id, '[SMOKE]-NOAUTH-' || v_suffix, CURRENT_DATE, NULL, v_admin, NULL);
+      v_ticket_id, '[SMOKE]-NOAUTH-' || v_suffix, CURRENT_DATE, NULL, v_admin,
+      'smk-btfc-noauth-' || gen_random_uuid()::text);
     RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated create_order_from_blend_ticket was accepted';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
@@ -160,7 +163,8 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   BEGIN
     PERFORM create_order_from_blend_ticket(
-      v_ticket_id, '[SMOKE]-FORGE-' || v_suffix, CURRENT_DATE, NULL, v_other, NULL);
+      v_ticket_id, '[SMOKE]-FORGE-' || v_suffix, CURRENT_DATE, NULL, v_other,
+      'smk-btfc-forge-' || gen_random_uuid()::text);
     RAISE EXCEPTION 'SMOKE_FAIL: forged p_performed_by was accepted';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
@@ -177,7 +181,8 @@ BEGIN
       json_build_object('sub', v_nonprivileged, 'role', 'authenticated')::text, true);
     BEGIN
       PERFORM create_order_from_blend_ticket(
-        v_ticket_id, '[SMOKE]-ROLE-' || v_suffix, CURRENT_DATE, NULL, v_nonprivileged, NULL);
+        v_ticket_id, '[SMOKE]-ROLE-' || v_suffix, CURRENT_DATE, NULL, v_nonprivileged,
+        'smk-btfc-role-' || gen_random_uuid()::text);
       RAISE EXCEPTION 'SMOKE_FAIL: a non-admin/non-sales actor created an order from a blend ticket';
     EXCEPTION WHEN OTHERS THEN
       IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;

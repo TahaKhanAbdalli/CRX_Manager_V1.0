@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createBelowCostReasonMemo,
   parseBelowCostApprovalError,
   stripBelowCostApprovalNote,
   withBelowCostReason,
@@ -61,5 +62,31 @@ describe('withBelowCostReason', () => {
   it('strips the internal order-note marker from customer output', () => {
     expect(stripBelowCostApprovalNote('Deliver south\nBelow-cost approved: price match'))
       .toBe('Deliver south');
+  });
+});
+
+describe('createBelowCostReasonMemo', () => {
+  it('resends the reason approved under a key, so a retry matches the committed request', () => {
+    const reasonFor = createBelowCostReasonMemo();
+    const args = { p_notes: 'Deliver south', p_idempotency_key: 'k1' };
+    // First attempt: no reason yet. The approved attempt carries one.
+    expect(reasonFor('k1', null)).toBeNull();
+    const approved = withBelowCostReason('create_direct_order', args, reasonFor('k1', 'Price match'));
+    // A retry's first attempt (no fresh reason) sends the identical request.
+    const retry = withBelowCostReason('create_direct_order', args, reasonFor('k1', null));
+    expect(retry).toEqual(approved);
+  });
+
+  it('never applies one key\'s reason to another key', () => {
+    const reasonFor = createBelowCostReasonMemo();
+    reasonFor('k1', 'Price match');
+    expect(reasonFor('k2', null)).toBeNull();
+  });
+
+  it('a fresh reason replaces the earlier one for its key', () => {
+    const reasonFor = createBelowCostReasonMemo();
+    reasonFor('k1', 'First');
+    expect(reasonFor('k1', 'Second')).toBe('Second');
+    expect(reasonFor('k1', null)).toBe('Second');
   });
 });

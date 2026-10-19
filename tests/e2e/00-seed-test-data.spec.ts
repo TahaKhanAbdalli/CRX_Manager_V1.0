@@ -219,6 +219,8 @@ test.describe.serial('Seed Test Data', () => {
       invoiceType = 'chemical_sale',
     ): Promise<{ orderId: string; invId: string }> => {
       const orderRes = await rpc(page, 'create_direct_order', {
+        // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+        p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
         p_customer_id: custId,
         p_order_date:  TODAY,
         p_order_name:  orderName,

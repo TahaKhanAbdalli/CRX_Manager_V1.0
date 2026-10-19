@@ -1634,16 +1634,40 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL(blend): order effect was not atomically linked';
   END IF;
+  -- An exact retry under the same key returns the cached result.
   v_replay := public.create_order_from_blend_ticket(
     v_ticket,
-    '[E2E]-IGNORED-REPLAY-' || left(v_ticket::text, 8),
+    '[E2E]-GAUNTLET-' || left(v_ticket::text, 8),
     current_date,
-    NULL,
+    '[E2E] rollback-only gauntlet',
     v_admin,
     v_key_prefix || '-order-create'
   )::jsonb;
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL(blend): order replay did not return the cached result';
+  END IF;
+  -- Since 20261016140000 the key is bound to the exact request: the same key with a different
+  -- order number and notes is refused, and no second order is created.
+  BEGIN
+    v_replay := public.create_order_from_blend_ticket(
+      v_ticket,
+      '[E2E]-IGNORED-REPLAY-' || left(v_ticket::text, 8),
+      current_date,
+      NULL,
+      v_admin,
+      v_key_prefix || '-order-create'
+    )::jsonb;
+    RAISE EXCEPTION 'SMOKE_FAIL(blend): a changed request replayed another request''s order: %', v_replay;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL(blend)%' THEN RAISE; END IF;
+    IF position('IDEMPOTENCY_INTENT_MISMATCH' IN SQLERRM) = 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(blend): wrong changed-request refusal: %', SQLERRM;
+    END IF;
+  END;
+  IF EXISTS (
+    SELECT 1 FROM public.orders WHERE order_number = '[E2E]-IGNORED-REPLAY-' || left(v_ticket::text, 8)
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(blend): a refused changed request created an order';
   END IF;
 
   -- The linked sales-order path and direct blend-ticket invoice path are

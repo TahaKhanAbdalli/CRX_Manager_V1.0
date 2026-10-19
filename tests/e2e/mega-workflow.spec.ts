@@ -1402,6 +1402,8 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     // ── Create the quick-delivery order ───────────────────────────
     const prodName = (prod as Record<string, unknown>).name as string || 'E2E Test Product';
     const result = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: S.customerId,
       p_order_date: new Date().toISOString().slice(0, 10),
       p_order_name: `QD-${RUN}`,

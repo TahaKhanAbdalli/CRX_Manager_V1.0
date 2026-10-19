@@ -552,6 +552,8 @@ test.describe('Pricing Edge Cases', () => {
 
     // Create a direct order using the tier-2 price (133.33 = 100/(1-0.25))
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `OT-${RUN}`,

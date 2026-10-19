@@ -38,6 +38,10 @@ export function useFormDraft<T extends object>(
   draft: T | null;
   saveDraft: (state: T) => void;
   clearDraft: () => void;
+  /** Write state now, cancelling any pending debounced write. */
+  flushNow: (state: T) => void;
+  /** Write the latest committed state now (the one auto-save tracks), cancelling a pending write. */
+  flushLatest: () => void;
 } {
   const storageKey = DRAFT_PREFIX + key;
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,6 +77,7 @@ export function useFormDraft<T extends object>(
   /** Write state to localStorage immediately (no debounce). */
   const flushNow = useCallback(
     (state: T) => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
       try {
         const envelope: DraftEnvelope<T> = { savedAt: Date.now(), data: state };
         localStorage.setItem(storageKey, JSON.stringify(envelope));
@@ -126,6 +131,11 @@ export function useFormDraft<T extends object>(
     };
   }, [flushNow, latestState]);
 
+  // A caller leaving the page mid-await holds an older render's state; this writes the newest one.
+  const flushLatest = useCallback(() => {
+    if (latestState.current !== undefined) flushNow(latestState.current);
+  }, [flushNow, latestState]);
+
   // Cleanup debounce timer on unmount
   useEffect(() => {
     return () => {
@@ -133,5 +143,5 @@ export function useFormDraft<T extends object>(
     };
   }, []);
 
-  return { draft, saveDraft, clearDraft };
+  return { draft, saveDraft, clearDraft, flushNow, flushLatest };
 }

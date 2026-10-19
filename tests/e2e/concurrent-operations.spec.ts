@@ -95,6 +95,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // First order: 8 units (should succeed — 10 available)
     const order1 = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `Race1-${RUN}`,
@@ -116,6 +118,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Second order: 5 units (should fail — only 2 free)
     const order2 = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `Race2-${RUN}`,
@@ -153,6 +157,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Order exactly 15 units
     const result = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `Exact-${RUN}`,
@@ -188,6 +194,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order for 5 units
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `OD-${RUN}`,
@@ -267,6 +275,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order → invoice → post it
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `DP-${RUN}`,
@@ -359,6 +369,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `DPY-${RUN}`,
@@ -407,6 +419,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     const custId = await createCustomer(page, `ZeroQtyCust-${RUN}`);
 
     const result = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `ZQ-${RUN}`,
@@ -435,6 +449,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order → invoice → post
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `NP-${RUN}`,
@@ -486,6 +502,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order for 20 units
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `IG-${RUN}`,
@@ -557,6 +575,8 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // Create order
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `DC-${RUN}`,

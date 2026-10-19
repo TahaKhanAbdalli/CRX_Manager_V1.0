@@ -136,6 +136,23 @@ export function withBelowCostReason<T extends Record<string, unknown>>(
   }
 }
 
+/**
+ * Remembers the below-cost reason approved under each retry key. The approved attempt adds the
+ * reason to the request, so a retry under the same key must send it again or it no longer matches
+ * the request the key committed, and an intent-bound replay is refused. Returns the reason to send:
+ * a fresh one is recorded for its key; without one, the key's earlier reason (or null) is reused.
+ */
+export function createBelowCostReasonMemo(): (key: string, reason: string | null) => string | null {
+  const approved = new Map<string, string>();
+  return (key, reason) => {
+    if (reason) {
+      approved.set(key, reason);
+      return reason;
+    }
+    return approved.get(key) ?? null;
+  };
+}
+
 /** Remove the internal marker before order notes are rendered for a customer. */
 export function stripBelowCostApprovalNote(notes: string | null | undefined): string | null {
   if (!notes) return null;

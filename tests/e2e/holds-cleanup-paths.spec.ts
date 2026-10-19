@@ -124,6 +124,8 @@ async function setupPlannedQuote(
 
   // Create the planned hold via the production RPC
   await supabaseRpc(page, 'create_planned_holds', {
+    // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+    p_idempotency_key: `e2e-create_planned_holds-${crypto.randomUUID()}`,
     p_quote_id: quoteId,
     p_performed_by: userId,
   });

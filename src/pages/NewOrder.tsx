@@ -18,10 +18,11 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, assertRpcResult } from '../lib/db';
-import { withBelowCostReason } from '../lib/belowCostApproval';
-import { runCriticalAction } from '../lib/criticalAction';
+import { createBelowCostReasonMemo, withBelowCostReason } from '../lib/belowCostApproval';
+import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getCommittedOrderIdFromMismatch, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
@@ -121,28 +122,55 @@ export default function NewOrder() {
   // Hash MUST cover every submitted field (RPC sends customer/date/name/notes
   // + items[product_id,product_name,quantity,price,cost,unit_size]). Codex
   // 2026-05-16 follow-up: omitting any field replays prior success silently.
-  const orderIntentHash = [
-    customerId, orderDate, orderName, notes, customerPoNumber,
-    items
-      .map((i) => `${i.product_id}:${i.product_name || ''}:${i.quantity}:${i.price_per_unit}:${i.unit_cost}:${i.unit_size || ''}`)
-      .sort()
-      .join(','),
-  ].join('|');
+  // Each key's intent is exactly the arguments its RPC receives, built once and sent as built
+  // (CodeRabbit, 2026-10-18): a field the RPC never sees must not retire a key whose first
+  // attempt may have committed, or the retry would create a second order. JSON-encoded, never
+  // delimiter-joined, so "A|B" + "C" and "A" + "B|C" differ (Sol, 2026-10-18). The rush path
+  // shares this form and keeps its own key and intent (Codex P2).
+  const validIntentItems = items.filter((item) => item.product_id && item.quantity > 0);
+  const directOrderArgs = {
+    p_customer_id: customerId,
+    p_order_date: orderDate,
+    p_order_name: orderName || undefined,
+    p_notes: notes || undefined,
+    p_items: validIntentItems.map((item) => ({
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      price_per_unit: item.price_per_unit,
+      unit_cost: item.unit_cost,
+      unit_size: item.unit_size,
+    })),
+    p_customer_po_number: customerPoNumber.trim() || undefined,
+  };
+  const rushOrderArgs = {
+    p_customer_id: customerId,
+    p_items: validIntentItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
+    p_notes: notes || undefined,
+    p_customer_po_number: customerPoNumber.trim() || undefined,
+  };
+  // The below-cost reason approved under each retry key is sent again on a retry under that key:
+  // without it the retry no longer matches the committed request, the replay is refused, and a
+  // later resubmit could duplicate the order (Codex, PR #951). Keys live only while this page is
+  // mounted and rotate whenever the form changes, so a reason never reaches a different request.
+  const [belowCostReasonFor] = useState(createBelowCostReasonMemo);
+  const directOrderIntentHash = JSON.stringify(directOrderArgs);
+  const rushOrderIntentHash = JSON.stringify(rushOrderArgs);
   useEffect(() => {
     createOrderIdem.resetKey();
-    // Codex P2: the rush-order path shares this form, so reset its key too —
-    // otherwise a lost rush response + edited customer/items would replay the
-    // stale cached rush order and silently ignore the edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directOrderIntentHash]);
+  useEffect(() => {
     rushOrderIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderIntentHash]);
+  }, [rushOrderIntentHash]);
 
   // Draft persistence: auto-saves form to sessionStorage so data survives
   // a PWA reload when the user switches away on mobile (e.g. to the calculator).
   // Codex round-7 P2: include priceLater so a reload doesn't silently downgrade a
   // rush (price-later) order back to a normal priced order on submit.
   const draftState = { customerId, orderName, orderDate, customerPoNumber, notes, items, priceLater };
-  const { draft, clearDraft } = useFormDraft<typeof draftState>('new-order', draftState);
+  const { draft, clearDraft, flushLatest: flushLatestDraft } = useFormDraft<typeof draftState>('new-order', draftState);
 
   // Restore draft on mount (runs once after loading completes)
   const [draftRestored, setDraftRestored] = useState(false);
@@ -467,7 +495,7 @@ export default function NewOrder() {
 
   const submitOrder = async () => {
     if (!profile) return;
-    const validItems = items.filter((item) => item.product_id && item.quantity > 0);
+    const validItems = validIntentItems;
     setSaving(true);
 
     await runCriticalAction({
@@ -481,14 +509,30 @@ export default function NewOrder() {
           // the is_admin()-only orders UPDATE RLS, so a sales_rep got a false failure
           // (order already created, PO lost, not retryable) — no direct order UPDATE here.
           const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_rush_order', withBelowCostReason('create_rush_order', {
-            p_customer_id: customerId,
-            p_items: validItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
-            p_notes: notes || undefined,
-            p_customer_po_number: customerPoNumber.trim() || undefined,
+            ...rushOrderArgs,
             p_performed_by: profile.id,
             p_idempotency_key: rushKey,
-          }, reason)));
-          if (error) throw error;
+          }, belowCostReasonFor(rushKey, reason))));
+          if (error) {
+            // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+            // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+            const bindingRejection = getIdempotencyBindingRejection(error);
+            if (bindingRejection === 'intent' || bindingRejection === 'actor') rushOrderIdem.resetKey();
+            // An intent refusal carries the order an earlier attempt under this key already created: open it
+            // instead of letting the next click, with a fresh key, create a second order.
+            const committedOrderId = getCommittedOrderIdFromMismatch(error, 'create_rush_order');
+            if (committedOrderId) {
+              // The refusal means this form differs from the order that committed, so keep the
+              // draft: the edits are not in that order and must stay recoverable (Sol, 2026-10-18).
+              // Written now, from the latest form state (an edit made while the request was pending counts).
+              flushLatestDraft();
+              toast('warning', 'An earlier attempt with this retry already created an order. Nothing new was created — opening that order now. Your current form is kept as a draft.');
+              navigate(`/orders/${committedOrderId}`);
+              // Already reported above: no generic "created" toast on top of it.
+              throw new CriticalActionHandledError('opened the order an earlier attempt created');
+            }
+            throw error;
+          }
           const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
           const rushOrderId = rushResult.order_id;
           rushOrderIdem.resetKey();
@@ -507,27 +551,33 @@ export default function NewOrder() {
           return;
         }
         const idemKey = createOrderIdem.getKey();
-        const rpcItems = validItems.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          price_per_unit: item.price_per_unit,
-          unit_cost: item.unit_cost,
-          unit_size: item.unit_size,
-        }));
 
         const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_direct_order', withBelowCostReason('create_direct_order', {
-          p_customer_id: customerId,
-          p_order_date: orderDate,
-          p_order_name: orderName || undefined,
-          p_notes: notes || undefined,
-          p_items: rpcItems,
+          ...directOrderArgs,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
-          p_customer_po_number: customerPoNumber.trim() || undefined,
-        }, reason)));
+        }, belowCostReasonFor(idemKey, reason))));
 
-        if (error) throw error;
+        if (error) {
+          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') createOrderIdem.resetKey();
+          // An intent refusal carries the order an earlier attempt under this key already created: open it
+          // instead of letting the next click, with a fresh key, create a second order.
+          const committedOrderId = getCommittedOrderIdFromMismatch(error, 'create_direct_order');
+          if (committedOrderId) {
+            // The refusal means this form differs from the order that committed, so keep the
+            // draft: the edits are not in that order and must stay recoverable (Sol, 2026-10-18).
+            // Written now, from the latest form state (an edit made while the request was pending counts).
+            flushLatestDraft();
+            toast('warning', 'An earlier attempt with this retry already created an order. Nothing new was created — opening that order now. Your current form is kept as a draft.');
+            navigate(`/orders/${committedOrderId}`);
+            // Already reported above: no generic "created" toast on top of it.
+            throw new CriticalActionHandledError('opened the order an earlier attempt created');
+          }
+          throw error;
+        }
 
         createOrderIdem.resetKey();
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(data, 'create_direct_order');

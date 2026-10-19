@@ -73,6 +73,38 @@ describe('useFormDraft', () => {
     expect(stored.data).toEqual({ name: 'New Data' });
   });
 
+  it('flushNow writes at once and a pending debounced save cannot overwrite it', () => {
+    const { result } = renderHook(() => useFormDraft<{ name: string }>('flush-test'));
+
+    act(() => {
+      result.current.saveDraft({ name: 'Older' });
+      result.current.flushNow({ name: 'Latest' });
+    });
+    expect(JSON.parse(localStorage.getItem(`${DRAFT_PREFIX}flush-test`)!).data).toEqual({ name: 'Latest' });
+
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(JSON.parse(localStorage.getItem(`${DRAFT_PREFIX}flush-test`)!).data).toEqual({ name: 'Latest' });
+  });
+
+  it('flushLatest writes the newest committed state, not an older one a caller still holds', () => {
+    const { result, rerender } = renderHook(
+      ({ state }) => useFormDraft('flush-latest', state),
+      { initialProps: { state: { name: 'At click' } } },
+    );
+    // An edit made while a request was pending: auto-save schedules it but has not written yet.
+    rerender({ state: { name: 'Edited while pending' } });
+    act(() => {
+      result.current.flushLatest();
+    });
+    expect(JSON.parse(localStorage.getItem(`${DRAFT_PREFIX}flush-latest`)!).data).toEqual({ name: 'Edited while pending' });
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(JSON.parse(localStorage.getItem(`${DRAFT_PREFIX}flush-latest`)!).data).toEqual({ name: 'Edited while pending' });
+  });
+
   it('clearDraft removes from localStorage', () => {
     const envelope = { savedAt: Date.now(), data: { name: 'To Delete' } };
     localStorage.setItem(`${DRAFT_PREFIX}clear-test`, JSON.stringify(envelope));

@@ -250,6 +250,8 @@ test.describe('Period Close & Accounting', () => {
 
     // Create an order with the test period's date
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: PERIOD_START,  // date in our test period
       p_order_name: `UP-${RUN}`,
@@ -421,6 +423,8 @@ test.describe('Period Close & Accounting', () => {
     const expectedTotal = qty * price; // 598.50
 
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `IM-${RUN}`,
@@ -487,6 +491,8 @@ test.describe('Period Close & Accounting', () => {
 
     // Create order
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `PP-${RUN}`,
@@ -580,6 +586,8 @@ test.describe('Period Close & Accounting', () => {
 
     // Create order — the RPC should auto-create commission records
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `CM-${RUN}`,
@@ -711,6 +719,8 @@ test.describe('Period Close & Accounting', () => {
 
     // Create order → invoice → post → void
     const orderResult = await supabaseRpc(page, 'create_direct_order', {
+      // A fresh key per call: these RPCs refuse a keyless call since 20261016140000.
+      p_idempotency_key: `e2e-create_direct_order-${crypto.randomUUID()}`,
       p_customer_id: custId,
       p_order_date: TS,
       p_order_name: `VP-${RUN}`,
