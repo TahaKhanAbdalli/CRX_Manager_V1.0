@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, Eye, EyeOff, Users, X } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -53,10 +53,16 @@ const fmtDec = (n: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(n);
 const fmtQty = (n: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
+// Cost, profit and margin arrive NULL for non-admins; never show a missing value as $0.
+const fmtOpt = (n: number | null) => (n == null ? '—' : fmt(n));
+const marginCell = (n: number | null) => (n == null
+  ? <span className="text-secondary">—</span>
+  : <span className={n < 10 ? 'text-red-600' : 'text-crx-green'}>{fmtDec(n)}%</span>);
 
 // ─── Component ───────────────────────────────────────────────
 export default function SalesReports() {
-  const { role: _role } = useAuth();
+  const { role } = useAuth();
+  const isAdmin = role === 'admin';
   const { toast } = useToast();
 
   // ── Tab state — URL-driven (?tab=) so the ⌘K palette can switch reports even when
@@ -66,6 +72,14 @@ export default function SalesReports() {
   const tab: Tab = rawTab && (VALID_TABS as string[]).includes(rawTab) ? (rawTab as Tab) : 'detail';
   const setTab = (t: Tab) => setSearchParams({ tab: t }, { replace: true });
   const [customerView, setCustomerView] = useState(false);
+  // Cost, profit and margin are admin-only (Mason, 2026-10-15); the server sends
+  // them as NULL to everyone else, so non-admins never get those columns.
+  // Which role each cached dataset was fetched for: the server sends NULL cost to non-admins,
+  // so after a mid-page promotion cost appears only on rows fetched as admin (never a false $0).
+  // Detail and summary rows are cached separately, so each carries its own tag.
+  const [detailForAdmin, setDetailForAdmin] = useState<boolean | null>(null);
+  const [summaryForAdmin, setSummaryForAdmin] = useState<boolean | null>(null);
+  const showCost = isAdmin && !customerView && (tab === 'detail' ? detailForAdmin : summaryForAdmin) === true;
 
   // ── Filter state ──
   const [startDate, setStartDate] = useState('');
@@ -154,7 +168,12 @@ export default function SalesReports() {
   }, [selectedCustomerIds]);
 
   // ── Fetch data ──
+  // Only the latest request may update the report (a role or filter change can leave an
+  // older request in flight that would otherwise land last).
+  const reportRequestId = useRef(0);
   const fetchData = useCallback(async () => {
+    const requestId = ++reportRequestId.current;
+    const forAdmin = isAdmin;
     setLoading(true);
     const params: Record<string, unknown> = {};
     if (startDate) params.p_start_date = startDate;
@@ -167,8 +186,10 @@ export default function SalesReports() {
 
     if (tab === 'detail') {
       const { data, error } = await supabase.rpc('get_sales_detail_report', params);
+      if (requestId !== reportRequestId.current) return;
       if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
       setDetailData(assertRpcResult<SalesDetailRow[]>(data, 'get_sales_detail_report'));
+      setDetailForAdmin(forAdmin);
     } else {
       const groupByMap: Record<Tab, string> = {
         by_product: 'product', by_customer: 'customer',
@@ -177,11 +198,13 @@ export default function SalesReports() {
       const { data, error } = await supabase.rpc('get_sales_summary_report', {
         ...params, p_group_by: groupByMap[tab],
       });
+      if (requestId !== reportRequestId.current) return;
       if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
       setSummaryData(assertRpcResult<SalesSummaryRow[]>(data, 'get_sales_summary_report'));
+      setSummaryForAdmin(forAdmin);
     }
     setLoading(false);
-  }, [tab, startDate, endDate, productId, effectiveCustomerIds, salesRepId, category, season, toast]);
+  }, [isAdmin, tab, startDate, endDate, productId, effectiveCustomerIds, salesRepId, category, season, toast]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -253,12 +276,12 @@ export default function SalesReports() {
         { key: 'unit', header: 'Unit' },
         { key: 'unit_price', header: 'Unit Price', format: (v: unknown) => fmtCSV(v) },
         { key: 'total_price', header: 'Total', format: (v: unknown) => fmtCSV(v) },
-        ...(!customerView ? [
+        ...(showCost ? [
           { key: 'cost', header: 'Cost', format: (v: unknown) => fmtCSV(v) },
           { key: 'profit', header: 'Profit', format: (v: unknown) => fmtCSV(v) },
           { key: 'margin_pct', header: 'Margin %' },
-          { key: 'sales_rep_name', header: 'Sales Rep' },
         ] : []),
+        ...(!customerView ? [{ key: 'sales_rep_name', header: 'Sales Rep' }] : []),
         { key: 'invoice_number', header: 'Invoice #' },
       ];
       exportToCSV(detailData as unknown as Record<string, unknown>[], cols,
@@ -268,7 +291,7 @@ export default function SalesReports() {
         { key: 'group_key', header: tab === 'by_product' ? 'Product' : tab === 'by_customer' ? 'Customer' : tab === 'by_month' ? 'Month' : tab === 'by_sales_rep' ? 'Sales Rep' : 'Group' },
         { key: 'total_quantity', header: 'Units Sold' },
         { key: 'total_revenue', header: 'Revenue', format: (v: unknown) => fmtCSV(v) },
-        ...(!customerView ? [
+        ...(showCost ? [
           { key: 'total_cost', header: 'Cost', format: (v: unknown) => fmtCSV(v) },
           { key: 'total_profit', header: 'Profit', format: (v: unknown) => fmtCSV(v) },
           { key: 'margin_pct', header: 'Margin %' },
@@ -298,7 +321,7 @@ export default function SalesReports() {
         { key: 'unit', header: 'Unit' },
         { key: 'unit_price', header: 'Unit Price', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
         { key: 'total_price', header: 'Total', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
-        ...(!customerView ? [
+        ...(showCost ? [
           { key: 'profit', header: 'Profit', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
           { key: 'margin_pct', header: 'Margin', align: 'right' as const, format: (v: unknown) => `${Number(v || 0).toFixed(1)}%` },
         ] : []),
@@ -316,7 +339,7 @@ export default function SalesReports() {
         { key: 'group_key', header: tab === 'by_product' ? 'Product' : tab === 'by_customer' ? 'Customer' : tab === 'by_month' ? 'Month' : 'Sales Rep' },
         { key: 'total_quantity', header: 'Units', align: 'right' as const, format: (v: unknown) => fmtQty(Number(v) || 0) },
         { key: 'total_revenue', header: 'Revenue', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
-        ...(!customerView ? [
+        ...(showCost ? [
           { key: 'total_profit', header: 'Profit', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
           { key: 'margin_pct', header: 'Margin', align: 'right' as const, format: (v: unknown) => `${Number(v || 0).toFixed(1)}%` },
         ] : []),
@@ -357,14 +380,16 @@ export default function SalesReports() {
     { key: 'unit', header: 'Unit' },
     { key: 'unit_price', header: 'Unit Price', sortable: true, className: 'text-right', render: (r) => fmtCurrency(r.unit_price) },
     { key: 'total_price', header: 'Total', sortable: true, className: 'text-right font-medium', render: (r) => fmt(r.total_price) },
+    ...(showCost ? [
+      { key: 'cost', header: 'Cost', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => fmtOpt(r.cost) },
+      { key: 'profit', header: 'Profit', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => fmtOpt(r.profit) },
+      { key: 'margin_pct', header: 'Margin', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => marginCell(r.margin_pct) },
+    ] as Column<SalesDetailRow>[] : []),
     ...(!customerView ? [
-      { key: 'cost', header: 'Cost', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => fmt(r.cost) },
-      { key: 'profit', header: 'Profit', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => fmt(r.profit) },
-      { key: 'margin_pct', header: 'Margin', sortable: true, className: 'text-right', render: (r: SalesDetailRow) => <span className={r.margin_pct < 10 ? 'text-red-600' : 'text-crx-green'}>{fmtDec(r.margin_pct)}%</span> },
       { key: 'sales_rep_name', header: 'Rep', sortable: true },
     ] as Column<SalesDetailRow>[] : []),
     { key: 'invoice_number', header: 'Invoice #', render: (r) => r.invoice_number || '—' },
-  ], [customerView]);
+  ], [customerView, showCost]);
 
   // ─── Summary columns ────────────────────────────────────────
   const summaryColumns: Column<SalesSummaryRow>[] = useMemo(() => {
@@ -373,15 +398,15 @@ export default function SalesReports() {
       { key: 'group_key', header: groupHeader, sortable: true },
       { key: 'total_quantity', header: 'Units Sold', sortable: true, className: 'text-right', render: (r) => fmtQty(r.total_quantity) },
       { key: 'total_revenue', header: 'Revenue', sortable: true, className: 'text-right font-medium', render: (r) => fmt(r.total_revenue) },
-      ...(!customerView ? [
-        { key: 'total_cost', header: 'Cost', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => fmt(r.total_cost) },
-        { key: 'total_profit', header: 'Profit', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => fmt(r.total_profit) },
-        { key: 'margin_pct', header: 'Margin', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => <span className={r.margin_pct < 10 ? 'text-red-600' : 'text-crx-green'}>{fmtDec(r.margin_pct)}%</span> },
+      ...(showCost ? [
+        { key: 'total_cost', header: 'Cost', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => fmtOpt(r.total_cost) },
+        { key: 'total_profit', header: 'Profit', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => fmtOpt(r.total_profit) },
+        { key: 'margin_pct', header: 'Margin', sortable: true, className: 'text-right', render: (r: SalesSummaryRow) => marginCell(r.margin_pct) },
       ] as Column<SalesSummaryRow>[] : []),
       { key: 'order_count', header: 'Orders', sortable: true, className: 'text-right' },
       { key: 'line_count', header: 'Lines', sortable: true, className: 'text-right' },
     ];
-  }, [tab, customerView]);
+  }, [tab, showCost]);
 
   // ─────────────────────────── RENDER ───────────────────────────
   return (
@@ -557,12 +582,12 @@ export default function SalesReports() {
       </Card>
 
       {/* ── Summary Cards ── */}
-      <div className={`grid gap-4 ${customerView ? 'grid-cols-2' : 'grid-cols-4'}`}>
+      <div className={`grid gap-4 ${showCost ? 'grid-cols-4' : 'grid-cols-3'}`}>
         <Card>
           <p className="text-xs font-medium text-secondary mb-1">Total Revenue</p>
           <p className="text-2xl font-bold text-nav-dark">{fmt(totals.revenue)}</p>
         </Card>
-        {!customerView && (
+        {showCost && (
           <Card>
             <p className="text-xs font-medium text-secondary mb-1">Total Profit</p>
             <p className="text-2xl font-bold text-nav-dark">{fmt(totals.profit)}</p>

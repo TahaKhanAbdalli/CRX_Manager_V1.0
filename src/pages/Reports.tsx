@@ -14,6 +14,7 @@ import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/i
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
 import { formatExactUSD } from '../lib/money';
+import { parseDollarsToCentsSigned } from '../lib/parseCents';
 import LogbookReport from '../components/reports/LogbookReport';
 import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -35,6 +36,19 @@ type Category = 'profitability' | 'logbook' | 'financial' | 'operational' | 'yea
 type ProfitTab = 'customer' | 'product' | 'commission' | 'revenue';
 type FinancialTab = 'pnl' | 'gross_sales' | 'customer_balance' | 'commission_balance';
 type OperationalTab = 'chemical_history' | 'inventory_cost' | 'posted_applications' | 'price_list';
+
+// Cost and margin are admin-only (Mason, 2026-10-15). The server refuses these
+// reports to everyone else, so non-admins never see the tabs.
+const ADMIN_ONLY_FINANCIAL_TABS: ReadonlySet<FinancialTab> = new Set(['pnl', 'gross_sales', 'commission_balance']);
+const ADMIN_ONLY_OPERATIONAL_TABS: ReadonlySet<OperationalTab> = new Set(['inventory_cost']);
+// Profit by customer / product / month is profit; a rep keeps only their own commissions.
+const ADMIN_ONLY_PROFIT_TABS: ReadonlySet<ProfitTab> = new Set(['customer', 'product', 'revenue']);
+const NO_COMMISSIONS: CommissionRow[] = [];
+// A rep's own commission rows, without order_profit (profit is admin-only).
+// Price list columns; only an admin's list carries current_cost (cost is admin-only).
+const PRICE_LIST_COLUMNS = 'id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, product_form, container_type, container_size, unit_size';
+const PRICE_LIST_COLUMNS_ADMIN = 'id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size';
+const REP_COMMISSION_COLUMNS = 'id, recipient, order_id, job_id, commission_amount, split_percentage, order_date, status, paid_date';
 
 // ─── Existing profitability interfaces (unchanged) ─────────────
 // Quick-pay recovery messages tell the admin what to do next based on what this
@@ -137,9 +151,9 @@ export default function Reports() {
 
   // ─── Category / sub-tab state ───────────────────────────────
   const [category, setCategory] = useState<Category>('profitability');
-  const [profitTab, setProfitTab] = useState<ProfitTab>('customer');
-  const [financialTab, setFinancialTab] = useState<FinancialTab>('pnl');
-  const [operationalTab, setOperationalTab] = useState<OperationalTab>('inventory_cost');
+  const [profitTab, setProfitTab] = useState<ProfitTab>(() => (isAdmin ? 'customer' : 'commission'));
+  const [financialTab, setFinancialTab] = useState<FinancialTab>(() => (isAdmin ? 'pnl' : 'customer_balance'));
+  const [operationalTab, setOperationalTab] = useState<OperationalTab>(() => (isAdmin ? 'inventory_cost' : 'chemical_history'));
 
   // ─── Date range ─────────────────────────────────────────────
   const [startDate, setStartDate] = useState('');
@@ -150,6 +164,11 @@ export default function Reports() {
   const [customerData, setCustomerData] = useState<CustomerProfit[]>([]);
   const [productData, setProductData] = useState<ProductProfit[]>([]);
   const [commissionData, setCommissionData] = useState<CommissionRow[]>([]);
+  // Which role the loaded commission rows were fetched for. A rep sees only their own rows
+  // without order profit, so rows loaded under another role are never shown or exported.
+  const [commissionDataForAdmin, setCommissionDataForAdmin] = useState<boolean | null>(null);
+  const commissionsLoadId = useRef(0);
+  const visibleCommissions = commissionDataForAdmin === isAdmin ? commissionData : NO_COMMISSIONS;
   const [revenueData, setRevenueData] = useState<RevenueSummary[]>([]);
   const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
   const [markingPaid, setMarkingPaid] = useState(false);
@@ -188,9 +207,11 @@ export default function Reports() {
   // admin-only. Invalidate any in-flight admin response and leave the tab immediately if
   // the current session loses admin access while this page is open.
   useEffect(() => {
-    if (isAdmin || financialTab !== 'commission_balance') return;
+    if (isAdmin || !ADMIN_ONLY_FINANCIAL_TABS.has(financialTab)) return;
     commissionRequestId.current += 1;
-    setFinancialTab('pnl');
+    setFinancialTab('customer_balance');
+    setPnlData([]);
+    setGrossSalesData([]);
     setCommBalanceData([]);
     setCommPaymentDetailData([]);
     setCommissionAsOfDate('');
@@ -220,6 +241,19 @@ export default function Reports() {
   const [chemProductId, setChemProductId] = useState('');
   const [chemProductName, setChemProductName] = useState('');
   const [inventoryCostData, setInventoryCostData] = useState<InventoryCostRow[]>([]);
+  useEffect(() => {
+    if (isAdmin || !ADMIN_ONLY_PROFIT_TABS.has(profitTab)) return;
+    setProfitTab('commission');
+    setCustomerData([]);
+    setProductData([]);
+    setRevenueData([]);
+  }, [isAdmin, profitTab]);
+  // Leave the admin-only Inventory Cost tab if this session is (or becomes) a non-admin.
+  useEffect(() => {
+    if (isAdmin || !ADMIN_ONLY_OPERATIONAL_TABS.has(operationalTab)) return;
+    setOperationalTab('chemical_history');
+    setInventoryCostData([]);
+  }, [isAdmin, operationalTab]);
   const [priceListData, setPriceListData] = useState<Record<string, unknown>[]>([]);
   const [priceListError, setPriceListError] = useState(false);
   const [priceListLoaded, setPriceListLoaded] = useState(false);
@@ -300,14 +334,19 @@ export default function Reports() {
   // catch, so a rejection here would discard the specific "some commissions were
   // already batched" warning and surface nothing in its place.
   const fetchCommissions = useCallback(async (): Promise<boolean> => {
+    const loadId = ++commissionsLoadId.current;
+    const forAdmin = isAdmin;
     try {
-      let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
+      let query = supabase.from('commissions').select(isAdmin ? '*' : REP_COMMISSION_COLUMNS).order('order_date', { ascending: false });
       if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
       if (startDate) query = query.gte('order_date', startDate);
       if (endDate) query = query.lte('order_date', endDate);
       const { data, error } = await query;
+      // A newer load (for example after a role change) owns the result; drop this one.
+      if (loadId !== commissionsLoadId.current) return true;
       if (error) { toast('error', 'Failed to load commissions.'); return false; }
-      setCommissionData((data || []) as CommissionRow[]);
+      setCommissionData((data || []) as unknown as CommissionRow[]);
+      setCommissionDataForAdmin(forAdmin);
       setSelectedCommissions(new Set());
       return true;
     } catch (err) {
@@ -341,12 +380,12 @@ export default function Reports() {
   // ─── PROFITABILITY parent fetcher ────────────────────────────
   const fetchProfitability = useCallback(async () => {
     setLoading(true);
-    if (profitTab === 'customer') await fetchCustomerProfitability();
-    if (profitTab === 'product') await fetchProductProfitability();
+    if (profitTab === 'customer' && isAdmin) await fetchCustomerProfitability();
+    if (profitTab === 'product' && isAdmin) await fetchProductProfitability();
     if (profitTab === 'commission') await fetchCommissions();
-    if (profitTab === 'revenue') await fetchRevenue();
+    if (profitTab === 'revenue' && isAdmin) await fetchRevenue();
     setLoading(false);
-  }, [profitTab, fetchCustomerProfitability, fetchProductProfitability, fetchCommissions, fetchRevenue]);
+  }, [profitTab, isAdmin, fetchCustomerProfitability, fetchProductProfitability, fetchCommissions, fetchRevenue]);
 
   // ─── FINANCIAL sub-fetchers ─────────────────────────────────
   const fetchPnL = useCallback(async () => {
@@ -427,8 +466,8 @@ export default function Reports() {
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
   const fetchFinancial = useCallback(async () => {
     setLoading(true);
-    if (financialTab === 'pnl') await fetchPnL();
-    if (financialTab === 'gross_sales') await fetchGrossSales();
+    if (financialTab === 'pnl' && isAdmin) await fetchPnL();
+    if (financialTab === 'gross_sales' && isAdmin) await fetchGrossSales();
     if (financialTab === 'customer_balance') await fetchCustomerBalance();
     if (financialTab === 'commission_balance' && isAdmin) await fetchCommissionBalance();
     setLoading(false);
@@ -463,7 +502,8 @@ export default function Reports() {
     try {
       const result = await fetchAllRows<Record<string, unknown>>((from, to) => supabase
         .from('products')
-        .select('id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size')
+        // Cost is admin-only (Mason, 2026-10-15): a non-admin's price list never asks for it.
+        .select<string, Record<string, unknown>>(isAdmin ? PRICE_LIST_COLUMNS_ADMIN : PRICE_LIST_COLUMNS)
         .eq('is_active', true)
         .order('product_name')
         .order('id')
@@ -513,7 +553,7 @@ export default function Reports() {
     setPriceListError(false);
     setPriceListData(data);
     setPriceListLoaded(true);
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   const fetchPostedApplications = useCallback(async () => {
     // PR-07 follow-up: dropped `applicator:profiles(full_name)` embed; applicator
@@ -567,11 +607,11 @@ export default function Reports() {
   const fetchOperational = useCallback(async () => {
     setLoading(true);
     if (operationalTab === 'chemical_history') await fetchChemHistory();
-    if (operationalTab === 'inventory_cost') await fetchInventoryCost();
+    if (operationalTab === 'inventory_cost' && isAdmin) await fetchInventoryCost();
     if (operationalTab === 'price_list') await fetchPriceList();
     if (operationalTab === 'posted_applications') await fetchPostedApplications();
     setLoading(false);
-  }, [operationalTab, fetchChemHistory, fetchInventoryCost, fetchPriceList, fetchPostedApplications]);
+  }, [operationalTab, isAdmin, fetchChemHistory, fetchInventoryCost, fetchPriceList, fetchPostedApplications]);
 
   // ─── Fetch on tab/date change ───────────────────────────────
   useEffect(() => {
@@ -649,7 +689,7 @@ export default function Reports() {
     const actor = profile;
     if (!actor) { toast('error', 'Your profile is still loading — try again in a moment.'); return; }
     // Only pending commissions can be marked paid
-    const selected = commissionData.filter((c) => selectedCommissions.has(c.id));
+    const selected = visibleCommissions.filter((c) => selectedCommissions.has(c.id));
     const nonPending = selected.filter((c) => c.status !== 'pending');
     if (nonPending.length > 0) {
       toast('error', `${nonPending.length} selected commission(s) are not in 'pending' status — only pending commissions can be marked paid`);
@@ -851,7 +891,7 @@ export default function Reports() {
   };
 
   const toggleSelectAll = () => {
-    const pendingIds = commissionData.filter((c) => c.status === 'pending').map((c) => c.id);
+    const pendingIds = visibleCommissions.filter((c) => c.status === 'pending').map((c) => c.id);
     setSelectedCommissions(selectedCommissions.size === pendingIds.length && pendingIds.length > 0 ? new Set() : new Set(pendingIds));
   };
 
@@ -866,6 +906,7 @@ export default function Reports() {
 
   // ─── CSV export (profitability) ─────────────────────────────
   const handleProfitCSV = () => {
+    if (!isAdmin && ADMIN_ONLY_PROFIT_TABS.has(profitTab)) return;
     if (profitTab === 'customer') {
       exportToCSV(customerData, [
         { key: 'farm_name', header: 'Customer' },
@@ -883,12 +924,12 @@ export default function Reports() {
         { key: 'margin_pct', header: 'Margin %', format: (v) => `${Number(v).toFixed(1)}%` },
       ], 'product_profitability');
     } else if (profitTab === 'commission') {
-      exportToCSV(commissionData, [
+      exportToCSV(visibleCommissions, [
         { key: 'order_date', header: 'Date', format: fmtDateOnlyCSV },
         { key: 'recipient', header: 'Recipient' },
         { key: 'commission_amount', header: 'Commission', format: fmtCSV },
         { key: 'split_percentage', header: 'Split %', format: (v) => `${v}%` },
-        { key: 'order_profit', header: 'Order Profit', format: fmtCSV },
+        ...(isAdmin ? [{ key: 'order_profit', header: 'Order Profit', format: fmtCSV }] : []),
         { key: 'status', header: 'Status' },
         { key: 'paid_date', header: 'Paid Date', format: fmtDateOnlyCSV },
       ], 'commissions');
@@ -905,6 +946,7 @@ export default function Reports() {
 
   // ─── Generic CSV/PDF export for financial/operational ───────
   const handleFinancialCSV = () => {
+    if (!isAdmin && ADMIN_ONLY_FINANCIAL_TABS.has(financialTab)) return;
     if (financialTab === 'pnl') {
       exportToCSV(pnlData as unknown as Record<string, unknown>[], [
         { key: 'line_item', header: 'Line Item' },
@@ -948,6 +990,7 @@ export default function Reports() {
   };
 
   const handleOperationalCSV = () => {
+    if (!isAdmin && ADMIN_ONLY_OPERATIONAL_TABS.has(operationalTab)) return;
     if (operationalTab === 'chemical_history') {
       exportToCSV(chemHistoryData as unknown as Record<string, unknown>[], [
         { key: 'transaction_date', header: 'Date', format: fmtDateCSV },
@@ -979,7 +1022,7 @@ export default function Reports() {
         { key: 'sku', header: 'SKU' },
         { key: 'category', header: 'Category' },
         { key: 'vendor', header: 'Vendor' },
-        { key: 'current_cost', header: 'Cost', format: fmtCSV },
+        ...(isAdmin ? [{ key: 'current_cost', header: 'Cost', format: fmtCSV }] : []),
         { key: 'tier1_price', header: 'Tier 1', format: fmtCSV },
         { key: 'tier2_price', header: 'Tier 2', format: fmtCSV },
         { key: 'tier3_price', header: 'Tier 3', format: fmtCSV },
@@ -1028,7 +1071,7 @@ export default function Reports() {
     ...(isAdmin ? [{
       key: '_select' as keyof CommissionRow,
       header: (
-        <input type="checkbox" checked={selectedCommissions.size > 0 && selectedCommissions.size === commissionData.filter((c) => c.status === 'pending').length} onChange={toggleSelectAll} aria-label="Select all pending commissions" className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green" />
+        <input type="checkbox" checked={selectedCommissions.size > 0 && selectedCommissions.size === visibleCommissions.filter((c) => c.status === 'pending').length} onChange={toggleSelectAll} aria-label="Select all pending commissions" className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green" />
       ) as unknown as string,
       render: (r: CommissionRow) => r.status === 'pending' ? (
         <input type="checkbox" checked={selectedCommissions.has(r.id)} onChange={() => toggleCommissionSelect(r.id)} aria-label={`Select commission for ${r.recipient}`} className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green" />
@@ -1038,7 +1081,7 @@ export default function Reports() {
     { key: 'recipient', header: 'Recipient', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient}</span> },
     { key: 'commission_amount', header: 'Commission', sortable: true, render: (r) => <span className="font-mono font-medium">{fmt(r.commission_amount)}</span> },
     { key: 'split_percentage', header: 'Split %', sortable: true, render: (r) => `${r.split_percentage}%` },
-    { key: 'order_profit', header: 'Order Profit', sortable: true, render: (r) => <span className="font-mono">{fmt(r.order_profit)}</span> },
+    ...(isAdmin ? [{ key: 'order_profit', header: 'Order Profit', sortable: true, render: (r: CommissionRow) => <span className="font-mono">{fmt(r.order_profit)}</span> } as Column<CommissionRow>] : []),
     { key: 'status', header: 'Status', render: (r) => <Badge variant={statusToBadgeVariant[r.status] || 'default'}>{r.status}</Badge> },
     { key: 'paid_date', header: 'Paid', sortable: true, render: (r) => r.paid_date ? parseLocalDate(r.paid_date).toLocaleDateString() : '-' },
   ];
@@ -1120,7 +1163,7 @@ export default function Reports() {
     { key: 'sku', header: 'SKU' },
     { key: 'category', header: 'Category', sortable: true },
     { key: 'vendor', header: 'Vendor', sortable: true },
-    { key: 'current_cost', header: 'Cost', render: (r) => <span className="font-mono">{r.current_cost != null ? fmt(r.current_cost as number) : '-'}</span> },
+    ...(isAdmin ? [{ key: 'current_cost', header: 'Cost', render: (r: Record<string, unknown>) => <span className="font-mono">{r.current_cost != null ? fmt(r.current_cost as number) : '-'}</span> } as Column<Record<string, unknown>>] : []),
     { key: 'tier1_price', header: 'Tier 1', render: (r) => <span className="font-mono">{r.tier1_price != null ? fmt(r.tier1_price as number) : '-'}</span> },
     { key: 'tier2_price', header: 'Tier 2', render: (r) => <span className="font-mono">{r.tier2_price != null ? fmt(r.tier2_price as number) : '-'}</span> },
     { key: 'tier3_price', header: 'Tier 3', render: (r) => <span className="font-mono">{r.tier3_price != null ? fmt(r.tier3_price as number) : '-'}</span> },
@@ -1136,8 +1179,17 @@ export default function Reports() {
     { key: 'season', header: 'Season' },
   ];
 
-  // Unpaid commission total
-  const unpaidTotal = commissionData.filter((c) => c.status === 'pending').reduce((sum, c) => sum + c.commission_amount, 0);
+  // Unpaid commission total, summed in whole cents. An amount that is not an exact
+  // whole-cent decimal makes the total unknown (shown as a dash), never a guessed number.
+  const unpaidTotalCents = visibleCommissions
+    .filter((c) => c.status === 'pending')
+    .reduce<number | null>((sum, c) => {
+      if (sum === null) return null;
+      const text = String(c.commission_amount);
+      if (!/^-?\d+(\.\d{1,2})?$/.test(text)) return null;
+      const cents = parseDollarsToCentsSigned(text);
+      return cents === null ? null : sum + cents;
+    }, 0);
 
   const categories: { key: Category; label: string }[] = [
     { key: 'profitability', label: 'Profitability' },
@@ -1147,26 +1199,26 @@ export default function Reports() {
     { key: 'year_end', label: 'Year-End Summaries' },
   ];
 
-  const profitTabs: { key: ProfitTab; label: string }[] = [
+  const profitTabs = ([
     { key: 'customer', label: 'By Customer' },
     { key: 'product', label: 'By Product' },
     { key: 'commission', label: 'Commissions' },
     { key: 'revenue', label: 'Revenue Summary' },
-  ];
+  ] as { key: ProfitTab; label: string }[]).filter((t) => isAdmin || !ADMIN_ONLY_PROFIT_TABS.has(t.key));
 
-  const financialTabs: { key: FinancialTab; label: string }[] = [
+  const financialTabs = ([
     { key: 'pnl', label: 'P&L' },
     { key: 'gross_sales', label: 'Gross Sales' },
     { key: 'customer_balance', label: 'Customer Balance' },
-    ...(isAdmin ? [{ key: 'commission_balance' as const, label: 'Commission Balance' }] : []),
-  ];
+    { key: 'commission_balance', label: 'Commission Balance' },
+  ] as { key: FinancialTab; label: string }[]).filter((t) => isAdmin || !ADMIN_ONLY_FINANCIAL_TABS.has(t.key));
 
-  const operationalTabs: { key: OperationalTab; label: string }[] = [
+  const operationalTabs = ([
     { key: 'inventory_cost', label: 'Inventory Cost' },
     { key: 'chemical_history', label: 'Chemical History' },
     { key: 'posted_applications', label: 'Posted Applications' },
     { key: 'price_list', label: 'Price List' },
-  ];
+  ] as { key: OperationalTab; label: string }[]).filter((t) => isAdmin || !ADMIN_ONLY_OPERATIONAL_TABS.has(t.key));
 
   // ─── Date filter bar (shared across profitability/financial/operational)
   const dateFilterBar = (onCSV: () => void, csvDisabled = false) => (
@@ -1196,7 +1248,7 @@ export default function Reports() {
         </div>
 
         {/* Gross sales group-by selector */}
-        {category === 'financial' && financialTab === 'gross_sales' && (
+        {category === 'financial' && isAdmin && financialTab === 'gross_sales' && (
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Group By</label>
             <select value={grossSalesGroupBy} onChange={(e) => setGrossSalesGroupBy(e.target.value as 'product' | 'customer' | 'salesman')} aria-label="Group by" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
@@ -1285,7 +1337,7 @@ export default function Reports() {
           {profitTab === 'commission' && (
             <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
               <div className="flex items-center gap-4">
-                <span className="text-sm text-amber-800"><span className="font-semibold">Unpaid commissions:</span> {fmt(unpaidTotal)}</span>
+                <span className="text-sm text-amber-800"><span className="font-semibold">Unpaid commissions:</span> {unpaidTotalCents === null ? '—' : fmt(unpaidTotalCents / 100)}</span>
                 {selectedCommissions.size > 0 && <span className="text-sm text-secondary">{selectedCommissions.size} selected</span>}
               </div>
               {isAdmin && selectedCommissions.size > 0 && (
@@ -1296,10 +1348,10 @@ export default function Reports() {
 
           <Card padding={false}>
             <div className="p-5">
-              {profitTab === 'customer' && <DataTable data={customerData as unknown as Record<string, unknown>[]} columns={customerCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search customers..." searchKeys={['farm_name']} emptyTitle="No customer data" loading={loading} />}
-              {profitTab === 'product' && <DataTable data={productData as unknown as Record<string, unknown>[]} columns={productCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name']} emptyTitle="No product data" loading={loading} />}
-              {profitTab === 'commission' && <DataTable data={commissionData as unknown as Record<string, unknown>[]} columns={commissionCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No commissions" loading={loading} />}
-              {profitTab === 'revenue' && <DataTable data={revenueData as unknown as Record<string, unknown>[]} columns={revenueCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No revenue data" loading={loading} />}
+              {isAdmin && profitTab === 'customer' && <DataTable data={customerData as unknown as Record<string, unknown>[]} columns={customerCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search customers..." searchKeys={['farm_name']} emptyTitle="No customer data" loading={loading} />}
+              {isAdmin && profitTab === 'product' && <DataTable data={productData as unknown as Record<string, unknown>[]} columns={productCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name']} emptyTitle="No product data" loading={loading} />}
+              {profitTab === 'commission' && <DataTable data={visibleCommissions as unknown as Record<string, unknown>[]} columns={commissionCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No commissions" loading={loading} />}
+              {isAdmin && profitTab === 'revenue' && <DataTable data={revenueData as unknown as Record<string, unknown>[]} columns={revenueCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No revenue data" loading={loading} />}
             </div>
           </Card>
         </>
@@ -1322,7 +1374,7 @@ export default function Reports() {
           {dateFilterBar(handleFinancialCSV, isAdmin && financialTab === 'commission_balance' && !commissionExportReady)}
 
           {/* P&L summary cards */}
-          {financialTab === 'pnl' && pnlData.length > 0 && (
+          {isAdmin && financialTab === 'pnl' && pnlData.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
               {pnlData.map((row) => (
                 <Card key={row.line_item}>
@@ -1351,8 +1403,8 @@ export default function Reports() {
 
           <Card padding={false}>
             <div className="p-5">
-              {financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
-              {financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
+              {isAdmin && financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
+              {isAdmin && financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
               {financialTab === 'customer_balance' && <DataTable data={custBalanceData as unknown as Record<string, unknown>[]} columns={custBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['farm_name']} emptyTitle="No outstanding balances" loading={loading} />}
               {isAdmin && financialTab === 'commission_balance' && (
                 <>
@@ -1415,7 +1467,7 @@ export default function Reports() {
           )}
 
           {/* Inventory cost total */}
-          {operationalTab === 'inventory_cost' && inventoryCostData.length > 0 && (
+          {isAdmin && operationalTab === 'inventory_cost' && inventoryCostData.length > 0 && (
             <div className="flex items-center gap-6 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
               <span className="text-sm text-blue-800">
                 <span className="font-semibold">Total Inventory Value:</span>{' '}
@@ -1432,7 +1484,7 @@ export default function Reports() {
 
           {!(operationalTab === 'price_list' && priceListError) && <Card padding={false}>
             <div className="p-5">
-              {operationalTab === 'inventory_cost' && <DataTable data={inventoryCostData as unknown as Record<string, unknown>[]} columns={inventoryCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category']} emptyTitle="No inventory data" loading={loading} />}
+              {isAdmin && operationalTab === 'inventory_cost' && <DataTable data={inventoryCostData as unknown as Record<string, unknown>[]} columns={inventoryCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category']} emptyTitle="No inventory data" loading={loading} />}
               {operationalTab === 'chemical_history' && <DataTable data={chemHistoryData as unknown as Record<string, unknown>[]} columns={chemHistoryCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No chemical history" emptyDescription="Select a product and date range" loading={loading} />}
               {operationalTab === 'posted_applications' && <DataTable data={postedAppsData} columns={postedAppsCols} searchable searchKeys={['customer_name', 'record_number']} emptyTitle="No posted applications" loading={loading} />}
               {operationalTab === 'price_list' && <DataTable data={priceListData} columns={priceListCols} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'vendor']} emptyTitle="No products" loading={loading || priceListPending} />}

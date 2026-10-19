@@ -14,10 +14,13 @@ const H = vi.hoisted(() => ({
     deniedPages: [] as string[],
   },
   rpcHandler: null as RpcHandler | null,
+  selects: [] as Array<{ table: string; columns: string }>,
+  filters: [] as Array<{ table: string; column: string; value: unknown }>,
+  tableHandler: null as ((table: string, columns: string) => Promise<unknown> | null) | null,
 }));
 
 type QueryBuilder = {
-  select: () => QueryBuilder;
+  select: (columns?: string) => QueryBuilder;
   eq: (...args: unknown[]) => QueryBuilder;
   order: (...args: unknown[]) => QueryBuilder;
   limit: (...args: unknown[]) => QueryBuilder;
@@ -31,10 +34,11 @@ type QueryBuilder = {
 
 vi.mock('../lib/db', () => ({
   supabase: {
-    from: () => {
+    from: (table: string) => {
+      let selected = '*';
       const builder: QueryBuilder = {
-        select: () => builder,
-        eq: () => builder,
+        select: (columns = '*') => { selected = columns; H.selects.push({ table, columns }); return builder; },
+        eq: (column: unknown, value: unknown) => { H.filters.push({ table, column: String(column), value }); return builder; },
         order: () => builder,
         limit: () => builder,
         is: () => builder,
@@ -42,7 +46,10 @@ vi.mock('../lib/db', () => ({
         gte: () => builder,
         lte: () => builder,
         not: () => builder,
-        then: (resolve) => resolve({ data: [], error: null }),
+        then: (resolve) => {
+          const custom = H.tableHandler?.(table, selected);
+          return custom ? custom.then(resolve) : resolve({ data: [], error: null });
+        },
       };
       return builder;
     },
@@ -116,8 +123,11 @@ const renderReports = () => render(<MemoryRouter><Reports /></MemoryRouter>);
 beforeEach(() => {
   cleanup();
   H.rpc = [];
+  H.selects = [];
+  H.filters = [];
   H.toast.mockReset();
   H.rpcHandler = null;
+  H.tableHandler = null;
   H.auth.role = 'admin';
   H.auth.profile = { id: 'admin-1', role: 'admin' };
   vi.mocked(exportToCSV).mockClear();
@@ -131,6 +141,8 @@ describe('Reports commission history', () => {
   it('does not expose or fetch the admin-only commission ledger for a sales rep', async () => {
     H.auth.role = 'sales_rep';
     H.auth.profile = { id: 'sales-rep-1', role: 'sales_rep' };
+    // A rep lands on Customer Balance, which reads a list.
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
     renderReports();
 
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
@@ -139,6 +151,110 @@ describe('Reports commission history', () => {
     await waitFor(() => {
       expect(H.rpc.some(({ name }) => name === 'get_commission_history_report')).toBe(false);
     });
+  });
+
+  it('shows a sales rep no cost or margin report and never calls one (cost is admin-only)', async () => {
+    H.auth.role = 'sales_rep';
+    H.auth.profile = { id: 'sales-rep-1', role: 'sales_rep' };
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+    renderReports();
+
+    // Profitability: only the rep's own Commissions, without the Order Profit column.
+    expect(screen.queryByRole('button', { name: 'By Customer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'By Product' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revenue Summary' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Commissions' })).toBeInTheDocument();
+    expect(screen.queryByText('Order Profit')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    expect(screen.queryByRole('button', { name: 'P&L' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Gross Sales' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customer Balance' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
+    expect(screen.queryByRole('button', { name: 'Inventory Cost' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Chemical History' })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const called = H.rpc.map(({ name }) => name);
+      expect(called).not.toContain('get_bottom_line_pnl');
+      expect(called).not.toContain('get_gross_sales_report');
+      expect(called).not.toContain('get_inventory_cost_report');
+    });
+  });
+
+  it('never asks for product cost or order profit on a sales rep\'s Price List or Commissions', async () => {
+    H.auth.role = 'sales_rep';
+    H.auth.profile = { id: 'sales-rep-1', role: 'sales_rep' };
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+    renderReports();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Price List' }));
+
+    await waitFor(() => {
+      expect(H.selects.some(({ table }) => table === 'products')).toBe(true);
+      expect(H.selects.some(({ table }) => table === 'commissions')).toBe(true);
+    });
+    for (const { table, columns } of H.selects) {
+      if (table === 'products') expect(columns).not.toMatch(/current_cost|\*/);
+      if (table === 'commissions') expect(columns).not.toMatch(/order_profit|\*/);
+    }
+    // A rep's commissions are filtered to the rep's own rows.
+    expect(H.filters).toContainEqual({ table: 'commissions', column: 'recipient_user_id', value: 'sales-rep-1' });
+  });
+
+  it('never shows a rep commission rows from an admin load that finishes after the role change', async () => {
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+    let finishAdminLoad: (value: unknown) => void = () => {};
+    const row = (id: string, recipient: string) => ({
+      id, recipient, order_id: null, job_id: null, commission_amount: 10, split_percentage: 100,
+      order_date: '2026-10-01', status: 'pending', paid_date: null, order_profit: 500,
+    });
+    H.tableHandler = (table, columns) => {
+      if (table !== 'commissions') return null;
+      if (columns === '*') return new Promise((resolve) => { finishAdminLoad = resolve; });
+      return Promise.resolve({ data: [row('c-own', 'Own Rep Row')], error: null });
+    };
+    const view = renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Commissions' }));
+    await waitFor(() => expect(H.selects.some(({ table, columns }) => table === 'commissions' && columns === '*')).toBe(true));
+
+    // The session drops to sales rep while the admin's full commission load is still in flight.
+    H.auth.role = 'sales_rep';
+    H.auth.profile = { id: 'sales-rep-1', role: 'sales_rep' };
+    view.rerender(<MemoryRouter><Reports /></MemoryRouter>);
+    expect(await screen.findByText('Own Rep Row')).toBeInTheDocument();
+
+    finishAdminLoad({ data: [row('c-other', 'Other Recipient Row')], error: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText('Other Recipient Row')).not.toBeInTheDocument();
+    expect(screen.getByText('Own Rep Row')).toBeInTheDocument();
+  });
+
+  it('still asks for cost on an admin\'s Price List', async () => {
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+    renderReports();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Price List' }));
+
+    await waitFor(() => {
+      expect(H.selects.some(({ table, columns }) => table === 'products' && columns.includes('current_cost'))).toBe(true);
+    });
+  });
+
+  it('still shows an admin the P&L, Gross Sales and Inventory Cost reports', () => {
+    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+    renderReports();
+
+    expect(screen.getByRole('button', { name: 'By Customer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revenue Summary' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    expect(screen.getByRole('button', { name: 'P&L' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Gross Sales' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
+    expect(screen.getByRole('button', { name: 'Inventory Cost' })).toBeInTheDocument();
   });
 
   it('calls one snapshot RPC and renders both balance and payment-detail fields', async () => {

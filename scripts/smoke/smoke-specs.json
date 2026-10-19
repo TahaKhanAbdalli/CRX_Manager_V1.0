@@ -265,6 +265,27 @@
         "security"
       ]
     },
+    "cost_margin_admin_only_rpc_leaks": {
+      "chain": "smoke-cost_margin_admin_only_rpc_leaks.sql",
+      "container_prover": "prove-cost-margin-admin-only-rpc-leaks-real-schema.mjs",
+      "description": "REQUIRES 20261019010000 (Goal 1 part 3, step 1: cost and margin are admin-only). READ-ONLY. As each live role (authenticated with real profile claims): an active admin runs get_gross_sales_report, get_inventory_cost_report, get_field_profitability, get_profitability_report, get_bottom_line_pnl and dashboard_summary, while an active sales rep, driver, applicator, commission-recipient profile and an id with no active profile are each refused ('Permission denied: requires admin role') and a signed-out visitor (anon) cannot call them; get_sales_detail_report and get_sales_summary_report give the rep the admin's rows with every cost, profit and margin value NULL; get_inventory_position gives the rep the admin's rows with no current_cost. Also checks wrapper attributes and grants, that the nine renamed _*_cost_impl_20261019 bodies are callable by no API role, and that the below-cost trigger strips locked_unit_cost_cents for non-admins (its behavior, and save_quote's reply, need a write and are proven only by the container prover). Fails closed before the migration; terminal rollback.",
+      "covers": [
+        "get_gross_sales_report",
+        "get_inventory_cost_report",
+        "get_field_profitability",
+        "get_profitability_report",
+        "get_bottom_line_pnl",
+        "get_sales_detail_report",
+        "get_sales_summary_report",
+        "get_inventory_position",
+        "dashboard_summary",
+        "save_quote",
+        "_enforce_below_cost_line"
+      ],
+      "area": [
+        "security"
+      ]
+    },
     "money_replay_binding_batch1": {
       "chain": "smoke-money-replay-binding-batch1.sql",
       "container_prover": "prove-money-replay-binding-batch1-real-schema.mjs",

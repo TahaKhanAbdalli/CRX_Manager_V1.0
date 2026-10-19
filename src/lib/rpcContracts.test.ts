@@ -3061,6 +3061,11 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   // Both remain trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
   // is revoked; remove these narrow entries only after the actual applied-name
   // snapshot contains the candidates, not because its maximum date advanced.
+  // The NOT APPLIED cost-admin-only candidate (20261019010000) re-emits this trigger
+  // body; its only write is the below_cost_approvals audit row of the line write that
+  // fired it. Remove once that candidate is in the applied-name snapshot.
+  _enforce_below_cost_line:
+    'local cost-admin-only candidate re-emits this trigger-only below-cost guard (RETURNS trigger, no API-role EXECUTE); its audit insert belongs to the parent line write, whose RPC owns the idempotency key',
   record_commission_earned_state:
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   record_commission_settlement_event:

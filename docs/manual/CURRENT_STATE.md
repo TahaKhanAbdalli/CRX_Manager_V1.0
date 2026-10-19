@@ -1,9 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-18 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 01:08 UTC: 1034 rows / 1027 names,
+**Last verified:** 2026-10-19 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 01:08 UTC and again 12:50 UTC: 1034 rows / 1027 names,
 `max(version)` `20261019010324` = `20261016140000_bind_stock_replay_receipts_batch2`, applied 2026-10-19
-01:03:24 UTC; the 2026-10-16 13:42 UTC read before it had 1033 rows / 1026 names,
+01:03:24 UTC; PR #957's `20261019010000` is NOT applied, and every body it pins still matches live
+at 12:50 UTC; the 2026-10-16 13:42 UTC read before it had 1033 rows / 1026 names,
 `max(version)` `20261016121253` = `20261016060000_bind_money_replay_receipts_batch1`, applied 2026-10-16
 12:12:53 UTC; the 06:16 UTC read before it had 1032 rows / 1025 names,
 `max(version)` `20261016051944` = `20261016030000_staff_photo_buckets_private`, applied 2026-10-16

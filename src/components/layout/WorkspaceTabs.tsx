@@ -50,7 +50,7 @@ const WORKSPACES: Workspace[] = [
       { path: '/dashboard', label: 'Overview', roles: ['admin', 'sales_rep'] },
       { path: '/reports', label: 'Reports Library', roles: ['admin', 'sales_rep'] },
       { path: '/sales-reports', label: 'Sales Reports', roles: ['admin', 'sales_rep'] },
-      { path: '/field-profitability', label: 'Field Profitability', roles: ['admin', 'sales_rep'] },
+      { path: '/field-profitability', label: 'Field Profitability', roles: ['admin'] },
       { path: '/financial-dashboard', label: 'Financial Dashboard', roles: ['admin'] },
     ],
   },

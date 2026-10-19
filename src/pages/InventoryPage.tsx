@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText, TrendingUp, ShoppingCart } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -159,6 +159,9 @@ export default function InventoryPage() {
   const manualAddIdem = useIdempotencyKey('manual_inventory_add', profile?.id || '');
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
+  // Which role the loaded rows were fetched for: get_inventory_position omits current_cost for
+  // non-admins, so cost and valuation appear only once rows fetched as admin have arrived.
+  const [inventoryForAdmin, setInventoryForAdmin] = useState<boolean | null>(null);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('');
@@ -265,11 +268,17 @@ export default function InventoryPage() {
     setExportingPdf(false);
   };
 
+  // Only the latest load may update the grid (a role change or a refresh after a write
+  // can leave an older load in flight that would otherwise land last).
+  const inventoryRequestId = useRef(0);
   const fetchInventory = useCallback(async () => {
+    const requestId = ++inventoryRequestId.current;
+    const forAdmin = isAdmin;
     // Wave B.3 — single read-only RPC replaces 4 separate fetches + JS reduce.
     // RPC computes net_position = available - prebooked + on_order server-side
     // and returns holds_qty / planned_qty / delivered_ytd alongside.
     const { data, error } = await supabase.rpc('get_inventory_position');
+    if (requestId !== inventoryRequestId.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
@@ -314,8 +323,9 @@ export default function InventoryPage() {
     const locs = [...new Set(rows.map((r) => r.location).filter(Boolean))];
     setLocations(locs.sort());
     setInventory(rows);
+    setInventoryForAdmin(forAdmin);
     setLoading(false);
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   const fetchHolds = useCallback(async () => {
     // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
@@ -1049,6 +1059,7 @@ export default function InventoryPage() {
   const totalPlanned = inventory.reduce((s, i) => s + i.total_planned_qty, 0);
   const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
   const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
+  const showInventoryCost = isAdmin && inventoryForAdmin === true;
   const totalValuation = inventory.reduce((sum, r) => sum + (r.quantity_available * (r.current_cost || 0)), 0);
 
   const netPositionColor = (n: number) => {
@@ -1181,7 +1192,7 @@ export default function InventoryPage() {
         <span className="text-gray-500">{row.delivered_ytd.toFixed(1)}</span>
       ),
     },
-    ...(isAdmin ? [
+    ...(showInventoryCost ? [
       {
         key: 'current_cost' as const,
         header: 'Unit Cost',
@@ -1284,7 +1295,9 @@ export default function InventoryPage() {
     { label: 'Planned', value: totalPlanned, color: 'bg-amber-50 text-amber-600', icon: Package },
     { label: 'Committed', value: totalCommitted, color: 'bg-orange-50 text-orange-600', icon: Package },
     { label: 'Delivered YTD', value: totalDeliveredYTD, color: 'bg-gray-50 text-gray-600', icon: Package },
-    { label: 'Inventory Value', value: totalValuation, color: 'bg-emerald-50 text-emerald-600', icon: Package, format: 'currency' },
+    // Valued at cost, so admin-only (cost is admin-only, Mason 2026-10-15; the server
+    // no longer sends non-admins current_cost, which would show a false $0).
+    ...(showInventoryCost ? [{ label: 'Inventory Value', value: totalValuation, color: 'bg-emerald-50 text-emerald-600', icon: Package, format: 'currency' as const }] : []),
   ];
 
   const filteredProducts = products.filter((p) =>

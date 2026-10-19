@@ -3376,9 +3376,9 @@ export interface SalesDetailRow {
   unit: string;
   unit_price: number;
   total_price: number;
-  cost: number;
-  profit: number;
-  margin_pct: number;
+  cost: number | null; // NULL for non-admins: cost is admin-only (20261019010000)
+  profit: number | null;
+  margin_pct: number | null;
   sales_rep_name: string;
   invoice_number: string | null;
   season: number;
@@ -3390,9 +3390,9 @@ export interface SalesSummaryRow {
   group_id: string | null;
   total_quantity: number;
   total_revenue: number;
-  total_cost: number;
-  total_profit: number;
-  margin_pct: number;
+  total_cost: number | null; // NULL for non-admins: cost is admin-only (20261019010000)
+  total_profit: number | null;
+  margin_pct: number | null;
   order_count: number;
   line_count: number;
 }
