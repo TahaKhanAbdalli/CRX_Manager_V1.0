@@ -1,8 +1,9 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-19 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-19 12:50 UTC: still 1034 rows / 1027 names, and every body the cost/margin step-1 migration
-`20261019010000` pins still matches live; at 01:08 UTC: 1034 rows / 1027 names; the one change since the 2026-10-16 13:42 UTC read
+`execute_sql`, 2026-10-19 18:35 UTC: 1035 rows / 1028 names; the one change since the 12:50 UTC read is that the
+cost/margin step-1 migration `20261019010000` (ledger `20261019182757`, PR #957 merged as `8124ae21c`) is now applied,
+which re-certified the cost/margin entry below with a live per-role check; at 01:08 UTC: 1034 rows / 1027 names; the one change since the 2026-10-16 13:42 UTC read
 is that `20261016140000_bind_stock_replay_receipts_batch2` (ledger `20261019010324`, PR #951 merged as
 `d51d67c0b`) is now applied, which re-certified the replay-binding entry below: batch 2's thirteen wrappers,
 thirteen renamed bodies and the widened deferred trigger all read live at 01:05 UTC. In the 13:42 UTC read
@@ -78,7 +79,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 written) — product cost and margin are still readable by sales reps, drivers and applicators
+## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; steps 2–3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
 
 Mason decided on 2026-10-15 that cost and margin are admin-only, including on a rep's own quotes and invoices
 (`docs/plans/2026-10-13-direction-and-goals.md`, Goal 1). A read-only live inventory on 2026-10-18 found three kinds of
@@ -90,7 +91,7 @@ exposure (full list in the PR for step 1):
   column, so this needs column-level grants (the `application_services` pattern, `20260729015706`).
 - **Functions** that hand cost to non-admins: five cost reports, `dashboard_summary` (company-wide profit and margin to any signed-in account), the sales reports, `get_inventory_position`, `save_quote`'s
   reply, and the below-cost refusal message, which carried the exact cost (a rep could type a one-cent price to read it).
-  **Step 1 (`20261019010000`, not yet applied) closes all of these** except purchase-order cost (`get_chemical_history`,
+  **Step 1 (`20261019010000`, LIVE 2026-10-19 18:27 UTC; the report and inventory reads passed a read-only live per-role check, while the quote-save reply and below-cost message need a write and were proven only in the disposable test database) closes all of these** except purchase-order cost (`get_chemical_history`,
   `match_quick_receive_items`). Mason decided on 2026-10-18 that reps keep purchase orders and receiving but cannot see or
   enter unit cost (an admin enters it later); that is built in steps 2 and 3.
 - **Saves that trust the browser's cost:** `save_job` (job chemical cost), the field-application invoice save and field lines

@@ -1,0 +1,3 @@
+## 2026-10-19 - Cost and margin admin-only, step 1 live
+
+Migration `20261019010000_cost_margin_admin_only_rpc_leaks` (PR #957, merged as `8124ae21c`) applied at 18:27 UTC on Mason's own `I approve`. The cost reports, P&L, field profitability and dashboard profit refuse non-admins; the sales reports, inventory list, quote-save reply and below-cost message no longer hand non-admins cost. The report and inventory reads passed a read-only live per-role check; the quote-save reply and below-cost message need a write, so they were proven only in the disposable test database. Steps 2–3 (screens stop reading cost columns; column lock) remain open in KNOWN_ISSUES.
