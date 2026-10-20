@@ -20,7 +20,8 @@ try {
   // 20 after 20261019200000 retired the complete_job exemption: its batch-3a wrapper no longer trips actor-forgery.
   // 21 after the 2026-10-19 reviewed apply_prepay_to_invoice keyless-branch exception (batch-1 wrapper).
   // 22 after the 2026-10-19 start_and_complete_delivery p_signed_by exception (20261019220000).
-  equal(actorEntries.length, 22, '21 new exceptions plus bound legacy cancel_delivery; no stale transfer or complete_job exemption');
+  // 23 after the 2026-10-20 reviewed get_gross_sales_report p_group_by exception (cost/margin wrapper, 20261019010000).
+  equal(actorEntries.length, 23, '22 reviewed exceptions plus bound legacy cancel_delivery; no stale transfer or complete_job exemption');
   check(!actorEntries.some((entry) => entry.violation_key.startsWith('complete_job(')), 'remove the retired complete_job exemption');
   check(!actorEntries.some((entry) => entry.violation_key.startsWith('transfer_job_to_invoice(')), 'remove unused identity-only exemption');
   const cancelPurchaseOrder = actorEntries.find((entry) => entry.violation_key.startsWith('cancel_purchase_order('));

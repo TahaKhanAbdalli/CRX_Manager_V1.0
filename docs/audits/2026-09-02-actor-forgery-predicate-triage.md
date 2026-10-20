@@ -149,6 +149,10 @@ checker capability, and two of them (exception-block nesting, delegate-following
 a wrong simplification produces a false negative in a security control. That is a scoping decision
 for Mason, not something to improvise inside a triage.
 
+> **Superseded in part, 2026-10-20 (Mason).** The `p_group_by` report collisions are now
+> fingerprint-bound reviewed exceptions. See `docs/manual/DECISION_LOG.md`, 2026-10-20 entry. The other
+> classes above are unaffected by that decision.
+
 ## Separate finding — attribution gap, not forgery
 
 Three routines take `p_performed_by`, **never reference it**, and record no actor at all:
