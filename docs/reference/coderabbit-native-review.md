@@ -1,12 +1,26 @@
 # CodeRabbit native review requests
 
-> **Legacy route (2026-09-26).** CodeRabbit reviews every non-draft PR automatically, on open and
-> on every push (`.coderabbit.yaml` › `auto_review`; `docs/manual/DECISION_LOG.md` 2026-09-26,
-> fewer prompts / more CodeRabbit), and GitHub's `protect-main` ruleset requires one approving
-> review of the latest push. With automatic review on and no label filter, the provider label below
-> **no longer triggers a review**. When CodeRabbit was rate limited on, or skipped, the exact head
-> you need reviewed, post `@coderabbitai review` on the PR once (Mason, 2026-09-27). The workflow
-> stays installed; everything below describes how it worked while automatic reviews were disabled.
+> **Current rule: CodeRabbit is advisory (Mason, 2026-10-19, "cut coderabbit volume").**
+> `.coderabbit.yaml` sets `request_changes_workflow: false` (CodeRabbit never submits `APPROVED`
+> or `CHANGES_REQUESTED`; it only comments), `auto_incremental_review: false` (it reviews a PR
+> ONCE, when the PR is opened non-draft or marked ready, not on later pushes) and
+> `ignore_title_keywords: ["docs("]` (a PR whose title contains `docs(` is not reviewed at all).
+> GitHub's `protect-main` ruleset no longer requires an approving review (required status checks
+> stay), and the merge and migration-landing gates no longer require CodeRabbit `APPROVED`.
+> Agents open PRs as drafts and mark them ready once the head is frozen, which triggers the single
+> review. If that review arrives before the merge, fix or refute with evidence every comment, in
+> one push. Do not wait for CodeRabbit if it has not reviewed by the time checks are green and Sol
+> is clean, and never post `@coderabbitai review` to buy a re-review. A failed CodeRabbit
+> pre-merge check is a finding to fix or refute, not a blocker (all five custom checks are `warning` mode since 2026-10-19). Accepted loss: its
+> "edit to an already-applied migration" error check no longer blocks; the mandatory exact-SHA Sol
+> review of any migration change and the CI migration check remain.
+>
+> History: from 2026-09-26 to 2026-10-19 CodeRabbit reviewed every non-draft push, the ruleset
+> required one approving review of the latest push, the merge gates required CodeRabbit `APPROVED`
+> on the exact head, and agents posted `@coderabbitai review` once for a skipped or rate-limited
+> head. Before 2026-09-26 the ready-label workflow below dispatched each review. The provider label
+> **no longer triggers a review**. The workflow stays installed; everything below describes how it
+> worked while automatic reviews were disabled.
 
 The operator applied `ready-for-coderabbit` once the candidate was frozen,
 current, green and independently reviewed. The privileged `pull_request_target`
@@ -36,18 +50,20 @@ Provider documentation:
 
 ## Autonomous landing (Mason, 2026-09-26)
 
-Mason's standing rule (see `docs/manual/DECISION_LOG.md`, 2026-09-26): once
-CodeRabbit has reviewed the FINAL head with no unresolved objection, a fresh
-exact-SHA `gpt-6-sol` high review of that head is clean, and every required
-check is green, the agent merges by itself. The merge gates enforce it — both
-`.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs`
-deny a merge into `main` unless CodeRabbit's latest verdict is `APPROVED` on the
-exact `headRefOid`, the newest run of every reported check is green with
-`mergeStateStatus` CLEAN, and the Sol proof is bound to that head and to GitHub's
-real base. `--auto` and `--admin` are refused. The one exception to the Sol proof
-is a documentation-only change as defined in `docs/reference/sol-exempt-paths.md`
-(Mason, 2026-10-07): the gates read the PR's file list and accept it without the
-proof, with every other condition still required.
+Mason's standing rule (see `docs/manual/DECISION_LOG.md`, 2026-09-26, as
+amended 2026-10-19): once a fresh exact-SHA `gpt-6-sol` high review of the FINAL
+head is clean and every required check is green, the agent merges by itself. The
+merge gates enforce it — both `.claude/hooks/pr-merge-guard.mjs` and
+`.codex/hooks/production-action-guard.mjs` deny a merge into `main` unless the
+newest run of every reported check is green with `mergeStateStatus` CLEAN, the
+aggregate `reviewDecision` is not `CHANGES_REQUESTED`, the head contains GitHub's
+real base, the merge is pinned with `--match-head-commit`, and the Sol proof is
+bound to that head and to GitHub's real base. `--auto` and `--admin` are refused.
+The one exception to the Sol proof is a documentation-only change as defined in
+`docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07): the gates read the PR's
+file list and accept it without the proof, with every other condition still
+required. Until 2026-10-19 the gates also required CodeRabbit's latest verdict to
+be `APPROVED` on the exact `headRefOid` (`coderabbitApprovedHead`, since deleted).
 
 Three plumbing changes made that loop possible without a person:
 
@@ -79,8 +95,9 @@ with a valid identity and submission time. An approval or a substantive
 `COMMENTED` summary can prove delivery. A `CHANGES_REQUESTED` review proves
 delivery but keeps the gate blocked. A queued/skipped status, empty `COMMENTED`
 reply artifact or dismissed review is insufficient. Delivery is not merge
-clearance: the merge gates additionally require CodeRabbit's `APPROVED` verdict on
-the exact head.
+clearance. (Until 2026-10-19 the merge gates additionally required CodeRabbit's
+`APPROVED` verdict on the exact head; CodeRabbit is advisory now and never
+submits `APPROVED`.)
 
 Each normal native attempt records a head/base receipt tied to its trusted
 Actions run before dispatch. A review must be submitted after that receipt;
@@ -144,7 +161,8 @@ only its unit shrank from "the PR" to "the candidate epoch".
   ignored. Inside the epoch the one-candidate rules apply unchanged: an untracked
   or duplicate provider-label event, a history rewrite, or a receipt for another
   head/base blocks. An event whose timestamp cannot be read is never excluded.
-- `auto_incremental_review` is `true`, because per CodeRabbit's documentation a PR
+- (Legacy; since 2026-10-19 `auto_incremental_review` is `false`, so CodeRabbit
+  reviews each PR once and this label path cannot buy a re-review.) `auto_incremental_review` was `true`, because per CodeRabbit's documentation a PR
   first reviewed because of a positive label is only re-reviewed while that
   setting stays true (with it false, a relabel at a new head was observed to skip
   with `incremental reviews are disabled`). Work-in-progress pushes stay
@@ -160,9 +178,9 @@ only its unit shrank from "the PR" to "the candidate epoch".
 The legacy loop for a fix was therefore: fix, push to the same PR, wait for checks, run
 the exact-SHA Sol proof (not needed for a documentation-only change), apply
 `ready-for-coderabbit`, and merge once CodeRabbit
-approved the new head. Today CodeRabbit re-reviews every push automatically (see the banner
-above). Never post `@coderabbitai` commands by hand, except the single `@coderabbitai review`
-for a skipped or rate-limited head that the banner describes (Mason, 2026-09-27), and never use
+approved the new head. Today CodeRabbit reviews each PR once, as advice only (see the banner
+above). Never post `@coderabbitai` commands by hand — including `@coderabbitai review` to buy a
+re-review (the 2026-09-27 single-retrigger exception ended 2026-10-19) — and never use
 `@coderabbitai resume`.
 
 The run API's `head_sha` can expose either the PR head or the execution base.

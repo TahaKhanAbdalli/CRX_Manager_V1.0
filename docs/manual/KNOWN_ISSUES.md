@@ -487,8 +487,10 @@ shell rule matches protected names in the command text, so a command that spells
 recognised. Two `gpt-5.6-sol` rounds showed that, combined with a hard link made through the alias, an
 agent could rewrite a proof's `base_sha`, timestamp, model or verdict, and the push guard would accept
 it, because proof validation trusts those fields without checking who wrote them. That would defeat the
-expiry and moved-base rules of the protected-review gate. (Merging into `main` still also needs
-CodeRabbit's APPROVED review of the exact head, which a rewritten proof does not supply.)
+expiry and moved-base rules of the protected-review gate. (Until 2026-10-19 merging into `main` also
+needed CodeRabbit's APPROVED review of the exact head, which a rewritten proof does not supply. Since
+2026-10-19 CodeRabbit is advisory and that backstop is gone: a rewritten Sol proof plus green checks is
+enough for the merge gates, so this gap is now more exposed.)
 
 **The 8.3 alias is one route, not the whole problem.** The same write-up records that the review-proof
 guard is a named-access speed bump against mistakes and casual self-certification, NOT a
@@ -2371,9 +2373,8 @@ from an agent; the guards can only refuse the *commands* that would use it.
 state directly rather than inferring it (**corrected 2026-09-26:** they no longer require
 `reviewDecision === "APPROVED"` — no approving review has been required since 2026-09-02;
 `.claude/hooks/pr-merge-guard.mjs` refuses
-`CHANGES_REQUESTED` and requires `mergeStateStatus` CLEAN with every check green; the landing path
-in `.claude/commands/ship.md` Step 8 still requires the `ready-for-coderabbit` review of the frozen
-head before merge — only the GitHub *approval* requirement was removed), and deny the
+`CHANGES_REQUESTED` and requires `mergeStateStatus` CLEAN with every check green; since 2026-10-19
+CodeRabbit is advisory and no CodeRabbit review or approval is required before merge), and deny the
 `/pulls/<n>/merge` REST endpoint and the `mergePullRequest` GraphQL mutation by destination
 regardless of transport. That closes every route found so far, and it is an honest-mistake net —
 **not a security boundary.** A command shape nobody has thought of, or an indirection that never
@@ -2444,8 +2445,10 @@ three careful passes.
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
 - **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
-  above): the exact-SHA `gpt-6-sol` proof on migration diffs and the CodeRabbit final review are the
-  controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
+  above): the exact-SHA `gpt-6-sol` proof on migration diffs is the control that always applies.
+  (**Since 2026-10-19 the CodeRabbit review is advisory and not guaranteed:** it reviews a PR once when
+  marked ready, skips `docs(` titles, and the merge does not wait for it, so "the CodeRabbit review" in
+  the rows below is a best-effort extra layer, not a guaranteed one.) The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
   routine at all only because it carries no `ACTOR_MISMATCH` token — but they then fire only on their own
   sinks: the actor parameter near COALESCE/`auth.uid()`/role text, or a `financial_audit_log` write in the
@@ -3488,7 +3491,7 @@ live ledger.** `20260914101000`..`101300` are on `main` since #850 and LIVE sinc
 landing this higher stamp first would strand them. Full
 order: `20260914100700`, `100800`, `100900` (all three live as of 2026-09-28), `101000`..`101300`,
 then this file. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the hold lifts it applies
-under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head, a fresh exact-SHA
+under the autonomous-landing rule (#804; CodeRabbit APPROVED no longer required since 2026-10-19): a fresh exact-SHA
 `gpt-6-sol` review clean, every required check green, and the migration-apply-guard proofs. Until then a rep's Remove on
 the live Documents tab (shipped in PR #764) is refused.
 

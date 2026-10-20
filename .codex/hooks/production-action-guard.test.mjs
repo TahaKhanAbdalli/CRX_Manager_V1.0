@@ -10,7 +10,7 @@ import {
   PROTECTED_HARNESS_FILES,
   canonicalizeGuardPath,
   computedSegmentWithUnrecognizedCommand,
-  evaluateProductionAction,
+  evaluateProductionAction as evaluateProductionActionRaw,
   expandBraces,
   gitInvocationIsReadOnly,
   globCouldMatchProtectedHarnessPath,
@@ -22,6 +22,43 @@ import {
   unrecognizedCommandWord,
   unrecognizedProtectedHarnessAccess,
 } from "./production-action-guard.mjs";
+
+// Since 2026-10-19 (Luna round 3) the merge gate FAILS CLOSED when it cannot
+// read the PR's review threads, because unresolved CodeRabbit threads block a
+// merge. Most fixtures here mock only the PR JSON, so this default answers the
+// thread query with "GitHub answered: no threads" whenever the fixture's own
+// mock gave no thread data. A fixture that THROWS on the query still throws,
+// and `rawThreads: true` turns the default off for the fail-closed tests.
+const NO_THREADS_JSON = JSON.stringify({ data: { repository: { pullRequest: {
+  headRefOid: "f".repeat(40),
+  reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+} } } });
+function withThreadDefault(runGh) {
+  if (typeof runGh !== "function") return runGh;
+  return (args, ...rest) => {
+    const out = runGh(args, ...rest);
+    // The thread lookup first asks `gh pr view --json number,url`; a fixture that
+    // answers every call with the PR JSON has no url, so supply one.
+    if (Array.isArray(args) && args.includes("number,url")) {
+      try {
+        const meta = JSON.parse(out);
+        if (meta?.url && Number.isInteger(meta?.number)) return out;
+      } catch { /* not meta — fall through */ }
+      return JSON.stringify({ number: 1, url: "https://github.com/fixture/repo/pull/1" });
+    }
+    if (Array.isArray(args) && args[0] === "api" && args[1] === "graphql" && args.some((a) => /reviewThreads/.test(String(a)))) {
+      try {
+        const pr = JSON.parse(out)?.data?.repository?.pullRequest;
+        if (pr && typeof pr === "object" && "reviewThreads" in pr) return out;
+      } catch { /* not thread data — fall through to the default */ }
+      return NO_THREADS_JSON;
+    }
+    return out;
+  };
+}
+const evaluateProductionAction = (options) => evaluateProductionActionRaw(
+  options?.rawThreads ? options : { ...options, runGh: withThreadDefault(options?.runGh) },
+);
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -1468,15 +1505,16 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviews: [] }),
   });
-  assert.equal(noCodeRabbit.blocked, true, "no CodeRabbit review of the head: the merge stays with Mason");
-  assert.match(noCodeRabbit.reason, /CodeRabbit has not APPROVED this exact head/, "and the denial says why");
+  // CodeRabbit is advisory since 2026-10-19 (Mason): no review of the head no
+  // longer holds a green, Sol-proven merge.
+  assert.equal(noCodeRabbit.blocked, false, "no CodeRabbit review of the head: a green, Sol-proven merge still lands");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => JSON.stringify({ ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] }),
-  }).blocked, true, "an approval of an OLDER commit does not cover the head");
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  }).blocked, true, "an open CHANGES_REQUESTED objection still refuses the merge");
   const autoMerge = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --squash --auto${PIN}` },
@@ -1775,9 +1813,9 @@ try {
       "GitHub reporting the head behind its base needs Sol");
 
     // The exemption replaces ONLY the Sol proof. Every other gate still refuses.
-    const unapproved = mergeDocs({ pr: { ...docsPr, reviews: [] } });
-    assert.equal(unapproved.blocked, true, "a docs-only PR without CodeRabbit's approval of the head is refused");
-    assert.match(unapproved.reason, /CodeRabbit has not APPROVED/, "by the CodeRabbit gate");
+    // CodeRabbit skips "docs(" PRs since 2026-10-19, so its approval cannot be required.
+    assert.equal(mergeDocs({ pr: { ...docsPr, reviews: [] } }).blocked, false,
+      "a docs-only PR with no CodeRabbit review merges once checks are green");
     const red = mergeDocs({ pr: { ...docsPr, mergeStateStatus: "UNSTABLE", statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" }] } });
     assert.equal(red.blocked, true, "a docs-only PR with a failed check is refused");
     assert.match(red.reason, /green GitHub pipeline/, "by the green-pipeline gate");
@@ -2250,7 +2288,7 @@ try {
   const controlGh = (args) => {
     if (Array.isArray(args) && args.includes("graphql")) {
       controlAttempts += 1;
-      throw new Error("advisory unavailable"); // fail-open: a notice, never a deny
+      throw new Error("advisory unavailable");
     }
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
     return mainPrJson;
@@ -2263,7 +2301,44 @@ try {
     runGh: controlGh,
   });
   assert.equal(controlAttempts > 0, true, "CONTROL: the advisory IS reached once every hard gate has passed");
-  assert.equal(controlVerdict.blocked, false, "a failed advisory lookup fails OPEN — it prints a notice and allows");
+  // Since 2026-10-19 (Luna round 3, HIGH) an unreadable thread list DENIES: it
+  // cannot rule out an unresolved CodeRabbit thread. The Codex App part of the
+  // lookup alone would still only print a notice.
+  assert.equal(controlVerdict.blocked, true, "a failed thread lookup fails CLOSED — CodeRabbit findings cannot be ruled out");
+  assert.match(String(controlVerdict.reason), /could not read this pull request's review threads completely/, "…and says why");
+  // A PARTIAL read (more pages, no usable cursor) is refused the same way.
+  const partialVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    rawThreads: true,
+    runGh: (args) => {
+      if (Array.isArray(args) && args.includes("graphql")) {
+        return JSON.stringify({ data: { repository: { pullRequest: { headRefOid: risky.sha,
+          reviewThreads: { pageInfo: { hasNextPage: true, endCursor: null }, nodes: [] } } } } });
+      }
+      if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+      return mainPrJson;
+    },
+  });
+  assert.equal(partialVerdict.blocked, true, "a partly read thread list fails CLOSED");
+  // CONTROL: the same merge with a complete, empty thread list is allowed.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    rawThreads: true,
+    runGh: (args) => {
+      if (Array.isArray(args) && args.includes("graphql")) {
+        return JSON.stringify({ data: { repository: { pullRequest: { headRefOid: risky.sha,
+          reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } });
+      }
+      if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+      return mainPrJson;
+    },
+  }).blocked, false, "CONTROL: a complete thread read with nothing open allows the merge");
 
   // ── round 8 (SEC-001): a CHAINED merge must not run #1's advisory before ──
   // ── #2's hard checks ─────────────────────────────────────────────────────
@@ -2307,7 +2382,9 @@ try {
   const chainedControlGh = (args) => {
     if (Array.isArray(args) && args.includes("graphql")) {
       chainedControlAttempts += 1;
-      throw new Error("advisory unavailable"); // fail-open
+      // A complete, empty thread list: since 2026-10-19 a failed read would deny.
+      return JSON.stringify({ data: { repository: { pullRequest: { headRefOid: risky.sha,
+        reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } });
     }
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
     return mainPrJson;
@@ -2334,7 +2411,7 @@ try {
   const dedupeGh = (args) => {
     if (Array.isArray(args) && args.includes("graphql")) {
       dedupeAdvisoryAttempts += 1;
-      throw new Error("advisory unavailable"); // fail-open
+      return NO_THREADS_JSON; // a complete, empty read (a failed one denies since 2026-10-19)
     }
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
     if (Array.isArray(args) && args.includes("view")) dedupePrViews += 1;
@@ -2383,7 +2460,7 @@ try {
     let virtualNow = 1_000_000;
     const resolved = [];
     const slowGh = (args) => {
-      if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable"); // fail-open
+      if (Array.isArray(args) && args.includes("graphql")) return NO_THREADS_JSON;
       if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
       if (Array.isArray(args)) resolved.push(args.find((arg) => /^\d+$/.test(String(arg))));
       virtualNow += msPerGhCall; // a SUCCESSFUL call that took this long
@@ -2449,7 +2526,7 @@ try {
   // Every one of these was ALLOWED on PR #630's head against this merge-ready
   // fixture: the inner command was one argv word to every parser.
   const readyGh = (args) => {
-    if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+    if (Array.isArray(args) && args.includes("graphql")) return NO_THREADS_JSON;
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
     return mainPrJson;
   };
@@ -2617,7 +2694,7 @@ try {
   // A GREEN, mergeable PR: the POSIX reading clears every hard gate, so only the
   // PowerShell reading's --admin can deny it.
   const greenGh = (args) => {
-    if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+    if (Array.isArray(args) && args.includes("graphql")) return NO_THREADS_JSON;
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
     return mainPrJson;
   };
@@ -2711,6 +2788,88 @@ try {
   });
   assert.equal(shellStanding.blocked, true, "PARITY: the same standing thread denies the shell route");
   assert.match(String(shellStanding.reason), /unresolved comment/, "…with the same denial");
+
+  // CodeRabbit is advisory (2026-10-19), but an UNRESOLVED CodeRabbit thread on
+  // ANY commit still denies: it never re-reviews, so its threads sit on an older
+  // commit once a fix is pushed. A resolved one does not block.
+  const coderabbitThreadGh = (resolved) => (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      return JSON.stringify({ data: { repository: { pullRequest: {
+        headRefOid: risky.sha,
+        reviewThreads: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [{
+            isResolved: resolved,
+            isOutdated: true,
+            comments: { totalCount: resolved ? 2 : 1, nodes: [{ author: { login: "coderabbitai" }, originalCommit: { oid: risky.base } }] },
+          }],
+        },
+      } } } });
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const coderabbitOpenVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: coderabbitThreadGh(false),
+  });
+  assert.equal(coderabbitOpenVerdict.blocked, true, "an unresolved CodeRabbit thread on an OLDER commit denies the merge");
+  assert.match(String(coderabbitOpenVerdict.reason), /CodeRabbit has an unresolved comment thread/, "…naming CodeRabbit");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: coderabbitThreadGh(true),
+  }).blocked, false, "CONTROL: a resolved CodeRabbit thread does not block a green, Sol-proven merge");
+  // The thread lookup runs on the HARD-gate budget (Codex App P1 on #973): a slow
+  // lookup is refused before the hook would be killed, and that DENIES.
+  {
+    let virtualNow = 2_000_000;
+    const slowLookupVerdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+      repoDir: risky.repo,
+      nowMs: now,
+      rawThreads: true,
+      clock: () => virtualNow,
+      hardGateDeadlineMs: virtualNow + 12_500,
+      runGh: (args) => {
+        if (isAdvisoryMetaCall(args)) { virtualNow += 8_000; return advisoryMetaJson; } // slow but successful
+        if (Array.isArray(args) && args.includes("graphql")) return NO_THREADS_JSON;
+        return mainPrJson;
+      },
+    });
+    assert.equal(slowLookupVerdict.blocked, true, "a thread lookup that would outrun the hook is DENIED, never left to be killed");
+  }
+
+  // Resolving ONE review thread is the sanctioned exit from that denial, so the
+  // guard lets exactly that GraphQL mutation through (Codex App P1 on #973).
+  const resolveQuery = 'mutation{resolveReviewThread(input:{threadId:"PRRT_kwDOabc123"}){thread{isResolved}}}';
+  const ghCall = (command) => evaluateProductionAction({ toolName: "Bash", toolInput: { command }, repoDir: risky.repo, nowMs: now, runGh: () => mainPrJson });
+  assert.equal(ghCall(`gh api graphql -f query='${resolveQuery}'`).blocked, false,
+    "resolving one review thread (literal id) is allowed");
+  assert.equal(ghCall(`gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"PRRT_kw1"}){thread{id isResolved}}}'`).blocked, false,
+    "selecting id and isResolved is allowed too");
+  for (const [label, command] of [
+    ["a second mutation in the same query", `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"PRRT_1"}){thread{id}} mergePullRequest(input:{pullRequestId:"PR_1"}){clientMutationId}}'`],
+    ["a merge mutation", `gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:"PR_1"}){clientMutationId}}'`],
+    ["an extra method flag", `gh api graphql -X POST -f query='${resolveQuery}'`],
+    ["a body from a file", `gh api graphql --input body.json`],
+    ["an unexpected field", `gh api graphql -f query='${resolveQuery}' -F other=1`],
+    ["two queries", `gh api graphql -f query='${resolveQuery}' -f query='${resolveQuery}'`],
+    ["a different host", `gh api --hostname evil.example graphql -f query='${resolveQuery}'`],
+    ["a computed program path", `$(echo /tmp)/gh api graphql -f query='${resolveQuery}'`],
+    ["a variable program path", `$env:TEMP/gh api graphql -f query='${resolveQuery}'`],
+    ["a hand-pathed program", `/tmp/evil/gh api graphql -f query='${resolveQuery}'`],
+    ["a wider selection", `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"PRRT_1"}){thread{id pullRequest{id}}}}'`],
+  ]) {
+    assert.equal(ghCall(command).blocked, true, `still blocked: ${label}`);
+  }
+
   // The connector route used to ALLOW a clean, green, proof-backed merge. Since
   // 2026-09-26 it cannot carry the head pin, so even that merge is refused and
   // agents merge through `gh pr merge --match-head-commit`. The fail-open advisory
@@ -2729,7 +2888,14 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: controlGh,
-  }).blocked, false, "CONTROL: the same clean, green, proof-backed merge with a failed (fail-open) advisory is allowed on the pinned shell route");
+  }).blocked, true, "since 2026-10-19 the same merge with a FAILED thread read is refused on the pinned shell route (fail closed)");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: coderabbitThreadGh(true),
+  }).blocked, false, "CONTROL: the same clean, green, proof-backed merge with a complete thread read is allowed on the pinned shell route");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required

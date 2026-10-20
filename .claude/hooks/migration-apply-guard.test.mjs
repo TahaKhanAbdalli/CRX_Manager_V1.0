@@ -141,7 +141,7 @@ function describeHookRun(r) {
 //
 // Since 2026-09-26 (Mason's autonomous-landing rule, Sol HIGH on its PR) the LAST
 // check is the pull-request landing gate (migration-landing-gate-lib.mjs): the
-// apply must come from the PR's branch with CodeRabbit's approval, green checks
+// apply must come from the PR's branch with green checks
 // and a Sol proof on GitHub. This hook runs as a real subprocess with no seam, and
 // a fixture cannot have a real PR, so an apply that passes every OTHER check now
 // ends in exactly that refusal. It runs last, after every local check, so that

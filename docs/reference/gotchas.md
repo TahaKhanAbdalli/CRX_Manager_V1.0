@@ -291,8 +291,9 @@ Two more consequences worth knowing before you carve a column out:
 
 ## A green CodeRabbit check does not mean a review happened (2026-08-17)
 
-`AGENTS.md` makes reading CodeRabbit's review a standing pre-merge step. The check row is **not**
-evidence that step is satisfiable. On PR #411, `gh pr checks` reported:
+Since 2026-10-19 CodeRabbit is advisory (one review per PR, comments only, no approval required to
+merge), but a CodeRabbit review that arrives before the merge must still be read and every comment
+fixed or refuted. The check row is **not** evidence that a review happened. On PR #411, `gh pr checks` reported:
 
 ```text
 CodeRabbit	pass	0		Review completed
@@ -313,14 +314,15 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
-CodeRabbit review was submitted. Say so rather than treating green as clean. Since 2026-09-26
-the agent merge gates require CodeRabbit's APPROVED verdict on the exact head, and since
-2026-09-27 GitHub's `protect-main` ruleset again requires one approving review of the latest push
-(stale approvals dismissed) — a green CodeRabbit status row never satisfies either. CodeRabbit
-reviews every non-draft push automatically since 2026-09-26; for a head it skipped or was rate
-limited on, post `@coderabbitai review` on the PR once (Mason, 2026-09-27). With automatic review
-on and no label filter, the `ready-for-coderabbit` label no longer triggers a review — the rest of
-this paragraph describes that legacy route. On it, `coderabbit-review-requested` deliberately prevents an
+CodeRabbit review was submitted. Say so rather than treating green as clean. Current rule (Mason,
+2026-10-19): CodeRabbit reviews each PR once, when marked ready or opened non-draft, and only
+comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
+review has arrived by the time checks are green and Sol is clean, merge without it — never post
+`@coderabbitai review` to buy one. (From 2026-09-26 to 2026-10-19 the merge gates required
+CodeRabbit's APPROVED verdict on the exact head, the ruleset required one approving review, and
+agents posted `@coderabbitai review` once for a skipped or rate-limited head.) The
+`ready-for-coderabbit` label no longer triggers a review — the rest of this paragraph describes that
+legacy route. On it, `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
 For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
 review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;
@@ -330,13 +332,12 @@ dispatches again. Since 2026-09-26 a fix goes on the SAME PR — the push record
 epoch, and a relabel of the new head earns one follow-up review; a fresh PR is needed only for the
 rare cases the reference names (e.g. a same-head review with no receipt of this epoch). Only the
 workflow's verified cleanup before any provider call permits a same-head retry. Follow
-`docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
-confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
-`CHANGES_REQUESTED` verdict. An agent merge needs CodeRabbit's `APPROVED` review (Mason's
-autonomous-landing rule, 2026-09-26): require the native receipt's head SHA, that authenticated
-`APPROVED` review's `commit_id`, and the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
-the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an
-independent trust identity.
+`docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never claim a
+CodeRabbit review from the ordinary check row alone, and never merge over a `CHANGES_REQUESTED`
+verdict. (Legacy, until 2026-10-19: an agent merge needed CodeRabbit's `APPROVED` review with the
+native receipt's head SHA, that review's `commit_id` and the live PR head matching, and the receipt
+and live base SHAs matching the expected base.) The generic Actions-authored marker is dedupe
+evidence, not an independent trust identity.
 
 ---
 

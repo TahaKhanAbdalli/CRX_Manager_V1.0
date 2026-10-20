@@ -202,8 +202,10 @@ ok(!isMachineGenerated(""), "empty not machine");
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────
 ok(/autonomous-landing rule \(2026-09-26\)/.test(PUSH_POLICY), "policy names the authorization");
-ok(/CodeRabbit APPROVED on the exact head/.test(PUSH_POLICY) && /exact-SHA Sol proof LAST/.test(PUSH_POLICY),
-  "policy names both final reviews the rule depends on");
+ok(/exact-SHA Sol proof LAST/.test(PUSH_POLICY), "policy names the final review the rule depends on");
+// CodeRabbit is advisory since 2026-10-19 (Mason): the policy must not demand its approval.
+ok(/its approval is not required/.test(PUSH_POLICY) && !/CodeRabbit APPROVED/.test(PUSH_POLICY),
+  "policy treats CodeRabbit as advisory, never as a required approval");
 ok(/exact-SHA Sol proof LAST \(except a documentation-only change as defined in docs\/reference\/sol-exempt-paths\.md\)/.test(PUSH_POLICY),
   "policy names the documentation-only exception to the Sol proof (Mason, 2026-10-07)");
 ok(/HARD GATES/.test(PUSH_POLICY), "policy names the hard gates");

@@ -16,23 +16,18 @@ language: en-US
 reviews:
   profile: assertive
 
-  # Makes CodeRabbit withhold approval until its comments are resolved AND - the
-  # part that matters here - "the latest commit has been reviewed" (schema
-  # description, verified 2026-08-24). That clause is first-party enforcement of
-  # the exact-head problem this repo keeps hitting, where a review earned by an
-  # earlier commit reads as a green light for the final one. It is also the
-  # switch that gives the `mode: error` checks below any force at all: per
-  # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
+  # OFF since 2026-10-19 (Mason: "cut CodeRabbit volume" and "not force to have
+  # a review"). CodeRabbit is ADVISORY: it leaves comments and never submits an
+  # APPROVED or CHANGES_REQUESTED verdict, so it can neither unlock nor hold a
+  # merge. Mason removed the protect-main approving-review requirement the same
+  # day. Merges now rest on the required checks, the exact-SHA Sol proof (except
+  # documentation-only changes) and the agent merge gates, which still refuse any
+  # PR whose GitHub reviewDecision is CHANGES_REQUESTED. Agents fix or answer every
+  # CodeRabbit comment that arrives before the merge (.claude/commands/ship.md).
   #
-  # Since 2026-09-27 (Mason's decision, DECISION_LOG 2026-09-26) the `protect-main`
-  # ruleset requires one approving review of the latest push and dismisses stale
-  # approvals on push, with no bypass actors, so the rule binds every account.
-  # CodeRabbit's formal approval is how a PR becomes mergeable, and GitHub - not
-  # only a local hook - enforces it; the agent merge gates additionally require
-  # that CodeRabbit's latest verdict is APPROVED on the exact head. The required
-  # build/deployment contexts remain separate. If CodeRabbit is down or stuck,
-  # merges wait for it to recover; only Mason ever changes the ruleset.
-  request_changes_workflow: true
+  # The pre_merge_checks below are all `warning` mode now: a failed one is a
+  # finding to fix or refute, never a red status that holds the merge.
+  request_changes_workflow: false
   high_level_summary: true
   # Put the summary in the walkthrough COMMENT, never in the PR description
   # (2026-09-26, autonomous landing). Writing the description is a PR `edited`
@@ -84,22 +79,28 @@ reviews:
   # reviewed today. The exclusion work, and the repository-walking test that
   # enforces this rule, are parked in PR #441.
 
-  # Automatic review of every non-draft PR, on open and on every push. Mason's
-  # call, 2026-09-26 ("we have a lot of CodeRabbit usage now, so I want it used
-  # a lot more"), replacing the label-dispatch rationing: every PR now gets an
-  # outside review no agent can forget, and the merge gates (DECISION_LOG
-  # 2026-09-26, autonomous landing) require CodeRabbit's APPROVED verdict on the
-  # exact head, which a review of every push supplies. Drafts stay unreviewed,
-  # so opening a draft is how work-in-progress opts out. The
-  # `ready-for-coderabbit` label route still works but is no longer needed.
+  # ONE automatic review per PR (Mason, 2026-10-19, "cut CodeRabbit volume").
+  # CodeRabbit reviews a non-draft PR when it opens or is marked ready, and NOT
+  # again on later pushes: every push used to buy a fresh paid review, which made
+  # CodeRabbit the bottleneck and the largest review bill. PRs are opened as
+  # drafts (unreviewed) and marked ready once the head is frozen, so that single
+  # review lands on the finished change. Titles containing "docs(" are skipped
+  # entirely: documentation records need no outside review. Agents never post
+  # `@coderabbitai review` to buy a re-review (.claude/commands/ship.md).
+  #
+  # History: 2026-09-26 turned on a review of every push because the merge gates
+  # then required CodeRabbit's APPROVED verdict on the exact head. That
+  # requirement is gone (see request_changes_workflow above).
   auto_review:
     enabled: true
-    auto_incremental_review: true
+    auto_incremental_review: false
     # 0 = never pause. The default (5) silently stops reviewing a PR after five
     # reviewed pushes, which is exactly when a long fix loop most needs one.
     auto_pause_after_reviewed_commits: 0
     drafts: false
     description_keyword: ""
+    ignore_title_keywords:
+      - "docs("
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
   # AGENTS.md so CodeRabbit flags the exact mistakes that have bitten this
@@ -203,14 +204,20 @@ reviews:
     issue_assessment:
       mode: warning
 
-    # ---- error mode: red X + withheld approval -----------------------------
+    # ---- WARNING mode since 2026-10-19 (were `error`) ----------------------
+    # CodeRabbit is advisory and reviews each PR once, so a failed check could
+    # never be cleared by a re-review, and a red CodeRabbit status would hold the
+    # merge gates (they refuse any red check) on a finding the agent already
+    # fixed (Luna round 2). As warnings they stay findings the agent must fix or
+    # refute (ship.md Step 8); the exact-SHA Sol review covers the same rules.
+    # The "STAYS error" note on the applied-migration check below is history.
     # Every instruction below opens with an explicit skip clause, so a PR that
     # touches none of the named files passes trivially. That is deliberate: a
     # check that fires on unrelated docs and hook work gets ignored, and an
     # ignored check protects nothing.
     custom_checks:
       - name: New table without RLS
-        mode: error
+        mode: warning
         instructions: >-
           Scope: only files ADDED under supabase/migrations/. If this pull
           request adds no new file under supabase/migrations/, PASS immediately
@@ -233,7 +240,7 @@ reviews:
           and a policy on the child too. Otherwise PASS.
 
       - name: SECURITY DEFINER without search_path
-        mode: error
+        mode: warning
         instructions: >-
           Scope: only files ADDED under supabase/migrations/. If this pull
           request adds no new file under supabase/migrations/, PASS immediately
@@ -256,7 +263,7 @@ reviews:
           for arbitrary restricted paths. Otherwise PASS.
 
       - name: Mutating RPC without idempotency key
-        mode: error
+        mode: warning
         instructions: >-
           Scope: only files ADDED under supabase/migrations/. If this pull
           request adds no new file under supabase/migrations/, PASS immediately
@@ -338,7 +345,7 @@ reviews:
           write enforces nothing. Otherwise PASS.
 
       - name: Money not exact whole cents
-        mode: error
+        mode: warning
         instructions: >-
           Scope: files under supabase/migrations/, src/, AND
           supabase/functions/. Edge Functions are TypeScript and are an
@@ -370,7 +377,7 @@ reviews:
       # migration never ran, a false positive on a parked draft is the price:
       # Mason clears it with "Ignore failed checks" in the walkthrough.
       - name: Edit to an already-applied migration
-        mode: error
+        mode: warning
         instructions: >-
           Scope: only supabase/migrations/. If this pull request modifies no
           existing file there, PASS immediately.

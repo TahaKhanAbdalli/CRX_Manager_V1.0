@@ -1564,7 +1564,7 @@ ok(normalizeMigName("99999999999999_alias_20260210_fix_rls.sql") !== normalizeMi
 // A non-destructive apply happens with no ask only "under the same conditions" as
 // an agent merge. The rule book must refuse when the PR half refuses, and the
 // gate must refuse each missing condition on its own.
-denies(evaluate(fixture(), { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: CodeRabbit has not APPROVED" }) }),
+denies(evaluate(fixture(), { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: #900 is not merge-ready" }) }),
   "MIGRATION LANDING GATE", "a perfectly proved migration is still refused while its PR is not ready");
 denies(evaluate(fixture(), { landingGate: () => { throw new Error("boom"); } }),
   "MIGRATION LANDING GATE", "a crashing landing check fails closed");
@@ -1588,7 +1588,9 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+  const crThread = (resolved) => ({ isResolved: resolved, isOutdated: true,
+    comments: { totalCount: resolved ? 2 : 1, nodes: [{ author: { login: "coderabbitai" }, originalCommit: { oid: "c".repeat(40) } }] } });
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH, threads = [], threadsError = null, threadsMore = false, threadsHead = HEAD_SHA } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1600,6 +1602,12 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       throw new Error(`unexpected git ${key}`);
     },
     runGh: (args) => {
+      if (args[0] === "api" && args[1] === "graphql") {
+        if (threadsError) throw threadsError;
+        assert.ok(args.includes("owner={owner}") && args.includes("name={repo}") && args.includes(`number=${pr.number ?? 900}`));
+        return JSON.stringify({ data: { repository: { pullRequest: { headRefOid: threadsHead,
+          reviewThreads: { pageInfo: { hasNextPage: threadsMore, endCursor: threadsMore ? null : null }, nodes: threads } } } } });
+      }
       if (args[0] === "api") {
         const base = pr.baseRefOid || BASE_SHA;
         assert.deepEqual(args, ["api", `repos/{owner}/{repo}/compare/${base}...${HEAD_SHA}`, "--jq", ".behind_by"]);
@@ -1615,7 +1623,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     assert.ok(String(verdict.reason).includes(fragment), `${message} — refusal did not mention ${JSON.stringify(fragment)}: ${verdict.reason}`);
     pass++;
   };
-  ok(gate().ok === true, "a ready PR — committed file, head matches, CodeRabbit APPROVED, green, fresh Sol proof — passes");
+  ok(gate().ok === true, "a ready PR — committed file, head matches, green, fresh Sol proof — passes");
   refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "main" } }), "not from the pull request's own branch", "applying from main is refused");
   refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "HEAD" } }), "detached HEAD", "a detached checkout is refused");
   refused(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: new Error("missing") } }), "is not committed at HEAD", "an uncommitted migration is refused");
@@ -1660,9 +1668,19 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   refused(gate({ pr: { baseRefName: "develop" } }), "does not target main", "a PR into another branch is refused");
   refused(gate({ pr: { headRefOid: "c".repeat(40) } }), "is not this checkout's HEAD", "a checkout behind or ahead of the PR head is refused");
   refused(gate({ pr: { reviewDecision: "CHANGES_REQUESTED" } }), "CHANGES_REQUESTED", "an open objection is refused");
-  refused(gate({ pr: { reviews: [] } }), "CodeRabbit has not APPROVED", "no CodeRabbit approval is refused");
-  refused(gate({ pr: { reviews: [{ ...readyPr.reviews[0], commit: { oid: "c".repeat(40) } }] } }), "CodeRabbit has not APPROVED",
-    "an approval of an older commit is refused");
+  // CodeRabbit is advisory since 2026-10-19 (Mason): its approval is not a landing condition.
+  ok(gate({ pr: { reviews: [], reviewDecision: null } }).ok === true, "a ready PR with no CodeRabbit review passes");
+  // …but its unanswered threads block an apply exactly as they block the merge (Luna round 2, HIGH),
+  // and an apply fails CLOSED when the threads cannot be read.
+  refused(gate({ threads: [crThread(false)] }), "unresolved CodeRabbit comment thread", "an unresolved CodeRabbit thread on an older commit is refused");
+  ok(gate({ threads: [crThread(true)] }).ok === true, "a resolved CodeRabbit thread does not block");
+  refused(gate({ threadsError: new Error("HTTP 502") }), "fail closed", "an unreadable thread list refuses the apply");
+  refused(gate({ threadsMore: true }), "could not be read completely", "a partly read thread list refuses the apply");
+  // Luna round 8: same fail-closed counter as the merge gates, bound to the checked head.
+  refused(gate({ threads: [{ isResolved: false, comments: { totalCount: 1, nodes: [{ author: null }] } }] }),
+    "could not be read completely", "a thread whose author cannot be read refuses the apply");
+  refused(gate({ threadsHead: "d".repeat(40) }), "head moved while it was being checked",
+    "a thread answer for a different head refuses the apply");
   refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
   refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",
     "a failed check is refused");
@@ -1759,8 +1777,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS), proofs: false }), ACCESS),
     "without subagent review proof", "an approval never skips the reviewer proof");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
-    { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: CodeRabbit has not APPROVED" }) }),
-  "CodeRabbit has not APPROVED", "an approval never skips the pull-request landing gate");
+    { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: #900 is not merge-ready" }) }),
+  "is not merge-ready", "an approval never skips the pull-request landing gate");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { via: undefined }) }), ACCESS),
     "malformed", "an approval file not written by the reply hook's shape is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, {

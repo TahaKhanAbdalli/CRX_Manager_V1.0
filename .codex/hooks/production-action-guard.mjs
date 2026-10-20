@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  coderabbitApprovedHead,
   contentIsRisky,
   createHardGateBudget,
   expandNestedCommands,
   extractPatchDestinations,
   ghApiMergeRequest,
+  ghApiIsResolveReviewThreadOnly,
   ghApiMutates,
   commandFedToInterpreter,
   commandFedToInterpreterDenial,
@@ -55,6 +55,9 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
+  coderabbitFindingsDenial,
+  coderabbitThreadCount,
+  coderabbitUnreadableDenial,
   collectCodexThreads,
   evaluateCodexBotReview,
 } from "../../.claude/hooks/codex-bot-review-lib.mjs";
@@ -693,7 +696,10 @@ export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
 export function computedSegmentWithUnrecognizedCommand(command, workdir = "") {
   const text = String(command || "");
   const segments = shellSegments(text);
-  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(segment);
+  // The lone resolve-review-thread call (#973) holds `(` only inside its quoted
+  // GraphQL text; ghApiIsResolveReviewThreadOnly has already proved every word
+  // literal (no `$`, backtick or subexpression can match it), so it is not computed.
+  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(segment) && !ghApiIsResolveReviewThreadOnly(segment);
   const commandComputed = segments.some(computed);
   for (const segment of segments) {
     if (!computed(segment) && !(commandComputed && segmentHeadIsExecutor(segment))) continue;
@@ -1231,8 +1237,10 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
   // Mason's autonomous-landing rule (2026-09-26) — mirror of pr-merge-guard.mjs.
-  // An agent merges into main only when CodeRabbit APPROVED the exact head, the
-  // newest run of every check is green, and a fresh exact-SHA Sol proof exists.
+  // An agent merges into main only when the newest run of every check is green
+  // and a fresh exact-SHA Sol proof exists (or the diff is documentation-only).
+  // CodeRabbit's approval is no longer required (Mason, 2026-10-19): it is
+  // advisory, and a CHANGES_REQUESTED review from anyone still denies above.
   // `--auto` would land commits pushed after this gate ran, so it is refused.
   // An immediate merge has the same race, closed by `--match-head-commit` equal
   // to the head checked here, which makes GitHub refuse a moved head (Sol HIGH,
@@ -1248,17 +1256,8 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (request.auto) {
     return denied(
       "CODEX PRODUCTION GATE: `--auto` is not allowed into main — auto-merge lands the PR after this gate has " +
-      "run, so commits pushed in the meantime would merge without an exact-head Sol proof or a CodeRabbit " +
-      "review of them. Wait for the checks, then merge immediately."
-    );
-  }
-  if (!coderabbitApprovedHead(pullRequest)) {
-    return denied(
-      `CODEX PRODUCTION GATE: CodeRabbit has not APPROVED this exact head (${String(pullRequest.headRefOid).slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews every " +
-      "non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every real " +
-      "finding, and retry. If CodeRabbit skipped or was rate limited on this exact head, post " +
-      "`@coderabbitai review` on the PR once (Mason, 2026-09-27)."
+      "run, so commits pushed in the meantime would merge without an exact-head Sol proof. Wait for the " +
+      "checks, then merge immediately."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
@@ -1328,8 +1327,9 @@ const CODEX_CALL_TIMEOUT_MS = 5_000;
 // SEC-001): the caller computes it once and passes the same value to each
 // deferred lookup, so N chained merges spend one budget between them rather
 // than N budgets in series.
-function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS }) {
+function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), deadlineMs = clock() + CODEX_ADVISORY_BUDGET_MS }) {
   let codexVerdict = null;
+  let coderabbitOpen = null; // null = not read completely → fail closed below
   try {
     const metaArgs = ["pr", "view"];
     if (request.selector) metaArgs.push(String(request.selector));
@@ -1350,11 +1350,20 @@ function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + C
         // Omit `after` on the first page — see the Claude-side note.
         if (cursor) args.push("-F", `after=${cursor}`);
         return JSON.parse(runGh(args, repoDir))?.data?.repository?.pullRequest;
-      }, { deadlineMs });
+      }, { deadlineMs, now: clock });
       if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
+      coderabbitOpen = coderabbitThreadCount(node);
     }
   } catch {
     codexVerdict = null; // never a deny
+  }
+  // CodeRabbit is advisory (2026-10-19): its unanswered threads, on any commit,
+  // still block — mirror of pr-merge-guard.mjs, including the fail-closed read.
+  if (coderabbitOpen === null) {
+    return denied(coderabbitUnreadableDenial("CODEX PRODUCTION GATE", request.selector));
+  }
+  if (coderabbitOpen > 0) {
+    return denied(coderabbitFindingsDenial("CODEX PRODUCTION GATE", request.selector, coderabbitOpen));
   }
   if (codexVerdict?.status === "findings-at-head") {
     return denied(codexBotFindingsDenial("CODEX PRODUCTION GATE", request.selector, codexVerdict.unresolvedAtHead));
@@ -1522,7 +1531,13 @@ export function evaluateProductionAction({
     // out of the per-merge gate — a merge driven through the connector skipped
     // the check a shell merge got, the asymmetry AGENTS.md forbids.
     if (result.advisoryRequest) {
-      const advisory = codexAppAdvisory({ request: result.advisoryRequest, repoDir: actionRepoDir, runGh });
+      // The lookup now carries a fail-closed CodeRabbit check, so it runs on the
+      // HARD-gate budget (Codex App P1 on #973): a call that could not finish
+      // before the hook is killed is refused, which leaves the count unread and
+      // denies, instead of a killed hook that says nothing and so allows.
+      const advisory = codexAppAdvisory({ request: result.advisoryRequest, repoDir: actionRepoDir, runGh: gateRunGh, clock,
+        deadlineMs: Math.min(clock() + CODEX_ADVISORY_BUDGET_MS, hardGateDeadlineMs) });
+      if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
       if (advisory) return advisory;
     }
     return { blocked: false };
@@ -1864,7 +1879,9 @@ export function evaluateProductionAction({
       if (result.advisoryRequest) deferredAdvisories.push(result.advisoryRequest);
       continue;
     }
-    if (ghApiMutates(segment)) {
+    // Resolving one review thread is the sanctioned exit from the CodeRabbit
+    // thread denial, so that one narrowly-parsed mutation is allowed (#973).
+    if (ghApiMutates(segment) && !ghApiIsResolveReviewThreadOnly(segment)) {
       return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");
     }
   }
@@ -1929,9 +1946,11 @@ export function evaluateProductionAction({
   // A nested command hands its cleared merges to the outer call, whose allow
   // point is the only one that comes after EVERY hard gate in the command.
   if (nestingDepth > 0) return { blocked: false, deferredAdvisories };
-  const advisoryDeadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
+  // On the HARD-gate budget since #973: see the connector route above.
+  const advisoryDeadlineMs = Math.min(clock() + CODEX_ADVISORY_BUDGET_MS, hardGateDeadlineMs);
   for (const request of [...nestedAdvisories, ...deferredAdvisories]) {
-    const advisory = codexAppAdvisory({ request, repoDir: actionRepoDir, runGh, deadlineMs: advisoryDeadlineMs });
+    const advisory = codexAppAdvisory({ request, repoDir: actionRepoDir, runGh: gateRunGh, clock, deadlineMs: advisoryDeadlineMs });
+    if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
     if (advisory) return advisory;
   }
   return { blocked: false };

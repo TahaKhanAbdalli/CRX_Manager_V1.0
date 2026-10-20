@@ -5,7 +5,7 @@
 // pull request whose every changed file is plain documentation named below. Both
 // merge guards ask this module — .claude/hooks/pr-merge-guard.mjs and
 // .codex/hooks/production-action-guard.mjs — and only at the point where the Sol
-// proof would otherwise be demanded: CodeRabbit APPROVED on the exact head, every
+// proof would otherwise be demanded: no CHANGES_REQUESTED review, every
 // check green, the `--match-head-commit` pin and the head containing its base are
 // all checked BEFORE this, and none of them is relaxed by it.
 //

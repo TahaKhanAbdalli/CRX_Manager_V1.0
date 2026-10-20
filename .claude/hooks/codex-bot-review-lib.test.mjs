@@ -16,11 +16,16 @@ import {
   CODEX_THREAD_MAX_PAGES,
   codexBotFindingsDenial,
   codexBotThreads,
+  coderabbitFindingsDenial,
+  coderabbitThreadCount,
+  coderabbitUnreadableDenial,
   collectCodexThreads,
   evaluateCodexBotReview,
+  isCodeRabbitLogin,
   isCodexBotLogin,
   isStandingAtHead,
   oidMatchesHead,
+  unresolvedCodeRabbitThreads,
 } from "./codex-bot-review-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,12 +37,66 @@ const HEAD = "53e9c07142a4428848a3cebc0c31d2c1b83334c9";
 const OLD = "306d1e263e0000000000000000000000000000aa";
 
 // Build a GraphQL-shaped reviewThread node.
-const thread = ({ login = "chatgpt-codex-connector", oid = HEAD, resolved = false } = {}) => ({
+// A resolved thread carries a reply by default (resolved AND answered is the
+// handled state since #973); pass totalCount explicitly to test otherwise, or
+// null to omit the field.
+const thread = ({ login = "chatgpt-codex-connector", oid = HEAD, resolved = false, totalCount = resolved ? 2 : 1 } = {}) => ({
   isResolved: resolved,
   isOutdated: false,
-  comments: { nodes: [{ author: { login }, originalCommit: { oid } }] },
+  comments: { ...(totalCount === null ? {} : { totalCount }), nodes: [{ author: { login }, originalCommit: { oid } }] },
 });
 const pr = (threads, headRefOid = HEAD) => ({ headRefOid, reviewThreads: { nodes: threads } });
+
+// ── CodeRabbit's unresolved threads (advisory since 2026-10-19) ──────────────
+ok(isCodeRabbitLogin("coderabbitai") && isCodeRabbitLogin("coderabbitai[bot]") && isCodeRabbitLogin(" CodeRabbitAI "),
+  "both API spellings of CodeRabbit's login match");
+ok(!isCodeRabbitLogin("coderabbit") && !isCodeRabbitLogin("chatgpt-codex-connector"), "other logins do not");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai", oid: OLD })])), 1,
+  "an unresolved CodeRabbit thread on an OLDER commit counts — it never re-reviews the fix");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai", resolved: true, totalCount: 2 })])), 0,
+  "a thread resolved WITH a reply is handled");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai", resolved: true, totalCount: 1 })])), 1,
+  "a thread resolved with NO reply still counts as unanswered (Luna rounds 4–6)");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai", resolved: true, totalCount: null })])), 1,
+  "an unknown comment count is treated as no reply");
+// A thread whose opening author cannot be read is unreadable, not clean (Luna round 7).
+eq(coderabbitThreadCount(pr([{ isResolved: false, comments: null }])), null, "a thread with no readable comments makes the count null");
+eq(coderabbitThreadCount(pr([{ isResolved: false, comments: { totalCount: 1, nodes: [{ author: null }] } }])), null,
+  "a thread whose author is null makes the count null");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai", resolved: false, totalCount: 3 })])), 1,
+  "a reply alone, without resolving, is still open");
+eq(unresolvedCodeRabbitThreads(pr([thread()])), 0, "a Codex App thread is not a CodeRabbit thread");
+eq(unresolvedCodeRabbitThreads(pr([thread({ login: "coderabbitai" }), thread({ login: "coderabbitai[bot]", oid: OLD })])), 2,
+  "every unresolved CodeRabbit thread is counted");
+eq(unresolvedCodeRabbitThreads({}), 0, "no thread data reads as zero (fail-open)");
+ok(/CodeRabbit has 2 unresolved comment threads/.test(coderabbitFindingsDenial("X", "5", 2)), "the denial names the count");
+// The count the gates act on: null (fail closed) unless the read is complete.
+eq(coderabbitThreadCount(pr([])), 0, "a complete read with nothing open is 0");
+eq(coderabbitThreadCount(pr([thread({ login: "coderabbitai" })])), 1, "a complete read counts open threads");
+eq(coderabbitThreadCount({ ...pr([]), incomplete: true }), null, "a partial read with nothing seen is null — cannot rule a finding out");
+eq(coderabbitThreadCount({ ...pr([thread({ login: "coderabbitai" })]), incomplete: true }), 1,
+  "a partial read that already shows an open thread still counts it");
+eq(coderabbitThreadCount(pr([], "")), null, "no head means nothing was read — null");
+eq(coderabbitThreadCount(null), null, "no data at all — null");
+eq(coderabbitThreadCount({ headRefOid: HEAD }), null, "a head with no thread list is malformed — null, not a clean 0");
+eq(coderabbitThreadCount({ headRefOid: HEAD, reviewThreads: {} }), null, "a thread object with no nodes — null");
+// End to end through the pager (Codex App P1 on PR #973): a GraphQL answer with a
+// head but a missing or null reviewThreads field must come out INCOMPLETE, so the
+// CodeRabbit count is null (fail closed), never a clean 0.
+for (const reviewThreads of [undefined, null, {}, { nodes: null }]) {
+  const walked = collectCodexThreads(() => ({ headRefOid: HEAD, reviewThreads }));
+  eq(walked.incomplete, true, `a page with reviewThreads=${JSON.stringify(reviewThreads)} marks the walk incomplete`);
+  eq(coderabbitThreadCount(walked), null, `…and the CodeRabbit count is null for reviewThreads=${JSON.stringify(reviewThreads)}`);
+}
+eq(coderabbitThreadCount(collectCodexThreads(() => ({ headRefOid: HEAD, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } }))), 0,
+  "CONTROL: a well-formed empty page through the pager counts 0");
+// Only an explicit hasNextPage:false proves the read complete (Luna round 5, HIGH).
+for (const pageInfo of [undefined, null, {}, { hasNextPage: null }, { hasNextPage: "false" }]) {
+  const walked = collectCodexThreads(() => ({ headRefOid: HEAD, reviewThreads: { nodes: [], pageInfo } }));
+  eq(walked.incomplete, true, `pageInfo=${JSON.stringify(pageInfo)} leaves the walk incomplete`);
+  eq(coderabbitThreadCount(walked), null, `…so the CodeRabbit count is null for pageInfo=${JSON.stringify(pageInfo)}`);
+}
+ok(/fail closed/.test(coderabbitUnreadableDenial("X", "5")), "the unreadable denial says it fails closed");
 
 // ── the two spellings of the bot's name ──────────────────────────────────────
 // Verified live 2026-09-02 on PR #556: `gh pr view --json reviews` reports
@@ -149,7 +208,11 @@ ok(oidMatchesHead(HEAD.toUpperCase(), HEAD), "oid match is case-insensitive");
 ok(oidMatchesHead(` ${HEAD} `, HEAD), "oid match tolerates surrounding whitespace");
 ok(!isStandingAtHead({ resolved: false, oid: "" }, ""), "MUST NOT BLOCK: unknown-vs-unknown is not a standing finding");
 ok(isStandingAtHead({ resolved: false, oid: HEAD }, HEAD), "unresolved at the head IS a standing finding");
-ok(!isStandingAtHead({ resolved: true, oid: HEAD }, HEAD), "MUST NOT BLOCK: resolved at the head is not standing");
+ok(!isStandingAtHead({ resolved: true, replies: 1, oid: HEAD }, HEAD), "MUST NOT BLOCK: resolved and answered at the head is not standing");
+ok(isStandingAtHead({ resolved: true, replies: 0, oid: HEAD }, HEAD),
+  "resolved with NO reply at the head is still standing — a silent resolve does not clear a finding (Luna round 7)");
+eq(evaluateCodexBotReview(pr([thread({ resolved: true, totalCount: 1, oid: HEAD })])).status, "findings-at-head",
+  "a Codex App thread resolved without a reply still blocks");
 
 // An unknown oid must never compare equal to a head, in either direction.
 eq(
@@ -438,7 +501,8 @@ ok(
   "the segment loop actually queues the returned request — a gate that hands it back to a caller that drops it is the dead code this pin exists to catch",
 );
 ok(
-  /const advisoryDeadlineMs = Date\.now\(\) \+ CODEX_ADVISORY_BUDGET_MS;/.test(codexGuardSource)
+  // Capped by the hard-gate deadline since #973 (the lookup now fails closed).
+  /const advisoryDeadlineMs = Math\.min\(clock\(\) \+ CODEX_ADVISORY_BUDGET_MS, hardGateDeadlineMs\);/.test(codexGuardSource)
   && /deadlineMs: advisoryDeadlineMs/.test(codexGuardSource),
   "one deadline is computed once and shared by every deferred lookup, so N merges cannot multiply the budget",
 );
@@ -460,7 +524,6 @@ const claudeQueuePushes = [...guardSource.matchAll(/advisoryQueue\.push\(request
 const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request, advisoryDeadlineMs\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
 const claudeProofAt = guardSource.indexOf("every main merge → require the fresh, bound Sol proof");
-const claudeCodeRabbitAt = guardSource.indexOf("if (!coderabbitApprovedHead(pr))");
 const claudeRequestLoopAt = guardSource.indexOf("for (const request of requests) gateRequest(request);");
 eq(
   claudeQueuePushes.length,
@@ -486,11 +549,11 @@ ok(
   "the Claude guard computes one shared deadline for the whole queue",
 );
 // Every merge now reaches the proof gate, so the single allow point must follow
-// it — and the CodeRabbit exact-head approval check — as well as the green gate.
-ok(claudeCodeRabbitAt > 0, "the Claude guard's CodeRabbit exact-head approval check is present to order");
+// it as well as the green gate. (CodeRabbit's approval check was removed
+// 2026-10-19 when Mason made CodeRabbit advisory.)
 ok(
-  claudeQueuePushes.every((at) => at > claudeProofAt && at > claudeCodeRabbitAt),
-  "MUST RUN LAST: both allow points follow the CodeRabbit approval check and the exact-SHA proof gate",
+  claudeQueuePushes.every((at) => at > claudeProofAt && at > claudeGreenAt),
+  "MUST RUN LAST: both allow points follow the green-pipeline gate and the exact-SHA proof gate",
 );
 
 // ── the lookup is BOUNDED, on both guards ────────────────────────────────────
@@ -510,7 +573,7 @@ for (const [label, source] of [["Claude", guardSource], ["Codex", codexGuardSour
     `the ${label} guard's advisory budget (${budgetMs}ms) must stay at or under half its ${hookBudgetMs}ms hook timeout`,
   );
   ok(
-    /collectCodexThreads\([\s\S]{0,2000}?\{ deadlineMs \}\)/.test(source),
+    /collectCodexThreads\([\s\S]{0,2000}?\{ deadlineMs(?:, now: clock)? \}\)/.test(source),
     `the ${label} guard actually PASSES the deadline to collectCodexThreads — declaring a budget it never applies is decoration`,
   );
 }

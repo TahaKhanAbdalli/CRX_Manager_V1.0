@@ -130,9 +130,11 @@ record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.te
 // Mason, 2026-10-03: Claude dropped its pre-code approval pause and plans-then-proceeds like Codex.
 record(/Codex and Claude both proceed after a short plan without waiting for approval/i.test(agents), "plan authority stays explicit for both agents");
 record(
-  /skipped or was rate-limited on a head, the agent posts `@coderabbitai review` on the PR once/i.test(protectedDelivery)
+  /CodeRabbit is advisory/i.test(protectedDelivery)
+    && /fix or refute every comment/i.test(protectedDelivery)
+    && /Never post `@coderabbitai review` to buy a re-review/i.test(protectedDelivery)
     && /never ask Mason to comment, label, or click for CodeRabbit/i.test(protectedDelivery),
-  "agents request a skipped CodeRabbit review themselves and never ask Mason to",
+  "CodeRabbit is advisory (Mason, 2026-10-19): agents handle its comments, never buy re-reviews, and never ask Mason to",
 );
 record(
   /Post it to Mason, then proceed without waiting for his confirmation/i.test(shipWorkflow)
@@ -150,8 +152,8 @@ record(/Money must resolve to exact whole cents/i.test(agents), "AGENTS.md retai
 record(/Use `src\/lib\/db\.ts` as the only Supabase client[\s\S]*assertRpcResult\(\)[\s\S]*checkMutationResult\(\)/i.test(agents), "AGENTS.md retains Supabase client and result-check requirements");
 record(/never use `--no-verify`[\s\S]*never push directly to `main`/i.test(agents), "AGENTS.md retains protected-delivery bans");
 const autonomousLandingChecks = [
-  ["CodeRabbit approval of the frozen final head", /CodeRabbit has APPROVED the frozen final head/i],
-  ["a clean exact-SHA Sol review of that head", /fresh exact-SHA Sol[^.]*review of that head is clean/i],
+  ["a clean exact-SHA Sol review of the frozen final head", /fresh exact-SHA Sol review of the frozen final head is clean/i],
+  ["no review asking for changes", /no review asks for changes/i],
   ["every required check green", /every required check is green/i],
   ["migrations limited to NON-destructive ones", /NON-destructive migration/i],
   ["access changes limited to routine grants (Mason, 2026-09-26)", /routine grants only/i],

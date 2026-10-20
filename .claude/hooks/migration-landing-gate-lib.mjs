@@ -1,9 +1,10 @@
 // MIGRATION LANDING GATE (Mason's autonomous-landing rule, 2026-09-26).
 //
 // The rule lets an agent apply a NON-destructive migration live with no in-chat
-// ask — but only "under the same conditions" as an agent merge: CodeRabbit
-// APPROVED the frozen final head, the exact-SHA Sol review of that head is clean,
-// and every check is green. The migration's own reviewer + Sol proofs (the rest
+// ask — but only "under the same conditions" as an agent merge: the exact-SHA
+// Sol review of the frozen final head is clean and every check is green.
+// (CodeRabbit's approval was one of those conditions until Mason made CodeRabbit
+// advisory on 2026-10-19.) The migration's own reviewer + Sol proofs (the rest
 // of migration-apply-lib.mjs) prove the SQL was reviewed; they say nothing about
 // the pull request carrying it. Sol's exact-SHA review of the introducing PR
 // (HIGH, 2026-09-26) found exactly that gap: a migration could reach production
@@ -25,13 +26,18 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  coderabbitApprovedHead,
   headContainsBaseOnGitHub,
   proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
 } from "./codex-push-lib.mjs";
+import {
+  CODEX_THREADS_QUERY,
+  CODEX_THREAD_PAGE_SIZE,
+  coderabbitThreadCount,
+  collectCodexThreads,
+} from "./codex-bot-review-lib.mjs";
 
 const PROTECTED_BRANCH_RE = /^(?:main|master|production)$/i;
 
@@ -41,8 +47,8 @@ function refuse(why) {
     reason:
       `MIGRATION LANDING GATE: ${why}\n\n` +
       `Under Mason's autonomous-landing rule (2026-09-26) a live apply happens only after the pull request ` +
-      `that carries the migration is ready to merge: CodeRabbit APPROVED its exact head, every check is ` +
-      `green, and a fresh exact-SHA gpt-6-sol proof (node scripts/write-codex-push-proof.mjs) is bound to that ` +
+      `that carries the migration is ready to merge: every check is green, no review asks for changes, ` +
+      `and a fresh exact-SHA gpt-6-sol proof (node scripts/write-codex-push-proof.mjs) is bound to that ` +
       `head. Apply from a clean checkout of the PR's branch with the migration committed, then merge right ` +
       `after. A destructive migration never applies through an agent — it is parked for Mason.`,
   };
@@ -157,9 +163,45 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
     return refuse(`${number}'s head on GitHub (${String(pr?.headRefOid || "?").slice(0, 12)}) is not this checkout's HEAD (${head.slice(0, 12)}) — push, or pull, so the reviewed commit is the one applied.`);
   }
   if (pullRequestReviewBlocked(pr)) return refuse(`${number} has an unresolved CHANGES_REQUESTED review.`);
-  if (!coderabbitApprovedHead(pr)) return refuse(`CodeRabbit has not APPROVED ${number}'s exact head ${head.slice(0, 12)}.`);
   if (!pullRequestChecksGreen(pr)) {
     return refuse(`${number} is not merge-ready: mergeStateStatus must be CLEAN and the newest run of every check green.`);
+  }
+  // CodeRabbit is advisory (2026-10-19), but its unanswered threads block the
+  // merge gates, so they block an apply too — otherwise production could take a
+  // migration whose PR cannot merge (Luna round 2, HIGH). Unlike the merge gates'
+  // fail-open notice, an apply FAILS CLOSED here like every other check in this
+  // gate: an unreadable or partly read thread list refuses.
+  let threads;
+  try {
+    threads = collectCodexThreads((cursor) => {
+      const args = [
+        "api", "graphql",
+        "-f", `query=${CODEX_THREADS_QUERY}`,
+        "-F", "owner={owner}",
+        "-F", "name={repo}",
+        "-F", `number=${pr.number}`,
+        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+      ];
+      if (cursor) args.push("-F", `after=${cursor}`);
+      return JSON.parse(gh(args))?.data?.repository?.pullRequest;
+    });
+  } catch (error) {
+    if (OUT(error)) throw error;
+    return refuse(`could not read ${number}'s review threads to check for unanswered CodeRabbit findings (${error?.message || error}); fail closed.`);
+  }
+  // The thread answer must describe the SAME head everything above checked
+  // (Luna round 8): a push between the two lookups would otherwise apply A's
+  // migration on the strength of B's threads.
+  if (String(threads.headRefOid || "").toLowerCase() !== head.toLowerCase()) {
+    return refuse(`${number}'s head moved while it was being checked (threads read at ${String(threads.headRefOid || "?").slice(0, 12)}, applying ${head.slice(0, 12)}); fail closed — re-run on the current head.`);
+  }
+  // Same counter as the merge gates: null = unreadable or partial → refuse.
+  const coderabbitOpen = coderabbitThreadCount(threads);
+  if (coderabbitOpen === null) {
+    return refuse(`${number}'s review threads could not be read completely, so unanswered CodeRabbit findings cannot be ruled out (fail closed).`);
+  }
+  if (coderabbitOpen > 0) {
+    return refuse(`${number} has ${coderabbitOpen} unresolved CodeRabbit comment thread(s). Reply on each (the fix or the reason) and resolve it before applying.`);
   }
 
   const baseSha = String(pr?.baseRefOid || "").trim();

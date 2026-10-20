@@ -72,7 +72,7 @@ const SESSION_ONBOARDING =
   "without waiting for approval or repeated pauses (Mason, 2026-10-03). Every hard-gated live action listed in AGENTS.md—including each destructive migration, " +
   "Edge Function deployment, and data deletion—requires Mason's current approval immediately beforehand. " +
   "Under his autonomous-landing rule (2026-09-26) a NON-destructive migration and the merge need no ask once " +
-  "CodeRabbit approved the exact head, the exact-SHA Sol proof is clean and checks are green; the gates enforce it. " +
+  "the exact-SHA Sol proof is clean and checks are green; the gates enforce it. CodeRabbit is advisory. " +
   "A documentation-only change as defined in docs/reference/sol-exempt-paths.md needs no Sol proof; the merge gates check its file list. " +
   "Clearly identify the rare action or business decision only Mason can make.";
 

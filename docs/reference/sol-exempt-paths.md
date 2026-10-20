@@ -2,7 +2,9 @@
 
 **Rule (Mason, 2026-10-07):** a pull request whose every changed file is plain
 documentation, as defined below, may merge into `main` without the final Sol review.
-It still needs CodeRabbit APPROVED on the exact head and every required check green.
+It still needs every required check green and no review asking for changes. (Until
+2026-10-19 it also needed CodeRabbit APPROVED on the exact head; CodeRabbit is advisory
+now and skips `docs(` PRs, so a documentation-only PR may merge with no outside review.)
 The head must still be pinned with `--match-head-commit` and contain its base. Every
 other change still needs the fresh exact-SHA Sol review, run last (`AGENTS.md`,
 "Safety and Protected Delivery").

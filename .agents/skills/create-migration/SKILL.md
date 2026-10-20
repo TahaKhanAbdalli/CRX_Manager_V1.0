@@ -150,8 +150,9 @@ Docs updated:
 
 ⚠️  Remember: This migration is LOCAL only.
     Applying it to the live database goes through /migration-review →
-    scripts/apply-migration-file.mjs, after the PR's final CodeRabbit and
-    Sol reviews are clean (Mason's autonomous-landing rule, 2026-09-26:
+    scripts/apply-migration-file.mjs, after the PR's checks are green and
+    its final Sol review is clean (Mason's autonomous-landing rule, 2026-09-26;
+    CodeRabbit is advisory since 2026-10-19:
     non-destructive = no per-migration ask once the full proof + Sol gate
     passes; destructive, data-overwriting or access-changing = only after Mason's own `I approve` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply)). NEVER `supabase db push` and
     NEVER the dashboard SQL editor — both bypass the review gate and are blocked.

@@ -6,7 +6,7 @@
 // Claude's risky-diff Codex gate never followed. This hook closes that gap:
 //
 //   * merge into main → allowed only under Mason's autonomous-landing rule
-//     (2026-09-26): CodeRabbit APPROVED the exact head, the newest run of every
+//     (2026-09-26; CodeRabbit approval dropped 2026-10-19): the newest run of every
 //     check is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high
 //     Codex proof is bound to that head and GitHub's real base (minted only by
 //     scripts/write-codex-push-proof.mjs — hand-writing is blocked). Every diff
@@ -28,7 +28,6 @@ import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  coderabbitApprovedHead,
   headContainsBaseOnGitHub,
   createHardGateBudget,
   expandNestedCommands,
@@ -61,6 +60,9 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
+  coderabbitFindingsDenial,
+  coderabbitThreadCount,
+  coderabbitUnreadableDenial,
   collectCodexThreads,
   evaluateCodexBotReview,
 } from "./codex-bot-review-lib.mjs";
@@ -249,20 +251,18 @@ function collectMergeRequests(scanned) {
 // protection so he can hand-merge a PR whose review is stuck (CodeRabbit down,
 // rate-limited, or wedged). That bypass is granted by admin rights, not by a
 // separate credential — so every agent session, running on his token, inherits
-// it. Since 2026-09-27 the protect-main ruleset requires an approval of the
-// latest push and has no bypass actors, so that classic setting no longer lets
-// an admin skip the review; the denial stands either way. Denied here, before
+// it. Since 2026-10-19 the protect-main ruleset requires no approving review
+// (Mason), so a green candidate never needs the override; the denial stands
+// either way. Denied here, before
 // the PR is even resolved: there is no base branch and no diff for which an
 // agent asking GitHub to skip review is the right move.
 if (requests.some((request) => request?.admin)) {
   deny(
     "PR MERGE GATE: `--admin` asks GitHub to override branch protection. An agent may never use it, " +
-    "whatever the diff or the deadline. Merge the ordinary way: the `protect-main` ruleset requires one " +
-    "approving review of the latest push (stale approvals are dismissed, no bypass actors), and CodeRabbit " +
-    "is the reviewer that gives it, so a green, up-to-date candidate whose latest push CodeRabbit APPROVED " +
-    "merges without `--admin`. If a review asked for changes, resolve it first — fix what it found and " +
-    "push; CodeRabbit re-reviews every push automatically (if it skipped the latest head, post " +
-    "`@coderabbitai review` once). If the merge is still blocked, hand the PR to Mason and say why."
+    "whatever the diff or the deadline. Merge the ordinary way: a green, up-to-date candidate with its " +
+    "exact-SHA Sol proof (or a documentation-only diff) merges without `--admin`. If a review asked for " +
+    "changes, resolve it first — fix what it found and push. If the merge is still blocked, hand the PR " +
+    "to Mason and say why."
   );
 }
 
@@ -353,6 +353,7 @@ const CODEX_ADVISORY_BUDGET_MS = 12_000;
 // the one `deadlineMs` the caller computed, so N merges spend one budget.
 function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS) {
   let codexVerdict = null;
+  let coderabbitOpen = null; // null = not read completely → fail closed below
   try {
     const metaArgs = ["pr", "view"];
     if (request.selector) metaArgs.push(String(request.selector));
@@ -376,9 +377,21 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
         return JSON.parse(gh(args))?.data?.repository?.pullRequest;
       }, { deadlineMs });
       if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
+      coderabbitOpen = coderabbitThreadCount(node);
     }
   } catch {
     codexVerdict = null; // notice below; never a deny
+  }
+
+  // CodeRabbit is advisory (2026-10-19): its unanswered threads, on any commit,
+  // are the one thing about its review that still blocks. See
+  // unresolvedCodeRabbitThreads(). Unlike the Codex App notice, a failed or
+  // partial read DENIES (Luna round 3, HIGH) — the agent retries.
+  if (coderabbitOpen === null) {
+    deny(coderabbitUnreadableDenial("PR MERGE GATE", request.selector));
+  }
+  if (coderabbitOpen > 0) {
+    deny(coderabbitFindingsDenial("PR MERGE GATE", request.selector, coderabbitOpen));
   }
 
   // The one blocking case: it flagged THIS commit and nobody answered. Not
@@ -475,13 +488,18 @@ function gateRequest(request) {
 
   // ── AUTONOMOUS LANDING RULE (Mason, 2026-09-26) ────────────────────────────
   // An agent merges into main by itself only when ALL of these hold for the exact
-  // head GitHub will merge: CodeRabbit approved that head, every check's newest
+  // head GitHub will merge: every check's newest
   // run is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high Codex
   // proof is bound to that head and to GitHub's real base. Every change needs the
   // Sol proof now, not only the risky ones — that is the rule Mason confirmed,
   // accepting the extra Codex spend. The one exception is a documentation-only
   // change (Mason, 2026-10-07), checked at the end, after every other gate here.
   // Anything short of it is denied here and stays with Mason.
+  //
+  // CodeRabbit's approval is NOT required (Mason, 2026-10-19: "not force to have
+  // a review"). It is advisory now — one review per PR, no verdicts — and the
+  // agent fixes or answers its comments before merging (ship.md Step 8).
+  // A CHANGES_REQUESTED review from anyone still denies above.
 
   // `--auto` hands the landing to GitHub AFTER this gate has run, so a commit
   // pushed in the meantime would merge with no exact-head proof and no CodeRabbit
@@ -505,18 +523,7 @@ function gateRequest(request) {
   if (request.auto) {
     deny(
       "PR MERGE GATE: `--auto` is not allowed into main — auto-merge lands the PR later, after this gate " +
-      "has run, so commits pushed in the meantime would merge without an exact-head Sol proof or a " +
-      "CodeRabbit review of them. Wait for the checks, then merge immediately with `gh pr merge <n> --squash`."
-    );
-  }
-
-  if (!coderabbitApprovedHead(pr)) {
-    deny(
-      `PR MERGE GATE: CodeRabbit has not APPROVED this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews " +
-      "every non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every " +
-      "real finding (each fix on this same PR is re-reviewed), then retry. If CodeRabbit skipped or was " +
-      "rate limited on this exact head, post `@coderabbitai review` on the PR once (Mason, 2026-09-27)."
+      "has run, so commits pushed in the meantime would merge without an exact-head Sol proof. Wait for the checks, then merge immediately with `gh pr merge <n> --squash`."
     );
   }
 
@@ -579,14 +586,14 @@ function gateRequest(request) {
   // ── documentation-only exemption (Mason, 2026-10-07) ───────────────────────
   // No proof was found. A pull request whose every changed file is documentation
   // on the allow-list in sol-exempt-lib.mjs merges without one. Asked only HERE,
-  // after CodeRabbit's exact-head approval, the green pipeline, the head pin and
+  // after the review-objection check, the green pipeline, the head pin and
   // base containment have all passed. It spends the same budgeted gh, and any
   // failure inside it answers "Sol required".
   const exemption = solExemptionOnGitHub({ baseSha, headSha, repo: request.repo, gh: hardGateGh });
   if (exemption.exempt) {
     process.stderr.write(
       `SOL EXEMPTION: ${exemption.reason} (docs/reference/sol-exempt-paths.md, Mason 2026-10-07), so this ` +
-      `merge needs no Sol proof. CodeRabbit APPROVED head ${String(headSha).slice(0, 12)} and every check is green.\n`,
+      `merge needs no Sol proof. Head ${String(headSha).slice(0, 12)} has every check green.\n`,
     );
     advisoryQueue.push(request);
     return;

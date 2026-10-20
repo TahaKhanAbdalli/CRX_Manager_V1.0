@@ -125,7 +125,7 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
         nodes {
           isResolved
           isOutdated
-          comments(first:1) { nodes { author { login } originalCommit { oid } } }
+          comments(first:1) { totalCount nodes { author { login } originalCommit { oid } } }
         }
       }
     }
@@ -191,8 +191,22 @@ export function collectCodexThreads(runQuery, { deadlineMs = null, now = Date.no
     }
     if (!headRefOid) headRefOid = String(pr.headRefOid || "");
     const threads = pr?.reviewThreads;
-    if (Array.isArray(threads?.nodes)) nodes.push(...threads.nodes);
-    if (threads?.pageInfo?.hasNextPage !== true) break;
+    // A page with no thread list (a partial or malformed GraphQL answer) is NOT
+    // an empty page: mark the walk incomplete so it is never read as "nothing
+    // open" (Codex App review of PR #973, P1).
+    if (!Array.isArray(threads?.nodes)) {
+      incomplete = true;
+      break;
+    }
+    nodes.push(...threads.nodes);
+    // Only an explicit `hasNextPage: false` ends the walk as COMPLETE; a missing
+    // or malformed pageInfo cannot prove there is nothing more (Luna round 5).
+    const hasNextPage = threads?.pageInfo?.hasNextPage;
+    if (hasNextPage === false) break;
+    if (hasNextPage !== true) {
+      incomplete = true;
+      break;
+    }
     const next = String(threads?.pageInfo?.endCursor || "");
     // No cursor but "hasNextPage" would loop forever on the same page — and
     // there IS more, which this walk cannot reach.
@@ -216,6 +230,8 @@ function normalizeThread(node) {
     // The empty string means "unknown" and must never compare equal to a head.
     oid: String(first?.originalCommit?.oid ?? "").trim().toLowerCase(),
     resolved: node?.isResolved === true,
+    // Comments after the first one: a reply. Unknown counts as none.
+    replies: Math.max(0, (Number.isInteger(node?.comments?.totalCount) ? node.comments.totalCount : 1) - 1),
   };
 }
 
@@ -247,7 +263,11 @@ export function oidMatchesHead(oid, head) {
 // The blocking condition, in one place: an unresolved Codex thread raised
 // against the exact commit being merged.
 export function isStandingAtHead(thread, head) {
-  return thread?.resolved !== true && oidMatchesHead(thread?.oid, head);
+  // Handled = resolved AND answered (at least one reply). Since #973 a Codex
+  // session may resolve threads, so a silent resolve must not clear a finding
+  // (Luna round 7) — the same rule as CodeRabbit's threads.
+  const handled = thread?.resolved === true && Number(thread?.replies) >= 1;
+  return !handled && oidMatchesHead(thread?.oid, head);
 }
 
 // Classify the Codex App's position on the head that is about to merge.
@@ -289,6 +309,75 @@ export function evaluateCodexBotReview(pullRequest) {
   return { status: anyAtHead ? "clean-at-head" : "stale", ...base };
 }
 
+// ── CodeRabbit's unanswered findings (Mason, 2026-10-19) ─────────────────────
+// CodeRabbit became advisory on 2026-10-19: it reviews a PR once, when it is
+// marked ready, and never approves or requests changes, so nothing it says can
+// hold a merge on its own. Its comment threads are the one record of what it
+// found. Every UNRESOLVED CodeRabbit thread on the PR blocks — on ANY commit,
+// not only the head, because CodeRabbit never re-reviews: a fix pushed after its
+// review moves the head past every thread it opened, and a head-only rule would
+// let all of them through unanswered. The exit is the same as for the Codex App:
+// fix it and resolve the thread, or reply with a one-line reason and resolve it.
+// Unlike the Codex App check, this FAILS CLOSED (Luna round 3, HIGH): a thread
+// read that fails, or stops before the last page, cannot rule out an unanswered
+// finding, so the gates refuse and the agent retries. Use coderabbitThreadCount().
+export const CODERABBIT_LOGINS = Object.freeze(["coderabbitai", "coderabbitai[bot]"]);
+
+export function isCodeRabbitLogin(login) {
+  return CODERABBIT_LOGINS.includes(String(login || "").trim().toLowerCase());
+}
+
+// How many review threads CodeRabbit opened on this PR that are not HANDLED.
+// Handled = resolved AND answered: at least one reply after CodeRabbit's comment
+// (the fix or the reason it is wrong). Resolving without a word does not count
+// (Luna rounds 4–6): the gate cannot judge a reply, but it can require one.
+export function unresolvedCodeRabbitThreads(pullRequest) {
+  const nodes = pullRequest?.reviewThreads?.nodes;
+  if (!Array.isArray(nodes)) return 0;
+  return nodes.map(normalizeThread)
+    .filter((thread) => isCodeRabbitLogin(thread.author) && !(thread.resolved && thread.replies >= 1)).length;
+}
+
+// The count the gates act on, or null when the read cannot be trusted as
+// complete. A partial read that already SHOWS an open thread still returns that
+// count — partial evidence of a finding is evidence.
+export function coderabbitThreadCount(pullRequest) {
+  if (!pullRequest || !String(pullRequest.headRefOid || "")) return null;
+  // No thread list at all is a malformed answer, not an empty one (Luna round 4).
+  if (!Array.isArray(pullRequest?.reviewThreads?.nodes)) return null;
+  // A thread whose opening comment's author cannot be read could be CodeRabbit's
+  // — unreadable, not clean (Luna round 7).
+  if (pullRequest.reviewThreads.nodes.some((node) => !String(node?.comments?.nodes?.[0]?.author?.login ?? "").trim())) {
+    return null;
+  }
+  const open = unresolvedCodeRabbitThreads(pullRequest);
+  if (open > 0) return open;
+  return pullRequest.incomplete === true ? null : 0;
+}
+
+export function coderabbitUnreadableDenial(prefix, selector) {
+  const which = selector ? String(selector) : "<number>";
+  return (
+    `${prefix}: could not read this pull request's review threads completely, so unanswered CodeRabbit ` +
+    "findings cannot be ruled out (fail closed, Luna round 3). Retry the merge in a minute; if it keeps " +
+    `failing, check them by hand (gh pr view ${which} --comments) and tell Mason the thread lookup is failing.`
+  );
+}
+
+export function coderabbitFindingsDenial(prefix, selector, count) {
+  const which = selector ? String(selector) : "<number>";
+  const n = Number(count) > 0 ? Number(count) : 1;
+  const noun = n === 1 ? "an unresolved comment thread" : `${n} unresolved comment threads`;
+  return (
+    `${prefix}: CodeRabbit has ${noun} on this pull request. Its approval is not required (Mason, ` +
+    "2026-10-19), but its findings are: every one must be fixed or answered before the merge.\n\n" +
+    `  1. Read them:  gh pr view ${which} --comments      (author: coderabbitai)\n` +
+    "  2. Fix each real issue and push (CodeRabbit will not re-review; the checks and Sol cover the fix).\n" +
+    "  3. REPLY on each thread (what you fixed, or a one-line reason it is wrong), then resolve it —\n" +
+    "     a thread resolved with no reply still counts as unanswered."
+  );
+}
+
 // The deny text for "findings-at-head". Kept here so the Claude and Codex
 // guards cannot drift into two different explanations of the same refusal.
 export function codexBotFindingsDenial(prefix, selector, count) {
@@ -302,7 +391,7 @@ export function codexBotFindingsDenial(prefix, selector, count) {
     `  1. Read them:  gh pr view ${which} --comments      (author: chatgpt-codex-connector)\n` +
     "  2. Fix each real issue and push.\n" +
     "  3. For a genuine nitpick, reply with a one-line reason and RESOLVE the thread — resolving is\n" +
-    "     the intended exit here, not a workaround.\n\n" +
+    "     the intended exit here, not a workaround. A thread resolved with no reply still blocks.\n\n" +
     "Only unresolved comments on the exact head block a merge. Threads already resolved, and findings " +
     "raised against earlier commits, do not."
   );

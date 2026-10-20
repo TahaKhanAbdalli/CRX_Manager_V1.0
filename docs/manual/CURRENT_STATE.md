@@ -272,10 +272,10 @@ pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff re
 
 **Field-season delivery (applied live 2026-10-02).** All four applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Post-apply read-only checks are in `docs/reference/migration-history.md` (top capture). The rest of this paragraph is kept as history. The Oct-1 filed-season guard ships as four migrations,
 `20260914101000`..`20260914101300` (rows 931–934 in `docs/reference/migration-history.md`), all
-LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base). They apply only after
+LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base; historical — since 2026-10-19 that gate is legacy, so update the PR's branch instead of replacing it). They apply only after
 `20260914100900` (that precondition is now met: it applied live 2026-09-27 evening, ledger
 `20260928025520`), in ascending stamp order, with `101000` and `101100` in one window; see the
-APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session until Mason approves that exact file with Windows Hello (owner-approval route, PR #845). **Order changed by Mason on 2026-09-30:** the delivery PR merges FIRST (its app changes are backward-compatible: a client-side filed-season date guard and plain-English error mapping, using only existing columns). The four migrations then apply from the owner-approval PR's checkout once main is merged into it. The landing gate needs the migration committed at the HEAD of an open, CodeRabbit-approved, Sol-cleared PR, not the PR that introduced it; `20260914100900` was applied the same way. After this PR merges, no PR adding a new migration may merge or apply before `20260914101300` is live.
+APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session until Mason approves that exact file with Windows Hello (owner-approval route, PR #845). **Order changed by Mason on 2026-09-30:** the delivery PR merges FIRST (its app changes are backward-compatible: a client-side filed-season date guard and plain-English error mapping, using only existing columns). The four migrations then apply from the owner-approval PR's checkout once main is merged into it. The landing gate needs the migration committed at the HEAD of an open, Sol-cleared PR with green checks (CodeRabbit approval was also required until 2026-10-19), not the PR that introduced it; `20260914100900` was applied the same way. After this PR merges, no PR adding a new migration may merge or apply before `20260914101300` is live.
 
 ## Recent production deployments
 
@@ -479,8 +479,9 @@ PR #875) and was verified on the live site 2026-10-04.
   automatically — there is no separate deploy step. Since the `protect-main`
   ruleset landed (2026-07-14) nobody can push to `main` directly. Landing
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
-  branch, PR, Luna review rounds, required checks, CodeRabbit APPROVED on the
-  final head, a fresh exact-SHA Sol review run last (every merge, since
+  branch, PR (opened as a draft, marked ready once frozen so CodeRabbit gives
+  its one advisory review), Luna review rounds, required checks (CodeRabbit
+  approval no longer required since 2026-10-19), a fresh exact-SHA Sol review run last (every merge, since
   2026-09-26, except a documentation-only change as defined in
   `docs/reference/sol-exempt-paths.md`, since 2026-10-07), then an exact-head merge. The merge is the deploy; a
   non-destructive migration (its grants routine, none widening access) is applied through the proof

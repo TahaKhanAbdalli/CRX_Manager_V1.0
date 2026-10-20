@@ -150,9 +150,9 @@ The only sanctioned way to apply a migration to the live database:
 2. Every migration also needs a fresh independent `gpt-6-sol` high-effort Codex review of
    this exact migration content — the content-bound Sol proof in `AGENTS.md`; a clean
    Luna round does not count (the `/migration-review` flow mints it; the apply-guard checks it).
-3. Authorization (`AGENTS.md`, Mason's autonomous-landing rule, 2026-09-26): when CodeRabbit
-   has APPROVED the frozen final head, a fresh exact-SHA Sol review of that head is clean, and
-   every required check is green, the agent applies the change's NON-destructive migration
+3. Authorization (`AGENTS.md`, Mason's autonomous-landing rule, 2026-09-26; CodeRabbit
+   approval dropped 2026-10-19): when a fresh exact-SHA Sol review of the frozen final head is
+   clean and every required check is green, the agent applies the change's NON-destructive migration
    (its GRANT/REVOKE lines routine, none widening access) through the migration-apply-guard proof gate (both reviewer proofs and a fresh content-bound
    Sol proof, each under 30 minutes), in any session, no ask. Three kinds are Mason's: a
    migration that DELETES data (rows or data-bearing tables/columns), one that OVERWRITES

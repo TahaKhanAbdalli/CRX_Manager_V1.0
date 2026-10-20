@@ -4394,6 +4394,39 @@ export function hardGateBudgetDenial(prefix, action = "merge") {
 // reason ghApiMergeRequest above already does: a global flag may sit between the
 // binary and the subcommand (`gh -R o/r api -X POST …`), and the old
 // position-anchored `gh\s+api` test did not see that form either.
+// The ONE GraphQL write the Codex guard lets through (Codex App P1 on PR #973):
+// resolving a single review thread. Since 2026-10-19 the merge gates deny while
+// any CodeRabbit thread is unresolved, and resolving is the sanctioned exit, so
+// a Codex session must be able to do it. Deliberately narrow: `gh api graphql`
+// followed only by separate `-f`/`-F` fields, exactly one `query=` whose whole
+// text is a lone resolveReviewThread mutation on a LITERAL thread id, selecting
+// only `id`/`isResolved`. (A `$threadId` variable form is not accepted: the
+// guard's computed-text rule refuses any `$` in the segment anyway.) Anything
+// else stays an unrecognized mutating call.
+const RESOLVE_THREAD_QUERY_RE = new RegExp(
+  "^\\s*mutation\\s*\\{\\s*" +
+  "resolveReviewThread\\s*\\(\\s*input\\s*:\\s*\\{\\s*threadId\\s*:\\s*\"[A-Za-z0-9_=-]+\"\\s*\\}\\s*\\)\\s*" +
+  "\\{\\s*thread\\s*\\{\\s*(?:id|isResolved)(?:\\s+(?:id|isResolved))*\\s*\\}\\s*\\}\\s*\\}\\s*$",
+);
+export function ghApiIsResolveReviewThreadOnly(command) {
+  const raw = String(command || "");
+  // No run-time text anywhere in the raw segment: this predicate exempts the
+  // segment from the computed-text rule, so it must prove there is none
+  // (automated security review of #973: an unanchored binary path let
+  // `$(...)/gh` through).
+  if (/[$`]/.test(raw)) return false;
+  const words = splitShellArgv(raw);
+  if (words.length < 5) return false;
+  // The bare program name only — a path could itself be computed or hostile.
+  if (!/^gh(?:\.exe)?$/i.test(words[0])) return false;
+  if (words[1] !== "api" || words[2] !== "graphql") return false;
+  // Exactly `gh api graphql -f query=<the mutation>`, nothing more.
+  if (words.length !== 5 || words[3] !== "-f") return false;
+  const value = String(words[4]);
+  if (!value.startsWith("query=")) return false;
+  return RESOLVE_THREAD_QUERY_RE.test(value.slice("query=".length));
+}
+
 export function ghApiMutates(command) {
   const text = String(command || "");
   if (!ghBinaryMentioned(text)) return false;
@@ -4557,38 +4590,6 @@ export function pullRequestApproved(pullRequest) {
 // CI, not a review, is what gates a landing now.
 export function pullRequestReviewBlocked(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
-}
-
-// Autonomous-landing rule (Mason, 2026-09-26): an agent merges only when
-// CodeRabbit has reviewed the FINAL head with no unresolved objection. Read from
-// `gh pr view --json reviews` — `author.login` is the bare `coderabbitai` there
-// (the `[bot]` suffix is REST-only), and `commit.oid` is the commit the review
-// was submitted against.
-//
-// The latest CodeRabbit VERDICT decides: APPROVED, CHANGES_REQUESTED or
-// DISMISSED. COMMENTED reviews are skipped because a thread reply mints an empty
-// COMMENTED review at the current head, and that is a reply artifact, not a
-// verdict. With `request_changes_workflow: true` CodeRabbit approves only once its
-// comments are resolved and the latest commit was reviewed, so APPROVED at the
-// exact head is the "clean final review" signal; an approval at an older commit,
-// or one GitHub dismissed on a later push, does not count.
-//
-// The name cannot be claimed by a person: `coderabbitai` is CodeRabbit's own
-// GitHub organization login, so no user account can hold it.
-export function coderabbitApprovedHead(pullRequest) {
-  const headSha = String(pullRequest?.headRefOid || "");
-  const reviews = pullRequest?.reviews;
-  if (!/^[0-9a-f]{40}$/i.test(headSha) || !Array.isArray(reviews)) return false;
-  const verdicts = reviews
-    .filter((review) => String(review?.author?.login || "").toLowerCase().replace(/\[bot\]$/, "") === "coderabbitai")
-    .filter((review) => ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(String(review?.state || "").toUpperCase()))
-    .map((review) => ({ review, at: Date.parse(String(review?.submittedAt || "")) }))
-    .filter((entry) => Number.isFinite(entry.at))
-    .sort((left, right) => left.at - right.at);
-  const latest = verdicts[verdicts.length - 1]?.review;
-  return Boolean(latest)
-    && String(latest.state).toUpperCase() === "APPROVED"
-    && String(latest?.commit?.oid || "").toLowerCase() === headSha.toLowerCase();
 }
 
 // The API path for `gh api` calls about a merge request's repository. `gh pr

@@ -26,7 +26,7 @@ independent, and it is the one that guards money.
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
 | Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head; the one exception is a documentation-only change as defined in `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07) | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and the head is frozen with checks green (CodeRabbit is advisory since 2026-10-19); the one exception is a documentation-only change as defined in `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07) | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
@@ -400,14 +400,15 @@ one-line reason. This is still the advisory path — it mints no proof.
 
 **Only after Step 3A is clean, for EVERY change headed for `main`** (Mason's autonomous-landing
 rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
-or not). Run it LAST: after CodeRabbit APPROVED the frozen head, immediately before the migration
-apply (if any) and the merge. The proof binds to that HEAD and to GitHub's real base and expires
-after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voids it.
+or not). Run it LAST: after the head is frozen and checks are green (and after any CodeRabbit
+fix push, if its one advisory review arrived), immediately before the migration apply (if any) and
+the merge. The proof binds to that HEAD and to GitHub's real base and expires after 30 minutes, so a
+later commit or a moved base voids it.
 
 **The one exception: skip Step 3B for a documentation-only change** as defined in
 `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). Both merge gates read the PR's real file
-list and accept it without a Sol proof once CodeRabbit APPROVED the exact head and every check is
-green. Run Step 3B only if a gate refuses saying "documentation-only exemption does not
+list and accept it without a Sol proof once every check is green on the exact head (merge pinned
+with `--match-head-commit`, head containing its base). Run Step 3B only if a gate refuses saying "documentation-only exemption does not
 apply"; any other refusal names its own failing condition, which Sol cannot fix, so fix that.
 
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
@@ -537,28 +538,26 @@ Notes:
 ## Step 5: Hand back to the push gate
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
-clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → CodeRabbit APPROVED → Step 3B Sol proof LAST (unless the
+clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a draft PR → finish checks →
+freeze the candidate commit → mark ready (one advisory CodeRabbit review; fix or refute what arrives) → Step 3B Sol proof LAST (unless the
 documentation-only exemption in Step 3B applies) →
 apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
 Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (Mason's autonomous-landing rule, 2026-09-26; automatic review since 2026-09-26):**
-CodeRabbit reviews every non-draft PR automatically, on open and on every push, and GitHub's
-`protect-main` ruleset requires one approving review of the latest push. Bring the branch current
-and green and freeze the release-candidate commit. **Only if CodeRabbit did not review that exact
-head** (rate limited or skipped), post `@coderabbitai review` on the PR once (Mason, 2026-09-27);
-with automatic review on, the `ready-for-coderabbit` label no longer triggers a review
-(`docs/reference/coderabbit-native-review.md` describes that legacy route). A skipped status or
-empty reply artifact does not count as a review. Read the review and fix any real issue before
-merging; nitpicks may be dismissed with a one-line reason. **A fix goes on the SAME PR:** CodeRabbit
-re-reviews the push automatically — no replacement PR. Never use `@coderabbitai resume`, post
-`@coderabbitai review` only for a skipped head, and reserve `@coderabbitai full review` for a
-deliberately justified complete reread. Both agent merge
-gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
-run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
-that head and GitHub's real base (not needed for a documentation-only change, Step 3B above).
-`CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+**CodeRabbit (advisory since 2026-10-19, Mason: "cut coderabbit volume"):** CodeRabbit reviews
+each PR ONCE, when it is opened non-draft or marked ready, never on later pushes; it only comments
+(never APPROVED or CHANGES_REQUESTED), and it skips PRs whose title contains `docs(`. GitHub's
+`protect-main` ruleset no longer requires an approving review (required checks stay). Open the PR
+as a draft, bring the branch current and green, freeze the release-candidate commit, then mark it
+ready. If CodeRabbit's review arrives before the merge, fix or refute with evidence every comment,
+in one push on the SAME PR — no replacement PR. Do not wait for it if it has not reviewed by the
+time checks are green and Sol is clean, never post `@coderabbitai review` to buy a re-review, and
+never use `@coderabbitai resume`. A failed CodeRabbit pre-merge "error" check is a finding to fix
+or refute, not a blocker. (`docs/reference/coderabbit-native-review.md` has the history.) Both agent
+merge gates enforce the rule: the newest run of every reported check green with `mergeStateStatus`
+CLEAN, the head containing GitHub's real base, and the Step 3B Sol proof bound to that head and
+base (not needed for a documentation-only change, Step 3B above). `CHANGES_REQUESTED` (from
+anyone), `--auto` and `--admin` are refused.
 
 **Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof
 for every merge into `main` except a documentation-only change (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
@@ -576,7 +575,7 @@ ONLY on a terminal CLEAN token with a stable clean worktree does it write the HE
 human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
 wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify.
 Merging that PR deploys production; under Mason's autonomous-landing rule in `AGENTS.md` the agent
-merges it itself once CodeRabbit approved the head and this proof is fresh.
+merges it itself once checks are green and this proof is fresh.
 
 ## General task handoff (not just review)
 

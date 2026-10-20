@@ -500,8 +500,10 @@ function readStrictYamlSubset(text) {
   return values;
 }
 
-// Mason, 2026-09-26 (DECISION_LOG, fewer prompts / more CodeRabbit): CodeRabbit
-// reviews every non-draft PR on open and on every push. The EFFECTIVE settings
+// Mason, 2026-10-19 (DECISION_LOG, "cut coderabbit volume"): CodeRabbit reviews
+// a non-draft PR ONCE, on open or when marked ready, not on later pushes, skips
+// "docs(" titles, and never approves or requests changes. (2026-09-26 to
+// 2026-10-19 it reviewed every push.) The EFFECTIVE settings
 // are pinned, not the first matching text (CodeRabbit and Luna, PR #841): the
 // auto_review block must hold exactly these keys and values, so switching it
 // off, pausing it, narrowing it (a `labels:` list, `ignore_usernames`, ...) or
@@ -513,17 +515,20 @@ function assertAutomaticReviewPinned(config) {
   );
   assert.deepEqual(autoReview, {
     'reviews.auto_review.enabled': 'true',
-    'reviews.auto_review.auto_incremental_review': 'true',
+    'reviews.auto_review.auto_incremental_review': 'false',
     'reviews.auto_review.auto_pause_after_reviewed_commits': '0',
     'reviews.auto_review.drafts': 'false',
     'reviews.auto_review.description_keyword': '""',
+    'reviews.auto_review.ignore_title_keywords': null,
+    'reviews.auto_review.ignore_title_keywords[0]': '"docs("',
   });
   assert.equal(settings.get('reviews.high_level_summary_in_walkthrough'), 'true');
+  assert.equal(settings.get('reviews.request_changes_workflow'), 'false');
 }
 
 const CODERABBIT_CONFIG = path.join(__dirname, '..', '..', '.coderabbit.yaml');
 
-test('CodeRabbit reviews every non-draft PR automatically, on open and on every push', () => {
+test('CodeRabbit reviews each non-draft PR once, automatically, and stays advisory', () => {
   assertAutomaticReviewPinned(fs.readFileSync(CODERABBIT_CONFIG, 'utf8'));
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
