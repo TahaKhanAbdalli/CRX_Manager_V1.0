@@ -24,7 +24,7 @@ import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
-import { fetchAllRows } from '../lib/reconciliation';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { COMMISSION_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
@@ -159,6 +159,20 @@ export default function Reports() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
+  // The reports (`category:tab`) whose last load failed. Each shows an error and cannot be
+  // exported, instead of an empty or partial table that looks complete. One entry per report,
+  // so a late failure of one report can never clear another's.
+  const [failedReports, setFailedReports] = useState<ReadonlySet<string>>(() => new Set());
+  const markReportFailed = useCallback((key: string) => setFailedReports((s) => (s.has(key) ? s : new Set(s).add(key))), []);
+  const reportLoaded = useCallback((key: string) => setFailedReports((s) => {
+    if (!s.has(key)) return s;
+    const next = new Set(s);
+    next.delete(key);
+    return next;
+  }), []);
+  // Only the newest tab or date load may set report data or clear `loading`; an older
+  // multi-page read finishing late is ignored.
+  const reportLoadSeq = useRef(0);
 
   // ─── PROFITABILITY data (original) ──────────────────────────
   const [customerData, setCustomerData] = useState<CustomerProfit[]>([]);
@@ -272,26 +286,39 @@ export default function Reports() {
   const [yeBatchMode, setYeBatchMode] = useState(false);
 
   // ─── PROFITABILITY sub-fetchers ────────────────────────────
+  // Each reads every matching row page by page (one request stops at the server's row
+  // cap), and a failed read clears its table and marks the report failed.
   const fetchCustomerProfitability = useCallback(async () => {
-    let query = supabase
-      .from('orders')
-      .select('id, total_price, customer:customers(farm_name)')
-      .is('deleted_at', null)
-      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load customer profitability.'); return; }
+    const seq = reportLoadSeq.current;
+    const fail = () => {
+      setCustomerData([]);
+      markReportFailed('profitability:customer');
+      toast('error', 'Failed to load customer profitability.');
+    };
     // Cost is admin-only (Mason, 2026-10-15): profit comes from get_admin_cost_fields, not the table.
     type CustomerProfitOrder = { id: string; total_price: number; total_profit?: number | null; customer: { farm_name: string } | { farm_name: string }[] | null };
+    const { data, error } = await fetchAllRows<CustomerProfitOrder>((from, to) => {
+      let query = supabase
+        .from('orders')
+        .select('id, total_price, customer:customers(farm_name)', { count: 'exact' })
+        .is('deleted_at', null)
+        .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
+      if (startDate) query = query.gte('order_date', startDate);
+      if (endDate) query = query.lte('order_date', endDate);
+      return query.order('id').range(from, to);
+    });
+    if (seq !== reportLoadSeq.current) return;
+    if (error) { fail(); return; }
     let orders: CustomerProfitOrder[];
     try {
-      orders = await withAdminCosts('orders', (data || []) as CustomerProfitOrder[], isAdmin);
+      orders = await withAdminCosts('orders', data || [], isAdmin);
     } catch (err) {
+      if (seq !== reportLoadSeq.current) return;
       Sentry.captureException(err, { extra: { context: 'customer_profitability_costs' } });
-      toast('error', 'Failed to load customer profitability.');
+      fail();
       return;
     }
+    if (seq !== reportLoadSeq.current) return;
 
     const grouped: Record<string, CustomerProfit> = {};
     orders.forEach((o) => {
@@ -308,25 +335,37 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setCustomerData(result);
-  }, [startDate, endDate, toast, isAdmin]);
+    reportLoaded('profitability:customer');
+  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
 
   const fetchProductProfitability = useCallback(async () => {
-    let query = supabase
-      .from('order_items')
-      .select('id, product_name, total_price, total_units_needed, order:orders!inner(order_date)');
-    if (startDate) query = query.gte('order.order_date', startDate);
-    if (endDate) query = query.lte('order.order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load product profitability.'); return; }
+    const seq = reportLoadSeq.current;
+    const fail = () => {
+      setProductData([]);
+      markReportFailed('profitability:product');
+      toast('error', 'Failed to load product profitability.');
+    };
     type ProductProfitItem = { id: string; product_name: string; total_price: number; profit?: number | null; total_units_needed: number };
+    const { data, error } = await fetchAllRows<ProductProfitItem>((from, to) => {
+      let query = supabase
+        .from('order_items')
+        .select('id, product_name, total_price, total_units_needed, order:orders!inner(order_date)', { count: 'exact' });
+      if (startDate) query = query.gte('order.order_date', startDate);
+      if (endDate) query = query.lte('order.order_date', endDate);
+      return query.order('id').range(from, to);
+    });
+    if (seq !== reportLoadSeq.current) return;
+    if (error) { fail(); return; }
     let items: ProductProfitItem[];
     try {
-      items = await withAdminCosts('order_items', (data || []) as ProductProfitItem[], isAdmin);
+      items = await withAdminCosts('order_items', data || [], isAdmin);
     } catch (err) {
+      if (seq !== reportLoadSeq.current) return;
       Sentry.captureException(err, { extra: { context: 'product_profitability_costs' } });
-      toast('error', 'Failed to load product profitability.');
+      fail();
       return;
     }
+    if (seq !== reportLoadSeq.current) return;
 
     const grouped: Record<string, ProductProfit> = {};
     items.forEach((i) => {
@@ -342,7 +381,8 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setProductData(result);
-  }, [startDate, endDate, toast, isAdmin]);
+    reportLoaded('profitability:product');
+  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
 
   // Returns whether the commission list on screen is now current. The quick-pay
   // recovery messages send the admin to a list to work out what actually
@@ -355,47 +395,75 @@ export default function Reports() {
   const fetchCommissions = useCallback(async (): Promise<boolean> => {
     const loadId = ++commissionsLoadId.current;
     const forAdmin = isAdmin;
+    // A failed refresh clears the list and its selection: a stale or partial list must not
+    // be batched for payment or shown with an unpaid total.
+    const fail = () => {
+      setCommissionData([]);
+      setCommissionDataForAdmin(null);
+      setSelectedCommissions(new Set());
+      markReportFailed('profitability:commission');
+      toast('error', 'Failed to load commissions.');
+    };
     try {
       // Cost is admin-only (Mason, 2026-10-15): order_profit comes from get_admin_cost_fields.
-      let query = supabase.from('commissions').select(isAdmin ? COMMISSION_COLUMNS : REP_COMMISSION_COLUMNS).order('order_date', { ascending: false });
-      if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
-      if (startDate) query = query.gte('order_date', startDate);
-      if (endDate) query = query.lte('order_date', endDate);
-      const { data, error } = await query;
+      const { data, error } = await fetchAllRows<CommissionRow>((from, to) => {
+        let query = supabase
+          .from('commissions')
+          .select(isAdmin ? COMMISSION_COLUMNS : REP_COMMISSION_COLUMNS, { count: 'exact' });
+        if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
+        if (startDate) query = query.gte('order_date', startDate);
+        if (endDate) query = query.lte('order_date', endDate);
+        return query
+          .order('order_date', { ascending: false })
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<{ data: CommissionRow[] | null; error: { message: string } | null; count?: number | null }>;
+      });
       // A newer load (for example after a role change) owns the result; drop this one.
       if (loadId !== commissionsLoadId.current) return true;
-      if (error) { toast('error', 'Failed to load commissions.'); return false; }
-      const rows = await withAdminCosts('commissions', (data || []) as unknown as CommissionRow[], forAdmin);
+      if (error) { fail(); return false; }
+      const rows = await withAdminCosts('commissions', data || [], forAdmin);
       if (loadId !== commissionsLoadId.current) return true;
       setCommissionData(rows);
       setCommissionDataForAdmin(forAdmin);
       setSelectedCommissions(new Set());
+      reportLoaded('profitability:commission');
       return true;
     } catch (err) {
+      if (loadId !== commissionsLoadId.current) return true;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_commissions' } });
-      toast('error', 'Failed to load commissions.');
+      fail();
       return false;
     }
-  }, [isAdmin, profile, startDate, endDate, toast]);
+  }, [isAdmin, profile, startDate, endDate, toast, reportLoaded, markReportFailed]);
 
   const fetchRevenue = useCallback(async () => {
-    let query = supabase.from('orders').select('id, order_date, total_price')
-      .is('deleted_at', null)
-      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
-      .order('order_date');
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load revenue data.'); return; }
+    const seq = reportLoadSeq.current;
+    const fail = () => {
+      setRevenueData([]);
+      markReportFailed('profitability:revenue');
+      toast('error', 'Failed to load revenue data.');
+    };
     type RevenueOrder = { id: string; order_date: string; total_price: number; total_profit?: number | null };
+    const { data, error } = await fetchAllRows<RevenueOrder>((from, to) => {
+      let query = supabase.from('orders').select('id, order_date, total_price', { count: 'exact' })
+        .is('deleted_at', null)
+        .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
+      if (startDate) query = query.gte('order_date', startDate);
+      if (endDate) query = query.lte('order_date', endDate);
+      return query.order('order_date').order('id').range(from, to);
+    });
+    if (seq !== reportLoadSeq.current) return;
+    if (error) { fail(); return; }
     let orders: RevenueOrder[];
     try {
-      orders = await withAdminCosts('orders', (data || []) as RevenueOrder[], isAdmin);
+      orders = await withAdminCosts('orders', data || [], isAdmin);
     } catch (err) {
+      if (seq !== reportLoadSeq.current) return;
       Sentry.captureException(err, { extra: { context: 'revenue_costs' } });
-      toast('error', 'Failed to load revenue data.');
+      fail();
       return;
     }
+    if (seq !== reportLoadSeq.current) return;
 
     const grouped: Record<string, RevenueSummary> = {};
     orders.forEach((o) => {
@@ -406,43 +474,90 @@ export default function Reports() {
       grouped[month].orders += 1;
     });
     setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
-  }, [startDate, endDate, toast, isAdmin]);
+    reportLoaded('profitability:revenue');
+  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
 
   // ─── PROFITABILITY parent fetcher ────────────────────────────
   const fetchProfitability = useCallback(async () => {
+    const seq = ++reportLoadSeq.current;
     setLoading(true);
     if (profitTab === 'customer' && isAdmin) await fetchCustomerProfitability();
     if (profitTab === 'product' && isAdmin) await fetchProductProfitability();
     if (profitTab === 'commission') await fetchCommissions();
     if (profitTab === 'revenue' && isAdmin) await fetchRevenue();
-    setLoading(false);
+    if (seq === reportLoadSeq.current) setLoading(false);
   }, [profitTab, isAdmin, fetchCustomerProfitability, fetchProductProfitability, fetchCommissions, fetchRevenue]);
 
   // ─── FINANCIAL sub-fetchers ─────────────────────────────────
+  // The report functions return one row per group, customer, product or transaction, and the
+  // server cuts a function's rows off at its row cap too, so each is read page by page. Pages
+  // are separate calls, so each read sorts on every column after the report's own order: the
+  // rows then come back in one fixed sequence on every call, and no row can repeat or go
+  // missing at a page seam (rows equal in every column are interchangeable).
   const fetchPnL = useCallback(async () => {
-    if (!startDate || !endDate) { setPnlData([]); return; }
+    if (!startDate || !endDate) { setPnlData([]); reportLoaded('financial:pnl'); return; }
+    const seq = reportLoadSeq.current;
+    // P&L is a fixed handful of line items, far below the row cap, whose function order is the
+    // order the cards show; one call keeps that order.
     const { data, error } = await supabase.rpc('get_bottom_line_pnl', { p_start_date: startDate, p_end_date: endDate });
-    if (error) { toast('error', `P&L failed: ${error.message}`); return; }
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      setPnlData([]);
+      markReportFailed('financial:pnl');
+      toast('error', `P&L failed: ${error.message}`);
+      return;
+    }
     setPnlData(assertRpcResult<PnLRow[]>(data, 'get_bottom_line_pnl'));
-  }, [startDate, endDate, toast]);
+    reportLoaded('financial:pnl');
+  }, [startDate, endDate, toast, reportLoaded, markReportFailed]);
 
   const fetchGrossSales = useCallback(async () => {
-    if (!startDate || !endDate) { setGrossSalesData([]); return; }
-    const { data, error } = await supabase.rpc('get_gross_sales_report', {
-      p_start_date: startDate,
-      p_end_date: endDate,
-      p_group_by: grossSalesGroupBy,
-    });
-    if (error) { toast('error', `Gross sales failed: ${error.message}`); return; }
+    if (!startDate || !endDate) { setGrossSalesData([]); reportLoaded('financial:gross_sales'); return; }
+    const seq = reportLoadSeq.current;
+    const { data, error } = await fetchAllRows<GrossSalesRow>((from, to) => supabase
+      .rpc('get_gross_sales_report', {
+        p_start_date: startDate,
+        p_end_date: endDate,
+        p_group_by: grossSalesGroupBy,
+      }, { count: 'exact' })
+      .order('total_revenue', { ascending: false })
+      .order('group_name')
+      .order('total_cost')
+      .order('gross_profit')
+      .order('margin_pct')
+      .order('units_sold')
+      .order('order_count')
+      .range(from, to));
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      setGrossSalesData([]);
+      markReportFailed('financial:gross_sales');
+      toast('error', `Gross sales failed: ${error.message}`);
+      return;
+    }
     setGrossSalesData(assertRpcResult<GrossSalesRow[]>(data, 'get_gross_sales_report'));
-  }, [startDate, endDate, grossSalesGroupBy, toast]);
+    reportLoaded('financial:gross_sales');
+  }, [startDate, endDate, grossSalesGroupBy, toast, reportLoaded, markReportFailed]);
 
   const fetchCustomerBalance = useCallback(async () => {
     const asOf = endDate || localToday();
-    const { data, error } = await supabase.rpc('get_customer_balance_listing', { p_as_of_date: asOf });
-    if (error) { toast('error', `Customer balance failed: ${error.message}`); return; }
+    const seq = reportLoadSeq.current;
+    const { data, error } = await fetchAllRows<CustomerBalanceRow>((from, to) => supabase
+      .rpc('get_customer_balance_listing', { p_as_of_date: asOf }, { count: 'exact' })
+      // The function's own order (largest balance first), then the unique customer id.
+      .order('outstanding_balance', { ascending: false })
+      .order('customer_id')
+      .range(from, to));
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      setCustBalanceData([]);
+      markReportFailed('financial:customer_balance');
+      toast('error', `Customer balance failed: ${error.message}`);
+      return;
+    }
     setCustBalanceData(assertRpcResult<CustomerBalanceRow[]>(data, 'get_customer_balance_listing'));
-  }, [endDate, toast]);
+    reportLoaded('financial:customer_balance');
+  }, [endDate, toast, reportLoaded, markReportFailed]);
 
   const fetchCommissionBalance = useCallback(async () => {
     if (!isAdmin) {
@@ -496,31 +611,64 @@ export default function Reports() {
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
   const fetchFinancial = useCallback(async () => {
+    const seq = ++reportLoadSeq.current;
     setLoading(true);
     if (financialTab === 'pnl' && isAdmin) await fetchPnL();
     if (financialTab === 'gross_sales' && isAdmin) await fetchGrossSales();
     if (financialTab === 'customer_balance') await fetchCustomerBalance();
     if (financialTab === 'commission_balance' && isAdmin) await fetchCommissionBalance();
-    setLoading(false);
+    if (seq === reportLoadSeq.current) setLoading(false);
   }, [financialTab, isAdmin, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
 
   // ─── OPERATIONAL sub-fetchers ───────────────────────────────
   const fetchChemHistory = useCallback(async () => {
-    if (!chemProductId || !startDate || !endDate) { setChemHistoryData([]); return; }
-    const { data, error } = await supabase.rpc('get_chemical_history', {
-      p_product_id: chemProductId,
-      p_start_date: startDate,
-      p_end_date: endDate,
-    });
-    if (error) { toast('error', `Chemical history failed: ${error.message}`); return; }
+    if (!chemProductId || !startDate || !endDate) { setChemHistoryData([]); reportLoaded('operational:chemical_history'); return; }
+    const seq = reportLoadSeq.current;
+    const { data, error } = await fetchAllRows<ChemicalHistoryRow>((from, to) => supabase
+      .rpc('get_chemical_history', {
+        p_product_id: chemProductId,
+        p_start_date: startDate,
+        p_end_date: endDate,
+      }, { count: 'exact' })
+      .order('transaction_date', { ascending: false })
+      .order('transaction_type')
+      .order('reference_number')
+      .order('customer_name')
+      .order('quantity')
+      .order('unit')
+      .order('unit_price')
+      .order('total_amount')
+      .order('notes')
+      .range(from, to));
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      setChemHistoryData([]);
+      markReportFailed('operational:chemical_history');
+      toast('error', `Chemical history failed: ${error.message}`);
+      return;
+    }
     setChemHistoryData(assertRpcResult<ChemicalHistoryRow[]>(data, 'get_chemical_history'));
-  }, [chemProductId, startDate, endDate, toast]);
+    reportLoaded('operational:chemical_history');
+  }, [chemProductId, startDate, endDate, toast, reportLoaded, markReportFailed]);
 
   const fetchInventoryCost = useCallback(async () => {
-    const { data, error } = await supabase.rpc('get_inventory_cost_report');
-    if (error) { toast('error', `Inventory cost failed: ${error.message}`); return; }
+    const seq = reportLoadSeq.current;
+    const { data, error } = await fetchAllRows<InventoryCostRow>((from, to) => supabase
+      .rpc('get_inventory_cost_report', undefined, { count: 'exact' })
+      // The function's own order (product name), then the unique product id.
+      .order('product_name')
+      .order('product_id')
+      .range(from, to));
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      setInventoryCostData([]);
+      markReportFailed('operational:inventory_cost');
+      toast('error', `Inventory cost failed: ${error.message}`);
+      return;
+    }
     setInventoryCostData(assertRpcResult<InventoryCostRow[]>(data, 'get_inventory_cost_report'));
-  }, [toast]);
+    reportLoaded('operational:inventory_cost');
+  }, [toast, reportLoaded, markReportFailed]);
 
   // Reads every active product page by page (one request stops at the row cap).
   // A failed page clears the list and shows an error, so a partial price list
@@ -534,7 +682,7 @@ export default function Reports() {
       const result = await fetchAllRows<Record<string, unknown>>((from, to) => supabase
         .from('products')
         // Cost is admin-only (Mason, 2026-10-15): never read from the table; admins add it below.
-        .select<string, Record<string, unknown>>(PRICE_LIST_COLUMNS)
+        .select<string, Record<string, unknown>>(PRICE_LIST_COLUMNS, { count: 'exact' })
         .eq('is_active', true)
         .order('product_name')
         .order('id')
@@ -551,7 +699,7 @@ export default function Reports() {
         const rows = result.data ?? [];
         const recheck = await fetchAllRows<{ id: string }>((from, to) => supabase
           .from('products')
-          .select('id')
+          .select('id', { count: 'exact' })
           .eq('is_active', true)
           .order('id')
           .range(from, to));
@@ -593,38 +741,53 @@ export default function Reports() {
     // U10 (2026-07-06): application_records now carries an applicator_name snapshot
     // (as-of-application, filled for new rows) — prefer it and only fall back to the
     // profiles join for old rows where it's NULL.
-    let query = supabase
-      .from('application_records')
-      .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator_id, applicator_name, applicator_license_number, total_acres, invoice_id, season')
-      .not('invoice_id', 'is', null)
-      .order('application_date', { ascending: false })
-      .limit(500);
-    if (startDate) query = query.gte('application_date', startDate);
-    if (endDate) query = query.lte('application_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load posted applications.'); return; }
-
-    const rows = (data || []) as Array<Record<string, unknown> & {
+    const seq = reportLoadSeq.current;
+    const fail = () => {
+      setPostedAppsData([]);
+      markReportFailed('operational:posted_applications');
+      toast('error', 'Failed to load posted applications.');
+    };
+    type PostedApplicationRow = Record<string, unknown> & {
       customer?: { farm_name?: string };
       field?: { field_name?: string };
       applicator_id?: string | null;
       applicator_name?: string | null;
-    }>;
+    };
+    // Every posted application in the range, page by page (`id` is the unique last sort
+    // key the pager needs); this list used to stop at 500.
+    const { data: pages, error } = await fetchAllRows((from, to) => {
+      let query = supabase
+        .from('application_records')
+        .select('id, record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator_id, applicator_name, applicator_license_number, total_acres, invoice_id, season', { count: 'exact' })
+        .not('invoice_id', 'is', null);
+      if (startDate) query = query.gte('application_date', startDate);
+      if (endDate) query = query.lte('application_date', endDate);
+      return query
+        .order('application_date', { ascending: false })
+        .order('id')
+        .range(from, to);
+    });
+    if (seq !== reportLoadSeq.current) return;
+    if (error) { fail(); return; }
+
+    const rows = (pages || []) as unknown as PostedApplicationRow[];
 
     const applicatorIds = [...new Set(
       rows.filter((r) => !r.applicator_name).map((r) => r.applicator_id).filter(Boolean) as string[]
     )];
 
-    let applicatorNameMap: Record<string, string> = {};
-    if (applicatorIds.length > 0) {
-      const { data: applicators } = await supabase
-        .from('profile_public_view')
-        .select('id, full_name')
-        .in('id', applicatorIds);
-      applicatorNameMap = Object.fromEntries(
-        ((applicators || []) as Array<{ id: string; full_name: string }>).map((a) => [a.id, a.full_name])
-      );
-    }
+    const applicators = await fetchAllRowsForIds(applicatorIds, (idChunk, from, to) => supabase
+      .from('profile_public_view')
+      .select('id, full_name', { count: 'exact' })
+      .in('id', idChunk)
+      .order('id')
+      .range(from, to));
+    if (seq !== reportLoadSeq.current) return;
+    // Missing names would show as "Unknown" applicators, as if that were the record.
+    if (applicators.error) { fail(); return; }
+    const applicatorNameMap: Record<string, string> = Object.fromEntries(
+      ((applicators.data || []) as Array<{ id: string; full_name: string }>).map((a) => [a.id, a.full_name])
+    );
 
     setPostedAppsData(rows.map((r) => ({
       ...r,
@@ -632,16 +795,18 @@ export default function Reports() {
       field_name: r.field?.field_name || '-',
       applicator_name: r.applicator_name || (r.applicator_id ? (applicatorNameMap[r.applicator_id] || 'Unknown') : '-'),
     })));
-  }, [startDate, endDate, toast]);
+    reportLoaded('operational:posted_applications');
+  }, [startDate, endDate, toast, reportLoaded, markReportFailed]);
 
   // ─── OPERATIONAL parent fetcher ───────────────────────────────
   const fetchOperational = useCallback(async () => {
+    const seq = ++reportLoadSeq.current;
     setLoading(true);
     if (operationalTab === 'chemical_history') await fetchChemHistory();
     if (operationalTab === 'inventory_cost' && isAdmin) await fetchInventoryCost();
     if (operationalTab === 'price_list') await fetchPriceList();
     if (operationalTab === 'posted_applications') await fetchPostedApplications();
-    setLoading(false);
+    if (seq === reportLoadSeq.current) setLoading(false);
   }, [operationalTab, isAdmin, fetchChemHistory, fetchInventoryCost, fetchPriceList, fetchPostedApplications]);
 
   // ─── Fetch on tab/date change ───────────────────────────────
@@ -654,11 +819,21 @@ export default function Reports() {
   // ─── YEAR-END fetchers / handlers ──────────────────────
   useEffect(() => {
     if (category === 'year_end' && yeCustomerOptions.length === 0) {
-      supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
-        .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))))
-        ; // non-critical: customer dropdown stays empty on error
+      // Every active customer, page by page: this picker used to stop at 1,000.
+      fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
+        .from('customers')
+        .select('id, farm_name', { count: 'exact' })
+        .eq('is_active', true)
+        .order('farm_name')
+        .order('id')
+        .range(from, to))
+        .then(({ data, error }) => {
+          // Batch "Generate All" finds customers itself; only the single-customer picker is affected.
+          if (error) { toast('error', 'Failed to load the customer list. Reload to try again.'); return; }
+          setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name })));
+        });
     }
-  }, [category, yeCustomerOptions.length]);
+  }, [category, yeCustomerOptions.length, toast]);
 
   const handleYeGenerate = async (season: number, options: YearEndSummaryOptions) => {
     setYeLoading(true);
@@ -1213,7 +1388,19 @@ export default function Reports() {
 
   // Unpaid commission total, summed in whole cents. An amount that is not an exact
   // whole-cent decimal makes the total unknown (shown as a dash), never a guessed number.
-  const unpaidTotalCents = visibleCommissions
+  // The report on screen, as recorded in failedReports, and whether its last load failed.
+  const currentReportKey = category === 'profitability' ? `profitability:${profitTab}`
+    : category === 'financial' ? `financial:${financialTab}`
+      : category === 'operational' ? `operational:${operationalTab}`
+        : category;
+  const reportFailed = failedReports.has(currentReportKey);
+  const reportFailedBanner = reportFailed && (
+    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+      This report could not be loaded completely, so it is not shown and cannot be exported. Reload to try again.
+    </div>
+  );
+
+  const unpaidTotalCents = failedReports.has('profitability:commission') ? null : visibleCommissions
     .filter((c) => c.status === 'pending')
     .reduce<number | null>((sum, c) => {
       if (sum === null) return null;
@@ -1364,7 +1551,9 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleProfitCSV)}
+          {dateFilterBar(handleProfitCSV, reportFailed)}
+
+          {reportFailedBanner}
 
           {profitTab === 'commission' && (
             <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
@@ -1378,14 +1567,14 @@ export default function Reports() {
             </div>
           )}
 
-          <Card padding={false}>
+          {!reportFailed && <Card padding={false}>
             <div className="p-5">
               {isAdmin && profitTab === 'customer' && <DataTable data={customerData as unknown as Record<string, unknown>[]} columns={customerCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search customers..." searchKeys={['farm_name']} emptyTitle="No customer data" loading={loading} />}
               {isAdmin && profitTab === 'product' && <DataTable data={productData as unknown as Record<string, unknown>[]} columns={productCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name']} emptyTitle="No product data" loading={loading} />}
               {profitTab === 'commission' && <DataTable data={visibleCommissions as unknown as Record<string, unknown>[]} columns={commissionCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No commissions" loading={loading} />}
               {isAdmin && profitTab === 'revenue' && <DataTable data={revenueData as unknown as Record<string, unknown>[]} columns={revenueCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No revenue data" loading={loading} />}
             </div>
-          </Card>
+          </Card>}
         </>
       )}
 
@@ -1403,7 +1592,9 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleFinancialCSV, isAdmin && financialTab === 'commission_balance' && !commissionExportReady)}
+          {dateFilterBar(handleFinancialCSV, reportFailed || (isAdmin && financialTab === 'commission_balance' && !commissionExportReady))}
+
+          {reportFailedBanner}
 
           {/* P&L summary cards */}
           {isAdmin && financialTab === 'pnl' && pnlData.length > 0 && (
@@ -1433,7 +1624,7 @@ export default function Reports() {
             </div>
           )}
 
-          <Card padding={false}>
+          {!reportFailed && <Card padding={false}>
             <div className="p-5">
               {isAdmin && financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
               {isAdmin && financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
@@ -1445,7 +1636,7 @@ export default function Reports() {
                 </>
               )}
             </div>
-          </Card>
+          </Card>}
 
           {isAdmin && financialTab === 'commission_balance' && (
             <Card padding={false}>
@@ -1485,7 +1676,9 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleOperationalCSV, operationalTab === 'price_list' && !priceListExportReady)}
+          {dateFilterBar(handleOperationalCSV, reportFailed || (operationalTab === 'price_list' && !priceListExportReady))}
+
+          {reportFailedBanner}
 
           {operationalTab === 'price_list' && priceListError && (
             <div role="alert" className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
@@ -1514,7 +1707,7 @@ export default function Reports() {
             </div>
           )}
 
-          {!(operationalTab === 'price_list' && priceListError) && <Card padding={false}>
+          {!reportFailed && !(operationalTab === 'price_list' && priceListError) && <Card padding={false}>
             <div className="p-5">
               {isAdmin && operationalTab === 'inventory_cost' && <DataTable data={inventoryCostData as unknown as Record<string, unknown>[]} columns={inventoryCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category']} emptyTitle="No inventory data" loading={loading} />}
               {operationalTab === 'chemical_history' && <DataTable data={chemHistoryData as unknown as Record<string, unknown>[]} columns={chemHistoryCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No chemical history" emptyDescription="Select a product and date range" loading={loading} />}

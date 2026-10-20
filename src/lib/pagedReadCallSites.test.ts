@@ -11,11 +11,7 @@ import { join } from 'path';
 const PAGES_DIR = join(__dirname, '..', 'pages');
 
 // Files not checked yet, each with its reason.
-const EXEMPT: Record<string, string> = {
-  'Reports.tsx': 'open PRs #954/#955/#957 change this file; Goal 4 follow-up',
-  'SalesReports.tsx': 'open PRs #954/#955/#957 change this file; Goal 4 follow-up',
-  'Deliveries.tsx': 'open PRs #954/#955/#957 change this file; Goal 4 follow-up',
-};
+const EXEMPT: Record<string, string> = {};
 
 const CALL_PATTERN = /\bfetchAllRows(?:ForIds)?\s*(?:<[^()]*?>)?\s*\(/g;
 

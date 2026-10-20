@@ -940,31 +940,32 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     Invoices, Orders, Quotes, Blend Tickets, Purchase Orders (and its outstanding items), Vendor Bills,
     Returns, Vendors, Application Records, Delivery Remainders, Customer Transaction Review,
     Commission Payments (payments and unpaid commissions), Payment History, To Ship and Rebates.
-  - **Deliberately left for a follow-up PR — do not forget:** Deliveries (`Deliveries.tsx`, 500) and
-    Reports (`Reports.tsx` and `SalesReports.tsx`: the 500-row price list and posted applications, and
-    the 500-product and 1,000-customer pickers). Open PRs #954, #955 and #957 were changing those files
-    on 2026-10-18, so they get the same fix once those land.
+  - **Fixed 2026-10-20 (Goal 4, part 1 finished):** Deliveries (`Deliveries.tsx`: the list, its item
+    counts and names, the stock-shortage check, the driver and customer filters and the load-sheet
+    lookups), Reports (`Reports.tsx`: the profitability, commission, posted-applications and price-list
+    reads, the report functions — P&L, Gross Sales, Customer Balance, Chemical History, Inventory Cost —
+    which the server also cuts off at 1,000 rows, and the Year-End customer picker) and Sales Reports
+    (`SalesReports.tsx`: the detail and summary functions and the customer, sales-rep and category
+    filters). A failed read shows an error and blocks that report's export. The Deliveries driver
+    dashboard's "next 20 unassigned" panel is deliberately still 20.
   - Still capped (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`; the pages
     fixed above are removed):
     - 1000: Customers (shows a banner).
-    - 500: Deliveries, Jobs (shows a banner) and Field Setup.
+    - 500: Jobs (shows a banner) and Field Setup.
     - 200: Notifications.
   - Pages that cap one of several queries:
     - Crop Programs: its product list, 500.
     - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
       `.range()` and are not capped.
-    - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
-      `fetchPostedApplications`). Its Chemical History product picker loads 500 products and its Year-End
-      customer picker 1,000 customers; Sales Reports has the same 500-product and 1,000-customer pickers.
-      Past those counts a record cannot be selected in the direct picker (Year-End "Generate All" finds
-      customers separately, and Sales Reports can still include linked farms through `get_customer_farm_group`).
+    - Reports' Application Logbook (`src/components/reports/LogbookReport.tsx`): its customer and field
+      pickers load 500 and its applicator picker 200 (not part of the 2026-10-20 fix).
   - Record pickers inside detail and editor pages (checked 2026-10-04): Customer Detail's parent-customer
     selector, Invoice Detail's customer selector and Order Detail's share editor each load 500 customers; the
     split field-invoice editor (`FieldAppSplitInvoiceEditor.tsx`) loads 1,000 fields, 1,000 products and the
     200 most recent completed jobs. Past those counts a record silently cannot be chosen there.
   - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
-  - Jobs and Customers show a banner when capped. Deliveries stops silently.
+  - Jobs and Customers show a banner when capped.
   - Paging is by position, so records changing during a long load are handled four ways:
     - repeats are dropped by `id`, and each page re-reads a 50-row overlap;
     - every list read asks the server for its exact count (`{ count: 'exact' }`, enforced by

@@ -22,8 +22,11 @@ type QueryBuilder = {
   limit: () => QueryBuilder;
   in: () => QueryBuilder;
   not: () => QueryBuilder;
+  range: () => Promise<unknown>;
   then: (resolve: (value: unknown) => unknown) => unknown;
 };
+
+type RpcResult = { data: unknown[] | null; error: { message: string } | null };
 
 vi.mock('../lib/db', () => ({
   supabase: {
@@ -35,25 +38,36 @@ vi.mock('../lib/db', () => ({
         limit: () => builder,
         in: () => builder,
         not: () => builder,
+        range: () => Promise.resolve({ data: [], error: null, count: 0 }),
         then: (resolve) => resolve({ data: [], error: null }),
       };
       return builder;
     },
+    // Paged like the server: `.range()` returns that slice with the exact count of all rows.
     rpc: (name: string) => {
       // Snapshot the rows at call time, so a held (slow) request returns what was current then.
-      const result = {
+      const result: RpcResult = {
         data: name === 'get_sales_detail_report' ? [H.detailRow]
           : name === 'get_sales_summary_report' ? [H.summaryRow]
             : [],
         error: null,
       };
+      let pending: Promise<RpcResult>;
       if (H.failNextRpc) {
         H.failNextRpc = false;
-        return Promise.resolve({ data: null, error: { message: 'network down' } });
+        pending = Promise.resolve({ data: null, error: { message: 'network down' } });
+      } else {
+        const hold = H.holdNextRpc;
+        H.holdNextRpc = null;
+        pending = hold ? hold.then(() => result) : Promise.resolve(result);
       }
-      const hold = H.holdNextRpc;
-      H.holdNextRpc = null;
-      return hold ? hold.then(() => result) : Promise.resolve(result);
+      const paged = {
+        order: () => paged,
+        range: (from: number, to: number) => pending.then((r) => (r.data
+          ? { data: r.data.slice(from, to + 1), error: null, count: r.data.length }
+          : r)),
+      };
+      return paged;
     },
   },
   assertRpcResult: <T,>(data: T) => data,
@@ -185,12 +199,17 @@ describe('SalesReports cost columns', () => {
     expect(await screen.findByRole('columnheader', { name: /^Cost/ })).toBeInTheDocument();
 
     // Back to Sales Detail, whose admin refetch fails: the cached rep rows must not be
-    // shown under admin cost columns (their NULL profit would read as $0).
+    // shown under admin cost columns (their NULL profit would read as $0). Since Goal 4 a
+    // failed load shows an error instead of any rows, and the report cannot be exported.
     H.failNextRpc = true;
     fireEvent.click(screen.getByRole('button', { name: 'Sales Detail' }));
-    expect(await screen.findByText('Prairie View Farms')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded completely');
+    expect(screen.queryByText('Prairie View Farms')).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /^Cost/ })).not.toBeInTheDocument();
     expect(screen.queryByText('$0')).not.toBeInTheDocument();
+    expect(screen.queryByText('Total Revenue')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CSV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'PDF' })).toBeDisabled();
   });
 
   it('still shows an admin the cost, profit and margin columns', async () => {

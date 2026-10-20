@@ -9,6 +9,7 @@ import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, fmtCurrency } from '../lib/reportPdf';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
@@ -111,6 +112,8 @@ export default function SalesReports() {
   const [detailData, setDetailData] = useState<SalesDetailRow[]>([]);
   const [summaryData, setSummaryData] = useState<SalesSummaryRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // The last report load failed: no totals, table or export until a load succeeds.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // ── Season options (current + 4 prior) ──
   const seasonOptions = useMemo(() => {
@@ -127,18 +130,46 @@ export default function SalesReports() {
   }, [selectedCustomerIds, includeFarmGroup, farmGroupCustomerIds]);
 
   // ── Load filter options on mount ──
+  // Each list is read page by page: one request stops at the server's row cap, which used to
+  // hide customers past 1,000 and categories found only on later products.
   useEffect(() => {
-    supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
-      .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
+    const failed = () => toast('error', 'Some filter lists could not be loaded. Reload to try again.');
+    fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
+      .from('customers')
+      .select('id, farm_name', { count: 'exact' })
+      .eq('is_active', true)
+      .order('farm_name')
+      .order('id')
+      .range(from, to))
+      .then(({ data, error }) => {
+        if (error) { failed(); return; }
+        setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name })));
+      });
     // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
-    supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
-      .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name })) as FilterOption[]));
-    supabase.from('products').select('category').eq('is_active', true).not('category', 'is', null)
-      .then(({ data }) => {
+    fetchAllRows((from, to) => supabase
+      .from('profile_public_view')
+      .select('id, full_name', { count: 'exact' })
+      .in('role', ['admin', 'sales_rep'])
+      .order('full_name')
+      .order('id')
+      .range(from, to))
+      .then(({ data, error }) => {
+        if (error) { failed(); return; }
+        setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name })) as FilterOption[]);
+      });
+    fetchAllRows<{ id: string; category: string | null }>((from, to) => supabase
+      .from('products')
+      .select('id, category', { count: 'exact' })
+      .eq('is_active', true)
+      .not('category', 'is', null)
+      .order('id')
+      .range(from, to))
+      .then(({ data, error }) => {
+        if (error) { failed(); return; }
         const unique = [...new Set((data || []).map(r => r.category as string))].filter(Boolean).sort();
         setCategoryOptions(unique);
       });
-  }, []);
+  }, [toast]);
 
   // ── Farm group lookup when customer selection changes ──
   useEffect(() => {
@@ -184,10 +215,42 @@ export default function SalesReports() {
     if (category) params.p_category = category;
     if (season) params.p_season = Number(season);
 
+    // The report functions return one row per line or group, and the server cuts a function's
+    // rows off at its row cap too, so both are read page by page. A failed read clears the
+    // report and shows an error: totals over a partial or stale report would look complete.
     if (tab === 'detail') {
-      const { data, error } = await supabase.rpc('get_sales_detail_report', params);
+      const { data, error } = await fetchAllRows<SalesDetailRow>((from, to) => supabase
+        .rpc('get_sales_detail_report', params, { count: 'exact' })
+        // Pages are separate calls: the report's own order (newest date, farm, product), then
+        // every other column, so the rows come back in one fixed sequence and none repeats or
+        // goes missing at a page seam (rows equal in every column are interchangeable).
+        .order('order_date', { ascending: false })
+        .order('customer_name')
+        .order('product_name')
+        .order('order_number')
+        .order('customer_id')
+        .order('product_id')
+        .order('sku')
+        .order('category')
+        .order('quantity')
+        .order('unit')
+        .order('unit_price')
+        .order('total_price')
+        .order('cost')
+        .order('profit')
+        .order('margin_pct')
+        .order('sales_rep_name')
+        .order('invoice_number')
+        .order('season')
+        .range(from, to));
       if (requestId !== reportRequestId.current) return;
-      if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
+      if (error) {
+        setDetailData([]);
+        setLoadFailed(true);
+        toast('error', `Failed to load: ${error.message}`);
+        setLoading(false);
+        return;
+      }
       setDetailData(assertRpcResult<SalesDetailRow[]>(data, 'get_sales_detail_report'));
       setDetailForAdmin(forAdmin);
     } else {
@@ -195,14 +258,33 @@ export default function SalesReports() {
         by_product: 'product', by_customer: 'customer',
         by_month: 'month', by_sales_rep: 'sales_rep', detail: 'product',
       };
-      const { data, error } = await supabase.rpc('get_sales_summary_report', {
-        ...params, p_group_by: groupByMap[tab],
-      });
+      const { data, error } = await fetchAllRows<SalesSummaryRow>((from, to) => supabase
+        .rpc('get_sales_summary_report', {
+          ...params, p_group_by: groupByMap[tab],
+        }, { count: 'exact' })
+        // The report's own order (largest revenue first), then every other column (see above).
+        .order('total_revenue', { ascending: false })
+        .order('group_key')
+        .order('group_id')
+        .order('total_quantity')
+        .order('total_cost')
+        .order('total_profit')
+        .order('margin_pct')
+        .order('order_count')
+        .order('line_count')
+        .range(from, to));
       if (requestId !== reportRequestId.current) return;
-      if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
+      if (error) {
+        setSummaryData([]);
+        setLoadFailed(true);
+        toast('error', `Failed to load: ${error.message}`);
+        setLoading(false);
+        return;
+      }
       setSummaryData(assertRpcResult<SalesSummaryRow[]>(data, 'get_sales_summary_report'));
       setSummaryForAdmin(forAdmin);
     }
+    setLoadFailed(false);
     setLoading(false);
   }, [isAdmin, tab, startDate, endDate, productId, effectiveCustomerIds, salesRepId, category, season, toast]);
 
@@ -424,8 +506,8 @@ export default function SalesReports() {
           {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           Customer View
         </button>
-        <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCSV}>CSV</Button>
-        <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} showChevron={false} onClick={handlePDF}>PDF</Button>
+        <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCSV} disabled={loadFailed || loading}>CSV</Button>
+        <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} showChevron={false} onClick={handlePDF} disabled={loadFailed || loading}>PDF</Button>
       </SplitHeading>
 
       {/* ── Customer View banner ── */}
@@ -581,8 +663,14 @@ export default function SalesReports() {
         </div>
       </Card>
 
+      {loadFailed && (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          This report could not be loaded completely, so its totals are not shown and it cannot be exported. Reload to try again.
+        </div>
+      )}
+
       {/* ── Summary Cards ── */}
-      <div className={`grid gap-4 ${showCost ? 'grid-cols-4' : 'grid-cols-3'}`}>
+      {!loadFailed && <div className={`grid gap-4 ${showCost ? 'grid-cols-4' : 'grid-cols-3'}`}>
         <Card>
           <p className="text-xs font-medium text-secondary mb-1">Total Revenue</p>
           <p className="text-2xl font-bold text-nav-dark">{fmt(totals.revenue)}</p>
@@ -602,7 +690,7 @@ export default function SalesReports() {
           <p className="text-xs font-medium text-secondary mb-1">Orders</p>
           <p className="text-2xl font-bold text-nav-dark">{totals.orders.toLocaleString()}</p>
         </Card>
-      </div>
+      </div>}
 
       {/* ── Tabs ── */}
       <div className="flex gap-1 border-b border-gray-200">
@@ -622,7 +710,7 @@ export default function SalesReports() {
       </div>
 
       {/* ── Data Table ── */}
-      {tab === 'detail' ? (
+      {loadFailed ? null : tab === 'detail' ? (
         <DataTable<SalesDetailRow>
           data={detailData}
           columns={detailColumns}

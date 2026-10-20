@@ -42,7 +42,10 @@ const { auth, mockFrom, mockRpc, mockToast, mockCaptureException, mockGenerateBa
   },
 }));
 
-type QueryResult = { data: unknown[] | null; error: unknown };
+type QueryResult = { data: unknown[] | null; error: unknown; count?: number | null };
+
+// Like PostgREST, no request returns more than this many rows.
+const SERVER_ROW_CAP = 1000;
 
 function buildChain(
   rows: unknown[],
@@ -50,23 +53,42 @@ function buildChain(
 ): Record<string, unknown> {
   const self: Record<string, unknown> = {};
   let result: QueryResult = { data: rows, error: null };
+  let countRequested = false;
+  let range: [number, number] | null = null;
   const method = (..._args: unknown[]) => self;
   for (const m of [
     'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'gt', 'gte',
-    'lt', 'lte', 'like', 'ilike', 'is', 'in', 'not', 'or', 'and', 'match',
+    'lt', 'lte', 'like', 'ilike', 'is', 'not', 'or', 'and', 'match',
     'order', 'limit', 'offset', 'single', 'maybeSingle', 'returns', 'abortSignal',
   ]) self[m] = method;
   // mockFrom creates a fresh chain for every query; each query selects once.
-  self.select = (columns: unknown) => {
+  self.select = (columns: unknown, options?: { count?: string }) => {
     result = selectResult?.(String(columns)) ?? { data: rows, error: null };
+    countRequested = Boolean(options?.count);
     return self;
+  };
+  // Honour an id-chunk filter on a column the rows carry, so chunked lookups see only their ids.
+  self.in = (column: string, values: unknown[]) => {
+    if (Array.isArray(result.data) && result.data.some((r) => column in (r as Record<string, unknown>))) {
+      result = { ...result, data: result.data.filter((r) => values.includes((r as Record<string, unknown>)[column])) };
+    }
+    return self;
+  };
+  self.range = (from: number, to: number) => { range = [from, to]; return self; };
+  // The page asked for (or the first SERVER_ROW_CAP rows), with the exact count of every
+  // matching row when the select asked for one.
+  const settled = (): QueryResult => {
+    if (!Array.isArray(result.data)) return result;
+    const [from, to] = range ?? [0, Infinity];
+    const page = result.data.slice(from, to + 1).slice(0, SERVER_ROW_CAP);
+    return { ...result, data: page, count: countRequested ? result.data.length : null };
   };
   self.then = (
     onFulfilled: (value: QueryResult) => unknown,
     onRejected?: (reason: unknown) => unknown,
-  ) => Promise.resolve(result).then(onFulfilled, onRejected);
-  self.catch = (onRejected: (reason: unknown) => unknown) => Promise.resolve(result).catch(onRejected);
-  self.finally = (onFinally: () => void) => Promise.resolve(result).finally(onFinally);
+  ) => Promise.resolve().then(settled).then(onFulfilled, onRejected);
+  self.catch = (onRejected: (reason: unknown) => unknown) => Promise.resolve().then(settled).catch(onRejected);
+  self.finally = (onFinally: () => void) => Promise.resolve().then(settled).finally(onFinally);
   return self;
 }
 

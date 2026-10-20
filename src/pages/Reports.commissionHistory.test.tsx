@@ -57,8 +57,19 @@ vi.mock('../lib/db', () => ({
     },
     rpc: (name: string, args: Record<string, unknown>) => {
       H.rpc.push({ name, args });
-      if (H.rpcHandler) return H.rpcHandler(name, args);
-      return Promise.resolve({
+      // A list function can also be paged with `.range()`, like PostgREST: that slice (never
+      // more than 1,000 rows) with the exact count of every row.
+      const pageable = (response: Promise<RpcResponse>) => {
+        const paged = Object.assign(response, {
+          order: () => paged,
+          range: (from: number, to: number) => response.then((r) => (Array.isArray(r.data)
+            ? { ...r, data: r.data.slice(from, to + 1).slice(0, 1000), count: r.data.length }
+            : r)),
+        });
+        return paged;
+      };
+      if (H.rpcHandler) return pageable(H.rpcHandler(name, args));
+      return pageable(Promise.resolve({
         data: {
           as_of_date: String(args.p_as_of_date),
           balance_rows: [{
@@ -85,7 +96,7 @@ vi.mock('../lib/db', () => ({
           }],
         },
         error: null,
-      });
+      }));
     },
   },
   assertRpcResult: <T,>(data: T) => {
