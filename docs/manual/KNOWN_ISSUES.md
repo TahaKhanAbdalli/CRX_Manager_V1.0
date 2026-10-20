@@ -134,7 +134,7 @@ authorized RPC (or widen the policy for an assigned driver's open delivery); a s
 queue would also cover it. Found by the Codex GitHub review on #955. Source:
 `src/pages/DeliveryDetail.tsx`, `src/pages/FieldStop.tsx` (receipt send after completion).
 
-## FIXED 2026-10-19 (migration `20261019220000` pending apply) — the Deliveries list can leave a scheduled delivery In Progress if signal drops between its two steps
+## FIXED 2026-10-19 (migration `20261019220000` applied live 2026-10-20 02:22 UTC (9:22 PM Central, 2026-10-19), PR #964) — the Deliveries list can leave a scheduled delivery In Progress if signal drops between its two steps
 
 **Fix (2026-10-19):** new RPC `start_and_complete_delivery` (migration
 `20261019220000_start_and_complete_delivery`) starts a scheduled delivery (by calling
