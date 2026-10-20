@@ -1,7 +1,13 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-19 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-19 20:55 UTC: 1036 rows / 1029 names, `max(version)`
+**Last verified:** 2026-10-20 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-20 19:41 UTC: 1038 rows / 1031 names, `max(version)`
+`20261020193610` = `20261019230000_cost_margin_admin_only_screens_step2` (Goal 1 part 3, step 2 of 3: screens read
+cost only through the admin-only `get_admin_cost_fields`, except the four purchase-order screens, and job, field-invoice
+and invoice saves work out a non-admin's cost on the server), applied 2026-10-20 19:36:10 UTC; PR #965 merged the
+screens before the apply, so PR #976 carried the apply and merged right after it as `2c448ce4e`. Before it,
+`20261020022222` = `20261019220000_start_and_complete_delivery` (PR #964), applied 2026-10-20 02:22:22 UTC. The
+2026-10-19 20:55 UTC read before them had 1036 rows / 1029 names, `max(version)`
 `20261019205246` = `20261019200000_bind_delivery_job_replay_receipts_batch3a` (replay-binding batch 3a, PR #954),
 applied 2026-10-19 20:52:46 UTC on Mason's own `I approve`: `complete_delivery` and `complete_job` now replay a
 saved result only for the same person and the exact same request, and both require a retry key. The 18:35 UTC read
@@ -34,12 +40,15 @@ Every other section keeps its own date; nothing below was re-certified by that r
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-19)
+## Current state at a glance (2026-10-19; migration ledger and registry lines 2026-10-20)
 
-- **Effective ordering high-water: `20261019010000_cost_margin_admin_only_rpc_leaks`**
-  (ledger version `20261019182757`, UTC; applied live 2026-10-19 18:27 UTC, PR #957 merged as
-  `8124ae21c`; read-only ledger read 2026-10-19 18:35 UTC: 1035 rows / 1028 names;
-  migration-history row 953). Before it, `20261016140000_bind_stock_replay_receipts_batch2` (ledger
+- **Effective ordering high-water: `20261019230000_cost_margin_admin_only_screens_step2`**
+  (ledger version `20261020193610`, UTC; applied live 2026-10-20 19:36 UTC, carried by PR #976 merged as
+  `2c448ce4e`; read-only ledger read 2026-10-20 19:41 UTC: 1038 rows / 1031 names;
+  migration-history row 956). Before it, `20261019220000_start_and_complete_delivery` (ledger
+  `20261020022222`, PR #964), `20261019200000_bind_delivery_job_replay_receipts_batch3a` (ledger
+  `20261019205246`, PR #954) and `20261019010000_cost_margin_admin_only_rpc_leaks`
+  (ledger `20261019182757`, applied 2026-10-19 18:27 UTC, PR #957 merged as `8124ae21c`, row 953). Before those, `20261016140000_bind_stock_replay_receipts_batch2` (ledger
   `20261019010324`, applied 2026-10-19 01:03 UTC, PR #951 merged as `d51d67c0b`, row 952), `20261016060000_bind_money_replay_receipts_batch1`
   (ledger `20261016121253`, applied 2026-10-16 12:12 UTC, PR #942 merged as `982bc0dda`, row 951), `20261016030000_staff_photo_buckets_private` (ledger
   `20261016051944`, applied 2026-10-16 05:19 UTC, PR #947 merged as `5851eb514`, row 950),
@@ -95,7 +104,11 @@ ships or quarterly, whichever comes first.
   `20261016030000_staff_photo_buckets_private` (`20261016051944`); then, from PR #942 (merged as
   `982bc0dda`; 2026-10-16 UTC), `20261016060000_bind_money_replay_receipts_batch1` (`20261016121253`); then, from
   PR #951 (merged as `d51d67c0b`; 2026-10-19 UTC), `20261016140000_bind_stock_replay_receipts_batch2` (`20261019010324`); then, from PR #957 (merged as `8124ae21c`;
-  2026-10-19 UTC), `20261019010000_cost_margin_admin_only_rpc_leaks` (`20261019182757`).
+  2026-10-19 UTC), `20261019010000_cost_margin_admin_only_rpc_leaks` (`20261019182757`); then, from PR #954 (merged
+  as `9dbc953c3`; 2026-10-19 UTC), `20261019200000_bind_delivery_job_replay_receipts_batch3a` (`20261019205246`); then,
+  from PR #964 (merged as `b0cd83b0a`; 2026-10-20 UTC), `20261019220000_start_and_complete_delivery`
+  (`20261020022222`); then, carried by PR #976 (merged as `2c448ce4e`; 2026-10-20 UTC; screens in PR #965),
+  `20261019230000_cost_margin_admin_only_screens_step2` (`20261020193610`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -112,10 +125,11 @@ ships or quarterly, whichever comes first.
   with `migrations_high_water` `20261019010324`;
   those migrations changed function bodies, grants, RLS and storage policies, bucket flags, one index and
   four triggers, none of which the
-  registry tracks). **Stale since 2026-10-19 18:27 UTC:** `20261019010000_cost_margin_admin_only_rpc_leaks`
-  (ledger `20261019182757`) applied after that delta and is not in the registry yet (it changed function bodies
-  and grants only, none of which the registry tracks). Bring it to live next, then drop the temporary
-  `_enforce_below_cost_line` exemption in `src/lib/rpcContracts.test.ts`.
+  registry tracks). PR #954 then brought it to `migrations_high_water` `20261019205246`, listing
+  `20261019010000_cost_margin_admin_only_rpc_leaks` and `20261019200000_bind_delivery_job_replay_receipts_batch3a`.
+  **Stale since 2026-10-20 02:22 UTC:** `20261019220000_start_and_complete_delivery` (ledger `20261020022222`) and
+  `20261019230000_cost_margin_admin_only_screens_step2` (ledger `20261020193610`), both applied live, are not in
+  the registry yet. Refresh the registry next (`/regen-schema-registry`); no database apply is pending for them.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration

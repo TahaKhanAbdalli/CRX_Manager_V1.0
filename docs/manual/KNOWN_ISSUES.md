@@ -82,7 +82,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; step 2 written as `20261019230000`, not applied; step 3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
+## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
 
 Mason decided on 2026-10-15 that cost and margin are admin-only, including on a rep's own quotes and invoices
 (`docs/plans/2026-10-13-direction-and-goals.md`, Goal 1). A read-only live inventory on 2026-10-18 found three kinds of
@@ -103,8 +103,9 @@ exposure (full list in the PR for step 1):
 
 **Order of work.** Step 2: the screens stop reading whole rows on those tables (about 80 call sites in 40 files would break
 under a column lock, admins included), admin screens read cost through an admin-only function, and the three saves above derive
-cost on the server for non-admins. **Step 2 is written (2026-10-19, migration `20261019230000` plus the screens; not applied, PR
-pending):** every screen now lists the non-cost columns it reads (`src/lib/costFields.ts`, guarded by `costFields.test.ts`),
+cost on the server for non-admins. **Step 2 is LIVE (migration `20261019230000` applied 2026-10-20 19:36 UTC, ledger `20261020193610`; the
+screens merged in PR #965, the apply carried by PR #976, merged as `2c448ce4e`):** every screen except the four
+purchase-order screens now lists the non-cost columns it reads (`src/lib/costFields.ts`, guarded by `costFields.test.ts`),
 admins add cost through `get_admin_cost_fields`, quote history comes through `get_quote_versions`, the three saves derive a
 non-admin's cost, and chemical history and Quick Receive no longer show purchase cost to reps. **Purchase orders are NOT part of
 step 2 (Mason, 2026-10-20, option 1 "for now"):** the purchase order screens and `save_purchase_order` are unchanged, so reps still
