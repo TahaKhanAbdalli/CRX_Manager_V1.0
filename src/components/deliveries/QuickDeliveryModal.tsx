@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../../lib/idempotency';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
+import { PRODUCT_COLUMNS } from '../../lib/costFields';
 import { formatCents as fmtCurrency } from '../../lib/money';
 import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import { validateInventoryPositionShape } from '../../lib/inventoryPositionValidator';
@@ -95,7 +96,7 @@ export default function QuickDeliveryModal({
     const fetchData = async () => {
       try {
         const [prodResult, driverResult] = await Promise.all([
-          supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
+          supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
           // PR-07 follow-up: driver picker only uses d.id + d.full_name; safe via view.
           supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
         ]);

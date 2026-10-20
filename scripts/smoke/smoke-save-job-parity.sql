@@ -160,7 +160,9 @@ BEGIN
   -- Absence of the marker is now a hard failure (Codex review, PR #475).
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
-   WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
+   -- Since 20261019230000 save_job is a cost wrapper and its body is _save_job_cost_step2_impl.
+   WHERE p.oid = COALESCE(to_regprocedure('public._save_job_cost_step2_impl(uuid,jsonb,jsonb,jsonb,uuid,text)'),
+                          to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)'));
 
   IF v_n = 0 THEN
     RAISE EXCEPTION 'FAIL: installed save_job carries no CHEM_UNIT_MISMATCH. Migration 20260820120000 is applied live (ledger 20260825142708), so its absence is a REGRESSION, not a pre-apply state.';
@@ -258,7 +260,9 @@ BEGIN
   -- than trusting step 3b's read, and its absence fails closed.
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
-   WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
+   -- Since 20261019230000 save_job is a cost wrapper and its body is _save_job_cost_step2_impl.
+   WHERE p.oid = COALESCE(to_regprocedure('public._save_job_cost_step2_impl(uuid,jsonb,jsonb,jsonb,uuid,text)'),
+                          to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)'));
 
   IF v_n = 0 THEN
     RAISE EXCEPTION 'FAIL: installed save_job carries no CHEM_UNIT_MISMATCH at the refusal checks - regression against applied migration 20260820120000.';

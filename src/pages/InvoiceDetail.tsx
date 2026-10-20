@@ -37,6 +37,7 @@ import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 
 interface LineItem {
   id?: string;
@@ -390,7 +391,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers(farm_name)')
+      .select(`${INVOICE_COLUMNS}, customer:customers(farm_name)`)
       .eq('id', invoiceId)
       .single();
 
@@ -444,7 +445,20 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
       if (isStale()) return;
     }
-    setInvoice(data as object as Invoice);
+    // Cost is admin-only (Mason, 2026-10-15). An admin whose cost read fails must not reach
+    // the editor: saving it would write zero cost onto every line.
+    let costedInvoice = data as unknown as Invoice;
+    try {
+      costedInvoice = (await withAdminCost('invoices', costedInvoice, isAdmin)) as Invoice;
+    } catch (costErr) {
+      if (isStale()) return;
+      Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_invoice_costs' } });
+      toast('error', 'Could not load this invoice\'s costs. Try again.');
+      navigate('/invoices');
+      return;
+    }
+    if (isStale()) return;
+    setInvoice(costedInvoice);
     const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;
     const normalizedTerms = effectivePaymentTerms.toLowerCase();
     const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(normalizedTerms);
@@ -550,16 +564,29 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
 
     // Fetch items
-    const { data: itemData } = await supabase
+    const { data: rawItemData } = await supabase
       .from('invoice_items')
-      .select('*, product:products(product_name)')
+      .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name)`)
       .eq('invoice_id', invoiceId)
       .order('sort_order');
 
     if (isStale()) return;
+    let itemData = rawItemData;
+    if (itemData) {
+      try {
+        itemData = await withAdminCosts('invoice_items', itemData, isAdmin);
+      } catch (costErr) {
+        if (isStale()) return;
+        Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_invoice_item_costs' } });
+        toast('error', 'Could not load this invoice\'s costs. Try again.');
+        navigate('/invoices');
+        return;
+      }
+      if (isStale()) return;
+    }
     if (itemData) {
       setItems(
-        (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
+        (itemData as unknown as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents?: number | null; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
           id: it.id,
           order_item_id: (it.order_item_id as string) ?? null,
           product_id: it.product_id,
@@ -568,7 +595,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           quantity: Number(it.quantity),
           unit_price_cents: it.unit_price_cents,
           extended_cents: it.extended_cents,
-          cost_cents: it.cost_cents,
+          // Absent for non-admins; the server works out their cost on save.
+          cost_cents: it.cost_cents ?? 0,
           rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
           acres: it.acres ? Number(it.acres) : null,
           unit_size: it.unit_size ?? null,
@@ -609,7 +637,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
-  }, [toast, navigate, routeArea]);
+  }, [toast, navigate, routeArea, isAdmin]);
 
   // Fetch existing invoice
   useEffect(() => {
@@ -629,7 +657,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     try {
       const { data, error } = await supabase
         .from('products')
-        .select('*, product_family:product_families(name)')
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
         .eq('is_active', true)
         .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
         .order('product_name')
@@ -640,7 +668,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         toast('error', 'Failed to search Products');
         setProductResults([]);
       } else {
-        setProductResults((data || []) as Product[]);
+        const costed = await withAdminCosts('products', (data || []) as unknown as Product[], isAdmin);
+        if (requestId !== productSearchRequestRef.current) return;
+        setProductResults(costed);
       }
     } catch (error) {
       if (requestId !== productSearchRequestRef.current) return;
@@ -650,7 +680,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     } finally {
       if (requestId === productSearchRequestRef.current) setProductSearchLoading(false);
     }
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   const clearProductSearch = useCallback(() => {
     productSearchRequestRef.current += 1;
@@ -1315,7 +1345,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const buildInvoicePdfData = async (options?: InvoicePrintOptions): Promise<InvoicePdfData> => {
     const { data: enrichedItems } = await supabase
       .from('invoice_items')
-      .select('*, product:products(product_name, epa_registration, product_form)')
+      .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name, epa_registration, product_form)`)
       .eq('invoice_id', id!)
       .order('sort_order');
 
@@ -1885,16 +1915,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               <span className="text-secondary">Subtotal</span>
               <span className="font-medium">{fmt(totalCents)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-secondary">Total Cost</span>
-              <span className="text-secondary">{fmt(totalCostCents)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-secondary">Margin</span>
-              <span className={totalCents - totalCostCents > 0 ? 'text-crx-green' : 'text-red-600'}>
-                {fmt(totalCents - totalCostCents)}
-              </span>
-            </div>
+            {/* Cost is admin-only (Mason, 2026-10-15). */}
+            {isAdmin && (
+              <>
+                <div className="flex justify-between text-sm">
+                  <span className="text-secondary">Total Cost</span>
+                  <span className="text-secondary">{fmt(totalCostCents)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-secondary">Margin</span>
+                  <span className={totalCents - totalCostCents > 0 ? 'text-crx-green' : 'text-red-600'}>
+                    {fmt(totalCents - totalCostCents)}
+                  </span>
+                </div>
+              </>
+            )}
             {!isNew && (
               <>
                 <hr className="border-gray-100" />
@@ -2149,7 +2184,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           ) : productResults.length > 0 ? (
             <div className="max-h-60 overflow-auto divide-y divide-gray-50">
               {productResults.map((p) => (
-                <ProductSearchResultRow key={p.id} product={p} onClick={() => addProduct(p)} trailing={<><div>T1: ${(p.tier1_price || 0).toFixed(2)}</div><div>Cost: ${(p.current_cost || 0).toFixed(2)}</div></>} />
+                <ProductSearchResultRow key={p.id} product={p} onClick={() => addProduct(p)} trailing={<><div>T1: ${(p.tier1_price || 0).toFixed(2)}</div>{isAdmin && <div>Cost: ${(p.current_cost || 0).toFixed(2)}</div>}</>} />
               ))}
             </div>
           ) : productSearch.length >= 2 ? (

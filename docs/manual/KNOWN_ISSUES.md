@@ -82,7 +82,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; steps 2–3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
+## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; step 2 written as `20261019230000`, not applied; step 3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
 
 Mason decided on 2026-10-15 that cost and margin are admin-only, including on a rep's own quotes and invoices
 (`docs/plans/2026-10-13-direction-and-goals.md`, Goal 1). A read-only live inventory on 2026-10-18 found three kinds of
@@ -103,8 +103,19 @@ exposure (full list in the PR for step 1):
 
 **Order of work.** Step 2: the screens stop reading whole rows on those tables (about 80 call sites in 40 files would break
 under a column lock, admins included), admin screens read cost through an admin-only function, and the three saves above derive
-cost on the server for non-admins. Step 3: the column lock, applied only after step 2's screens are live, then live per-role
-refusal checks. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
+cost on the server for non-admins. **Step 2 is written (2026-10-19, migration `20261019230000` plus the screens; not applied, PR
+pending):** every screen now lists the non-cost columns it reads (`src/lib/costFields.ts`, guarded by `costFields.test.ts`),
+admins add cost through `get_admin_cost_fields`, quote history comes through `get_quote_versions`, the three saves derive a
+non-admin's cost, and chemical history and Quick Receive no longer show purchase cost to reps. **Purchase orders are NOT part of
+step 2 (Mason, 2026-10-20, option 1 "for now"):** the purchase order screens and `save_purchase_order` are unchanged, so reps still
+see and enter purchase cost there. Until step 3, the columns themselves are still readable through the Data API. Step 3: the column
+lock, applied only after step 2's screens are live, then live per-role refusal checks; it must also revoke INSERT/UPDATE of the
+cost columns, because reps can still write `job_chemicals` and `invoice_items` rows directly. Step 3 must leave the columns the purchase order screens read (product `current_cost`, purchase order and line cost) unlocked
+until the purchase order project lands (`costFields.test.ts` names those four screens as its only exemption). **TOP-PRIORITY
+FOLLOW-UP / OPEN COST QUESTION (Mason, 2026-10-20, "dig deeper in future"): purchase orders as their own project.** Three Sol rounds
+on PR #965 showed any cost a rep's purchase order line is given (the catalog cost, or $0) can be wrong and then locked at receipt
+(the supplier-cost-basis snapshot trigger, and the writer's received-line rule), with no governed way to correct it. The project
+needs a governed way to correct, or at least track, a received line's cost, then can hide purchase cost from reps. Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
 profit to the rep who earns it; and a rep can still find a product's cost by trial and error, because a price below cost is
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
 logged or limited).

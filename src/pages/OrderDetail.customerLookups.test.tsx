@@ -159,7 +159,8 @@ describe('OrderDetail customer lookups', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     customerCalls = [];
-    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+    // The admin page adds cost through get_admin_cost_fields (cost is admin-only); no cost rows here.
+    mockRpc.mockImplementation((name: string) => Promise.resolve({ data: name === 'get_admin_cost_fields' ? {} : null, error: null }));
     mockTables();
   });
 

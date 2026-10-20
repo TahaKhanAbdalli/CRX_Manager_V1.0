@@ -1,7 +1,9 @@
 import type { CommissionSplit, QuoteVersion } from '../types';
 import type { Database } from '../types/supabase';
 
-export type QuoteVersionRow = Database['public']['Tables']['quote_versions']['Row'];
+// get_quote_versions returns the table's row shape; a non-admin's snapshot has every cost,
+// profit and margin value set to NULL (cost is admin-only, Mason 2026-10-15).
+export type QuoteVersionRow = Database['public']['Functions']['get_quote_versions']['Returns'][number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -42,7 +44,7 @@ function isQuoteSnapshotItem(value: unknown): value is QuoteVersion['snapshot_da
     && isFiniteNumber(value.sort_order)
     && isNullableString(value.notes)
     && isFiniteNumber(value.price_per_unit)
-    && isFiniteNumber(value.current_cost)
+    && isNullableFiniteNumber(value.current_cost)
     && isNullableString(value.suggested_rate)
     && isNullableFiniteNumber(value.actual_rate)
     && isNullableString(value.rate_unit)
@@ -51,9 +53,9 @@ function isQuoteSnapshotItem(value: unknown): value is QuoteVersion['snapshot_da
     && isNullableFiniteNumber(value.acres)
     && isNullableFiniteNumber(value.total_units_needed)
     && isNullableString(value.unit_size)
-    && isFiniteNumber(value.profit)
+    && isNullableFiniteNumber(value.profit)
     && isFiniteNumber(value.total_price)
-    && isFiniteNumber(value.net_margin)
+    && isNullableFiniteNumber(value.net_margin)
     && isNullableString(value.calc_mode)
     && isNullableString(value.price_unit);
 }
@@ -66,9 +68,9 @@ function isQuoteSnapshotQuote(value: unknown): value is QuoteVersion['snapshot_d
     && isFiniteNumber(quote.tier)
     && typeof quote.status === 'string'
     && isFiniteNumber(quote.total_price)
-    && isFiniteNumber(quote.total_cost)
-    && isFiniteNumber(quote.total_profit)
-    && isFiniteNumber(quote.total_margin_pct)
+    && isNullableFiniteNumber(quote.total_cost)
+    && isNullableFiniteNumber(quote.total_profit)
+    && isNullableFiniteNumber(quote.total_margin_pct)
     && isFiniteNumber(quote.valid_days)
     && isNullableString(quote.expires_at)
     && isNullableString(quote.header_notes)

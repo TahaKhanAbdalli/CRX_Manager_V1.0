@@ -17,6 +17,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../hooks/useUnresolvedIntent';
 import { fingerprintIntentPayload } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
+import { PRODUCT_COLUMNS } from '../lib/costFields';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
 import type { BlendRecipe, Product, RecipeType, UnitConversion } from '../types';
@@ -136,7 +137,7 @@ export default function BlendRecipes() {
   const fetchProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select(PRODUCT_COLUMNS)
       .eq('is_active', true)
       .order('product_name');
     if (error) {

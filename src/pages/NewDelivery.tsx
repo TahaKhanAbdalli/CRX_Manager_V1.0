@@ -20,6 +20,7 @@ import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { localToday } from '../lib/dateUtils';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
+import { ORDER_COLUMNS, ORDER_ITEM_COLUMNS } from '../lib/costFields';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -115,7 +116,7 @@ export default function NewDelivery() {
   const fetchOrders = useCallback(async () => {
     let orderQuery = supabase
       .from('orders')
-      .select('*, customer:customers(farm_name)')
+      .select(`${ORDER_COLUMNS}, customer:customers(farm_name)`)
       .in('status', ['confirmed', 'partially_fulfilled'])
       .is('deleted_at', null);
 
@@ -158,7 +159,7 @@ export default function NewDelivery() {
     setLoadingDetails(true);
     const { data: orderData, error: orderErr } = await supabase
       .from('orders')
-      .select('*')
+      .select(ORDER_COLUMNS)
       .eq('id', orderId)
       .maybeSingle();
 
@@ -175,7 +176,7 @@ export default function NewDelivery() {
 
     const [custRes, itemsRes] = await Promise.all([
       supabase.from('customers').select('*').eq('id', orderData.customer_id).maybeSingle(),
-      supabase.from('order_items').select('*').eq('order_id', orderId).order('section_name'),
+      supabase.from('order_items').select(ORDER_ITEM_COLUMNS).eq('order_id', orderId).order('section_name'),
     ]);
 
     if (custRes.error) {

@@ -28,6 +28,7 @@ import {
   type InvoicePdfData,
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS } from '../lib/costFields';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
 import SeasonTag from '../components/invoices/SeasonTag';
@@ -136,7 +137,7 @@ export default function Invoices() {
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data, error } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select('*, customer:customers!invoices_customer_id_fkey(farm_name)', { count: 'exact' })
+      .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
       .is('deleted_at', null)
       // Segregation (Mason 2026-06-19): field-application invoices live in their
       // own area (/field-invoices). This Chemical Sales list excludes them so a
@@ -424,7 +425,7 @@ export default function Invoices() {
           // Fetch items with product details
           const { data: items } = await supabase
             .from('invoice_items')
-            .select('*, product:products(product_name, epa_registration, product_form)')
+            .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name, epa_registration, product_form)`)
             .eq('invoice_id', inv.id)
             .order('sort_order');
 

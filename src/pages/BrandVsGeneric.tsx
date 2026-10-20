@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { FlaskConical, Plus, Pencil, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -14,6 +14,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
+import { PRODUCT_COLUMNS, withAdminCosts, withAdminNestedCosts } from '../lib/costFields';
 import type { Product, IngredientMap } from '../types';
 
 type MappingRow = IngredientMap & { generic_product: Product | null };
@@ -43,13 +44,17 @@ export default function BrandVsGeneric() {
   const [deleteTarget, setDeleteTarget] = useState<MappingRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Only the newest load may install rows: a role change re-runs the loader while an older
+  // (possibly cost-less) load is still in flight (Luna round 2).
+  const loadSeqRef = useRef(0);
   const fetchData = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const [prodRes, mapRes] = await Promise.all([
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+      supabase.from('products').select(PRODUCT_COLUMNS).eq('is_active', true).order('product_name'),
       supabase
         .from('ingredient_map')
-        .select('*, generic_product:products!ingredient_map_generic_product_id_fkey(*)')
+        .select(`*, generic_product:products!ingredient_map_generic_product_id_fkey(${PRODUCT_COLUMNS})`)
         .order('fallback_branded_product'),
     ]);
 
@@ -61,10 +66,25 @@ export default function BrandVsGeneric() {
       setLoading(false);
       return;
     }
-    setProducts((prodRes.data || []) as Product[]);
-    setMappings((mapRes.data || []) as MappingRow[]);
+    // Cost is admin-only (Mason, 2026-10-15).
+    let loadedProducts: Product[];
+    let loadedMappings: MappingRow[];
+    try {
+      loadedProducts = await withAdminCosts('products', (prodRes.data || []) as Product[], isAdmin);
+      loadedMappings = await withAdminNestedCosts('products', (mapRes.data || []) as MappingRow[], 'generic_product', isAdmin);
+    } catch (costError) {
+      Sentry.captureException(costError, {
+        tags: { source: 'fetch', action: 'load_ingredient_map' },
+      });
+      toast('error', 'Failed to load ingredient mappings');
+      setLoading(false);
+      return;
+    }
+    if (seq !== loadSeqRef.current) return;
+    setProducts(loadedProducts);
+    setMappings(loadedMappings);
     setLoading(false);
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   useEffect(() => {
     fetchData();
@@ -115,7 +135,7 @@ export default function BrandVsGeneric() {
     : null;
   const genericProduct = viewerMapping?.generic_product || null;
 
-  const fmt = (n: number | null) =>
+  const fmt = (n: number | null | undefined) =>
     n != null
       ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
       : '-';
@@ -331,12 +351,15 @@ export default function BrandVsGeneric() {
                   <p className="text-xs text-secondary">Category</p>
                   <p className="text-sm text-nav-dark">{selectedProduct.category || '-'}</p>
                 </div>
-                <div className="border-t border-gray-100 pt-3">
-                  <p className="text-xs text-secondary">Cost</p>
-                  <p className="text-lg font-semibold text-nav-dark font-mono">
-                    {fmt(selectedProduct.current_cost)}
-                  </p>
-                </div>
+                {/* Cost is admin-only (Mason, 2026-10-15). */}
+                {isAdmin && (
+                  <div className="border-t border-gray-100 pt-3">
+                    <p className="text-xs text-secondary">Cost</p>
+                    <p className="text-lg font-semibold text-nav-dark font-mono">
+                      {fmt(selectedProduct.current_cost)}
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <p className="text-xs text-secondary">T1</p>
@@ -369,12 +392,14 @@ export default function BrandVsGeneric() {
                   <p className="text-xs text-secondary">Category</p>
                   <p className="text-sm text-nav-dark">{genericProduct.category || '-'}</p>
                 </div>
-                <div className="border-t border-gray-100 pt-3">
-                  <p className="text-xs text-secondary">Cost</p>
-                  <p className="text-lg font-semibold text-crx-green font-mono">
-                    {fmt(genericProduct.current_cost)}
-                  </p>
-                </div>
+                {isAdmin && (
+                  <div className="border-t border-gray-100 pt-3">
+                    <p className="text-xs text-secondary">Cost</p>
+                    <p className="text-lg font-semibold text-crx-green font-mono">
+                      {fmt(genericProduct.current_cost)}
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <p className="text-xs text-secondary">T1</p>
@@ -408,7 +433,7 @@ export default function BrandVsGeneric() {
                   </thead>
                   <tbody>
                     {[
-                      { label: 'Cost', branded: selectedProduct.current_cost, generic: genericProduct.current_cost },
+                      ...(isAdmin ? [{ label: 'Cost', branded: selectedProduct.current_cost, generic: genericProduct.current_cost }] : []),
                       { label: 'Tier 1 Price', branded: selectedProduct.tier1_price, generic: genericProduct.tier1_price },
                       { label: 'Tier 2 Price', branded: selectedProduct.tier2_price, generic: genericProduct.tier2_price },
                       { label: 'Tier 3 Price', branded: selectedProduct.tier3_price, generic: genericProduct.tier3_price },

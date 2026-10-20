@@ -16,6 +16,7 @@ import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
 import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { QUOTE_COLUMNS } from '../lib/costFields';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -266,7 +267,7 @@ export default function Quotes() {
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data, error } = await fetchAllRows((from, to) => supabase
       .from('quotes')
-      .select('*, customer:customers(farm_name)', { count: 'exact' })
+      .select(`${QUOTE_COLUMNS}, customer:customers(farm_name)`, { count: 'exact' })
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .order('id')
@@ -447,7 +448,7 @@ export default function Quotes() {
         .from('quotes')
         .update({ deleted_at: new Date().toISOString() })
         .in('id', ids)
-        .select();
+        .select('id');
       checkMutationResult(result, 'Delete quotes');
       toast('success', `Deleted ${ids.length} quote(s)`);
       clearSelection();

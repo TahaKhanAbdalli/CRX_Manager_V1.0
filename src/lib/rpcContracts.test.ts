@@ -2207,7 +2207,12 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   });
 
   it('save_job specifically uses idempotency_keys (regression guard for the 2026-05-29 fix)', () => {
-    const body = latestFunctionBody('save_job');
+    // Since 20261019230000 public.save_job is a cost wrapper (cost is admin-only) that forwards
+    // the key to the renamed body, and that body must still read idempotency_keys itself.
+    const wrapper = latestFunctionBody('save_job');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper as string).toMatch(/public\._save_job_cost_step2_impl\([^;]*p_idempotency_key\)/);
+    const body = resolveFunctionBody('_save_job_cost_step2_impl');
     expect(body).not.toBeNull();
     expect(bodyUsesIdempotency(body as string)).toBe(true);
   });

@@ -520,7 +520,7 @@ export default function LabelDataQuality() {
         .eq('id', row.product.id)
         .eq('epa_registration', row.product.epaRegistrationDb || row.product.epa_registration)
         .is('signal_word', null)
-        .select();
+        .select('id');
       if (mutation.error) throw mutation.error;
       if (!mutation.data || mutation.data.length === 0) {
         toast('info', `${row.product.product_name} changed since the last EPA check. Re-run the check before applying a signal word.`);
@@ -581,7 +581,7 @@ export default function LabelDataQuality() {
           .eq('id', row.product.id)
           .eq('epa_registration', row.product.epaRegistrationDb || row.product.epa_registration)
           .is('signal_word', null)
-          .select();
+          .select('id');
         if (mutation.error) throw mutation.error;
         if (!mutation.data || mutation.data.length === 0) {
           skipped += 1;
@@ -797,7 +797,7 @@ export default function LabelDataQuality() {
         .from('products')
         .update({ epa_registration: registrationNumber, signal_word: null })
         .eq('id', row.product.id)
-        .select();
+        .select('id');
       checkMutationResult(mutation, 'update_product_epa_registration');
 
       const hadRegistration = row.product.epa_registration.trim().length > 0;

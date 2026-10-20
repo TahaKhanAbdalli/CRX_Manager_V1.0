@@ -73,17 +73,17 @@ export interface Product {
   inventory_unit: string | null;
   container_unit: string | null;
   container_type: ContainerType | null;
-  current_cost: number | null;
-  cost_updated_date: string | null;
+  current_cost?: number | null;
+  cost_updated_date?: string | null;
   tier1_price: number | null;
-  tier1_margin: number | null;
-  tier1_gross_margin: number | null;
+  tier1_margin?: number | null;
+  tier1_gross_margin?: number | null;
   tier2_price: number | null;
-  tier2_margin: number | null;
-  tier2_gross_margin: number | null;
+  tier2_margin?: number | null;
+  tier2_gross_margin?: number | null;
   tier3_price: number | null;
-  tier3_margin: number | null;
-  tier3_gross_margin: number | null;
+  tier3_margin?: number | null;
+  tier3_gross_margin?: number | null;
   tier1_price_per_acre: number | null;
   tier2_price_per_acre: number | null;
   tier3_price_per_acre: number | null;
@@ -685,9 +685,9 @@ export interface Quote {
   is_planned: boolean;
   commission_split: CommissionSplit | null;
   total_price: number;
-  total_cost: number;
-  total_profit: number;
-  total_margin_pct: number;
+  total_cost?: number | null;
+  total_profit?: number | null;
+  total_margin_pct?: number | null;
   valid_days: number;
   expires_at: string | null;
   header_notes: string | null;
@@ -723,7 +723,7 @@ export interface QuoteItem {
   notes: string | null;
   price_per_unit: number;
   price_override: number | null;
-  current_cost: number;
+  current_cost?: number | null;
   // Immutable as-of-quote cost snapshot (20260812115236), mirroring
   // order_items.cost_at_time_cents. Trigger-stamped on insert and never
   // written by the browser. NULL only on a legacy row whose product carried
@@ -738,9 +738,9 @@ export interface QuoteItem {
   acres: number | null;
   total_units_needed: number | null;
   unit_size: string | null;
-  profit: number;
+  profit?: number | null;
   total_price: number;
-  net_margin: number;
+  net_margin?: number | null;
   calc_mode: string | null;
   price_unit: string | null;
   product?: Product;
@@ -785,9 +785,9 @@ export interface QuoteVersion {
       tier: number;
       status: string;
       total_price: number;
-      total_cost: number;
-      total_profit: number;
-      total_margin_pct: number;
+      total_cost?: number | null;
+      total_profit?: number | null;
+      total_margin_pct?: number | null;
       valid_days: number;
       expires_at: string | null;
       header_notes: string | null;
@@ -808,7 +808,7 @@ export interface QuoteVersion {
         sort_order: number;
         notes: string | null;
         price_per_unit: number;
-        current_cost: number;
+        current_cost?: number | null;
         suggested_rate: string | null;
         actual_rate: number | null;
         rate_unit: string | null;
@@ -817,9 +817,9 @@ export interface QuoteVersion {
         acres: number | null;
         total_units_needed: number | null;
         unit_size: string | null;
-        profit: number;
+        profit?: number | null;
         total_price: number;
-        net_margin: number;
+        net_margin?: number | null;
         calc_mode: string | null;
         price_unit: string | null;
       }>;
@@ -881,9 +881,9 @@ export interface Order {
   status: OrderStatus;
   commission_split: CommissionSplit | null;
   total_price: number;
-  total_cost: number;
-  total_profit: number;
-  total_margin_pct: number;
+  total_cost?: number | null;
+  total_profit?: number | null;
+  total_margin_pct?: number | null;
   order_date: string;
   season: number | null;
   salesman_id: string | null;
@@ -946,22 +946,22 @@ export interface OrderItem {
   section_name: string | null;
   product_name: string;
   price_per_unit: number;
-  cost_per_unit: number;
+  cost_per_unit?: number | null;
   /**
    * Snapshot of `products.current_cost` (cents, rounded) at row insert time.
    * Distinct from `cost_per_unit` (caller-supplied — may be a stale quote cost
    * or manual override). Populated by trg_snapshot_order_item_cost trigger.
    * See migration 20260513050000 (audit #32).
    */
-  cost_at_time_cents: number | null;
+  cost_at_time_cents?: number | null;
   actual_rate: number | null;
   rate_unit: string | null;
   acres: number | null;
   total_units_needed: number;
   unit_size: string | null;
   total_price: number;
-  profit: number;
-  net_margin: number;
+  profit?: number | null;
+  net_margin?: number | null;
   quantity_delivered: number;
   quantity_remaining: number;
   sort_order: number;
@@ -1385,7 +1385,7 @@ export interface Commission {
   recipient_user_id: string | null;
   split_percentage: number;
   commission_amount: number;
-  order_profit: number;
+  order_profit?: number | null;
   order_date: string;
   order_number: string;
   customer_name: string;
@@ -1635,7 +1635,7 @@ export interface BlendTicketProduct {
   manually_corrected: boolean;
   rate_per_acre: number | null;
   rate_per_acre_unit: string | null;
-  unit_cost_cents: number | null;
+  unit_cost_cents?: number | null;
   unit_price_cents: number | null;
   created_at: string;
   product?: Product;
@@ -1826,7 +1826,7 @@ export interface Invoice {
   vehicle_name: string | null;
   application_date: string | null;
   job_id: string | null;
-  total_cost_cents: number;
+  total_cost_cents?: number | null;
 
   is_quick_delivery?: boolean;
   write_off_cents: number;
@@ -1880,7 +1880,7 @@ export interface InvoiceItem {
   quantity: number;
   unit_price_cents: number;
   extended_cents: number;
-  cost_cents: number;
+  cost_cents?: number | null;
   sort_order: number;
   rate_per_acre: number | null;
   acres: number | null;
@@ -2860,7 +2860,7 @@ export interface Job {
   batch_id: string | null;
   season: number | null;
   total_acres: number | null;
-  total_cost_cents: number;
+  total_cost_cents?: number | null;
   total_price_cents: number;
   priority: 'low' | 'normal' | 'high' | 'urgent';
   estimated_hours: number | null;
@@ -3103,7 +3103,7 @@ export interface JobChemical {
   unit: string | null;
   rate_per_acre: number | null;
   rate_unit: string | null;
-  cost_per_unit_cents: number;
+  cost_per_unit_cents?: number | null;
   price_per_unit_cents: number;
   // Field-app parity #1 (2026-06-24): ChemMan chemical extras.
   diluent_rate: number | null;
@@ -3357,8 +3357,9 @@ export interface ChemicalHistoryRow {
   customer_name: string | null;
   quantity: number;
   unit: string | null;
-  unit_price: number;
-  total_amount: number;
+  // NULL on Purchase rows for non-admins: purchase cost is admin-only (20261019230000).
+  unit_price: number | null;
+  total_amount: number | null;
   notes: string | null;
 }
 
@@ -3785,7 +3786,10 @@ export interface QuickReceiveAllocation {
   purchase_order_id: string;
   po_number: string;
   po_vendor: string;
-  unit_cost: number;
+  /** Admins only (purchase cost is admin-only, Mason 2026-10-18). */
+  unit_cost?: number | null;
+  /** Cheaper than the product's dearest open PO line: the NO-RETURN badge (20261019230000). */
+  is_no_return?: boolean;
   quantity_allocated: number;
   po_remaining_before: number;
   po_remaining_after: number;

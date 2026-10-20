@@ -74,6 +74,7 @@ import {
   type ProofDraft,
 } from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 import {
   carryoverRowsFromRecords,
   realApplicatorName,
@@ -1017,19 +1018,33 @@ export default function FieldApplicationInvoice() {
       }
     }
 
-    const { data: inv, error } = await supabase
+    const { data: rawInv, error } = await supabase
       .from('invoices')
-      .select('*')
+      .select(INVOICE_COLUMNS)
       .eq('id', id)
       .single();
 
     if (!isCurrentLoad()) return;
 
-    if (error || !inv) {
+    if (error || !rawInv) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
       return;
     }
+
+    // Cost is admin-only (Mason, 2026-10-15). An admin whose cost read fails must not reach
+    // the editor: re-saving it would write zero cost onto every chemical line.
+    let inv = rawInv;
+    try {
+      inv = (await withAdminCost('invoices', rawInv, isAdmin)) ?? rawInv;
+    } catch (costErr) {
+      if (!isCurrentLoad()) return;
+      Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_costs' } });
+      toast('error', 'Failed to load invoice');
+      navigate('/field-invoices');
+      return;
+    }
+    if (!isCurrentLoad()) return;
 
     const invoice = inv as Record<string, unknown>;
     // #A (Codex round-2): a per-line SPLIT child must never be edited in this per-acre editor —
@@ -1291,13 +1306,26 @@ export default function FieldApplicationInvoice() {
       );
     }
 
-    const { data: items } = await supabase
+    const { data: rawItems } = await supabase
       .from('invoice_items')
-      .select('*')
+      .select(INVOICE_ITEM_COLUMNS)
       .eq('invoice_id', id)
       .order('sort_order');
 
     if (!isCurrentLoad()) return;
+    let items = rawItems;
+    if (items) {
+      try {
+        items = await withAdminCosts('invoice_items', items, isAdmin);
+      } catch (costErr) {
+        if (!isCurrentLoad()) return;
+        Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_item_costs' } });
+        toast('error', 'Failed to load invoice');
+        navigate('/field-invoices');
+        return;
+      }
+      if (!isCurrentLoad()) return;
+    }
 
     if (items) {
       // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
@@ -1339,6 +1367,7 @@ export default function FieldApplicationInvoice() {
             unit_price_cents: (it.unit_price_cents as number) || 0,
             price_unit: (it.unit_size as string) || 'oz',
             extended_cents: (it.extended_cents as number) || 0,
+            // Absent for non-admins; the server works out their cost on save.
             unit_cost_cents: (it.cost_cents as number) || 0,
             sort_order: (it.sort_order as number) || idx,
             // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
@@ -1417,7 +1446,7 @@ export default function FieldApplicationInvoice() {
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
     setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
-  }, [id, toast, navigate]);
+  }, [id, toast, navigate, isAdmin]);
 
   useEffect(() => {
     // Invalidate any in-flight load for the previous identity BEFORE resetting state,

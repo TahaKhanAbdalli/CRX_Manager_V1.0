@@ -37,6 +37,7 @@ import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { PRODUCT_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
@@ -109,6 +110,8 @@ export default function NewOrder() {
   // scoped RLS on orders/order_items + PAGE_PERMISSIONS), re-open the routes and
   // these guards already hide all cost/profit/margin from field staff.
   const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
+  // Cost is admin-only (Mason, 2026-10-15).
+  const isAdmin = profile?.role === 'admin';
   useEffect(() => {
     if (isFieldStaff) setPriceLater(true);
   }, [isFieldStaff]);
@@ -200,10 +203,14 @@ export default function NewOrder() {
   const [productSearch, setProductSearch] = useState('');
   const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
 
+  // Only the newest load may install the product list: a role change re-runs this loader while an
+  // older (cost-less) load may still be in flight (Luna round 3).
+  const loadSeqRef = useRef(0);
   const fetchData = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
-      supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
+      supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
     ]);
     const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
@@ -234,10 +241,21 @@ export default function NewOrder() {
       }
     }
 
+    let productRows = (productsRes.data || []) as Product[];
+    try {
+      productRows = await withAdminCosts('products', productRows, isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_product_costs' } });
+      toast('error', 'Failed to load product costs. Please refresh.');
+      // Never offer an admin a product list without cost (Luna round 1).
+      productRows = [];
+    }
+    if (seq !== loadSeqRef.current) return;
+
     setCustomers((customersRes.data || []) as Customer[]);
-    setProducts((productsRes.data || []) as Product[]);
+    setProducts(productRows);
     setLoading(false);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   useEffect(() => {
     fetchData();
@@ -943,7 +961,9 @@ export default function NewOrder() {
                         products.current_cost and discards whatever the payload
                         carries, so an editable field here would show the rep a
                         profit and margin the saved order will not have. Read the
-                        catalogue value, do not let it be typed over. */}
+                        catalogue value, do not let it be typed over.
+                        Cost is admin-only (Mason, 2026-10-15). */}
+                    {isAdmin && (
                     <div>
                       <label className="block text-xs font-medium text-secondary mb-1">
                         Unit Cost
@@ -957,6 +977,7 @@ export default function NewOrder() {
                         title="Cost comes from the product catalog and cannot be edited here. Update the product to change it."
                       />
                     </div>
+                    )}
                     </>)}
 
                     <div>
@@ -999,8 +1020,9 @@ export default function NewOrder() {
                         </div>
                         {/* #2 (Codex round 2 BLOCKER): never show cost/profit/margin
                             to field staff (driver/applicator) — recalcItem computes
-                            real values from product cost/tier price even in rush mode. */}
-                        {!isFieldStaff && (<>
+                            real values from product cost/tier price even in rush mode.
+                            Cost is admin-only (Mason, 2026-10-15). */}
+                        {isAdmin && (<>
                         <div className="flex items-center gap-2">
                           <span className="text-secondary">Profit:</span>
                           <span className={`font-medium font-mono ${item.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -1048,7 +1070,7 @@ export default function NewOrder() {
                   <span className="text-secondary mr-2">Total:</span>
                   <span className="font-semibold font-mono text-nav-dark">{fmtUsd(orderTotal)}</span>
                 </div>
-                {!isFieldStaff && (<>
+                {isAdmin && (<>
                 <div>
                   <span className="text-secondary mr-2">Profit:</span>
                   <span className={`font-semibold font-mono ${orderProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>

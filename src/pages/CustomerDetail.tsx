@@ -46,6 +46,7 @@ import CustomerFacts from '../components/customers/CustomerFacts';
 import CustomerPrepCard from '../components/customers/CustomerPrepCard';
 import CustomerDocuments from '../components/customers/CustomerDocuments';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
+import { ORDER_COLUMNS, QUOTE_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
 
@@ -104,6 +105,8 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  // Cost is admin-only (Mason, 2026-10-15).
+  const isAdmin = profile?.role === 'admin';
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
   // Scoped by the ROUTE ID because F1 makes this key OUTLIVE an ambiguous reply, and
@@ -529,19 +532,34 @@ export default function CustomerDetail() {
     } else if (selectedTab === 'quotes') {
       const { data } = await supabase
         .from('quotes')
-        .select('*')
+        .select(QUOTE_COLUMNS)
         .eq('customer_id', id!)
         .order('created_at', { ascending: false });
+      // Cost is admin-only (Mason, 2026-10-15).
+      let quoteRows = (data || []) as Quote[];
+      try {
+        quoteRows = await withAdminCosts('quotes', quoteRows, isAdmin);
+      } catch (err) {
+        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_customer_quote_costs' } });
+        toast('error', 'Failed to load quote margins');
+      }
       if (isStale()) return;
-      setQuotes((data || []) as Quote[]);
+      setQuotes(quoteRows);
     } else if (selectedTab === 'orders') {
       const { data } = await supabase
         .from('orders')
-        .select('*')
+        .select(ORDER_COLUMNS)
         .eq('customer_id', id!)
         .is('deleted_at', null)
         .order('order_date', { ascending: false });
-      const rows = ((data || []) as Order[]).map((o) => {
+      let orderRows = (data || []) as Order[];
+      try {
+        orderRows = await withAdminCosts('orders', orderRows, isAdmin);
+      } catch (err) {
+        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_customer_order_costs' } });
+        toast('error', 'Failed to load order profit');
+      }
+      const rows = orderRows.map((o) => {
         return { ...o, fulfillment_pct: 0 };
       });
       if (isStale()) return;
@@ -728,7 +746,7 @@ export default function CustomerDetail() {
     if (isStale()) return;
     setTabLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, isAdmin]);
 
   useEffect(() => {
     if (!isNew && id && tab !== 'info') {
@@ -1636,7 +1654,7 @@ export default function CustomerDetail() {
                     <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Tier</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Total</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Margin</th>
+                    {isAdmin && <th className="px-4 py-3 text-left font-medium text-secondary">Margin</th>}
                     <th className="px-4 py-3 text-left font-medium text-secondary">Created</th>
                   </tr>
                 </thead>
@@ -1662,7 +1680,7 @@ export default function CustomerDetail() {
                       </td>
                       <td className="px-4 py-3">T{q.tier}</td>
                       <td className="px-4 py-3 font-mono">{fmt(q.total_price)}</td>
-                      <td className="px-4 py-3 font-mono text-emerald-600">{q.total_margin_pct.toFixed(1)}%</td>
+                      {isAdmin && <td className="px-4 py-3 font-mono text-emerald-600">{q.total_margin_pct == null ? '—' : `${q.total_margin_pct.toFixed(1)}%`}</td>}
                       <td className="px-4 py-3 text-secondary">
                         {new Date(q.created_at).toLocaleDateString()}
                       </td>
@@ -1699,7 +1717,7 @@ export default function CustomerDetail() {
                     <th className="px-5 py-3 text-left font-medium text-secondary">Order #</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Total</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Profit</th>
+                    {isAdmin && <th className="px-4 py-3 text-left font-medium text-secondary">Profit</th>}
                     <th className="px-4 py-3 text-left font-medium text-secondary">Date</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary w-40">Fulfillment</th>
                   </tr>
@@ -1718,7 +1736,7 @@ export default function CustomerDetail() {
                         </Badge>
                       </td>
                       <td className="px-4 py-3 font-mono">{fmt(o.total_price)}</td>
-                      <td className="px-4 py-3 font-mono text-emerald-600">{fmt(o.total_profit)}</td>
+                      {isAdmin && <td className="px-4 py-3 font-mono text-emerald-600">{o.total_profit == null ? '—' : fmt(o.total_profit)}</td>}
                       <td className="px-4 py-3 text-secondary">
                         {new Date(o.order_date + 'T00:00:00').toLocaleDateString()}
                       </td>

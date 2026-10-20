@@ -25,6 +25,7 @@ import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '
 import { Sentry } from '../lib/sentry';
 import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 import { fetchAllRows } from '../lib/reconciliation';
+import { COMMISSION_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
@@ -45,9 +46,8 @@ const ADMIN_ONLY_OPERATIONAL_TABS: ReadonlySet<OperationalTab> = new Set(['inven
 const ADMIN_ONLY_PROFIT_TABS: ReadonlySet<ProfitTab> = new Set(['customer', 'product', 'revenue']);
 const NO_COMMISSIONS: CommissionRow[] = [];
 // A rep's own commission rows, without order_profit (profit is admin-only).
-// Price list columns; only an admin's list carries current_cost (cost is admin-only).
+// Price list columns; an admin's list adds current_cost through withAdminCosts (cost is admin-only).
 const PRICE_LIST_COLUMNS = 'id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, product_form, container_type, container_size, unit_size';
-const PRICE_LIST_COLUMNS_ADMIN = 'id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size';
 const REP_COMMISSION_COLUMNS = 'id, recipient, order_id, job_id, commission_amount, split_percentage, order_date, status, paid_date';
 
 // ─── Existing profitability interfaces (unchanged) ─────────────
@@ -275,16 +275,26 @@ export default function Reports() {
   const fetchCustomerProfitability = useCallback(async () => {
     let query = supabase
       .from('orders')
-      .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)')
+      .select('id, total_price, customer:customers(farm_name)')
       .is('deleted_at', null)
       .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load customer profitability.'); return; }
+    // Cost is admin-only (Mason, 2026-10-15): profit comes from get_admin_cost_fields, not the table.
+    type CustomerProfitOrder = { id: string; total_price: number; total_profit?: number | null; customer: { farm_name: string } | { farm_name: string }[] | null };
+    let orders: CustomerProfitOrder[];
+    try {
+      orders = await withAdminCosts('orders', (data || []) as CustomerProfitOrder[], isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'customer_profitability_costs' } });
+      toast('error', 'Failed to load customer profitability.');
+      return;
+    }
 
     const grouped: Record<string, CustomerProfit> = {};
-    ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string } | { farm_name: string }[] | null }>).forEach((o) => {
+    orders.forEach((o) => {
       const customerJoin = Array.isArray(o.customer) ? o.customer[0] : o.customer;
       const name = customerJoin?.farm_name || 'Unknown';
       if (!grouped[name]) grouped[name] = { farm_name: name, total_revenue: 0, total_profit: 0, margin_pct: 0, order_count: 0 };
@@ -298,19 +308,28 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setCustomerData(result);
-  }, [startDate, endDate, toast]);
+  }, [startDate, endDate, toast, isAdmin]);
 
   const fetchProductProfitability = useCallback(async () => {
     let query = supabase
       .from('order_items')
-      .select('product_name, total_price, profit, total_units_needed, order:orders!inner(order_date)');
+      .select('id, product_name, total_price, total_units_needed, order:orders!inner(order_date)');
     if (startDate) query = query.gte('order.order_date', startDate);
     if (endDate) query = query.lte('order.order_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load product profitability.'); return; }
+    type ProductProfitItem = { id: string; product_name: string; total_price: number; profit?: number | null; total_units_needed: number };
+    let items: ProductProfitItem[];
+    try {
+      items = await withAdminCosts('order_items', (data || []) as ProductProfitItem[], isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'product_profitability_costs' } });
+      toast('error', 'Failed to load product profitability.');
+      return;
+    }
 
     const grouped: Record<string, ProductProfit> = {};
-    ((data || []) as Array<{ product_name: string; total_price: number; profit: number; total_units_needed: number }>).forEach((i) => {
+    items.forEach((i) => {
       const name = i.product_name;
       if (!grouped[name]) grouped[name] = { product_name: name, total_revenue: 0, total_profit: 0, units_sold: 0, margin_pct: 0 };
       grouped[name].total_revenue += i.total_price || 0;
@@ -323,7 +342,7 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setProductData(result);
-  }, [startDate, endDate, toast]);
+  }, [startDate, endDate, toast, isAdmin]);
 
   // Returns whether the commission list on screen is now current. The quick-pay
   // recovery messages send the admin to a list to work out what actually
@@ -337,7 +356,8 @@ export default function Reports() {
     const loadId = ++commissionsLoadId.current;
     const forAdmin = isAdmin;
     try {
-      let query = supabase.from('commissions').select(isAdmin ? '*' : REP_COMMISSION_COLUMNS).order('order_date', { ascending: false });
+      // Cost is admin-only (Mason, 2026-10-15): order_profit comes from get_admin_cost_fields.
+      let query = supabase.from('commissions').select(isAdmin ? COMMISSION_COLUMNS : REP_COMMISSION_COLUMNS).order('order_date', { ascending: false });
       if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
       if (startDate) query = query.gte('order_date', startDate);
       if (endDate) query = query.lte('order_date', endDate);
@@ -345,7 +365,9 @@ export default function Reports() {
       // A newer load (for example after a role change) owns the result; drop this one.
       if (loadId !== commissionsLoadId.current) return true;
       if (error) { toast('error', 'Failed to load commissions.'); return false; }
-      setCommissionData((data || []) as unknown as CommissionRow[]);
+      const rows = await withAdminCosts('commissions', (data || []) as unknown as CommissionRow[], forAdmin);
+      if (loadId !== commissionsLoadId.current) return true;
+      setCommissionData(rows);
       setCommissionDataForAdmin(forAdmin);
       setSelectedCommissions(new Set());
       return true;
@@ -357,7 +379,7 @@ export default function Reports() {
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
-    let query = supabase.from('orders').select('order_date, total_price, total_profit')
+    let query = supabase.from('orders').select('id, order_date, total_price')
       .is('deleted_at', null)
       .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
       .order('order_date');
@@ -365,9 +387,18 @@ export default function Reports() {
     if (endDate) query = query.lte('order_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load revenue data.'); return; }
+    type RevenueOrder = { id: string; order_date: string; total_price: number; total_profit?: number | null };
+    let orders: RevenueOrder[];
+    try {
+      orders = await withAdminCosts('orders', (data || []) as RevenueOrder[], isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'revenue_costs' } });
+      toast('error', 'Failed to load revenue data.');
+      return;
+    }
 
     const grouped: Record<string, RevenueSummary> = {};
-    ((data || []) as Array<{ order_date: string; total_price: number; total_profit: number }>).forEach((o) => {
+    orders.forEach((o) => {
       const month = o.order_date.substring(0, 7);
       if (!grouped[month]) grouped[month] = { month, revenue: 0, profit: 0, orders: 0 };
       grouped[month].revenue += o.total_price || 0;
@@ -375,7 +406,7 @@ export default function Reports() {
       grouped[month].orders += 1;
     });
     setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
-  }, [startDate, endDate, toast]);
+  }, [startDate, endDate, toast, isAdmin]);
 
   // ─── PROFITABILITY parent fetcher ────────────────────────────
   const fetchProfitability = useCallback(async () => {
@@ -502,8 +533,8 @@ export default function Reports() {
     try {
       const result = await fetchAllRows<Record<string, unknown>>((from, to) => supabase
         .from('products')
-        // Cost is admin-only (Mason, 2026-10-15): a non-admin's price list never asks for it.
-        .select<string, Record<string, unknown>>(isAdmin ? PRICE_LIST_COLUMNS_ADMIN : PRICE_LIST_COLUMNS)
+        // Cost is admin-only (Mason, 2026-10-15): never read from the table; admins add it below.
+        .select<string, Record<string, unknown>>(PRICE_LIST_COLUMNS)
         .eq('is_active', true)
         .order('product_name')
         .order('id')
@@ -535,7 +566,7 @@ export default function Reports() {
             extra: { context: 'price_list_load', rows: rows.length, uniqueIds: listIds.size, recheckRows: recheckIds.size, recheckError: recheck.error?.message },
           });
         } else {
-          data = rows;
+          data = await withAdminCosts('products', rows as Array<Record<string, unknown> & { id: string }>, isAdmin);
         }
       }
     } catch (err) {
@@ -999,8 +1030,9 @@ export default function Reports() {
         { key: 'customer_name', header: 'Customer/Vendor' },
         { key: 'quantity', header: 'Qty' },
         { key: 'unit', header: 'Unit' },
-        { key: 'unit_price', header: 'Price', format: fmtCSV },
-        { key: 'total_amount', header: 'Total', format: fmtCSV },
+        // Blank, not $0.00, where a non-admin's purchase price is withheld.
+        { key: 'unit_price', header: 'Price', format: (v) => (v == null ? '' : fmtCSV(v)) },
+        { key: 'total_amount', header: 'Total', format: (v) => (v == null ? '' : fmtCSV(v)) },
       ], 'chemical_history');
     } else if (operationalTab === 'inventory_cost') {
       exportToCSV(inventoryCostData as unknown as Record<string, unknown>[], [
@@ -1143,8 +1175,8 @@ export default function Reports() {
     { key: 'reference_number', header: 'Reference', render: (r) => <span className="font-medium text-nav-dark">{r.reference_number}</span> },
     { key: 'customer_name', header: 'Customer/Vendor', sortable: true },
     { key: 'quantity', header: 'Qty', sortable: true, render: (r) => `${r.quantity} ${r.unit || ''}` },
-    { key: 'unit_price', header: 'Unit Price', render: (r) => <span className="font-mono">{fmt(r.unit_price)}</span> },
-    { key: 'total_amount', header: 'Total', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_amount)}</span> },
+    { key: 'unit_price', header: 'Unit Price', render: (r) => <span className="font-mono">{r.unit_price == null ? '—' : fmt(r.unit_price)}</span> },
+    { key: 'total_amount', header: 'Total', sortable: true, render: (r) => <span className="font-mono">{r.total_amount == null ? '—' : fmt(r.total_amount)}</span> },
   ];
 
   const inventoryCostCols: Column<InventoryCostRow>[] = [

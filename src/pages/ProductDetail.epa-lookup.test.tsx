@@ -128,6 +128,12 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: H.toast }),
 }));
 
+// Admin cost comes from get_admin_cost_fields; the fixtures already carry it, so pass rows through.
+vi.mock('../lib/costFields', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/costFields')>()),
+  withAdminCost: async (_table: string, row: unknown) => row,
+}));
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     role: 'admin',

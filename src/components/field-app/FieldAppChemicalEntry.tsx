@@ -3,6 +3,8 @@ import { Plus, Trash2, AlertTriangle, ShieldAlert, Clock, CalendarClock } from '
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import { PRODUCT_COLUMNS, withAdminCosts } from '../../lib/costFields';
+import { useAuth } from '../../contexts/AuthContext';
 import type { Product, UnitConversion } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
@@ -142,6 +144,8 @@ export default function FieldAppChemicalEntry({
   applicationDate = null,
 }: FieldAppChemicalEntryProps) {
   const { toast } = useToast();
+  const { role } = useAuth();
+  const isAdmin = role === 'admin';
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PickerProduct[]>([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -157,31 +161,53 @@ export default function FieldAppChemicalEntry({
     });
   }, []);
   const searchRef = useRef<HTMLDivElement>(null);
+  // Only the newest search may install results: the admin cost read adds a second await, so an
+  // older search can now finish after a newer one (Luna round 1).
+  const searchSeqRef = useRef(0);
 
   const searchProducts = useCallback(async (q: string) => {
+    const seq = ++searchSeqRef.current;
     if (q.length < 2) { setSearchResults([]); setSearching(false); setSearchError(false); return; }
     setSearching(true);
     setSearchError(false);
     const { data, error } = await supabase
       .from('products')
-      .select('*, product_family:product_families(name)')
+      .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
       .eq('is_active', true)
       .or(`product_name.ilike.%${q}%,epa_registration.ilike.%${q}%`)
       .order('product_name')
       .limit(15);
+
+    // Cost is admin-only (Mason, 2026-10-15): a non-admin line carries 0 cost and the
+    // server derives it on save; cost is never displayed here.
+    let results: PickerProduct[] = [];
+    let loadError: unknown = error;
+    if (!error) {
+      try {
+        results = await withAdminCosts('products', (data || []) as unknown as PickerProduct[], isAdmin);
+      } catch (costError) {
+        loadError = costError;
+      }
+    }
+    if (seq !== searchSeqRef.current) return;
     setSearching(false);
 
-    if (error) {
-      Sentry.captureException(error, { tags: { component: 'FieldAppChemicalEntry' } });
+    if (loadError) {
+      Sentry.captureException(loadError, { tags: { component: 'FieldAppChemicalEntry' } });
       setSearchError(true);
       setSearchResults([]);
       return;
     }
     setSearchError(false);
-    setSearchResults((data || []) as unknown as PickerProduct[]);
-  }, []);
+    setSearchResults(results);
+  }, [isAdmin]);
 
   useEffect(() => {
+    // A new query retires any search still in flight and clears its results at once, so an older
+    // reply can never appear under the new text during the debounce (CodeRabbit).
+    searchSeqRef.current += 1;
+    setSearchResults([]);
+    setSearching(false);
     const timer = setTimeout(() => { if (searchQuery) searchProducts(searchQuery); }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery, searchProducts]);

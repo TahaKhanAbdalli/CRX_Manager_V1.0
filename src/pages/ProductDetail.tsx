@@ -41,6 +41,7 @@ import {
   type PurchaseCostBasisCandidate,
   type SupplierCostBasisCandidate,
 } from '../lib/productCostBasis';
+import { PRODUCT_COLUMNS, withAdminCost } from '../lib/costFields';
 
 const PRODUCT_NONPRICING_FIELDS = [
   'product_name', 'sku', 'category', 'vendor', 'manufacturer',
@@ -323,15 +324,28 @@ export default function ProductDetail() {
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchProduct = useCallback(async (reportError = true): Promise<boolean> => {
-    const { data, error } = await supabase.from('products').select('*').eq('id', id!).maybeSingle();
+    const { data, error } = await supabase.from('products').select(PRODUCT_COLUMNS).eq('id', id!).maybeSingle();
     if (error) {
       Sentry.captureException(error);
       if (reportError) toast('error', 'Failed to load product');
       setLoading(false);
       return false;
     }
-    if (data) {
-      const loadedProduct = data as Product;
+    // Cost is admin-only (Mason, 2026-10-15).
+    let withCost: Product | null;
+    try {
+      withCost = await withAdminCost('products', data as Product | null, isAdmin);
+    } catch (costError) {
+      Sentry.captureException(costError);
+      if (reportError) toast('error', 'Failed to load product');
+      setLoading(false);
+      return false;
+    }
+    // The admin cost read is a second await: if the route moved to another product meanwhile,
+    // this older load must not install its product on the new page (Luna round 2).
+    if (productIdRef.current !== id) return false;
+    if (withCost) {
+      const loadedProduct = withCost;
       setProduct(loadedProduct);
       setPersistedProduct(loadedProduct);
       setPricingMode(pricingModeFor(loadedProduct));
@@ -345,7 +359,7 @@ export default function ProductDetail() {
     }
     setLoading(false);
     return data !== null;
-  }, [id, toast]);
+  }, [id, isAdmin, productIdRef, toast]);
 
   const fetchCostHistory = useCallback(async (reportError = true): Promise<boolean> => {
     // cost_history is admin-only under RLS; a non-admin fetch would just be a
@@ -443,7 +457,7 @@ export default function ProductDetail() {
       .update(nonpricingProductPayload(product))
       .eq('id', id!)
       .eq('pricing_version', persistedProduct.pricing_version)
-      .select();
+      .select('id');
     if (!result.error && Array.isArray(result.data) && result.data.length === 0) {
       throw new Error('Product details changed after this page loaded. Reload before saving.');
     }
@@ -665,7 +679,7 @@ export default function ProductDetail() {
         const productInsertResult = await supabaseUntyped
           .from('products')
           .insert([nonpricingProductPayload(product)])
-          .select();
+          .select('id');
         if (productInsertResult.error) throw productInsertResult.error;
         checkMutationResult(productInsertResult, 'Insert product');
         setIsDirty(false);

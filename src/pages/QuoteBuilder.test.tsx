@@ -133,6 +133,14 @@ function buildUpdateChain(
   return self;
 }
 
+// Fixtures already carry cost; the admin cost read (get_admin_cost_fields) passes rows through.
+vi.mock('../lib/costFields', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/costFields')>()),
+  withAdminCost: async (_table: string, row: unknown) => row,
+  withAdminCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+  withAdminNestedCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+}));
+
 vi.mock('../lib/db', async () => {
   // Use the REAL sanitizeError. A hand-written stub shaped
   // `e instanceof Error ? e.message : …` re-implements the defect this PR fixes
@@ -154,9 +162,15 @@ vi.mock('../lib/db', async () => {
     || error.message?.startsWith(`${code}:`) === true
     || error.message?.startsWith(`${code} `) === true
   );
+  // Quote history now comes from get_quote_versions (cost is admin-only, 20261019230000); the
+  // fixtures still describe it as the quote_versions table, so serve the RPC from that table.
+  const rpcWithQuoteVersions = (name: string, args?: unknown) => (name === 'get_quote_versions'
+    ? Promise.resolve(mockFrom('quote_versions') as PromiseLike<{ data?: unknown; error?: unknown } | undefined>)
+      .then((r) => ({ data: r?.data ?? [], error: r?.error ?? null }))
+    : mockRpc(name, args));
   return {
-    supabase: { from: mockFrom, rpc: mockRpc },
-    supabaseUntyped: { from: mockFrom, rpc: mockRpc },
+    supabase: { from: mockFrom, rpc: rpcWithQuoteVersions },
+    supabaseUntyped: { from: mockFrom, rpc: rpcWithQuoteVersions },
     checkMutationResult: vi.fn(),
     assertRpcResult,
     hasRpcCode,
@@ -264,6 +278,7 @@ vi.mock('../components/ui/UnsavedChangesModal', () => ({ default: () => null }))
 
 import { preferredQuoteNotes } from '../lib/quoteNotes';
 import QuoteBuilder from './QuoteBuilder';
+import { PRODUCT_COLUMNS, QUOTE_ITEM_COLUMNS } from '../lib/costFields';
 // The REAL provider, not a stand-in. The hazard these tests cover is a property
 // of the real one: it is mounted above the route, so its approval dialog — and
 // the retry parked behind it — survive a navigation between quotes.
@@ -874,7 +889,7 @@ describe('QuoteBuilder', () => {
 
     expect(await screen.findByText('Family: Family Alpha')).toBeInTheDocument();
     expect(screen.getAllByText('SKU: SKU-EXACT')).toHaveLength(1);
-    expect(quoteItemSelects).toContain('*, product:products(*, product_family:product_families(name))');
+    expect(quoteItemSelects).toContain(`${QUOTE_ITEM_COLUMNS}, product:products(${PRODUCT_COLUMNS}, product_family:product_families(name))`);
   });
 
   afterEach(() => {

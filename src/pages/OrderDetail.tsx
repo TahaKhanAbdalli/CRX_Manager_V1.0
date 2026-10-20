@@ -40,6 +40,7 @@ import { validateInventoryPositionShape } from '../lib/inventoryPositionValidato
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { activeInvoiceCoversOrder } from '../lib/deliveryInvoiceCoverage';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { INVOICE_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -87,6 +88,7 @@ export default function OrderDetail() {
   const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '', id ?? '');
   // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
   const activeOrderIdRef = useRef<string | undefined>(undefined);
+  const fetchSeqRef = useRef(0);
   // Per-target idempotency keys for "post all drafts" (M7) — keyed by standalone
   // invoice or split group so a network retry reuses the server dedup boundary.
   const postDraftKeysRef = useRef<Record<string, string>>({});
@@ -162,26 +164,40 @@ export default function OrderDetail() {
   // #4 billing cockpit: post-all-drafts / consolidate-drafts actions.
   const [postingAll, setPostingAll] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
+  // An admin whose line costs failed to load must not edit lines: the edit would start from
+  // cost-less rows (Luna round 2). Cleared by the next successful load.
+  const [itemCostsFailed, setItemCostsFailed] = useState(false);
 
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
   // items are locked server-side (BOOKING_DRAW_ORDER_LOCKED); void/cancel the
   // order to return quantity to the booking, then draw again.
-  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled' && !order?.booking_draw;
+  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled' && !order?.booking_draw && !itemCostsFailed;
 
   const fetchOrder = useCallback(async () => {
     // Stale-route guard (M6): on rapid order-to-order navigation an older in-flight
-    // fetch must not render the previous order's items/invoices/deliveries.
-    const isStale = () => activeOrderIdRef.current !== id;
-    const { data: orderData } = await supabase
+    // fetch must not render the previous order's items/invoices/deliveries. Only the newest
+    // fetch may install state either, so an older cost-less load cannot overwrite an admin's
+    // costed lines (Luna round 3).
+    const seq = ++fetchSeqRef.current;
+    const isStale = () => activeOrderIdRef.current !== id || seq !== fetchSeqRef.current;
+    const { data: orderRow } = await supabase
       .from('orders')
-      .select('*')
+      .select(ORDER_COLUMNS)
       .eq('id', id!)
       .maybeSingle();
+    // Cost is admin-only (Mason, 2026-10-15).
+    let orderData = orderRow as Order | null;
+    try {
+      orderData = await withAdminCost('orders', orderData, isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_costs' } });
+      toast('error', 'Failed to load order cost. Please refresh.');
+    }
 
     if (isStale()) return;
     if (orderData) {
-      setOrder(orderData as Order);
+      setOrder(orderData);
 
       // Fetch parent quote for transaction thread
       if (orderData.quote_id) {
@@ -202,11 +218,20 @@ export default function OrderDetail() {
 
       const { data: itemsData } = await supabase
         .from('order_items')
-        .select('*')
+        .select(ORDER_ITEM_COLUMNS)
         .eq('order_id', id!)
         .order('section_name');
-      const itemsList = (itemsData || []) as OrderItem[];
+      let itemsList = (itemsData || []) as OrderItem[];
+      let costsFailed = false;
+      try {
+        itemsList = await withAdminCosts('order_items', itemsList, isAdmin);
+      } catch (err) {
+        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_item_costs' } });
+        toast('error', 'Failed to load order item costs. Please refresh.');
+        costsFailed = true;
+      }
       if (isStale()) return;
+      setItemCostsFailed(costsFailed);
       setItems(itemsList);
       setEditItems(itemsList.map((i) => ({ ...i })));
       // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
@@ -260,7 +285,7 @@ export default function OrderDetail() {
       // Load linked invoices (AR single source of truth)
       const { data: invoiceData } = await supabase
         .from('invoices')
-        .select('*')
+        .select(INVOICE_COLUMNS)
         .eq('order_id', id!)
         .not('status', 'in', '("voided","cancelled")')
         .order('invoice_number');
@@ -319,7 +344,7 @@ export default function OrderDetail() {
     }
     if (isStale()) return;
     setLoading(false);
-  }, [id, toast]);
+  }, [id, toast, isAdmin]);
 
   useEffect(() => {
     activeOrderIdRef.current = id;
@@ -328,7 +353,7 @@ export default function OrderDetail() {
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
-    const productsRes = await supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name');
+    const productsRes = await supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name');
     const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
     if (productsRes.error) {
@@ -340,7 +365,16 @@ export default function OrderDetail() {
       toast('error', 'Failed to load inventory positions. Please refresh.');
     }
 
-    setProducts((productsRes.data || []) as Product[]);
+    let productRows = (productsRes.data || []) as Product[];
+    try {
+      productRows = await withAdminCosts('products', productRows, isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_product_costs_for_order_edit' } });
+      toast('error', 'Failed to load product costs. Please refresh.');
+      // Never offer an admin a product list without cost (Luna round 1).
+      productRows = [];
+    }
+    setProducts(productRows);
 
     if (positionError) {
       setInventoryByProduct({});
@@ -355,7 +389,7 @@ export default function OrderDetail() {
         setInventoryByProduct({});
       }
     }
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   // Load products when edit mode is activated
   useEffect(() => {
@@ -595,7 +629,7 @@ export default function OrderDetail() {
         .from('orders')
         .update({ is_planned: newValue, updated_at: new Date().toISOString() })
         .eq('id', order.id)
-        .select();
+        .select('id');
       checkMutationResult(result, 'Toggle planned status');
       setOrder({ ...order, is_planned: newValue });
       toast('success', newValue ? 'Order marked as Planned' : 'Order marked as Committed');
@@ -688,7 +722,7 @@ export default function OrderDetail() {
             .from('orders')
             .update({ status: targetStatus, updated_at: new Date().toISOString() })
             .eq('id', id!)
-            .select();
+            .select('id');
           checkMutationResult(statusResult, 'Update order status');
           toast('success', `Status changed to ${targetStatus.replace('_', ' ')}`);
         }
@@ -1504,18 +1538,16 @@ export default function OrderDetail() {
             <p className="text-xs text-secondary">Total Price</p>
             <p className="text-sm font-medium text-nav-dark">{fmt(order.total_price)}</p>
           </div>
-          {/* #2 (Codex round 2): field staff (driver/applicator) can now reach this
-              page to create/track rush orders — never expose cost/profit/margin to
-              them. */}
-          {(role === 'admin' || role === 'sales_rep') && (<>
+          {/* Cost is admin-only (Mason, 2026-10-15): no profit/margin for reps or field staff. */}
+          {isAdmin && (<>
             <div>
               <p className="text-xs text-secondary">Profit</p>
-              <p className="text-sm font-medium text-crx-green">{fmt(order.total_profit)}</p>
+              <p className="text-sm font-medium text-crx-green">{order.total_profit == null ? '—' : fmt(order.total_profit)}</p>
             </div>
             <div>
               <p className="text-xs text-secondary">Margin</p>
               <p className="text-sm font-medium text-nav-dark">
-                {order.total_margin_pct.toFixed(1)}%
+                {order.total_margin_pct == null ? '—' : `${order.total_margin_pct.toFixed(1)}%`}
               </p>
             </div>
           </>)}

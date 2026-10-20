@@ -13016,6 +13016,10 @@ export type Database = {
         Returns: number
       }
       generate_ticket_number: { Args: never; Returns: string }
+      get_admin_cost_fields: {
+        Args: { p_ids: string[]; p_table: string }
+        Returns: Json
+      }
       get_ap_aging: {
         Args: { p_as_of_date?: string }
         Returns: {
@@ -13090,11 +13094,11 @@ export type Database = {
           notes: string
           quantity: number
           reference_number: string
-          total_amount: number
+          total_amount: number | null
           transaction_date: string
           transaction_type: string
           unit: string
-          unit_price: number
+          unit_price: number | null
         }[]
       }
       get_commission_balance_report: {
@@ -13602,6 +13606,21 @@ export type Database = {
         }[]
       }
       get_program_completion: { Args: { p_season?: number }; Returns: Json }
+      get_quote_versions: {
+        Args: { p_quote_id: string }
+        Returns: {
+          id: string
+          notes: string | null
+          pdf_url: string | null
+          quote_id: string
+          restore_trusted_at: string | null
+          sent_at: string
+          sent_by: string
+          sent_method: string | null
+          snapshot_data: Json
+          version_number: number
+        }[]
+      }
       get_receiving_log: {
         Args: {
           p_condition?: string

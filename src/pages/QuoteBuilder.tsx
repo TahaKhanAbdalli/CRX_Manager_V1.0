@@ -49,6 +49,7 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
+import { PRODUCT_COLUMNS, QUOTE_COLUMNS, QUOTE_ITEM_COLUMNS, withAdminCost, withAdminCosts, withAdminNestedCosts } from '../lib/costFields';
 import { formatUSD, formatCents } from '../lib/money';
 import { BelowCostApprovalHandledError, isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
@@ -71,7 +72,7 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { preferredQuoteNotes } from '../lib/quoteNotes';
-import { adaptQuoteVersionList, orderedQuoteVersionHistory, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
+import { adaptQuoteVersionList, orderedQuoteVersionHistory, type QuoteVersionRow, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -602,6 +603,8 @@ export default function QuoteBuilder() {
   // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
   // accepted/declined/expired/cancelled → sent (admin revert RPC only).
   const isAdmin = profile?.role === 'admin';
+  // Cost, profit and margin are admin-only (Mason, 2026-10-15); Customer View hides them for an admin too.
+  const hideCost = customerView || !isAdmin;
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
   // "Close — fulfilled by application" is only for a PLANNED open booking (the
@@ -791,10 +794,14 @@ export default function QuoteBuilder() {
     return () => { cancelled = true; };
   }, [isEditing, id]);
 
+  // Only the newest load may install the product list: a role change re-runs this loader while an
+  // older (cost-less) load may still be in flight (Luna round 3).
+  const referenceSeqRef = useRef(0);
   const fetchReferenceData = useCallback(async () => {
+    const seq = ++referenceSeqRef.current;
     const [custRes, prodRes, convRes, fieldsRes] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
-      supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
+      supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
       supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
@@ -811,11 +818,23 @@ export default function QuoteBuilder() {
       Sentry.captureException(convRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
     }
 
+    // Cost and margin are admin-only (Mason, 2026-10-15): only an admin's product list carries cost.
+    let productRows = (prodRes.data || []) as unknown as Product[];
+    try {
+      productRows = await withAdminCosts('products', productRows, isAdmin);
+    } catch (costErr) {
+      Sentry.captureException(costErr, { tags: { source: 'fetch', page: 'quote_builder', action: 'load_product_costs' } });
+      toast('error', 'Failed to load product costs.');
+      // Never offer an admin a product list without cost (Luna round 1).
+      productRows = [];
+    }
+    if (seq !== referenceSeqRef.current) return;
+
     setCustomers((custRes.data || []) as Customer[]);
-    setProducts((prodRes.data || []) as Product[]);
+    setProducts(productRows);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
     setFields((fieldsRes.data || []) as FieldOption[]);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   const generateQuoteNumber = async () => {
     // Use server-side sequence to prevent race conditions
@@ -825,7 +844,7 @@ export default function QuoteBuilder() {
       const year = new Date().getFullYear();
       const { count, error: countError } = await supabase
         .from('quotes')
-        .select('*', { count: 'exact', head: true })
+        .select('id', { count: 'exact', head: true })
         .like('quote_number', `Q-${year}-%`);
       if (countError) {
         toast('error', 'Failed to generate quote number. Please try again.');
@@ -888,7 +907,7 @@ export default function QuoteBuilder() {
   ): Promise<boolean> => {
     const { data, error } = await supabase
       .from('quotes')
-      .select('*')
+      .select('id, row_version')
       .eq('id', mutatedQuoteId)
       .maybeSingle();
     const nextRowVersion = readRowVersion((data as { row_version?: unknown } | null)?.row_version);
@@ -966,7 +985,7 @@ export default function QuoteBuilder() {
 
     const quoteRes = await supabase
       .from('quotes')
-      .select('*, customer:customers(*)')
+      .select(`${QUOTE_COLUMNS}, customer:customers(*)`)
       .eq('id', quoteId)
       .maybeSingle();
     if (mustNotInstall()) return false;
@@ -990,7 +1009,7 @@ export default function QuoteBuilder() {
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
       supabase
         .from('quote_items')
-        .select('*, product:products(*, product_family:product_families(name))')
+        .select(`${QUOTE_ITEM_COLUMNS}, product:products(${PRODUCT_COLUMNS}, product_family:product_families(name))`)
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
@@ -1009,9 +1028,25 @@ export default function QuoteBuilder() {
 
     const { data: finalHeader, error: finalHeaderError } = await supabase
       .from('quotes')
-      .select('*')
+      .select('id, row_version')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
+
+    // Cost and margin are admin-only (Mason, 2026-10-15): only an admin's copy carries them.
+    let costedQuote = quoteRes.data as unknown as Quote;
+    let costedItems = (itemsRes.data || []) as unknown as QuoteItem[];
+    try {
+      costedQuote = (await withAdminCost('quotes', costedQuote, isAdmin)) as Quote;
+      costedItems = await withAdminCosts('quote_items', costedItems, isAdmin);
+      costedItems = await withAdminNestedCosts('products', costedItems, 'product', isAdmin);
+    } catch (costErr) {
+      Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_quote_costs' } });
+      if (mustNotInstall()) return false;
+      toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
     if (mustNotInstall()) return false;
 
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
@@ -1024,9 +1059,9 @@ export default function QuoteBuilder() {
       return false;
     }
 
-    const q = quoteRes.data as Quote;
+    const q = costedQuote;
     const dbSections = (sectionsRes.data as QuoteSection[]) || [];
-    const dbItems = (itemsRes.data as QuoteItem[]) || [];
+    const dbItems = costedItems;
 
     const localSections: LocalSection[] = dbSections.map((s) => ({
       _key: nextKey(),
@@ -1048,7 +1083,8 @@ export default function QuoteBuilder() {
             notes: item.notes,
             price_per_unit: item.price_per_unit,
             price_override: item.price_override ?? null,
-            current_cost: item.current_cost,
+            // Absent for non-admins; the server re-derives cost on save either way.
+            current_cost: item.current_cost ?? 0,
             suggested_rate: item.suggested_rate,
             actual_rate: item.actual_rate,
             rate_unit: item.rate_unit,
@@ -1057,9 +1093,9 @@ export default function QuoteBuilder() {
             acres: item.acres,
             total_units_needed: item.total_units_needed,
             unit_size: item.unit_size,
-            profit: item.profit,
+            profit: item.profit ?? 0,
             total_price: item.total_price,
-            net_margin: item.net_margin,
+            net_margin: item.net_margin ?? 0,
             product: item.product,
             calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
             price_unit: item.price_unit || null,
@@ -1139,10 +1175,7 @@ export default function QuoteBuilder() {
 
     // Fetch version history for this quote
     const { data: versionsData, error: versionsError } = await supabase
-      .from('quote_versions')
-      .select('*')
-      .eq('quote_id', quoteId)
-      .order('version_number', { ascending: false });
+      .rpc('get_quote_versions', { p_quote_id: quoteId });
     if (mustNotInstall()) return false;
 
     if (versionsError) {
@@ -1153,7 +1186,9 @@ export default function QuoteBuilder() {
       // adaptQuoteVersionList. They are an expected part of the historical data, so they
       // raise neither a toast nor a Sentry report on every load. A row the SERVER trusts that
       // still fails validation is not that, and is reported.
-      const { versions, unreadable } = adaptQuoteVersionList(versionsData);
+      const { versions, unreadable } = adaptQuoteVersionList(
+        assertRpcResult<QuoteVersionRow[]>(versionsData, 'get_quote_versions'),
+      );
       setQuoteVersions(versions);
       setUnreadableQuoteVersions(unreadable);
       reportUntrustworthyQuoteVersions(unreadable, quoteId);
@@ -1163,7 +1198,7 @@ export default function QuoteBuilder() {
     const loadGeneration = ++initialLoadGenerationRef.current;
     setInstalledLoadGeneration(loadGeneration);
     return true;
-  }, [toast, navigate, resetSaveQuoteKeyFor]);
+  }, [toast, navigate, resetSaveQuoteKeyFor, isAdmin]);
 
   const reloadAfterStaleSave = useCallback(async () => {
     if (!quoteId) return false;
@@ -2165,7 +2200,7 @@ export default function QuoteBuilder() {
         .from('quotes')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', id)
-        .select('*');
+        .select('id, row_version');
       checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
       setStatus(newStatus);
       const trustedRowVersion = applyDirectQuoteMutationRowVersion(
@@ -2653,12 +2688,15 @@ export default function QuoteBuilder() {
 
   const fetchVersions = useCallback(async () => {
     if (!quoteId) return;
-    const { data } = await supabase
-      .from('quote_versions')
-      .select('*')
-      .eq('quote_id', quoteId)
-      .order('version_number', { ascending: false });
-    const { versions, unreadable } = adaptQuoteVersionList(data);
+    // Cost keys arrive NULL for non-admins (get_quote_versions).
+    const { data, error } = await supabase.rpc('get_quote_versions', { p_quote_id: quoteId });
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'read', action: 'load_quote_versions' } });
+      return;
+    }
+    const { versions, unreadable } = adaptQuoteVersionList(
+      assertRpcResult<QuoteVersionRow[]>(data, 'get_quote_versions'),
+    );
     setQuoteVersions(versions);
     setUnreadableQuoteVersions(unreadable);
     reportUntrustworthyQuoteVersions(unreadable, quoteId);
@@ -3245,7 +3283,7 @@ export default function QuoteBuilder() {
       const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
         const previousRowVersion = quoteRowVersionRef.current;
-        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('*');
+        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('id, row_version');
         checkMutationResult(revertResult, 'Revert quote status');
         setStatus(revertTo);
         applyDirectQuoteMutationRowVersion(
@@ -3853,7 +3891,7 @@ export default function QuoteBuilder() {
               <div className="text-sm text-secondary mb-3">
                 Total: {fmt(selectedVersion.snapshot_data?.quote?.total_price || 0)}
                 {' '}&middot;{' '}
-                Margin: {(selectedVersion.snapshot_data?.quote?.total_margin_pct || 0).toFixed(1)}%
+                {!hideCost && <>Margin: {(selectedVersion.snapshot_data?.quote?.total_margin_pct || 0).toFixed(1)}%</>}
               </div>
               {selectedVersion.snapshot_data?.sections?.map((sec, si) => (
                 <div key={si} className="mb-3">
@@ -4269,7 +4307,7 @@ export default function QuoteBuilder() {
                         <th className="px-5 py-3 font-medium w-8">#</th>
                         <th className="px-3 py-3 font-medium min-w-[200px]">Product</th>
                         <th className="px-3 py-3 font-medium">Price/Unit</th>
-                        {!customerView && <th className="px-3 py-3 font-medium">Cost</th>}
+                        {!hideCost && <th className="px-3 py-3 font-medium">Cost</th>}
                         <th className="px-3 py-3 font-medium">Sug. Rate</th>
                         <th className="px-3 py-3 font-medium">Actual Rate</th>
                         <th className="px-3 py-3 font-medium">Unit</th>
@@ -4279,8 +4317,8 @@ export default function QuoteBuilder() {
                         <th className="px-3 py-3 font-medium">Units Needed</th>
                         <th className="px-3 py-3 font-medium">Total</th>
                         <th className="px-3 py-3 font-medium min-w-[140px]">Notes</th>
-                        {!customerView && <th className="px-3 py-3 font-medium">Profit</th>}
-                        {!customerView && <th className="px-3 py-3 font-medium">Margin</th>}
+                        {!hideCost && <th className="px-3 py-3 font-medium">Profit</th>}
+                        {!hideCost && <th className="px-3 py-3 font-medium">Margin</th>}
                         <th className="px-3 py-3 font-medium w-10" />
                       </tr>
                     </thead>
@@ -4391,7 +4429,7 @@ export default function QuoteBuilder() {
                                   ))}
                               </select>
                             </td>
-                            {!customerView && (
+                            {!hideCost && (
                               <td className="px-3 py-2 font-mono text-secondary">
                                 {fmt(item.current_cost)}
                               </td>
@@ -4518,12 +4556,12 @@ export default function QuoteBuilder() {
                                 )}
                               </div>
                             </td>
-                            {!customerView && (
+                            {!hideCost && (
                               <td className="px-3 py-2 font-mono text-emerald-600">
                                 {fmt(item.profit)}
                               </td>
                             )}
-                            {!customerView && (
+                            {!hideCost && (
                               <td className="px-3 py-2 font-mono text-secondary">
                                 {pct(item.net_margin)}
                               </td>
@@ -4578,7 +4616,7 @@ export default function QuoteBuilder() {
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />
-        <div className={`grid grid-cols-2 ${customerView ? 'sm:grid-cols-1' : 'sm:grid-cols-4'} gap-4`}>
+        <div className={`grid grid-cols-2 ${hideCost ? 'sm:grid-cols-1' : 'sm:grid-cols-4'} gap-4`}>
           <div>
             <p className="text-xs text-secondary uppercase tracking-wide mb-1">
               Total Price
@@ -4587,7 +4625,7 @@ export default function QuoteBuilder() {
               {fmt(totals.totalPrice)}
             </p>
           </div>
-          {!customerView && (
+          {!hideCost && (
             <div>
               <p className="text-xs text-secondary uppercase tracking-wide mb-1">
                 Total Cost
@@ -4597,7 +4635,7 @@ export default function QuoteBuilder() {
               </p>
             </div>
           )}
-          {!customerView && (
+          {!hideCost && (
             <div>
               <p className="text-xs text-secondary uppercase tracking-wide mb-1">
                 Total Profit
@@ -4607,7 +4645,7 @@ export default function QuoteBuilder() {
               </p>
             </div>
           )}
-          {!customerView && (
+          {!hideCost && (
             <div>
               <p className="text-xs text-secondary uppercase tracking-wide mb-1">
                 Overall Margin

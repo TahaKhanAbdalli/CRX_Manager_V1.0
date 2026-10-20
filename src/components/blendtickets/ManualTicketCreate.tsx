@@ -11,6 +11,7 @@ import { validateBlendMath, type BlendMathWarning } from '../../lib/blendMathVal
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem, UnitConversion } from '../../types';
 import { Sentry } from '../../lib/sentry';
+import { PRODUCT_COLUMNS } from '../../lib/costFields';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../../lib/units';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import UnitSelect from './UnitSelect';
@@ -290,7 +291,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
     const loadData = async () => {
       const { data: prodData, error: prodError } = await supabase
         .from('products')
-        .select('*, product_family:product_families(name)')
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
         .eq('is_active', true)
         .order('product_name');
       if (prodError) {

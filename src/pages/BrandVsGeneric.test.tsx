@@ -45,6 +45,14 @@ vi.mock('../lib/db', async (importOriginal) => {
   return { ...actual, supabase: { from: (t: string) => makeFrom(t) }, checkMutationResult: vi.fn() };
 });
 
+// Admin cost comes from get_admin_cost_fields; the fixtures already carry it, so pass rows through.
+vi.mock('../lib/costFields', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/costFields')>()),
+  withAdminCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+  withAdminCost: async (_table: string, row: unknown) => row,
+  withAdminNestedCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+}));
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ role: H.state.role, profile: { role: H.state.role }, user: { id: 'u' } }),
 }));

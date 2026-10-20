@@ -29,6 +29,7 @@ type QueryBuilder = {
   gte: (...args: unknown[]) => QueryBuilder;
   lte: (...args: unknown[]) => QueryBuilder;
   not: (...args: unknown[]) => QueryBuilder;
+  range: (...args: unknown[]) => QueryBuilder;
   then: (resolve: (value: unknown) => unknown) => unknown;
 };
 
@@ -46,6 +47,7 @@ vi.mock('../lib/db', () => ({
         gte: () => builder,
         lte: () => builder,
         not: () => builder,
+        range: () => builder,
         then: (resolve) => {
           const custom = H.tableHandler?.(table, selected);
           return custom ? custom.then(resolve) : resolve({ data: [], error: null });
@@ -117,6 +119,7 @@ import Reports from './Reports';
 import * as dateUtils from '../lib/dateUtils';
 import { todayInBusinessTz } from '../lib/dateUtils';
 import { exportToCSV } from '../lib/csvExport';
+import { COMMISSION_COLUMNS } from '../lib/costFields';
 
 const renderReports = () => render(<MemoryRouter><Reports /></MemoryRouter>);
 
@@ -213,12 +216,12 @@ describe('Reports commission history', () => {
     });
     H.tableHandler = (table, columns) => {
       if (table !== 'commissions') return null;
-      if (columns === '*') return new Promise((resolve) => { finishAdminLoad = resolve; });
+      if (columns === COMMISSION_COLUMNS) return new Promise((resolve) => { finishAdminLoad = resolve; });
       return Promise.resolve({ data: [row('c-own', 'Own Rep Row')], error: null });
     };
     const view = renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Commissions' }));
-    await waitFor(() => expect(H.selects.some(({ table, columns }) => table === 'commissions' && columns === '*')).toBe(true));
+    await waitFor(() => expect(H.selects.some(({ table, columns }) => table === 'commissions' && columns === COMMISSION_COLUMNS)).toBe(true));
 
     // The session drops to sales rep while the admin's full commission load is still in flight.
     H.auth.role = 'sales_rep';
@@ -232,16 +235,20 @@ describe('Reports commission history', () => {
     expect(screen.getByText('Own Rep Row')).toBeInTheDocument();
   });
 
-  it('still asks for cost on an admin\'s Price List', async () => {
-    H.rpcHandler = () => Promise.resolve({ data: [], error: null });
+  it('still asks for cost on an admin\'s Price List, through get_admin_cost_fields and never from the table', async () => {
+    H.rpcHandler = (name) => Promise.resolve({ data: name === 'get_admin_cost_fields' ? { 'p-1': { current_cost: 12.5 } } : [], error: null });
+    H.tableHandler = (table) => (table === 'products'
+      ? Promise.resolve({ data: [{ id: 'p-1', product_name: 'Atrazine 4L' }], error: null })
+      : null);
     renderReports();
 
     fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
     fireEvent.click(screen.getByRole('button', { name: 'Price List' }));
 
     await waitFor(() => {
-      expect(H.selects.some(({ table, columns }) => table === 'products' && columns.includes('current_cost'))).toBe(true);
+      expect(H.rpc.some(({ name, args }) => name === 'get_admin_cost_fields' && args.p_table === 'products')).toBe(true);
     });
+    expect(H.selects.some(({ table, columns }) => table === 'products' && columns.includes('current_cost'))).toBe(false);
   });
 
   it('still shows an admin the P&L, Gross Sales and Inventory Cost reports', () => {

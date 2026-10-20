@@ -37,6 +37,7 @@ import type {
 } from '../../types';
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
+import { PRODUCT_COLUMNS } from '../../lib/costFields';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -91,6 +92,8 @@ export default function QuickReceivePanel() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  // Purchase cost is admin-only (Mason, 2026-10-18).
+  const isAdmin = profile?.role === 'admin';
   const receiveIntent = useUncertainMutationIntent<QuickReceiveIntent>({
     operation: 'receive_po_items',
     userId: profile?.id || '',
@@ -146,7 +149,7 @@ export default function QuickReceivePanel() {
     (async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('*, product_family:product_families(name)')
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
         .eq('is_active', true)
         .order('product_name');
       if (error) {
@@ -809,9 +812,10 @@ export default function QuickReceivePanel() {
                 const hasUnmatched = match.quantity_unmatched > 0;
                 const allUnmatched = match.allocations.length === 0;
 
-                // Find max cost to identify no-return (cheaper) POs
+                // Find max cost to identify no-return (cheaper) POs. The server now says so
+                // itself (is_no_return), since a non-admin's reply carries no cost.
                 const maxCost = match.allocations.length > 0
-                  ? Math.max(...match.allocations.map((a) => a.unit_cost))
+                  ? Math.max(...match.allocations.map((a) => a.unit_cost ?? 0))
                   : 0;
 
                 return (
@@ -894,7 +898,7 @@ export default function QuickReceivePanel() {
                           </p>
                         )}
                         {match.allocations.map((alloc) => {
-                          const isNoReturn = alloc.unit_cost < maxCost;
+                          const isNoReturn = alloc.is_no_return ?? ((alloc.unit_cost ?? 0) < maxCost);
                           return (
                             <label
                               key={alloc.po_item_id}
@@ -922,9 +926,11 @@ export default function QuickReceivePanel() {
                                 <span className="text-sm font-medium text-nav-dark">
                                   {alloc.po_number}
                                 </span>
-                                <span className="text-sm ml-2 font-mono">
-                                  @ {fmt(alloc.unit_cost)}/unit
-                                </span>
+                                {isAdmin && (
+                                  <span className="text-sm ml-2 font-mono">
+                                    @ {fmt(alloc.unit_cost ?? 0)}/unit
+                                  </span>
+                                )}
                                 {isNoReturn && (
                                   <Badge variant="warning" className="ml-2">
                                     NO-RETURN

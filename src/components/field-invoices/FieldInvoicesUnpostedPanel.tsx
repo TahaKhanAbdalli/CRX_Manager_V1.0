@@ -10,6 +10,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError, describePostInvoiceBlock } from '../../lib/db';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
+import { INVOICE_COLUMNS } from '../../lib/costFields';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { logActivity } from '../../lib/activityLogger';
@@ -53,7 +54,7 @@ type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
 // per-location rows (locations/crops/acres) + line items (chemicals). One round
 // trip; everything else is derived client-side by mapFieldInvoiceRow.
 const LIST_SELECT = `
-  *,
+  ${INVOICE_COLUMNS},
   customer:customers!invoices_customer_id_fkey(farm_name),
   job:jobs!invoices_job_id_fkey(job_number),
   field_app_locations(applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)),

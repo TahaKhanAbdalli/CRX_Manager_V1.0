@@ -31,12 +31,14 @@ import {
 } from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
+import { PURCHASE_ORDER_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const createBillIntent = useUncertainMutationIntent<{
     args: {
       p_vendor_id: string;
@@ -115,12 +117,20 @@ export default function NewVendorBill() {
   const fetchPOs = useCallback(async () => {
     const { data } = await supabase
       .from('purchase_orders')
-      .select('*')
+      .select(PURCHASE_ORDER_COLUMNS)
       .in('status', ['submitted', 'partially_received', 'fully_received'])
       .order('created_at', { ascending: false })
       .limit(200);
-    setPurchaseOrders((data || []) as PurchaseOrder[]);
-  }, []);
+    // Cost is admin-only (Mason, 2026-10-15); this page is admin-only, so admins add PO totals here.
+    let rows = (data || []) as PurchaseOrder[];
+    try {
+      rows = await withAdminCosts('purchase_orders', rows, isAdmin);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', page: 'new-vendor-bill', action: 'load_po_costs' } });
+      toast('error', 'Failed to load purchase order totals. Please refresh.');
+    }
+    setPurchaseOrders(rows);
+  }, [isAdmin, toast]);
 
   useEffect(() => {
     fetchVendors();
@@ -153,8 +163,8 @@ export default function NewVendorBill() {
       setVendorId(matchedVendor.id);
     }
 
-    // Auto-fill amount from PO total
-    if (po.total_cost > 0) {
+    // Auto-fill amount from PO total (cost is admin-only; a non-admin's row has none).
+    if (po.total_cost != null && po.total_cost > 0) {
       setSubtotalDollars(po.total_cost.toFixed(2));
     }
   };
@@ -361,7 +371,7 @@ export default function NewVendorBill() {
           <option value="">No linked PO</option>
           {purchaseOrders.map((po) => (
             <option key={po.id} value={po.id}>
-              {po.po_number} — {po.vendor} — ${po.total_cost.toFixed(2)}
+              {po.po_number} — {po.vendor}{isAdmin && po.total_cost != null ? ` — $${po.total_cost.toFixed(2)}` : ''}
             </option>
           ))}
         </select>

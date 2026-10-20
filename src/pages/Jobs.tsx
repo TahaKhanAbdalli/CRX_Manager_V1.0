@@ -13,6 +13,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { JOB_COLUMNS } from '../lib/costFields';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -439,7 +440,7 @@ export default function Jobs() {
     let query = supabase
       .from('jobs')
       .select(`
-        *,
+        ${JOB_COLUMNS},
         customer:customers(farm_name, account_number, phone),
         vehicle:vehicles(vehicle_name),
         job_fields(crop, field:fields(field_name, crop_type, county, state)),
@@ -1368,7 +1369,7 @@ export default function Jobs() {
         .update({ deleted_at: new Date().toISOString() })
         .in('id', ids)
         .in('status', DELETABLE)
-        .select();
+        .select('id');
       checkMutationResult(result, 'Delete jobs');
       // If the DB matched fewer rows than we asked to delete, a selected job was
       // not in a deletable status (e.g. it was billed between fetch and delete) and

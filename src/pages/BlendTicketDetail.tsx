@@ -4,6 +4,7 @@ import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, U
 import { sanitizeError, supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { BLEND_TICKET_PRODUCT_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS } from '../lib/costFields';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getCommittedOrderIdFromMismatch, getIdempotencyBindingRejection } from '../lib/idempotency';
@@ -212,12 +213,12 @@ export function BlendTicketDetail() {
           .order('upload_order'),
         supabase
           .from('blend_ticket_products')
-          .select('*, product:products(*)')
+          .select(`${BLEND_TICKET_PRODUCT_COLUMNS}, product:products(${PRODUCT_COLUMNS})`)
           .eq('blend_ticket_id', id!)
           .order('sequence_order'),
         supabase
           .from('products')
-          .select('*, product_family:product_families(name)')
+          .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
           .eq('is_active', true)
           .order('product_name'),
         supabase
@@ -841,7 +842,7 @@ export function BlendTicketDetail() {
     // Load orders for the same customer
     const { data, error } = await supabase
       .from('orders')
-      .select('*, items:order_items(*)')
+      .select(`${ORDER_COLUMNS}, items:order_items(${ORDER_ITEM_COLUMNS})`)
       .eq('customer_id', ticket.customer_id)
       .is('deleted_at', null)
       .in('status', ['confirmed', 'partially_fulfilled'])

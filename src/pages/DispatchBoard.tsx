@@ -56,6 +56,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
+import { JOB_COLUMNS } from '../lib/costFields';
 import {
   formatAppliedOfTotal,
   jobStatusToDispatchBadge,
@@ -211,7 +212,7 @@ export default function DispatchBoard() {
       const jobsQuery = supabase
         .from('jobs')
         .select(`
-          *,
+          ${JOB_COLUMNS},
           customer:customers(farm_name),
           job_fields(id, field_id, acres_to_treat, sort_order, field:fields(id, field_name))
         `)

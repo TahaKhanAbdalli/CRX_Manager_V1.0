@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { ORDER_COLUMNS, ORDER_ITEM_COLUMNS } from '../lib/costFields';
 import { Sentry } from '../lib/sentry';
 import { formatUSD as fmt } from '../lib/money';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
@@ -81,7 +82,7 @@ export default function Orders() {
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data: ordersData, error: ordersError } = await fetchAllRows((from, to) => supabase
       .from('orders')
-      .select('*, customer:customers(farm_name, parent_customer_id)', { count: 'exact' })
+      .select(`${ORDER_COLUMNS}, customer:customers(farm_name, parent_customer_id)`, { count: 'exact' })
       .gte('order_date', seasonStart)
       .lte('order_date', seasonEnd)
       .is('deleted_at', null)
@@ -290,7 +291,7 @@ export default function Orders() {
       // A selection can be the whole list, so read every row in id chunks.
       const [itemsRes, customersRes] = await Promise.all([
         fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
-          .from('order_items').select('*', { count: 'exact' }).in('order_id', idChunk)
+          .from('order_items').select(ORDER_ITEM_COLUMNS, { count: 'exact' }).in('order_id', idChunk)
           .order('sort_order').order('id').range(from, to)),
         fetchAllRowsForIds(customerIds, (idChunk, from, to) => supabase
           .from('customers').select('*', { count: 'exact' }).in('id', idChunk)
@@ -356,7 +357,7 @@ export default function Orders() {
       // read every row (id lists in chunks) rather than stopping at the row cap.
       const [itemsRes, customersRes, addrRes, invRes] = await Promise.all([
         fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
-          .from('order_items').select('*', { count: 'exact' }).in('order_id', idChunk)
+          .from('order_items').select(ORDER_ITEM_COLUMNS, { count: 'exact' }).in('order_id', idChunk)
           .order('sort_order').order('id').range(from, to)),
         fetchAllRowsForIds(customerIds, (idChunk, from, to) => supabase
           .from('customers').select('*', { count: 'exact' }).in('id', idChunk)
@@ -479,7 +480,7 @@ export default function Orders() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((o) => o.id);
-        const result = await supabase.from('orders').update({ deleted_at: new Date().toISOString() }).in('id', ids).select();
+        const result = await supabase.from('orders').update({ deleted_at: new Date().toISOString() }).in('id', ids).select('id');
         if (result.error?.message.includes('ORDER_MUST_BE_TERMINAL_BEFORE_DELETE')) {
           throw new Error(
             'An order became active before deletion. Refresh the list, then cancel or void it first.'

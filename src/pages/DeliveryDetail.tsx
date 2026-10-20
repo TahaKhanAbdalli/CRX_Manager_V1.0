@@ -45,6 +45,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
 import PrivatePhoto, { PrivatePhotoButton } from '../components/ui/PrivatePhoto';
 import { deliveryPhotoPath } from '../lib/privatePhotos';
+import { ORDER_ITEM_COLUMNS } from '../lib/costFields';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
   Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
@@ -566,7 +567,7 @@ export default function DeliveryDetail() {
       supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
       // PR-07 follow-up: driver picker only uses id/full_name/role; safe via view.
       supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
-      supabase.from('order_items').select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))').eq('order_id', delivery.order_id).order('section_name'),
+      supabase.from('order_items').select(`${ORDER_ITEM_COLUMNS}, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))`).eq('order_id', delivery.order_id).order('section_name'),
     ]);
     if (oiRes.error) {
       Sentry.captureException(oiRes.error, { extra: { context: 'load_delivery_edit_order_items', deliveryId: delivery.id } });

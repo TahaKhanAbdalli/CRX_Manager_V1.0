@@ -9,6 +9,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError } from '../../lib/db';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
+import { INVOICE_COLUMNS } from '../../lib/costFields';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { exportToCSV } from '../../lib/csvExport';
 import { downloadReportPdf } from '../../lib/reportPdf';
@@ -133,7 +134,7 @@ export default function FieldInvoicesListPanel() {
     const QUERY_LIMIT = 2000;
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers!invoices_customer_id_fkey(farm_name)')
+      .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`)
       .eq('invoice_type', 'field_application')
       .is('deleted_at', null)
       // Open invoices show from EVERY season; closed ones (paid / voided / cancelled)

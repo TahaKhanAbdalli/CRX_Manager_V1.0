@@ -10,6 +10,7 @@ import { isBelowCostApprovalHandledError, withBelowCostReason } from '../../lib/
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
+import { withAdminCosts } from '../../lib/costFields';
 import { logActivity } from '../../lib/activityLogger';
 import type { Json } from '../../types/supabase';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
@@ -175,7 +176,8 @@ const rejectPartiallyInvalidQuoteGroups = (
 
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
-  const { profile } = useAuth();
+  const { profile, role } = useAuth();
+  const isAdmin = role === 'admin';
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -438,7 +440,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     try {
       const [custRes, prodRes, convRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name'),
-        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit, unit_size, is_active').eq('is_active', true),
+        supabase.from('products').select('id, product_name, sku, inventory_unit, unit_size, is_active').eq('is_active', true),
         supabase.from('unit_conversions').select('*'),
       ]);
 
@@ -450,7 +452,21 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       }
 
       const customers = custRes.data;
-      const products = prodRes.data;
+      // Cost is admin-only (Mason, 2026-10-15): a non-admin's lines carry 0 cost and
+      // save_quote derives it; cost is never displayed here.
+      type ImportProduct = NonNullable<typeof prodRes.data>[number] & { current_cost?: number | null };
+      let productsWithCost: ImportProduct[] | null;
+      try {
+        productsWithCost = prodRes.data ? await withAdminCosts('products', prodRes.data as ImportProduct[], isAdmin) : null;
+      } catch (costError) {
+        Sentry.captureException(costError instanceof Error ? costError : new Error(String(costError)), {
+          extra: { context: 'BulkQuoteImport.loadProductCosts' },
+        });
+        toast('error', 'Failed to load reference data');
+        setUploading(false);
+        return;
+      }
+      const products = productsWithCost;
       const unitConversions = convRes.data || [];
 
       if (!customers || !products) {

@@ -12,6 +12,7 @@
 
 import type { InvoicePrintOptions } from '../types';
 import { supabase } from './db';
+import { INVOICE_ITEM_COLUMNS } from './costFields';
 import { computeTotalDiluentGallons, formatGallons } from './fieldAppDiluent';
 import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
@@ -27,6 +28,7 @@ export interface InvoicePdfItem {
   order_item_id?: string | null;
   product_id?: string | null;
   return_credit_cogs_cents?: number | null;
+  return_credit_source_item_id?: string | null;
   description: string;
   product_name?: string;
   quantity: number;
@@ -55,6 +57,7 @@ export function mapInvoicePdfItem(item: unknown): InvoicePdfItem {
     order_item_id: (row.order_item_id as string) || null,
     product_id: (row.product_id as string) || null,
     return_credit_cogs_cents: row.return_credit_cogs_cents != null ? Number(row.return_credit_cogs_cents) : null,
+    return_credit_source_item_id: (row.return_credit_source_item_id as string) || null,
     description: String(row.description ?? ''),
     product_name: row.product?.product_name || String(row.description ?? ''),
     quantity: Number(row.quantity),
@@ -85,6 +88,7 @@ interface ReturnCreditDisplayItem {
   order_item_id?: string | null;
   product_id?: string | null;
   return_credit_cogs_cents?: number | null;
+  return_credit_source_item_id?: string | null;
   description: string;
   quantity: number;
   unit_size?: string | null;
@@ -102,7 +106,9 @@ export function groupReturnCreditDisplayItems<T extends ReturnCreditDisplayItem>
   const grouped: T[] = [];
   const indexByKey = new Map<string, number>();
   for (const item of items) {
-    if (!item.order_item_id || item.return_credit_cogs_cents == null) {
+    // return_credit_cogs_cents is a cost column only admins can read (Mason, 2026-10-15);
+    // the source-line link marks the same RPC-authored rows for everyone else.
+    if (!item.order_item_id || (item.return_credit_cogs_cents == null && item.return_credit_source_item_id == null)) {
       grouped.push(item);
       continue;
     }
@@ -302,7 +308,7 @@ export async function buildInvoicePdfDataFromRow(
       .maybeSingle(),
     supabase
       .from('invoice_items')
-      .select('*, product:products(product_name, epa_registration, product_form)')
+      .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name, epa_registration, product_form)`)
       .eq('invoice_id', inv.id)
       .order('sort_order'),
     supabase

@@ -45,6 +45,14 @@ const {
   return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams, mockUseUnsavedChanges, mockBlockerReset, mockBlockerProceed };
 });
 
+// Fixtures already carry cost; the admin cost read (get_admin_cost_fields) passes rows through.
+vi.mock('../lib/costFields', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/costFields')>()),
+  withAdminCost: async (_table: string, row: unknown) => row,
+  withAdminCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+  withAdminNestedCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+}));
+
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   assertRpcResult: <T,>(data: T) => data,

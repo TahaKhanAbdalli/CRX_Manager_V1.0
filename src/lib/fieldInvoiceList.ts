@@ -63,7 +63,8 @@ export interface FieldInvoiceListRow {
   prepay_applied_cents: number;
   /** Cents written off (carried through to the PDF). */
   write_off_cents: number;
-  /** Total cost cents (carried through to the PDF). */
+  /** Total cost cents (carried through to the PDF, which never prints it). The lists no
+   * longer read this cost column, so it is 0 here: cost is admin-only (Mason, 2026-10-15). */
   total_cost_cents: number;
   balance_cents: number;
   invoice_date: string;
@@ -191,7 +192,7 @@ export function mapFieldInvoiceRow(raw: RawFieldInvoiceRow): FieldInvoiceListRow
     invoice_group_id: raw.invoice_group_id ?? null,
     // Forward the server-computed send suppression flag so the "don't email a $0 split
     // child" gate can actually fire (Codex P2 #10). Undefined before the column is live
-    // (LIST_SELECT uses `*`), which the gate reads as "not suppressed" — current behavior.
+    // (LIST_SELECT reads every non-cost column), which the gate reads as "not suppressed" — current behavior.
     send_disposition: raw.send_disposition ?? null,
     search_blob,
   };
