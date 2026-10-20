@@ -343,6 +343,9 @@ if (!psql) {
       'unallowlisted rows using --adjudicate, NOT key-only subtraction. The local\n' +
       'adjudicator does not certify capture freshness. THIS print-only process exits 0.',
   );
+  // On Linux a piped stdout is asynchronous, so exiting at once truncates this ~300 KB print;
+  // wait until every queued write has flushed (a write callback fires after all earlier chunks).
+  await new Promise((resolve) => process.stdout.write('', resolve));
   process.exit(0);
 }
 

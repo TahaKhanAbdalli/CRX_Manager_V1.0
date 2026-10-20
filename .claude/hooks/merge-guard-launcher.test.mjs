@@ -20,6 +20,7 @@ import {
   readableCall,
   superviseGuard,
 } from "./merge-guard-launcher.mjs";
+import { couldReachGatedAction } from "./codex-push-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCHER = path.join(__dirname, "merge-guard-launcher.mjs");
@@ -58,6 +59,10 @@ for (const command of [
 ok(mayMerge(JSON.stringify({ tool_name: "mcp__github__merge_pull_request", tool_input: { pullNumber: 9 } })),
   "the GitHub MCP merge tool is a possible merge");
 ok(mayMerge("not json but says gh pr merge"), "unparseable input is judged on its raw text");
+// Attached inline code (CodeRabbit, PR #956): the working guard denies it, so the
+// broken-guard fallback must count it as a possible merge too.
+ok(mayMerge(JSON.stringify({ tool_name: "Bash", tool_input: { command: "node -e'require(\"child_process\").execSync(Buffer.from(\"Z2ggcHIgbWVyZ2UgODEy\",\"base64\").toString())'" } })),
+  "attached node -e code is a possible merge while the guard is broken");
 // Shell quoting, escapes and line continuations cannot hide a merge from the text
 // test (Luna, PR #841). Each of these runs as an ordinary `gh pr merge` in at least
 // one shell: quotes and backslashes in Bash, carets in cmd, backticks in
@@ -140,7 +145,19 @@ for (const command of guardForms) {
   deniedForms += 1;
   ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
 }
-ok(deniedForms >= 26, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+// Since 2026-10-18 the working guard refuses run-time text and fed interpreters
+// only when the command could reach a merge (couldReachGatedAction), so the
+// forms above with no gated word (`bash -c "$CMD"`, `cat prog.js | node`, …)
+// pass it. This launcher still treats them as possible merges, which is the
+// stricter side and stays correct. Exact, not only a floor (Luna, PR #956 round
+// 1): EVERY form couldReachGatedAction marks must be denied by the working guard,
+// so a form that silently stops matching fails here instead of shrinking a count.
+// The inline `node -e` base64 form was allowed on main; inlineCodeReachesGatedAction
+// now refuses it (Luna, PR #956 round 2), so no form is exempt.
+for (const command of guardForms.filter((form) => couldReachGatedAction([form]))) {
+  ok(realGuardDenies(command), `the working guard still denies a form that could reach a merge: ${command}`);
+}
+ok(deniedForms >= 8, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
 
 // Drift check (Codex App P1, PR #841): every name on the guard's own lists of
 // programs that run text it cannot see is a possible merge here. The lists are

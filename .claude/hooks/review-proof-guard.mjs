@@ -226,9 +226,12 @@ const PROTECTED_GLOB_TARGETS = [".claude", "session-state", "applied-source-ledg
 // (`.clau*` → `.claude`, `sess*` → `session-state`, `…ledger.jso*` → `…ledger.json`).
 // Fail closed. A too-generic lead (`*`, `*.tmp`, `x*`) is ignored so ordinary
 // deletes like `rm dist/*.js` or `rm -rf node_modules/.cache` are not over-blocked.
+// Bash extglob `@(…)`, `+(…)`, `!(…)` opens a glob too (`.clau@(de)`). Callers
+// split on `(`, so the opener may arrive bare at the segment's end (`.clau@`).
+const GLOB_OPENER_RE = /[*?[\]{}]|[@!+](?:\(|$)/;
 function globSegCouldTargetProtected(seg) {
-  if (!/[*?[\]{}]/.test(seg)) return false;
-  const lead = (seg.match(/^[^*?[\]{}]*/)[0] || "").toLowerCase();
+  if (!GLOB_OPENER_RE.test(seg)) return false;
+  const lead = (seg.match(/^(?:(?![@!+](?:\(|$))[^*?[\]{}])*/)[0] || "").toLowerCase();
   // Floor the lead length so a too-generic glob (`*`, `s*`, `a*`) is ignored and
   // ordinary deletes (`rm dist/*.js`, `rm s*.o`, `rm a*.log`) are not over-blocked.
   // A DOTTED lead is specific enough at length 2: the only protected name starting
@@ -254,10 +257,32 @@ function segmentsHitStateDir(value) {
 // the literal-basename proof-path matcher misses (Opus review 2026-08-19, round
 // 5). The wrappers write internally via Node fs and never shell-redirect into the
 // state dir, so any such redirect is illegitimate; fail closed.
+// The guard inputs that live directly in the repo's `.claude` folder — every one a
+// hook reads: without `schema-registry.json` three schema checks allow every edit,
+// without `caller-graph.json` grant-change-guard denies every risky REVOKE, and
+// `active-areas.json` drives active-area-guard. main denied deleting, moving or
+// overwriting them through the broad `.claude` rule (Codex connector, PR #956).
+// (The settings files are covered by ENFORCEMENT_SURFACE_RE; `launch.json` is a
+// dev-server config no guard reads.) Reads and the regenerate scripts (which write
+// the file themselves) are untouched.
+const SCHEMA_REGISTRY_RE = /(?:^|[\s"'=:/\\({,])\.claude[/\\]+(?:schema-registry|caller-graph|active-areas)\.json(?![\w.-])/i;
+
 function redirectTargetsStateDir(value) {
   const norm = String(value || "").replace(/\\/g, "/");
   for (const m of norm.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
-    if (segmentsHitStateDir(m[1].replace(/["']/g, ""))) return true;
+    const target = m[1].replace(/["']/g, "");
+    // A redirect INTO the state dir, or a globbed name that could be it. A
+    // redirect to some other `.claude/…` file (memory, commands) is not this
+    // rule's business (narrowed 2026-10-18; hooks/settings stay covered by
+    // ENFORCEMENT_SURFACE_RE, agents/commands now too).
+    if (/(?:^|\/)session-state(?:\/|$)/i.test(target) ||
+        target.split("/").some((s) => globSegCouldTargetProtected(s)) ||
+        /(?:^|\/)\.claude\/+[^/]*[*?[\]{}]/i.test(target) ||
+        /(?:^|\/)\.claude\/+(?:[^/]+\/+)*\.{1,2}(?:\/|$)/i.test(target) ||
+        /(?:^|\/)\.claude\/+[^\s]*[$`%]/i.test(target) ||
+        /(?:^|\/)\.claude\/+worktrees(?:\/|$)/i.test(target) ||
+        SCHEMA_REGISTRY_RE.test(target) ||
+        /(?:^|\/)\.claude\/*$/i.test(target)) return true;
   }
   return false;
 }
@@ -299,6 +324,13 @@ function decodeAnsiCQuotes(text) {
     }));
 }
 
+// Every readable cd target the scans saw. The narrowed destructive rule below
+// judges each `&&`/`;` segment on its own text, so `cd .claude/hooks && rm -f
+// pr-merge-guard.mjs` names no protected path in its `rm` segment; these targets
+// let that rule see the working directory a later segment runs in (Codex
+// connector, PR #956).
+const cdTargetsSeen = [];
+
 function scanCdInvocations(scan) {
   for (const match of scan.matchAll(CD_CMD_RE)) {
     let target = "";
@@ -321,6 +353,7 @@ function scanCdInvocations(scan) {
     // 2). Check the decoded form too; the RAW form still covers Windows
     // `\`-separated paths, where the backslash is a real separator.
     const decoded = target.replace(/\\(.)/g, "$1");
+    cdTargetsSeen.push(target, decoded);
     // Statically unresolvable: variable expansion ($VAR/%VAR%/backtick),
     // shell glob/brace expansion (Opus review 2026-08-19 — `cd .clau[d]e/...`
     // resolves at runtime to a path the literal matcher never sees), and an
@@ -374,6 +407,9 @@ if (shellTool) {
   // quote-stripped) so a composed verb like `c"d".claude\...` — which becomes
   // `cd.claude\...` only after quotes are removed — is degluated there too.
   const deglue = (t) => t.replace(/(^|[;&|\r\n()"'\\\s])(cd|chdir)([/.\\])/gi, "$1$2 $3");
+  // Start from no recorded targets on every evaluation, so a module imported and
+  // run more than once never judges a command by an earlier one's cd (CodeRabbit, PR #956).
+  cdTargetsSeen.length = 0;
   scanCdInvocations(deglue(spliced));
   scanCdInvocations(deglue(spliced.replace(/["']/g, "")));
 
@@ -412,7 +448,50 @@ if (shellTool) {
   // reviewStateDirectoryMentioned only matches the contiguous state path (Opus
   // review 2026-08-19, round 3 — deleting the parent was unguarded). `.claude`
   // must be a whole path component: `.claude-cache` / `foo.claude` do not match.
-  const STATE_DIR_ANCESTOR_RE = /(?:^|[\s"'=:/\\(])\.claude(?![\w-])/i;
+  //
+  // NARROWED 2026-10-18 (Mason): `.claude` counts only as a WHOLE target —
+  // `.claude` or `.claude/` ending the word — never as the start of a deeper path
+  // (`.claude/commands/x.md`, `.claude/hooks/a.mjs`) and never as the user-home
+  // folder (`~/.claude/…`, `C:/Users/<name>/.claude/…`, Claude's memory). The old
+  // form denied any command mentioning any `.claude` path next to a word like
+  // `rm`/`move`/`del` — a grep for "move", a commit message, a heredoc — in about
+  // 34 sessions in two weeks. Deeper paths keep their own protection: hooks and
+  // settings by ENFORCEMENT_SURFACE_RE below, the state dir by
+  // reviewStateDirectoryMentioned, and every trusted file by name
+  // (reviewProofPathMentioned).
+  //
+  // `.claude/worktrees/…` is the exception and keeps the old breadth at ANY depth:
+  // every agent worktree carries its own `.claude/session-state`, so deleting or
+  // moving a worktree (or anything reached from inside one) destroys that state,
+  // and the eight historic spellings of that exploit are pinned in the tests.
+  // The home exclusion is anchored: `Users`/`home` must be the FIRST path component
+  // (after an optional drive letter), so `/tmp/Users/alice/.claude` is not mistaken for a
+  // home folder (Luna, PR #956 round 1).
+  // `{` and `,` delimit a whole target too: Bash brace expansion `rm -rf {.claude,}`
+  // and a PowerShell array `Remove-Item .claude,x` (CodeRabbit, PR #956).
+  const STATE_DIR_ANCESTOR_RE = /(?:^|[\s"'=:({,]|(?<!(?:(?:^|[\s"'=({,])(?:~|\$HOME|\$env:USERPROFILE|%USERPROFILE%)|(?:^|[\s"'=({,]|[A-Za-z]:)[/\\](?:Users|home)[/\\][^/\\\s"']+))[/\\])\.claude(?:[/\\]*(?=$|[\s"';&|)<>,}])|[/\\]+worktrees(?![\w-]))/i;
+  // The same narrowing for a component split: a `.claude` segment alone no longer
+  // counts (that is the ancestor rule's job); `session-state` and a glob that
+  // could expand to a protected name still do.
+  // A glob directly under `.claude` (`.claude/*`, `.claude/s*`) can expand to the
+  // state dir however short its lead, so it still counts.
+  // A `.` or `..` segment anywhere below `.claude` (`.claude/./`, `.claude/x/..`,
+  // `.claude/hooks/../session-state`) can name the whole folder or the state dir
+  // without spelling either, so it counts too (Codex connector, PR #956).
+  const segmentsHitStateDirNarrow = (value) => {
+    const text = String(value || "").replace(/\\/g, "/");
+    // Bash extglob `@(…)`, `+(…)`, `!(…)` (`.claude/s@(ession-)state`) expands the
+    // same way under `shopt -s extglob` / `bash -O extglob` (Codex connector, PR #956).
+    // `{` and `,` start a path too: Bash brace expansion `{.claude/s@(ession-)state,x}`
+    // (CodeRabbit, PR #956), as in STATE_DIR_ANCESTOR_RE.
+    if (/(?:^|[\s"'=:(/{,])\.claude\/+[^\s/"';&|<>]*(?:[*?[\]{}]|[@!+]\()/i.test(text)) return true;
+    if (/(?:^|[\s"'=:(/{,])\.claude\/+(?:[^\s/"';&|<>,{}]+\/+)*\.{1,2}(?=\/|$|[\s"';&|<>,}])/i.test(text)) return true;
+    // A path below `.claude` built at run time (`.claude/s$(printf ession-state)`,
+    // `.claude/$X`, a backtick, `%X%`) may BE the state dir (Codex connector, PR #956).
+    if (/(?:^|[\s"'=:(/{,])\.claude\/+[^\s;&|<>]*[$`%]/i.test(text)) return true;
+    const segs = text.split(/[\s"'=:/(){}|;&<>]+/);
+    return segs.some((s) => /^session-state$/i.test(s) || globSegCouldTargetProtected(s));
+  };
   // Check EVERY normalized view (parity with scanCdInvocations and the
   // proof-path matcher): the shell collapses `r"m"` → `rm` (quote-stripped view)
   // and drops the `\` in `.clau\de` → `.claude` (backslash-dropped view), but
@@ -431,9 +510,31 @@ if (shellTool) {
   // needed): a `>`/`>>` write into the state dir overwrites a wrapper-owned file
   // even when its basename is globbed.
   const namesStateDir = (v) =>
-    reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v) || segmentsHitStateDir(v);
+    reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v) || segmentsHitStateDirNarrow(v) ||
+    SCHEMA_REGISTRY_RE.test(v.replace(/\\/g, "/"));
   if (destructiveViews.some((v) => (hitsDestructiveVerb(v) && namesStateDir(v)) || redirectTargetsStateDir(v))) {
     deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
+  }
+  // A destructive verb anywhere in a command that cds into the repo's `.claude`
+  // (or below it: hooks, commands, agents, skills, workflows, the state dir) keeps
+  // the pre-narrowing command-wide protection: the later `rm`/`mv` runs inside that
+  // folder even though its own segment names no protected path. The home
+  // `~/.claude` (agent memory) stays out, matching STATE_DIR_ANCESTOR_RE.
+  const namesRepoClaude = (t) => {
+    const p = String(t).replace(/["']/g, "").replace(/\\/g, "/");
+    return /(?:^|\/)\.claude(?:\/|$)/i.test(p) &&
+      !/^(?:~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|(?:[A-Za-z]:)?\/(?:Users|home)\/[^/]+)\/+\.claude(?:\/|$)/i.test(p);
+  };
+  // A cd target the guard cannot read (`D=.claude/hooks; cd $D`, a glob, `%X%`)
+  // counts as entering `.claude` when the command names the repo's `.claude`
+  // anywhere, as the state-dir cd rule above already does for its folder
+  // (CodeRabbit, PR #956).
+  const commandNamesRepoClaude = () =>
+    destructiveViews.some((v) => v.split(/[\s;&|()<>=,{}]+/).some(namesRepoClaude));
+  const cdEntersRepoClaude = cdTargetsSeen.some(namesRepoClaude) ||
+    (cdTargetsSeen.some((t) => /[$%`*?[\]{}]/.test(t)) && commandNamesRepoClaude());
+  if (cdEntersRepoClaude && destructiveViews.some(hitsDestructiveVerb)) {
+    deny("REVIEW PROOF GUARD: a delete or move after cd into the repo's .claude folder is blocked — that folder holds the guard hooks, workflow sources and wrapper-owned review state. Run the command from the repo root with the full path so the guard can see what it touches.");
   }
 
   // The enforcement surfaces that live OUTSIDE `.claude`. Added 2026-09-01, when
@@ -461,7 +562,7 @@ if (shellTool) {
   // deleting the lock would quietly drop `git checkout <rev> -- .claude/hooks/x`
   // — a silent guard rewrite — from the protected set.
   const ENFORCEMENT_SURFACE_RE =
-    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|agents|commands|skills|workflows|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
   // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
   // @proven-by review-proof-guard.test.mjs (the deny block asserts that heads
   // absent from this set — cp, tee, rm, Set-Content, command, npx — are refused,

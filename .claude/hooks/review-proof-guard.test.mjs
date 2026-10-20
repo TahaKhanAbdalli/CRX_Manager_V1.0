@@ -899,4 +899,145 @@ for (const [label, payload] of [
 // A parameterless tool sends an empty tool_input object; that is readable, not skipped.
 assertEntrypointAllowed({ tool_name: "TodoRead", tool_input: {} }, "parameterless tool call");
 
+// ── Narrowing, 2026-10-18 (adversarial review of the guard proposals) ─────────
+// The state-dir rule used to deny ANY command naming ANY `.claude` path next to a
+// word like rm/move/del. These are the reviewer's probe commands; they are reads
+// or writes outside the review state and must pass now.
+for (const command of [
+  'grep -rn "move" ~/.claude/projects/C--CRX-Manager/memory',
+  "echo note > ~/.claude/projects/C--CRX-Manager/memory/a.md",
+  "echo note > C:/Users/mason/.claude/projects/x/memory/a.md",
+  'git commit -m "docs: rm stale note in .claude/commands"',
+  "cat .claude/hooks/a.mjs | grep -c rd",
+  "cat > /tmp/note.txt <<'EOF'\nsee .claude/launch.json and rm the old one\nEOF",
+]) {
+  assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command } }, `narrowed rule allows: ${command}`);
+}
+// …while the state dir, the whole `.claude` folder, globs that can reach it, and
+// every worktree stay protected.
+for (const command of [
+  "rm -rf .claude",
+  "rm -rf .claude/",
+  "mv C:/CRX_Manager/.claude /tmp/x",
+  "rm -rf .claude/*",
+  "rm -rf .claude/s*",
+  // Bash extglob aliases of the state dir (Codex connector, PR #956).
+  "bash -O extglob -c 'rm -rf .claude/s@(ession-)state'",
+  "rm -rf .claude/+(session-state)",
+  "rm -rf .claude/!(hooks)",
+  "rm -rf .clau@(de)",
+  "rm -rf .c+(laude)/s@(ession-)state",
+  "find .clau!(x)/s* -delete",
+  "rm -rf {.claude/s@(ession-)state,x}",
+  "rm -rf {x,.claude/x/..}",
+  "rm -rf .claude/session-state",
+  "echo x > .claude/session-state/anything.json",
+  "rm -rf .claude/worktrees/wt-a/src",
+  // The home exclusion is anchored to a real home folder (Luna, PR #956 round 1).
+  "rm -rf /tmp/Users/alice/.claude",
+  "rm -rf C:/CRX/home/x/.claude",
+  "rm -rf /tmp/~/.claude",
+  "rm -rf /tmp/$HOME/.claude",
+  "cp /tmp/payload .claude/./hooks/review-proof-guard.mjs",
+  // Dot-segment aliases of the whole folder or the state dir (Codex connector, PR #956).
+  "find .claude/./ -delete",
+  "rsync -a --delete /tmp/empty/ .claude/./",
+  "rm -rf .claude/hooks/../session-state",
+  "rm -rf .claude/x/..",
+  "echo x > .claude/hooks/../session-state/a.json",
+  // Run-time-built paths below .claude (Codex connector, PR #956).
+  "find .claude/s$(printf ession-state) -delete",
+  "rsync --delete /tmp/empty/ .claude/s$(printf ession-state)/",
+  "rm -rf .claude/$X",
+  // Brace expansion and PowerShell arrays name the whole folder (CodeRabbit, PR #956).
+  "rm -rf {.claude,}",
+  "rm -rf {.claude,x}",
+  "Remove-Item .claude,x -Recurse -Force",
+  // Trusted files a plain copy or tee could forge before (reviewer probes).
+  "cp /tmp/x.json .claude/session-state/migration-review-x.json",
+  "echo {} | tee .claude/session-state/owner-approval-x.json",
+  "node -e \"require('fs').writeFileSync('.claude/session-state/migration-review-x.json','{}')\"",
+  "rm owner-approval-code-used-123456.json",
+  "printf on > AUTOPILOT.on",
+  "echo '{\"held\":false}' > hold.json",
+  "cp /tmp/snap.json applied-migrations.json",
+  // Reviewer agents and commands are now enforcement surfaces.
+  "cp /tmp/x .claude/agents/rls-security-reviewer.md",
+  "echo x > .claude/commands/ship.md",
+  // Skill and workflow sources too (Codex connector, PR #956).
+  "rm -rf .claude/skills/codex-review",
+  "rm -rf .claude/workflows",
+]) {
+  assertEntrypointDenied({ tool_name: "Bash", tool_input: { command } }, /./, `still denied: ${command}`);
+}
+// KNOWN OVER-BLOCK kept on purpose: a command that names the state dir ITSELF
+// and also contains a destructive word anywhere still denies, even as a read.
+// Telling a read from a write there needs the verb-to-target parser this file
+// declines to write; naming the state dir is rare in ordinary work.
+assertEntrypointDenied({ tool_name: "Bash", tool_input: { command: "ls .claude/session-state | grep del" } }, /./, "known over-block");
+// Reading agents/commands stays allowed, and Edit/Write remain the way to change them.
+assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command: "cat .claude/agents/rls-security-reviewer.md" } }, "agent read allowed");
+assertEntrypointAllowed({ tool_name: "Edit", tool_input: { file_path: ".claude/commands/ship.md" } }, "command edit allowed");
+
+// A delete or move AFTER cd into the repo's .claude names no protected path in its own
+// segment; the cd target carries the protection across `&&`/`;` (Codex connector, PR #956).
+// Main's guard denied every one of these.
+for (const command of [
+  "cd .claude/hooks && rm -f pr-merge-guard.mjs",
+  "cd .claude/hooks; rm -f pr-merge-guard.mjs",
+  "cd .claude/commands && rm -f ship.md",
+  "cd .claude/agents && mv x.md y.md",
+  "cd .claude/skills && rm -f codex-review/SKILL.md",
+  "cd .claude/workflows && rm -f x.js",
+  "pushd .claude/hooks && rm -f pr-merge-guard.mjs",
+  "cd \"./.claude/hooks\" && rm -f pr-merge-guard.mjs",
+  "cd C:/CRX_Manager/.claude/hooks && rm -f pr-merge-guard.mjs",
+  "Set-Location .claude\\hooks; Remove-Item pr-merge-guard.mjs",
+  // An unreadable cd target in a command that names the repo's .claude (CodeRabbit, PR #956).
+  "D=.claude/hooks; cd $D && rm -f pr-merge-guard.mjs",
+  "D=.claude/commands; cd \"$D\"; rm -f ship.md",
+]) {
+  assertEntrypointDenied({ tool_name: "Bash", tool_input: { command } }, /after cd into the repo's \.claude/, `cd-then-delete denied: ${command}`);
+}
+// The schema registry backs three schema checks; deleting, moving or overwriting it
+// by shell is denied as main denied it, and reads stay allowed (Codex connector, PR #956).
+for (const command of [
+  "rm -f .claude/schema-registry.json",
+  "mv .claude/schema-registry.json /tmp/x.json",
+  "echo {} > .claude/schema-registry.json",
+  "Remove-Item .claude\\schema-registry.json",
+  "node -e \"1\" > .claude/schema-registry.json",
+  // Every .json directly in .claude is a guard input (Codex connector, PR #956).
+  "rm -f .claude/caller-graph.json",
+  "mv .claude/caller-graph.json /tmp/x",
+  "echo {} > .claude/caller-graph.json",
+  "Remove-Item .claude\\caller-graph.json",
+  "rm -f .claude/active-areas.json",
+]) {
+  assertEntrypointDenied({ tool_name: "Bash", tool_input: { command } }, /./, `registry write denied: ${command}`);
+}
+for (const command of [
+  "cat .claude/schema-registry.json | head",
+  "grep -n customers .claude/schema-registry.json",
+  "cat .claude/caller-graph.json | head",
+  "cp .claude/caller-graph.json /tmp/backup.json",
+  "rm -f src/x.json",
+]) {
+  assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command } }, `registry read allowed: ${command}`);
+}
+// Reading after that cd, and deleting after a cd elsewhere, stay allowed.
+for (const command of [
+  "cd .claude/hooks && ls",
+  "cd .claude/hooks && cat pr-merge-guard.mjs | head",
+  "cd .claude/hooks && node --test guards.test.mjs",
+  "cd src && rm -f x.tmp",
+  "cd src && rm -f x.tmp && cd .. && ls",
+  "D=src; cd $D && rm -f x.tmp",
+  "cd $TMPDIR && rm -f x.tmp",
+  "cd $D && ls .claude/hooks",
+  "cd ~/.claude/projects/x/memory && rm -f old.md",
+]) {
+  assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command } }, `cd allowed: ${command}`);
+}
+
 console.log("OK - review proof guard checks passed.");

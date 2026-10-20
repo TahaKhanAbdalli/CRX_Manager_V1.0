@@ -11,12 +11,10 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  checkMaintenanceProducerInvocation,
   checkDangerousCommand,
   checkCommandDeep,
   checkMigrationModify,
   extractNpmRunNames,
-  maintenanceProducerNamed,
   computedJavaScriptScriptArgument,
   splitShellSegments,
   splitShellWords,
@@ -69,21 +67,17 @@ ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 //    former exact invocations are denied too: the script that enforced the blob
 //    and proof checks is gone. ──
 const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
+// 2026-10-18 (Mason): the by-name producer rule is REMOVED. The producer file is
+// gone and never touched the live database; the rule only refused reads that
+// named it. Naming it is ordinary text now.
 for (const command of [
+  "grep -rn apply-live-testdata-maintenance-20260812 docs",
+  "git log --oneline -- scripts/apply-live-testdata-maintenance-20260812.mjs",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]) {
-  ok(maintenanceProducerNamed(command), `the exact command names the producer: ${command}`);
-  ok(checkMaintenanceProducerInvocation(command), `former exact producer invocation denied after retirement: ${command}`);
-  ok(/retired unapplied on 2026-09-05/.test(checkMaintenanceProducerInvocation(command)), `denial names the retirement: ${command}`);
+  ok(!checkDangerousCommand(command), `naming the retired producer is no longer refused: ${command}`);
 }
-// (a) The producer or its approval token in any spelling that survives
-//     quote/slash/whitespace/escape stripping — chained, wrapped, re-spelled,
-//     reordered, with an unknown argument, behind cmd/env, or with the name
-//     assembled by cmd `set` — stays denied.
-for (const command of [
+const REMOVED_PRODUCER_CORPUS = [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify; Write-Output chained",
   "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify --unknown",
@@ -102,9 +96,11 @@ for (const command of [
   "node --no-warnings scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
   "node --require fs scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
   'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
-]) {
-  ok(maintenanceProducerNamed(command), `producer named: ${command}`);
-  ok(checkDangerousCommand(command), `named producer invocation denied by shell guard: ${command}`);
+];
+// The old (a) corpus is kept only as a parse-safety check: none may throw.
+for (const command of REMOVED_PRODUCER_CORPUS) {
+  checkDangerousCommand(command);
+  pass++;
 }
 // (b) A JavaScript runtime (node/nodejs/bun/deno) whose SCRIPT argument is
 //     computed — a variable, a substitution, a glob, a brace expansion, a cmd
@@ -162,16 +158,12 @@ for (const command of [
   'F=$(decode); pwsh --Command \'"node" $F\'',
   'F=$(decode); pwsh --CommandWithArgs \'"node" $F\'',
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `computed script argument: ${command}`);
-  // Since 2026-10-02 (Mason) a computed script path alone is no longer refused:
-  // the producer it guarded was retired and deleted on 2026-09-05.
-  eq(checkMaintenanceProducerInvocation(command), null, `computed-script launch no longer refused by the producer rule: ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `computed script argument: ${command}`);}
 // (c) NODE_OPTIONS mutation through PowerShell is its own ordered check now (it
 //     used to ride inside the classifier); the 2026-08-12 decoded launch still
 //     denies, for that reason and no other.
 ok(/NODE_OPTIONS/.test(checkDangerousCommand(decodedPowerShellProcessLaunch) || ""), "decoded PowerShell launch is denied by the NODE_OPTIONS rule");
-ok(!maintenanceProducerNamed(decodedPowerShellProcessLaunch) && !computedJavaScriptScriptArgument(decodedPowerShellProcessLaunch), "…and by nothing else: its producer name and arguments are base64, invisible to a by-name rule");
+ok(!computedJavaScriptScriptArgument(decodedPowerShellProcessLaunch), "…and by nothing else: its producer name and arguments are base64, invisible to a by-name rule");
 // (d) NOW ALLOWED — every corpus entry the classifier refused only because its
 //     executable or its code could not be read from the text. None names the
 //     producer and none launches a JavaScript runtime on a computed script. Two of
@@ -290,9 +282,7 @@ for (const command of [
   "node scripts/%SCRIPT%.mjs",
   "node (Get-Item scripts/x.mjs).FullName",
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `computed script argument recognised: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `computed script argument recognised: ${command}`);}
 // (g) Codex App review of PR #619 (three P2 findings on 0d5823915), each pinned
 //     in both directions.
 //     1. A redirection glued to the runtime's name is still a launch: `<`/`>`
@@ -308,9 +298,7 @@ for (const command of [
   '> out node "$F"',
   'F=x </dev/null node "$F"',
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `redirection does not hide a computed script: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch behind a redirection (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `redirection does not hide a computed script: ${command}`);}
 //     2. A separator inside quotes is data, not a new segment: a search or a
 //        commit message that quotes `; node "$F"` is not a launch, while a shell
 //        head whose quoted argument contains one still is.
@@ -320,9 +308,7 @@ for (const command of [
   'git commit -m "later: run node $SCRIPT; then node $F"',
   "echo 'a & node $F'",
   'Write-Output "it\'s; node $F"',
-]) {
-  eq(checkMaintenanceProducerInvocation(command), null, `quoted separator does not open a launch segment: ${command}`);
-  ok(!checkDangerousCommand(command), `quoted separator stays allowed: ${command}`);
+]) {  ok(!checkDangerousCommand(command), `quoted separator stays allowed: ${command}`);
 }
 for (const command of [
   "bash -c 'echo a; node \"$F\"'",
@@ -331,9 +317,7 @@ for (const command of [
   "echo 'a'; node \"$F\"",
   "echo \"it's\"; node \"$F\"",
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `real separator or shell head still reaches the launch: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch after a quoted word (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `real separator or shell head still reaches the launch: ${command}`);}
 eq(splitShellSegments("rg -n 'a; b | c' docs; node x").length, 2, "quoted separators do not split; a real one does");
 eq(splitShellSegments('echo "a; \\" b"; node x').length, 2, "an escaped quote inside double quotes does not end the quote");
 eq(splitShellSegments("echo a\\; node x").length, 1, "a backslash-escaped separator does not split");
@@ -351,9 +335,7 @@ for (const command of [
   '2>"err log" node "$F"',
   'F=x > "out file" node "$F"',
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `quoted redirection target does not hide a computed script: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch behind a quoted redirection target (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `quoted redirection target does not hide a computed script: ${command}`);}
 for (const command of [
   'node > "out file" scripts/safe.mjs',
   '> "out file" node scripts/safe.mjs',
@@ -387,9 +369,7 @@ for (const command of [
   "su -c 'node \"$F\"' user",
   'flock lockfile node "$F"',
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `path-qualified or launcher-fronted computed script is seen: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: path-qualified or launcher-fronted computed launch (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `path-qualified or launcher-fronted computed script is seen: ${command}`);}
 for (const command of [
   "/usr/bin/node scripts/safe.mjs",
   "start /b node scripts/safe.mjs",
@@ -418,9 +398,7 @@ for (const command of [
   'nice -n 10 node "$F"',
   "xargs -I{} node \"$F\"",
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `a runtime name used as an option value does not shadow the launch: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: launch behind an earlier runtime-name token (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `a runtime name used as an option value does not shadow the launch: ${command}`);}
 for (const command of [
   "env -u node node scripts/safe.mjs",
   "env -u node printenv node",
@@ -450,9 +428,7 @@ for (const command of [
   'node --import="$P" scripts/safe.mjs',
   "node --loader=$P scripts/safe.mjs",
 ]) {
-  ok(computedJavaScriptScriptArgument(command), `computed option name, unquoted value, or loader value is still a computed script: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed option launch (was denied): ${command}`);
-}
+  ok(computedJavaScriptScriptArgument(command), `computed option name, unquoted value, or loader value is still a computed script: ${command}`);}
 // Quoted data that merely MENTIONS a runtime, a shell, or an encoded-command
 // spelling was never an invocation; it stays outside the producer gate.
 for (const dataCommand of [
@@ -475,9 +451,7 @@ for (const dataCommand of [
   "env --help pwsh /EncodedCommand",
   "timeout --help pwsh /EncodedCommand",
   "timeout -s TERM --help pwsh /" + "Encoded" + "Command",
-]) {
-  eq(checkMaintenanceProducerInvocation(dataCommand), null, `quoted data stays outside the producer gate: ${dataCommand}`);
-  ok(!checkDangerousCommand(dataCommand), `quoted data stays allowed: ${dataCommand}`);
+]) {  ok(!checkDangerousCommand(dataCommand), `quoted data stays allowed: ${dataCommand}`);
 }
 // FORMER OVER-BLOCK: computed `node …` text inside a shell's quoted argument was
 // refused until the computed-script rule was dropped on 2026-10-02 (Mason).
@@ -555,7 +529,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 
     ok(!checkCommandDeep("npm run safe", tmp), "npm run safe stays allowed");
     ok(checkCommandDeep("npm run dangerous", tmp), "npm run dangerous is caught via its resolved script body");
-    ok(checkCommandDeep("npm run producer", tmp), "producer invocation hidden in an npm script is denied");
+    ok(!checkCommandDeep("npm run producer", tmp), "2026-10-18: the retired producer's name in an npm script is no longer refused");
     ok(!checkCommandDeep("npm run producer:computed", tmp), "2026-10-02: a computed-script launch in an npm script is no longer refused");
     ok(
       checkCommandDeep("npm run chain:a", tmp),
@@ -596,15 +570,6 @@ ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows np
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a force push");
-
-r = runHook({
-  tool_name: "PowerShell",
-  tool_input: {
-    command: "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
-  },
-});
-eq(r.status, 0, "bash-safety.mjs exits 0 after denying a chained producer rewrite");
-ok(r.stdout.includes('"permissionDecision":"deny"'), "current shell guard denies the exact producer TOCTOU reproduction");
 
 // The shapes that used to be refused with a misleading "maintenance producer"
 // message pass the LIVE hook too, not only the library predicate.

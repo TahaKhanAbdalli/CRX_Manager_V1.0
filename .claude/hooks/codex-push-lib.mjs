@@ -658,7 +658,18 @@ export function reviewProofPathMentioned(value) {
   // scripts/remove-applied-ledger-entry.mjs, which never names the file in a
   // tool command. stop-wrap-ack.json is deliberately NOT protected — writing
   // it is the designed acknowledgment valve.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json)(?![\w.-])/i.test(text);
+  //
+  // Every other file a gate TRUSTS is named here too (adversarial review
+  // 2026-10-18): the migration reviewer proof, every owner-approval record (a
+  // deleted used-code marker would let an approval code be replayed), the
+  // AUTOPILOT.on flag, the applied-migrations snapshot, and hold.json. Before,
+  // only the broad "any .claude mention plus a destructive word" rule covered
+  // them, and `cp`/`tee`/`echo >` into them walked through; that broad rule is
+  // now narrowed to the state directory itself, so the names carry the weight.
+  // Their legitimate writers (write-apply-proofs, owner-approval-prompt,
+  // autopilot-arm, refresh-applied-migrations, hold-latch-prompt) all write
+  // internally and never name the file in a tool command.
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold\.json)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
@@ -4013,6 +4024,119 @@ export function commandFedToInterpreter(command) {
       if (stage.redirected && /^\s*exec(?:\s|$)/.test(stage.text.slice(0, 64))) inputReplaced = true;
     }
     return false;
+  });
+}
+
+// Could this command's text reach a merge, a push, or a GitHub call at all?
+// @speed-bump — the two fail-closed refusals above (a program or shell text built at run
+// time, and text fed to an interpreter on its input) are only worth their cost
+// when it could. Before 2026-10-18 they ran on every command, and refused an
+// ordinary `node - <<'EOF'` script, `python -` and `eval "$(fnm env)"` in about
+// 50 sessions in two weeks (adversarial review, 2026-10-18) — while
+// `node scratch.mjs` and `bash payload.sh`, which run the same arbitrary code
+// from a file, were always allowed. So these refusals are a speed bump for
+// commands that visibly involve gated words, not a boundary; the boundary for
+// merges is the merge gate's own checks on every readable `gh pr merge`, and
+// GitHub's branch protection.
+//
+// "Could reach" is read from every view the guards already use (as written,
+// with shell quoting consumed, and as argv words), over the command AND every
+// nested command it unwraps (a decoded -EncodedCommand payload included):
+//   • a gated WORD: gh, git, merge, push, api, alias, graphql, pulls, refs, a
+//     REST client (curl, wget, irm, iwr, Invoke-RestMethod/WebRequest), or an
+//     encoded-command / base64 marker whose payload the text does not show;
+//   • or an OBFUSCATION marker (char codes, escapes, decoding, reversing,
+//     joining) together with a way to run a program or reach the network,
+//     because that pair is how a gated word is hidden from the first test.
+const GATED_WORD_RE = /(?:^|[^\w-])(?:gh|git|merge|push|api|alias|graphql|pulls|refs|curl|wget|irm|iwr|invoke-restmethod|invoke-webrequest|encodedcommand|frombase64string|base64|atob)(?:$|[^\w-])|api\.github|(?:^|\s)-e(?:nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{12,}/i;
+// String concatenation with `+` (`'g'+'h pr '+'mer'+'ge'`) hides a gated word from
+// GATED_WORD_RE just as well as char codes do (Luna, PR #956 round 1). Only `+` between two
+// quotes counts: `'.'` is an ordinary path argument, not a join.
+// `printf 'g%s pr m%s 951' h erge | bash` assembles the words from a format string
+// (Codex connector, PR #956): a printf format with a `%` directive counts too.
+const OBFUSCATION_RE = /\bprintf\b[^|;&\n]*%|fromcharcode|fromcodepoint|fromhex|unhexlify|\bpack\s*\(|\bord\s*\(|\bchr\s*\(|buffer\.from|\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|\\[0-7]{3}|\$'|\[char\]|-join\b|\bjoin\s*\(|reverse\s*\(|\brev\b|\btr\b|\bxxd\b|decode|['"`]\s*\+\s*['"`]|\bconcat\s*\(/i;
+const CAPABILITY_RE = /child_process|subprocess|\bspawn|\bexec|popen|\bsystem\s*\(|start-process|invoke-expression|\biex\b|\beval\b|\bfetch\b|https?:|\brequest\b|socket|\b(?:bash|sh|zsh|cmd|pwsh|powershell|python3?|node|perl|ruby|deno|bun)\b|\$\(|`/i;
+// A PROGRAM NAME assembled from shell variables set in the same command
+// (`a=g; b=h; c=mer; d=ge; $a$b pr $c$d 951`) shows no gated word at all, and was
+// allowed on main before this change too (Codex connector, PR #956). An agent never
+// needs to build the name of the program it runs, so a run-time program name next
+// to a variable assignment is refused outright, whatever words the command shows.
+const SHELL_ASSIGNMENT_RE = /(?:^|[;&|\r\n(`]|\s)(?:export\s+|local\s+|declare\s+(?:-\w+\s+)*|readonly\s+|set\s+)?[A-Za-z_]\w*\+?=|\$(?:env:)?[A-Za-z_][\w:]*\s*[+]?=(?!=)|\b(?:set-variable|new-variable|sv|nv|set-item\s+env:)\b|\bread\s+(?:-\w+\s+)*[A-Za-z_]/i;
+// Widened (Codex connector, PR #956 second pass): a program word built by a plain
+// command substitution (`$(printf g)h pr m$(printf er)ge 951`) needs no assignment at
+// all, so ANY run-time-built top-level program name is refused. Running a program
+// from a variable (`node "$f"`) or handing a shell run-time text (`bash -c "$CMD"`,
+// `eval "$(fnm env)"`) is a different shape and is not affected.
+export function programAssembledAtRuntime(command) {
+  const text = String(command || "");
+  // `$` AND backtick: `` `printf g`h pr m`printf er`ge 951 `` builds the name too
+  // (Codex connector, PR #956 third pass).
+  return programBuiltAtRuntime(text, /[$`]/);
+}
+
+// A NESTED command's program name glued from a substitution or variable AND
+// literal letters (`$(printf g)h`, `g$(printf i)t`, `` `printf g`h ``, `g${X}t`):
+// a shell inside `bash -c '…'` assembles it, and the outer scan never reads it
+// (Codex connector, PR #956). A whole-word substitution (`eval "$(fnm env)"`'s
+// `$(fnm env)`) is not glued and stays allowed, as on the outer command.
+export function nestedProgramNameGlued(command) {
+  // Mark substitutions and variables first, so a space inside `$(fnm env)` does
+  // not split the word, then judge the first word alone. The balanced parser keeps
+  // a nested `$(echo $(printf g))h` whole; a flat `\$\([^()]*\)` split it at the
+  // inner space and missed the glued name (CodeRabbit, PR #956).
+  // An unclosed `$(` stays in `outer` as written; mark its opening too, so
+  // `$(printf g h pr m$(printf er)ge 951` still reads as a built name (CodeRabbit,
+  // PR #956). An unclosed arithmetic `$((` is not a command and is left alone.
+  const split = splitSubstitutions(String(command || "").trim());
+  let marked = split.outer;
+  if (split.unclosed !== undefined) {
+    const start = marked.length - split.unclosed.length - 2;
+    if (start >= 0 && marked.slice(start, start + 2) === "$(" && marked[start + 2] !== "(") {
+      marked = `${marked.slice(0, start)}\u0000${marked.slice(start + 2)}`;
+    }
+  }
+  marked = marked.replace(/\$\(\)|`[^`]*`|\$\{[^}]*\}|\$\w+/g, "\u0000");
+  const first = (marked.split(/[\s;&|]+/)[0] || "").replace(/["']/g, "");
+  return first.includes("\u0000") && first.replace(/\u0000/g, "").length > 0;
+}
+
+// Inline program code handed to a runtime as an ARGUMENT (`node -e "…"`,
+// `python -c "…"`, `perl -e`, `ruby -e`, `php -r`) is not fed input, so the fed-
+// interpreter refusal never saw it, on main or here: `node -e "…execSync(Buffer
+// .from('<base64 of gh pr merge>','base64')…)"` ran a merge the gate could not read
+// (Luna, PR #956 round 2). Only the CODE argument is judged, never the rest of the
+// command, so `gh pr view --json x | node -e "…"` — the everyday way to read gh JSON —
+// still passes when that code itself shows nothing gated.
+const INLINE_CODE_FLAG_RE = /^(?:-e|-p|-c|-r|-E|--eval|--print|--command|--run)$/;
+const INLINE_CODE_ATTACHED_RE = /^(?:--eval|--print|--command)=([\s\S]*)$/;
+export function inlineCodeReachesGatedAction(command) {
+  for (const segment of splitCommandSegments(String(command || ""))) {
+    const words = splitShellArgv(segment);
+    for (let index = 0; index < words.length; index += 1) {
+      const program = String(words[index]).split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+      if (!STDIN_PROGRAM_RUNTIMES.has(program) && program !== "nodejs") continue;
+      const end = Math.min(words.length, index + 1 + NESTED_SCAN_WINDOW);
+      for (let at = index + 1; at < end; at += 1) {
+        const word = String(words[at]);
+        // `--eval=…`, a separate `-e …`, or the short flag with its code attached
+        // (`perl -e'…'` reaches argv as `-e…`; Luna, PR #956 round 3).
+        const attached = INLINE_CODE_ATTACHED_RE.exec(word) || /^-[epcrE](.+)$/s.exec(word);
+        const code = attached ? attached[1] : INLINE_CODE_FLAG_RE.test(word) ? words[at + 1] : undefined;
+        if (code !== undefined && couldReachGatedAction([code])) return true;
+        // No early stop at the first bare word: a detached option value
+        // (`node --require fs -e "…"`) looks like a script argument, so the whole
+        // window is scanned (Codex connector, PR #956 third pass).
+      }
+    }
+  }
+  return false;
+}
+
+export function couldReachGatedAction(texts) {
+  return [].concat(texts).some((text) => {
+    const raw = String(text || "");
+    const views = [raw, withoutShellQuoting(raw), splitShellArgv(raw).join(" ")];
+    return views.some((view) => GATED_WORD_RE.test(view) || (OBFUSCATION_RE.test(view) && CAPABILITY_RE.test(view)));
   });
 }
 

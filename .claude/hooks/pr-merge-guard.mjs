@@ -35,6 +35,10 @@ import {
   ghApiMergeRequest,
   commandFedToInterpreter,
   commandFedToInterpreterDenial,
+  couldReachGatedAction,
+  programAssembledAtRuntime,
+  nestedProgramNameGlued,
+  inlineCodeReachesGatedAction,
   ghCommandUnreadableDenial,
   ghCommandUnreadableIn,
   ghHiddenByShellComposition,
@@ -142,9 +146,22 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     deny(`PR MERGE GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
   }
   if (nested.tooDeep) deny(nestedTooDeepDenial("PR MERGE GATE"));
-  if (nested.computed) deny(nestedComputedDenial("PR MERGE GATE"));
   const scannedCommands = [toolInput.command, ...nested.commands];
-  if (scannedCommands.some((text) => commandFedToInterpreter(text))) {
+  // Only a command that could reach a merge or a GitHub call gets the two
+  // fail-closed refusals (2026-10-18; see couldReachGatedAction).
+  const gated = couldReachGatedAction(scannedCommands);
+  if (gated && nested.computed) deny(nestedComputedDenial("PR MERGE GATE"));
+  if (programAssembledAtRuntime(toolInput.command)) deny(nestedComputedDenial("PR MERGE GATE"));
+  // A COMPUTED nested command is read too: `bash -c '$(printf g)h pr …'` assembles
+  // its program name inside the nested text (Codex connector, PR #956). Only when
+  // computed, because the grouping split also turns `$((i+1))` into fragments.
+  if (nested.computed && nested.commands.some((text) => nestedProgramNameGlued(text))) {
+    deny(nestedComputedDenial("PR MERGE GATE"));
+  }
+  if (scannedCommands.some((text) => inlineCodeReachesGatedAction(text))) {
+    deny(commandFedToInterpreterDenial("PR MERGE GATE"));
+  }
+  if (gated && scannedCommands.some((text) => commandFedToInterpreter(text))) {
     deny(commandFedToInterpreterDenial("PR MERGE GATE"));
   }
   for (const scanned of scannedCommands) collectMergeRequests(scanned);

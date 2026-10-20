@@ -477,16 +477,46 @@ ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still
     [`pwsh -EncodedCommand ${Buffer.from(NESTED_ADMIN, "utf16le").toString("base64")}`, /--admin/],
     [`bash ${pad("--norc", 70)} -c "${NESTED_ADMIN}"`, /option words/],
     [`${Array.from({ length: 40 }, (_, i) => `bash${" ".repeat(i + 1)}-c 'echo ok'; `).join("")}bash -c '${NESTED_ADMIN}'`, /inner commands/],
-    ["Get-Content payload.txt | iex", /on its input/],
     [`echo '${NESTED_ADMIN}' | env bash`, /on its input/],
-    ['cmd /c "type payload.txt | bash"', /on its input/],
+    [`Get-Content payload.txt | iex; ${NESTED_ADMIN}`, /on its input|--admin/],
+    ["node - <<'EOF'\nrequire('child_process').execSync('gh pr merge 1 --admin')\nEOF", /on its input/],
+    ["P=gh; $P pr merge 1 --squash", /built at run time/],
+    // Inline code argument that hides a merge (Luna, PR #956 round 2; main allowed it too).
+    ["node -e \"require('child_process').execSync(Buffer.from('Z2ggcHIgbWVyZ2UgODEy','base64').toString())\"", /on its input/],
+    ["python -c \"import subprocess; subprocess.run('g'+'h pr mer'+'ge 1', shell=True)\"", /on its input/],
+    // Codex connector, PR #956: inline code after a detached option value.
+    ["node --require fs -e \"require('child_process').execSync(Buffer.from('Z2ggcHIgbWVyZ2UgODEy','base64').toString())\"", /on its input/],
+    // Codex connector, PR #956: words assembled by a printf format.
+    ["printf 'g%s pr m%s 951 --squash' h erge | bash", /on its input/],
+    // Luna, PR #956 round 3.
+    ["node -e \"require('child_process').execSync(String.fromCodePoint(103,104,32,112,114,32,109,101,114,103,101,32,57,53,49))\"", /on its input/],
+    ["perl -e'system(join(\"\", \"g\",\"h pr \",\"mer\",\"ge 951\"))'", /on its input/],
+    // A program name assembled from variables (Codex connector, PR #956; main allowed it too).
+    ["a=g; b=h; c=mer; d=ge; $a$b pr $c$d 951 --squash", /built at run time/],
+    // String concatenation hides the gated word (Luna, PR #956 round 1).
+    ["node - <<'EOF'\nrequire('child_process').execSync('g'+'h pr '+'mer'+'ge 951')\nEOF", /on its input/],
+    ["python - <<'EOF'\nimport subprocess; subprocess.run('g'+'h pr mer'+'ge 1', shell=True)\nEOF", /on its input/],
     ["sudo -u root -g staff -H -n -E gh mm 123", /is not a gh command this guard can read/],
   ]) {
     r = runHook({ tool_name: "Bash", tool_input: { command } });
     ok(r.decision?.permissionDecision === "deny" && why.test(r.decision?.permissionDecisionReason || ""),
       `the real hook refuses ${JSON.stringify(command.slice(0, 60))} for the expected reason`);
   }
-  for (const command of ["timeout 30 echo gh mm 123", "git log --oneline | grep -n bash", "bash -c 'echo ok'; bash -c 'echo ok'"]) {
+  // 2026-10-18: the run-time-text and fed-to-interpreter refusals apply only
+  // when the command could reach a merge or GitHub call (couldReachGatedAction).
+  // A file payload with no gated word is the same as `bash payload.sh`, which
+  // was always allowed; inline scripts with no gated word are ordinary work.
+  for (const command of [
+    "timeout 30 echo gh mm 123", "git log --oneline | grep -n bash", "bash -c 'echo ok'; bash -c 'echo ok'",
+    "Get-Content payload.txt | iex", 'cmd /c "type payload.txt | bash"',
+    "node - <<'EOF'\nconsole.log(require('fs').readdirSync('.').length)\nEOF",
+    "python - <<'EOF'\nprint(1+1)\nEOF",
+    'eval "$(fnm env)" && node -v',
+    'bash -c "$CMD"',
+    // Reading gh JSON with inline code: only the CODE is judged, not the gh around it.
+    "gh pr view 956 --json title | node -e \"console.log(JSON.parse(require('fs').readFileSync(0)).title)\"",
+    'node -e "console.log(1)"',
+  ]) {
     r = runHook({ tool_name: "Bash", tool_input: { command } });
     ok(r.status === 0 && r.decision === null, `CONTROL: the real hook passes ${JSON.stringify(command)}`);
   }
@@ -760,8 +790,9 @@ ok(
   "every scanned command is checked for a gh alias or unknown gh command",
 );
 ok(
-  /if\s*\(\s*nested\.computed\s*\)\s*deny\(/.test(guardSource),
-  "a nested command built at run time is refused",
+  /if\s*\(\s*gated\s*&&\s*nested\.computed\s*\)\s*deny\(/.test(guardSource) &&
+    /const\s+gated\s*=\s*couldReachGatedAction\(\s*scannedCommands\s*\)/.test(guardSource),
+  "a nested command built at run time is refused when the command could reach a merge",
 );
 ok(
   /scannedCommands\.some\(\s*\(text\)\s*=>\s*commandFedToInterpreter\(\s*text\s*\)\s*\)/.test(guardSource),

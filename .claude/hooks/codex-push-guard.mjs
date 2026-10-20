@@ -26,6 +26,10 @@ import {
   mainPushSource,
   commandFedToInterpreter,
   commandFedToInterpreterDenial,
+  couldReachGatedAction,
+  programAssembledAtRuntime,
+  nestedProgramNameGlued,
+  inlineCodeReachesGatedAction,
   nestedComputedDenial,
   nestedTooDeepDenial,
   proofValid,
@@ -123,8 +127,29 @@ try {
   deny(`CODEX GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
 }
 if (nestedCommands.tooDeep) deny(nestedTooDeepDenial("CODEX GATE"));
-if (nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
-if ([cmd, ...nestedCommands.commands].some((text) => commandFedToInterpreter(text))) {
+// Only a command that could reach a push or a GitHub call gets the two
+// fail-closed refusals (2026-10-18; see couldReachGatedAction). @speed-bump
+const pushGated = couldReachGatedAction([cmd, ...nestedCommands.commands]);
+if (pushGated && nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
+if (programAssembledAtRuntime(cmd)) deny(nestedComputedDenial("CODEX GATE"));
+// A COMPUTED nested command is read too (`bash -c 'g$(printf i)t pu…'`; Codex
+// connector, PR #956). The grouping:false expansion above drops a computed inner
+// command's text, so this reads the full expansion the merge guard uses; only when
+// computed, because the grouping split also turns `$((i+1))` into fragments.
+if (nestedCommands.computed) {
+  let fullNested;
+  try {
+    fullNested = expandNestedCommands(cmd);
+  } catch (error) {
+    // @proven-by guards.test.mjs (the nested assembled-name entrypoint cases)
+    deny(`CODEX GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
+  }
+  if (fullNested.commands.some((text) => nestedProgramNameGlued(text))) deny(nestedComputedDenial("CODEX GATE"));
+}
+if ([cmd, ...nestedCommands.commands].some((text) => inlineCodeReachesGatedAction(text))) {
+  deny(commandFedToInterpreterDenial("CODEX GATE"));
+}
+if (pushGated && [cmd, ...nestedCommands.commands].some((text) => commandFedToInterpreter(text))) {
   deny(commandFedToInterpreterDenial("CODEX GATE"));
 }
 if (nestedCommands.commands.some((inner) =>

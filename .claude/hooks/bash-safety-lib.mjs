@@ -9,53 +9,17 @@
 // Behavior of the checks below is UNCHANGED from the original inline bash-safety.mjs
 // table — this is a pure extraction, plus one net-new pattern (shell-redirect writes
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
-// 2026-09-05: the maintenance-producer check became a by-name rule (see below).
+// 2026-10-18: the retired maintenance-producer by-name rule was removed (Mason).
+// The producer (scripts/apply-live-testdata-maintenance-20260812.mjs) was retired
+// unapplied and deleted on 2026-09-05, never touched the live database, and the
+// rule had come to refuse only reads that named it (`grep`, `git log -- <path>`).
 
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
-// The producer was retired unapplied on 2026-09-05 (Mason's decision, PR #622).
-// Its four exact invocations used to be allow-listed here because the script
-// itself enforced the committed-blob and exact-head-proof checks; with the
-// script gone those checks are gone too, so a replacement file at the same path
-// must not be runnable through the old exact spellings. Every mention now fails
-// closed.
-const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
-
-// ── maintenance producer: denied BY NAME (2026-09-05) ──────────────────────
-// scripts/apply-live-testdata-maintenance-20260812.mjs was the one reviewed,
-// blob-pinned tool allowed to rewrite three protected guard files. From
-// 2026-08-12 to 2026-09-05 this file also carried a ~350-line "opaque invocation"
-// classifier that refused ANY command whose executable or script could not be
-// read from its text — `node -e`, `bash -c`, `python -c`, `| xargs`, heredocs,
-// `$X` or `[ -f x ]` in executable position, PowerShell script blocks — on the
-// theory that such a command MIGHT run the producer without naming it. Measured
-// over the fortnight 2026-08-21..09-04 it fired 849 times; 59 of those named the
-// producer. The 2026-08-31 decision (docs/manual/DECISION_LOG.md) recorded it as
-// ineffective — `node runner.mjs` or `make x` execute the producer freely — and
-// named its removal the next harness task. Removed here. What remains is exact:
-//   • any spelling of the producer's name or of its approval token that survives
-//     quote/slash/whitespace/escape stripping (no exact spelling is allowed
-//     since the retirement);
-//   • a JavaScript runtime (node/nodejs/bun/deno) whose SCRIPT argument cannot be
-//     read from the text (`node "$F"`, `node scripts/$(…)`, `node scripts/appl?-…`),
-//     because that is the one shape that runs a file whose name this rule cannot
-//     check. Only a segment whose head word EXECUTES what follows (the runtime, a
-//     shell, a transparent launcher) is inspected, so `rg -n 'node "$F"' docs` is
-//     data. Arguments AFTER the script and inline code (`-e`/`-p`/stdin) are not
-//     scanned: `node scripts/x.mjs "$SINCE"` and `node -e "…${x}…"` are ordinary.
-// A nameless launch is bounded by the PR pipeline every guard-file change must
-// pass, not by this rule: the producer that used to enforce its own argv, blob,
-// and proof checks no longer exists. The generated Codex production guard
-// (.codex/hooks/production-action-guard.mjs) keeps the full classifier,
-// blob-pinned, for the Codex session that holds production credentials.
-export function maintenanceProducerNamed(command) {
-  const compact = String(command || "")
-    .toLowerCase()
-    .replace(/[\s\\/"'`^]/g, "");
-  return compact.includes(MAINTENANCE_PRODUCER_NAME)
-    || compact.includes("--approved-by-mason=");
-}
+// computedJavaScriptScriptArgument (below) recognises a JavaScript runtime whose
+// SCRIPT argument cannot be read from the text (`node "$F"`). Nothing refuses on
+// it since 2026-10-02; it stays exported with its tests as a parser utility.
 
 // A shell escape that splits a WORD (`n^ode`, `n\`ode`, `n\\ode`) is the runtime's
 // name once the shell has run; a bash backslash or PowerShell backtick before a
@@ -282,19 +246,6 @@ function computedScriptAfterRuntime(segment, match) {
   return false;
 }
 
-export function checkMaintenanceProducerInvocation(command) {
-  const value = String(command || "").trim();
-  if (maintenanceProducerNamed(value)) {
-    return "Blocked maintenance producer invocation. The 2026-08-12 maintenance producer was retired unapplied on 2026-09-05 and no invocation of that path is allowed; chaining, wrappers, substitutions, alternate spellings, and indirect writers are denied as before.";
-  }
-  // The computed-script-path rule (`node "$F"`) was dropped on 2026-10-02 (Mason):
-  // it existed only to keep the maintenance producer from running under a name
-  // this rule could not read, that producer was retired and deleted on
-  // 2026-09-05, and the rule kept refusing ordinary `for f in …; do node "$f"`
-  // loops. computedJavaScriptScriptArgument stays exported; nothing calls it now.
-  return null;
-}
-
 // Ordered [pattern, reason] checks. First match wins. Verbatim from the
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
@@ -402,8 +353,6 @@ export function checkDestructiveSql(cmd) {
 export function checkDangerousCommand(cmd) {
   const text = String(cmd || "");
   if (!text) return null;
-  const producerReason = checkMaintenanceProducerInvocation(text);
-  if (producerReason) return producerReason;
   for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
     if (re.test(text)) return reason;
   }
@@ -517,9 +466,6 @@ export function checkCommandDeep(cmd, cwd) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
-      if (maintenanceProducerNamed(resolved)) {
-        return "Blocked indirect maintenance producer invocation. Run the exact repository-relative node command directly; npm scripts and lifecycle wrappers are denied.";
-      }
       // Run BOTH check families on the resolved body — a script that rewrites an
       // existing migration is as dangerous as one that force-pushes (Codex P1
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection

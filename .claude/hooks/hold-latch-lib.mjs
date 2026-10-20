@@ -4,7 +4,8 @@
 // and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
-import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
+import { DENY_TOOLNAME_RE, DENY_BASH_RES } from "./autopilot-lib.mjs";
+import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 
 // Mason wants to halt / pause / is only scoping a future session.
 //
@@ -35,9 +36,17 @@ export function isResumePhrase(prompt) {
   return RESUME_RE.test(String(prompt || ""));
 }
 
-// Under a hold, which tool calls count as "building" and should be blocked?
-// Reads, tests, builds, and writes to session-state/scratchpad/SCOPE.md stay
-// allowed so Claude can still answer, checkpoint, and write a plan.
+// Under a hold, a tool call gets one of three answers (holdDecision):
+//
+//   "deny"  OUTWARD or hard-to-undo: push, merge, PR publishing, live migration
+//           apply, deploy, live SQL writes, and every shape autopilot refuses.
+//           Mason's own "stop" keeps hard-blocking these (DECISION_LOG 2026-10-02).
+//   "warn"  LOCAL and reversible: editing source, committing, local merge/rebase.
+//           The latch misfires on ordinary prose ("a hook to stop X", a helper's
+//           hand-back), and a frozen session cost far more than a local edit that
+//           the next message can undo, so these go through with a visible warning
+//           (Mason, 2026-10-18).
+//   "allow" reads, tests, builds, and notes / plans.
 const ALLOW_WRITE_PATH_RE = /(\.claude[\\/]session-state|scratchpad|SCOPE\.md$|PROGRESS|\.md$)/i;
 // `apply-migration-file` (2026-08-24) is the file-bytes live-apply door added for
 // migrations too large to transmit through apply_migration. It is a Bash command,
@@ -46,7 +55,25 @@ const ALLOW_WRITE_PATH_RE = /(\.claude[\\/]session-state|scratchpad|SCOPE\.md$|P
 // `node scripts/apply-migration-file.mjs … --confirm` invocation, meaning a
 // mid-session "stop" from Mason would NOT have paused a live migration through the
 // new spelling. Any future live-apply spelling must be added here too.
-const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supabase\s+db|apply_migration|apply-migration-file|deploy|npm\s+publish|vercel\s)/i;
+//
+// Pushes and `gh pr merge` are NOT spelled here: DENY_BASH_RES (autopilot-lib)
+// already matches them through global options, `.exe` and any case
+// (`git -C dir push`, `gh -R o/r pr merge`), which a bare `git\s+push` missed —
+// so before 2026-10-18 a "stop" did not stop the autonomous-landing merge.
+// A writing `gh api` call: an explicit write method, or any field / input flag
+// (`-f`, `-F`, `--field`, `--raw-field`, `--input`), which makes gh default to POST.
+// A REST client writing anywhere (curl/wget/Invoke-RestMethod/Invoke-WebRequest with a
+// write method or a body) is outward too (Luna, PR #956 round 1).
+// A database client run from the shell reaches the live database with whatever SQL
+// its file or flag carries, which this text check cannot read (Luna, PR #956 round 3),
+// so any psql/pg_restore launch counts as outward while a stop is latched.
+const OUTWARD_BASH_RE = /(supabase\s+db|\b(?:psql|pg_restore)(?:\.exe)?\b|apply_migration|apply-migration-file|deploy|npm\s+publish|vercel\s|\bgh(?:\.\w+)?["']?\s+(?:\S+\s+)*?(?:pr\s+(?:create|ready|close|reopen|comment|review|edit|update-branch|lock|unlock)|release\s+(?:create|upload|delete|edit)|issue\s+(?:create|close|reopen|comment|edit|delete|transfer|lock|unlock)|repo\s+(?:create|edit|delete|rename|archive|unarchive|sync|fork)|workflow\s+(?:run|enable|disable)|run\s+(?:rerun|cancel|delete)|(?:secret|variable)\s+(?:set|delete)|label\s+(?:create|edit|delete)|gist\s+(?:create|edit|delete))\b|\bgh(?:\.\w+)?["']?\s+(?:-\S+(?:\s+[^\s-]\S*)?\s+)*api\b[^\n]*?(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)|--method[=\s]+(?:POST|PUT|PATCH|DELETE)|\s-[fF]\S*|\s--(?:field|raw-field|input)(?:\s|=))|\b(?:curl|wget|invoke-restmethod|invoke-webrequest|irm|iwr)\b[^\n]*?(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)|\s--request[=\s]+(?:POST|PUT|PATCH|DELETE)|\s-method\s+(?:post|put|patch|delete)|\s--method[=\s]+(?:POST|PUT|PATCH|DELETE)|\s-[dFT]\S*|\s(?:--data(?:-raw|-binary|-urlencode|-ascii)?|--json|--form(?:-string)?|--upload-file|--post-data|--post-file|--body-data|--body-file|-body|-infile)(?:\s|=)))/i;
+const LOCAL_GIT_RE = /\bgit\b[^\n]*?\b(commit|merge|rebase|cherry-pick|tag)\b/i;
+// `SELECT … INTO new_table` creates and fills a table in plain PostgreSQL (CodeRabbit, PR #956).
+// Any `into` after a `select`, across `;` too: a semicolon inside a string literal
+// (`SELECT ';' INTO t`) must not end the match, and over-matching a read only errs
+// toward blocking while a stop is latched.
+const SQL_WRITE_RE = /\b(insert|update|delete|create|alter|drop|truncate|grant|revoke|copy|call|do|merge|refresh|vacuum|reindex|cluster|comment\s+on|security\s+label|lock|set\s+role|reset\s+role)\b|\bselect\b[\s\S]*?\binto\b/i;
 
 // hold-latch's mutate-tool set must be a SUPERSET of autopilot's deny set (2026-07-13
 // audit, FIX 3): a "stop" from Mason should pause at least every tool autopilot
@@ -61,27 +88,39 @@ const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supab
 const HOLD_LATCH_EXTRA_RE = /(apply_migration|create_directory|kill_process)/i;
 const MUTATE_TOOLNAME_RE = new RegExp(`(?:${DENY_TOOLNAME_RE.source}|${HOLD_LATCH_EXTRA_RE.source})`, "i");
 
-export function isBuildActionUnderHold(toolName, toolInput) {
+export function holdDecision(toolName, toolInput) {
   const name = String(toolName || "");
-  if (MUTATE_TOOLNAME_RE.test(name)) return true;
+  if (MUTATE_TOOLNAME_RE.test(name)) return "deny";
 
   const input = toolInput || {};
 
   if (/^(Write|Edit|NotebookEdit|MultiEdit)$/i.test(name)) {
     const fp = String(input.file_path || input.path || input.filePath || "");
-    if (fp && ALLOW_WRITE_PATH_RE.test(fp)) return false; // notes / plan / md are fine
-    return true; // building source = blocked under hold
+    if (fp && ALLOW_WRITE_PATH_RE.test(fp)) return "allow"; // notes / plan / md are fine
+    return "warn";
   }
 
-  const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && BUILD_BASH_RE.test(cmd)) return true;
+  // A backslash-newline continuation (and the indentation after it) joins two lines
+  // into one command, so `curl -X POST \<newline>  --data …` is read joined
+  // (CodeRabbit, PR #956).
+  const cmd = typeof input.command === "string" ? input.command.replace(/\\\r?\n[^\S\r\n]*/g, " ") : "";
+  if (cmd) {
+    if (OUTWARD_BASH_RE.test(cmd) || DENY_BASH_RES.some((re) => re.test(cmd))) return "deny";
+    if (LOCAL_GIT_RE.test(cmd)) return "warn";
+  }
 
-  // execute_sql that writes (not a read/smoke)
+  // execute_sql that writes, including a mutating RPC run inside a SELECT
+  // (`select public.void_invoice(…)`), which has no write keyword at all.
   if (/execute_sql/i.test(name)) {
     const q = String(input.query || "");
-    if (/\b(insert|update|delete|create|alter|drop|truncate)\b/i.test(q)) return true;
+    if (SQL_WRITE_RE.test(q) || findNonReadFunctionCall(q)) return "deny";
   }
-  return false;
+  return "allow";
+}
+
+// True when a "stop" must HARD-block this call (the outward set above).
+export function isBuildActionUnderHold(toolName, toolInput) {
+  return holdDecision(toolName, toolInput) === "deny";
 }
 
 export { HOLD_RE, RESUME_RE };
