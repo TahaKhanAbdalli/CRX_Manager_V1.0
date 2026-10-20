@@ -167,9 +167,10 @@ applied 12:12:53 UTC (ledger `20261016121253`, migration-history row 951; PR #94
 `982bc0dda`). The nine batch-1 functions (listed below, out of the unbound table) now refuse a reused key for a different
 caller or request (`IDEMPOTENCY_ACTOR_MISMATCH` / `IDEMPOTENCY_INTENT_MISMATCH`); an exact retry still
 replays. Proof: live postconditions read and the rollback-only live chain
-`smoke-money-replay-binding-batch1.sql` (SMOKE_PASS_ROLLBACK). Gap (CodeRabbit on PR #950): that chain
-checks an exact retry for eight of the nine functions; for `edit_prepay_credit` it checks only the
-mismatch refusal, so its exact-retry replay is not yet proven live. **Live body re-check 2026-10-18
+`smoke-money-replay-binding-batch1.sql` (SMOKE_PASS_ROLLBACK). The chain now checks an exact retry
+for all nine functions: the `edit_prepay_credit` step (the gap CodeRabbit raised on PR #950) was added
+and passed live 2026-10-20 00:35 UTC (SMOKE_PASS_ROLLBACK; the retry returned the saved answer and
+wrote no second audit row, no second receipt and no balance change). **Live body re-check 2026-10-18
 11:56 UTC** (read-only `pg_proc` read, migration-history row 951): all nine live wrappers bind the
 caller (`auth.uid()`, forged `p_performed_by` refused) and the request fingerprint through
 `check_idempotency_intent` before any saved result can come back (eight call their saved-result body;
@@ -178,7 +179,7 @@ left is `apply_prepay_to_invoice` inside `batch_apply_prepayments`, covered by t
 key. `_bind_replay_receipt_20261015`,
 the other batch-1 helpers and the nine renamed bodies have no EXECUTE for anon, authenticated,
 service_role or PUBLIC. None of the nine public functions was found unbound on a keyed call. This is a
-read of the deployed source, not an exercised retry, so the `edit_prepay_credit` gap above stays open. Batches 3–4 below are still open.
+read of the deployed source, not an exercised retry; the exercised `edit_prepay_credit` retry is the 2026-10-20 chain run above. Batches 3–4 below are still open.
 
 **The problem in one line.** When an action is retried, `check_idempotency` (and the copy-pasted
 `SELECT result FROM idempotency_keys WHERE idempotency_key = … AND operation = …` that many functions

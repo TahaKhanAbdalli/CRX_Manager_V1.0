@@ -187,6 +187,26 @@ BEGIN
   IF (SELECT balance_cents FROM public.prepay_credits WHERE id = v_credit_2) <> 25000 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: credit 2 balance is not the first edit''s 25000';
   END IF;
+  -- The exact retry (same admin, key and request) replays the receipt and does the edit no second
+  -- time: no second audit row, no second receipt, credit and customer balances unchanged.
+  v_cents := (SELECT prepay_balance_cents FROM public.customers WHERE id = v_customer);
+  v_res := public.edit_prepay_credit(v_credit_2, 25000, NULL, NULL, NULL, v_admin, v_key);
+  IF (v_res->>'idempotent')::boolean IS DISTINCT FROM true
+     OR (v_res->>'credit_id')::uuid IS DISTINCT FROM v_credit_2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the exact edit_prepay_credit retry did not replay: %', v_res;
+  END IF;
+  IF (SELECT count(*) FROM public.financial_audit_log
+       WHERE operation_type = 'prepay_edited' AND entity_id = v_credit_2) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the exact edit_prepay_credit retry wrote a second audit row';
+  END IF;
+  IF (SELECT count(*) FROM public.idempotency_keys
+       WHERE idempotency_key = v_key AND operation = 'edit_prepay_credit') <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the exact edit_prepay_credit retry wrote a second receipt';
+  END IF;
+  IF (SELECT balance_cents FROM public.prepay_credits WHERE id = v_credit_2) <> 25000
+     OR (SELECT prepay_balance_cents FROM public.customers WHERE id = v_customer) <> v_cents THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the exact edit_prepay_credit retry changed a balance';
+  END IF;
 
   -- --------------------------------------------------------------------------------------------
   -- 4. apply_write_off: a key reused on a DIFFERENT invoice is refused; another admin is refused.
