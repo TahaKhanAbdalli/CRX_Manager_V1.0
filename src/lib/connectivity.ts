@@ -17,11 +17,6 @@ import { supabase } from './db';
 export const NO_SIGNAL_MESSAGE =
   'No signal. This delivery was NOT completed and nothing was saved. Move to where you have signal, then try again.';
 
-// The Deliveries list starts a scheduled delivery (confirm_delivery) and then completes
-// it as two server calls. If signal drops between them, the start has already happened.
-export const NO_SIGNAL_AFTER_START_MESSAGE =
-  'Signal dropped after this delivery was started. It is now In Progress but was NOT completed: no stock was taken and nothing was billed. Get signal, then tap Mark Complete again.';
-
 const PROBE_TIMEOUT_MS = 6000;
 
 export async function hasSignal(timeoutMs: number = PROBE_TIMEOUT_MS): Promise<boolean> {

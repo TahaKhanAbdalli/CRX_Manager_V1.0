@@ -87,14 +87,19 @@ describe('paper ticket photo', () => {
 });
 
 describe('no delivery completion is queued offline', () => {
-  it.each(['src/pages/DeliveryDetail.tsx', 'src/pages/FieldStop.tsx', 'src/pages/Deliveries.tsx'])(
+  it.each([
+    ['src/pages/DeliveryDetail.tsx', 'complete_delivery'],
+    ['src/pages/FieldStop.tsx', 'complete_delivery'],
+    // The list starts and completes in one call (start_and_complete_delivery).
+    ['src/pages/Deliveries.tsx', 'start_and_complete_delivery'],
+  ])(
     '%s neither queues work offline nor skips the signal check',
-    (path) => {
+    (path, rpc) => {
       const source = readFileSync(path, 'utf8');
       expect(source).not.toMatch(/queueAction/);
       // The check must be real code that runs before the completion call, not a mention.
       const check = source.indexOf('if (!(await hasSignal()))');
-      const complete = source.indexOf("supabase.rpc('complete_delivery'");
+      const complete = source.indexOf(`supabase.rpc('${rpc}'`);
       expect(check).toBeGreaterThan(-1);
       expect(complete).toBeGreaterThan(check);
     },

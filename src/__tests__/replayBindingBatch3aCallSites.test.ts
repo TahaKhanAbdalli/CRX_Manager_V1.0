@@ -57,8 +57,10 @@ describe('replay-binding batch 3a call sites retire the key on any binding refus
 
   // After 20261019200000 both refuse a keyless call (IDEMPOTENCY_KEY_REQUIRED); the generated types
   // still mark the key optional, so pin that every app call sends one.
+  // Deliveries.tsx completes through start_and_complete_delivery (20261019220000), which also
+  // requires a key and calls complete_delivery with a key derived from it.
   const KEYED_CALLS: Array<[string, string]> = [
-    ['src/pages/Deliveries.tsx', 'complete_delivery'],
+    ['src/pages/Deliveries.tsx', 'start_and_complete_delivery'],
     ['src/pages/DeliveryDetail.tsx', 'complete_delivery'],
     ['src/pages/FieldStop.tsx', 'complete_delivery'],
     ['src/pages/FieldView.tsx', 'complete_job'],
@@ -149,8 +151,16 @@ describe('replay-binding batch 3a: a retry resends the completion time its key f
     expect(completedAtForKey(sent, 'key-2', () => undefined)).toBe('2026-10-17T17:00:00.000Z');
   });
 
+  // Deliveries.tsx sends the chosen date (p_delivered_on) instead; the server derives the time,
+  // and the date, not a time, is in the fingerprint, so a retry across midnight still replays.
+  it('src/pages/Deliveries.tsx sends the chosen business date, never a completion time', () => {
+    const source = read('src/pages/Deliveries.tsx');
+    expect(source).toContain('p_delivered_on: deliveredOnDate,');
+    expect(source).not.toMatch(/p_completed_at/);
+    expect(source).not.toMatch(/\.rpc\('(?:confirm_delivery|complete_delivery)'/);
+  });
+
   for (const [file, key] of [
-    ['src/pages/Deliveries.tsx', 'idemKey'],
     ['src/pages/DeliveryDetail.tsx', 'idemKey'],
     ['src/pages/FieldStop.tsx', 'rpcParams.p_idempotency_key'],
   ] as const) {

@@ -14881,6 +14881,19 @@ export type Database = {
         Args: { p_idempotency_key?: string; p_job_id: string }
         Returns: Json
       }
+      start_and_complete_delivery: {
+        Args: {
+          p_delivered_on: string
+          p_delivery_id: string
+          p_idempotency_key?: string
+          p_issue_notes?: string
+          p_issue_type?: string
+          p_performed_by?: string
+          p_quantities?: Json
+          p_signed_by: string
+        }
+        Returns: Json
+      }
       start_job: {
         Args: {
           p_idempotency_key?: string
