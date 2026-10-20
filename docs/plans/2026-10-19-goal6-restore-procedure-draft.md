@@ -11,12 +11,26 @@ and Supabase support (runbook 4.6).
 
 **Open items from the final review (fold into the first drill):**
 - **Independent schema check.** Before declaring a restore valid or cutting over, compare the restored
-  constraints, triggers, indexes, functions, policies, **sequences** (each restored value beyond every number already used, for example `invoice_number_seq` against `invoices.invoice_number`) and **views** (with their security settings, such as
+  constraints, triggers, indexes, functions, policies, **sequences** (see below) and **views** (with their security settings, such as
   `profile_public_view`, which the Team Board reads) with an *independent* expected schema (a
   schema-only capture saved beside the dump from the same snapshot, or the repository migrations rebuilt
   up to the dump's ledger version in a scratch database), not with the archive's own contents list. A dump
   missing its post-data section would not list those objects at all. Any schema error that is not on the
   known-platform-conflict list fails the restore.
+  - **Security switches and grants, not just policy names.** PostgreSQL keeps a table's policies even
+    when row-level security is switched off, so matching policy names proves nothing on its own (see
+    `supabase/baselines/README.md`, the `relations_and_acl` row). The expected schema must also be compared
+    for: each table's row-level security switches (`ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL
+    SECURITY`); the grants on every table, column, sequence and function (their access lists, or ACLs; sequence grants decide who can draw document numbers such as invoice numbers); and the
+    default privileges (`pg_default_acl`, the standing rule for what the *next* new object gets, which
+    no grant on an existing object shows). A difference in any of these fails the restore.
+  - **Sequences: compare the next number, not the stored value.** For each sequence, such as
+    `invoice_number_seq` feeding `invoices.invoice_number`, work out the number it will hand out next:
+    its `last_value` if `is_called` is false, otherwise `last_value` plus its increment. That next number
+    must be higher than the highest number already stored (for invoice numbers, the numeric part after the
+    prefix and year, for example `INV-2026-0042` is 42, among numbers with that sequence's prefix). Do not
+    require `last_value` itself to be higher: a correctly restored sequence that has already handed out
+    its last number has `is_called` true and `last_value` *equal* to that number, and would wrongly fail.
 - **Jobs during replay.** Replaying migrations can recreate `pg_cron` jobs. Step 8's job-safe replay is
   the only allowed path; the CLI's normal push is not used.
 - **Scheduled-job tables are not restored.** The restore deliberately leaves out `cron` table data, so
