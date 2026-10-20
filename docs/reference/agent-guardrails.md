@@ -401,7 +401,13 @@ separately, the permission change.
 5. **Permissions unchanged:** the `Edit(...)`/`Write(...)` prompts on guard files (the 2026-09-26
    choice "A") stay. Removing them was split out of PR #956 on 2026-10-19 after Sol rated it HIGH:
    an unprompted edit could change a merge or push guard, act, and restore it before a PR shows it.
-   `scripts/check-agent-guidance.mjs` now pins the reversal. What remains: shell writes to guard
+   `scripts/check-agent-guidance.mjs` now pins the reversal. **2026-10-20:** the removal is open as
+   its own draft PR (branch `claude/guard-file-prompts-removal-20261020`) for Mason to merge himself;
+   once merged, no Edit/Write ask entry remains and the check pins that instead. In that PR the
+   migration proof minter (`write-apply-proofs.mjs` and its `-lib`) and the containment library
+   (`supplier-pricing-phase3-private-artifacts.mjs`) join `ENFORCEMENT_SURFACE_RE`, so shell writes
+   to them are refused (Codex connector, PR #974). `package.json` is the one file left with neither
+   a prompt nor a shell-write deny: guarding it breaks installs and merge resolution. What remains: shell writes to guard
    files are still refused, and nothing reaches `main` without the PR path. Because worktree
    sessions load settings and hooks from the main checkout, all of this takes effect only after
    `C:/CRX_Manager` is fast-forwarded past the merge.

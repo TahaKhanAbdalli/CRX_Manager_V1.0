@@ -418,19 +418,29 @@ while (gateQueue.length) {
     }
   }
 }
-const unpromptedGateFiles = [...gateClosure]
-  .filter((relative) => !ask.has(`Edit(${relative})`) || !ask.has(`Write(${relative})`))
+// REVERSED by Mason, 2026-10-18 ("Change permissions to not always prompt me
+// allow it"; DECISION_LOG): the Edit/Write prompts on these files are removed.
+// What still stands between an edit and production: the review-proof guard
+// refuses SHELL writes to every one of them except `package.json` (guarding it
+// breaks installs and merges; the proof minters joined that guard in PR #974),
+// Edit/Write stay visible in the transcript, and nothing reaches main without
+// the PR path. Pin the reversal so
+// a prompt is not silently re-added without a decision, and so the derived set
+// keeps being computed (it documents what an unreviewed local edit could reach).
+const promptedGateFiles = [...gateClosure]
+  .filter((relative) => ask.has(`Edit(${relative})`) || ask.has(`Write(${relative})`))
   .sort();
+// Any Edit/Write ask entry at all, wildcard included (`Edit(.claude/hooks/**)`),
+// would quietly restore a prompt, so none may remain (CodeRabbit, PR #956).
+const editWriteAsk = [...ask].filter((rule) => /^(?:Edit|Write|MultiEdit|NotebookEdit)\(/.test(rule)).sort();
+record(editWriteAsk.length === 0, "no Edit/Write ask entries remain (Mason, 2026-10-18)", editWriteAsk.join(", "));
 record(
-  unpromptedGateFiles.length === 0,
-  `every production-gate file and module it loads keeps an Edit/Write ask prompt (${gateClosure.size} files)`,
-  unpromptedGateFiles.join(", "),
+  gateClosure.size > 0 && promptedGateFiles.length === 0,
+  `production-gate files are edited without an ask prompt (Mason, 2026-10-18; ${gateClosure.size} files)`,
+  promptedGateFiles.join(", "),
 );
-// package.json too (Codex GitHub App P1, PR #841): `npm run <script>` is allowed
-// without a prompt, so an uncommitted script edit could hide a `gh pr merge` from
-// the command-text merge guard, which sees only `npm run <script>`.
 for (const pattern of [".codex/hooks.json", ".github/workflows/**", ".husky/**", "package.json", ".claude/settings.json", ".claude/settings.local.json"]) {
-  record(ask.has(`Edit(${pattern})`) && ask.has(`Write(${pattern})`), `${pattern} keeps an Edit/Write ask prompt`);
+  record(!ask.has(`Edit(${pattern})`) && !ask.has(`Write(${pattern})`), `${pattern} is edited without an ask prompt (Mason, 2026-10-18)`);
 }
 
 const allHooks = Object.values(codexHooks.hooks || {})

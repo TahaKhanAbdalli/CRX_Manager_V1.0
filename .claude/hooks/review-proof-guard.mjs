@@ -562,7 +562,7 @@ if (shellTool) {
   // deleting the lock would quietly drop `git checkout <rev> -- .claude/hooks/x`
   // — a silent guard rewrite — from the protected set.
   const ENFORCEMENT_SURFACE_RE =
-    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|agents|commands|skills|workflows|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|agents|commands|skills|workflows|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|supplier-pricing-phase3-private-artifacts\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
   // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
   // @proven-by review-proof-guard.test.mjs (the deny block asserts that heads
   // absent from this set — cp, tee, rm, Set-Content, command, npx — are refused,
@@ -1037,7 +1037,7 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   };
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
+    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|supplier-pricing-phase3-private-artifacts\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
       .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {

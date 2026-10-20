@@ -19,6 +19,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Decision (Mason, in chat: "Split it").** On 2026-10-18 Mason approved removing the Edit/Write prompts on guard files, settings, workflows, Husky and `package.json` ("Change permissions to not always prompt me allow it"). Sol's merge review of PR #956 then rated that HIGH, so PR #956 keeps those prompts (the 2026-09-26 choice "A") and the removal moves to its own PR for Mason to merge himself if he still wants it.
 **Why.** Without the prompts a session could edit a merge or push guard, act, and restore the file before any PR diff showed it.
 **What this forbids/implies:** `scripts/check-agent-guidance.mjs` keeps requiring an Edit/Write prompt on every production-gate file until Mason merges that PR.
+**2026-10-20:** that PR is open as a draft (`claude/guard-file-prompts-removal-20261020`): it removes every Edit/Write entry from `permissions.ask` and restores the pin from `824061121`. It is Mason's to merge; once merged, the 2026-10-18 removal stands.
 
 ## 2026-10-19 — PRs open as drafts; review fixes and documentation records are batched to save CodeRabbit reviews
 

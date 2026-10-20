@@ -313,6 +313,14 @@ assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Push-Locatio
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } }).stdout, "");
+// Running and reading the migration proof minter stay allowed (PR #974 protects only writes).
+for (const command of [
+  "node scripts/write-apply-proofs.mjs --help",
+  "cat scripts/write-apply-proofs-lib.mjs | head",
+  "grep -n sha256 scripts/write-apply-proofs.mjs",
+]) {
+  assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command } }, `proof minter run/read allowed: ${command}`);
+}
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } }).stdout, "");
 // Round 5 non-regressions (F4/F5/F6): the deglue pass must not split a verb out
 // of an unrelated word; an empty location target WITHOUT a state-dir mention is
@@ -641,6 +649,12 @@ for (const command of [
   "cp /tmp/evil scripts/verify-deps.mjs",
   "rm -f scripts/agent-manifest-parity.mjs",
   "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // The migration proof minter, its library and the containment check's library
+  // (Codex connector, PR #974): with no Edit/Write prompt left on them, this shell
+  // rule is what stops a session rewriting the minter before it mints.
+  "cp /tmp/evil scripts/write-apply-proofs.mjs",
+  "echo x > scripts/write-apply-proofs-lib.mjs",
+  "cp /tmp/evil scripts/supplier-pricing-phase3-private-artifacts.mjs",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
