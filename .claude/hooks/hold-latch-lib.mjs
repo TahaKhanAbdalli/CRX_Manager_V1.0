@@ -85,7 +85,14 @@ const SQL_WRITE_RE = /\b(insert|update|delete|create|alter|drop|truncate|grant|r
 // but a mid-session "stop" should still pause them). Sharing DENY_TOOLNAME_RE
 // as the base means the two lists can't silently drift apart; guards.test.mjs
 // asserts the superset property directly against the live import.
-const HOLD_LATCH_EXTRA_RE = /(apply_migration|create_directory|kill_process)/i;
+// Every GitHub MCP tool except a read is outward: before this, `create_pull_request`,
+// `update_pull_request`, `add_issue_comment` and the rest of the write family went
+// through a stop (Codex connector, PR #956). Reads are recognised by name
+// (`get_*`, `list_*`, `search_*`, `*_read`, `actions_get`, `actions_list`), so a new
+// GitHub write tool is held by default instead of needing to be listed. A `mark_*`
+// name is never a read, even ending in `_read` (`mark_all_notifications_read`
+// changes state; CodeRabbit, PR #975).
+const HOLD_LATCH_EXTRA_RE = /(apply_migration|create_directory|kill_process|^mcp__github__(?!(?:get|list|search)_|(?!mark_)\w*_(?:read|get|list)$))/i;
 const MUTATE_TOOLNAME_RE = new RegExp(`(?:${DENY_TOOLNAME_RE.source}|${HOLD_LATCH_EXTRA_RE.source})`, "i");
 
 export function holdDecision(toolName, toolInput) {

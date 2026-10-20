@@ -468,6 +468,13 @@ ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still
     ["node - <<'EOF'\nrequire('child_process').execSync('g'+'h pr '+'mer'+'ge 951')\nEOF", /on its input/],
     ["python - <<'EOF'\nimport subprocess; subprocess.run('g'+'h pr mer'+'ge 1', shell=True)\nEOF", /on its input/],
     ["sudo -u root -g staff -H -n -E gh mm 123", /is not a gh command this guard can read/],
+    // Clustered short flags: the code is the NEXT word (Codex connector, PR #956; main allowed it too).
+    ["node -pe \"require('child_process').execSync('gh pr merge 951 --squash')\"", /on its input/],
+    ["node -ep \"require('child_process').execSync('gh pr merge 951 --squash')\"", /on its input/],
+    ["python3 -Bc \"import subprocess; subprocess.run('gh pr merge 951', shell=True)\"", /on its input/],
+    // `deno eval` takes its code as a subcommand argument (Codex connector, PR #956).
+    ["deno eval \"new Deno.Command('gh',{args:['pr','merge','951','--squash']}).output()\"", /on its input/],
+    ["deno eval --print \"new Deno.Command('gh',{args:['pr','merge','951']}).outputSync()\"", /on its input/],
   ]) {
     r = runHook({ tool_name: "Bash", tool_input: { command } });
     ok(r.decision?.permissionDecision === "deny" && why.test(r.decision?.permissionDecisionReason || ""),
@@ -487,6 +494,10 @@ ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still
     // Reading gh JSON with inline code: only the CODE is judged, not the gh around it.
     "gh pr view 956 --json title | node -e \"console.log(JSON.parse(require('fs').readFileSync(0)).title)\"",
     'node -e "console.log(1)"',
+    'node -pe "1+1"',
+    'python3 -Bc "print(1)"',
+    'deno eval "console.log(1+1)"',
+    "deno run --allow-read scripts/report.ts",
   ]) {
     r = runHook({ tool_name: "Bash", tool_input: { command } });
     ok(r.status === 0 && r.decision === null, `CONTROL: the real hook passes ${JSON.stringify(command)}`);

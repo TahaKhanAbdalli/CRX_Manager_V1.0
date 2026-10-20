@@ -78,6 +78,7 @@ import {
   configuredMirrorRemotes,
   pushDestinationLookupArgs,
   pushParseCostExceeded,
+  inlineCodeReachesGatedAction,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -4000,6 +4001,18 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     assert.equal(run.code, 0, `${run.label} exits cleanly on a stalled input`);
     assert.match(run.stdout, /could not be read/, `${run.label} refuses a stalled input`);
   }
+}
+
+// Inline runtime code: clustered short flags and `deno eval` (Codex connector, PR #956).
+// The push and merge guards share this check, so a push hidden this way is refused too.
+for (const command of [
+  "node -pe \"require('child_process').execSync('git push origin HEAD:main')\"",
+  "node -ce \"require('child_process').execSync('gh pr merge 951')\"",
+  "python -Bc \"import os; os.system('git push')\"",
+  "deno eval \"new Deno.Command('git',{args:['push']}).outputSync()\"",
+]) assert.equal(inlineCodeReachesGatedAction(command), true, `inline code reaches a gated action: ${command}`);
+for (const command of ['node -pe "1+1"', 'python -Bc "print(1)"', 'deno eval "console.log(2)"', "node -v", "deno run main.ts"]) {
+  assert.equal(inlineCodeReachesGatedAction(command), false, `harmless inline code passes: ${command}`);
 }
 
 console.log("OK - codex push shared library checks passed.");

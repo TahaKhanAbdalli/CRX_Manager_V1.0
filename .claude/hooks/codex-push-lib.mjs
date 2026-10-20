@@ -4107,8 +4107,18 @@ export function nestedProgramNameGlued(command) {
 // (Luna, PR #956 round 2). Only the CODE argument is judged, never the rest of the
 // command, so `gh pr view --json x | node -e "…"` — the everyday way to read gh JSON —
 // still passes when that code itself shows nothing gated.
-const INLINE_CODE_FLAG_RE = /^(?:-e|-p|-c|-r|-E|--eval|--print|--command|--run)$/;
+const INLINE_CODE_FLAG_RE = /^(?:--eval|--print|--command|--run)$/;
 const INLINE_CODE_ATTACHED_RE = /^(?:--eval|--print|--command)=([\s\S]*)$/;
+// A short-option cluster with a code letter in it (`-e`, `-pe`, `-ce`, `-Bc`). The
+// code is the text after that letter or, when the cluster ends there, the next word.
+// Before this, `node -pe "…gh pr merge…"` was read as code "e" and the real code
+// argument was never judged (Codex connector, PR #956; main allowed it too).
+// Digits count as cluster letters too (`perl -0e`; Luna, follow-up to PR #956).
+const INLINE_CODE_CLUSTER_RE = /^-[A-Za-z0-9]*?[epcrE]([\s\S]*)$/;
+// `deno eval "…"` takes its code as a subcommand argument, not a flag (Codex
+// connector, PR #956). Every word after `eval` in the window is judged, and
+// `eval` may follow the runtime's own options (`deno --quiet eval`; Luna).
+const EVAL_SUBCOMMAND_RUNTIMES = new Set(["deno", "bun"]);
 export function inlineCodeReachesGatedAction(command) {
   for (const segment of splitCommandSegments(String(command || ""))) {
     const words = splitShellArgv(segment);
@@ -4116,13 +4126,28 @@ export function inlineCodeReachesGatedAction(command) {
       const program = String(words[index]).split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
       if (!STDIN_PROGRAM_RUNTIMES.has(program) && program !== "nodejs") continue;
       const end = Math.min(words.length, index + 1 + NESTED_SCAN_WINDOW);
+      let evalSubcommand = false;
       for (let at = index + 1; at < end; at += 1) {
         const word = String(words[at]);
-        // `--eval=…`, a separate `-e …`, or the short flag with its code attached
-        // (`perl -e'…'` reaches argv as `-e…`; Luna, PR #956 round 3).
-        const attached = INLINE_CODE_ATTACHED_RE.exec(word) || /^-[epcrE](.+)$/s.exec(word);
-        const code = attached ? attached[1] : INLINE_CODE_FLAG_RE.test(word) ? words[at + 1] : undefined;
-        if (code !== undefined && couldReachGatedAction([code])) return true;
+        // Any `eval` word counts, not only the first non-option one: a global option
+        // with a detached value (`deno -L debug eval`) looks like a subcommand (Codex
+        // connector, PR #975). Words after it are refused only if they could reach a
+        // gated action, so a script argument named `eval` costs nothing.
+        if (EVAL_SUBCOMMAND_RUNTIMES.has(program) && word.toLowerCase() === "eval") {
+          evalSubcommand = true;
+          continue;
+        }
+        if (evalSubcommand && couldReachGatedAction([word])) return true;
+        // `--eval=…`, a separate `--eval …`, or a short cluster whose code is
+        // attached (`perl -e'…'` reaches argv as `-e…`; Luna, PR #956 round 3) or
+        // is the next word (`node -pe "…"`).
+        const attached = INLINE_CODE_ATTACHED_RE.exec(word);
+        const cluster = word.startsWith("--") ? null : INLINE_CODE_CLUSTER_RE.exec(word);
+        const codes = attached ? [attached[1]]
+          : INLINE_CODE_FLAG_RE.test(word) ? [words[at + 1]]
+          : cluster ? [cluster[1], words[at + 1]]
+          : [];
+        if (codes.some((code) => code !== undefined && code !== "" && couldReachGatedAction([code]))) return true;
         // No early stop at the first bare word: a detached option value
         // (`node --require fs -e "…"`) looks like a script argument, so the whole
         // window is scanned (Codex connector, PR #956 third pass).

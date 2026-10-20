@@ -104,6 +104,19 @@ eq(holdDecision("mcp__supabase__execute_sql", { query: "SELECT ';' INTO public.h
 eq(holdDecision("mcp__supabase__execute_sql", { query: "select count(*) from invoices" }), "allow",
   "plain read SQL allowed under hold");
 ok(isBuildActionUnderHold("mcp__supabase__apply_migration", {}), "apply blocked under hold");
+// Every GitHub MCP write tool is held; GitHub reads are not (Codex connector, PR #956).
+for (const tool of [
+  "create_pull_request", "update_pull_request", "add_issue_comment", "pull_request_review_write",
+  "issue_write", "update_pull_request_branch", "create_branch", "add_comment_to_pending_review",
+  "add_reply_to_pull_request_comment", "sub_issue_write", "actions_run_trigger", "fork_repository",
+  "create_repository", "merge_pull_request", "push_files",
+  // Ends in `_read` but changes state (CodeRabbit, PR #975).
+  "mark_all_notifications_read",
+]) eq(holdDecision(`mcp__github__${tool}`, {}), "deny", `GitHub MCP write held: ${tool}`);
+for (const tool of [
+  "get_file_contents", "list_pull_requests", "search_code", "pull_request_read", "issue_read",
+  "actions_get", "actions_list", "get_job_logs",
+]) eq(holdDecision(`mcp__github__${tool}`, {}), "allow", `GitHub MCP read allowed under hold: ${tool}`);
 // The file-bytes live-apply door is a Bash command, not an MCP tool, so the
 // tool-name set never sees it. Codex (P1, PR #460) verified the predicate returned
 // false for this exact invocation — a mid-session "stop" would NOT have paused a
@@ -398,6 +411,29 @@ for (const command of [
   for (const hook of ["pr-merge-guard.mjs", "codex-push-guard.mjs"]) {
     const res = runHook(hook, { tool_name: "Bash", tool_input: { command } });
     ok(res.stdout.includes("deny"), `${hook} denies a nested assembled program name: ${command}`);
+  }
+}
+// Inline runtime code behind a short-option cluster or `deno eval`, through the REAL
+// merge and push guards (Codex connector, PR #956; Luna on the follow-up).
+for (const command of [
+  "node -pe \"require('child_process').execSync('gh pr merge 951 --squash')\"",
+  "node -pe \"require('child_process').execSync('git push origin HEAD:main')\"",
+  "perl -0e \"system('gh pr merge 951')\"",
+  "deno eval \"new Deno.Command('gh',{args:['pr','merge','951']}).outputSync()\"",
+  "deno --quiet eval \"new Deno.Command('git',{args:['push','origin','HEAD:main']}).outputSync()\"",
+  // A global option with a detached value before `eval` (Codex connector, PR #975).
+  "deno -L debug eval \"new Deno.Command('git',{args:['push']}).outputSync()\"",
+  "deno --log-level info eval \"new Deno.Command('gh',{args:['pr','merge','951']}).outputSync()\"",
+]) {
+  for (const hook of ["pr-merge-guard.mjs", "codex-push-guard.mjs"]) {
+    const res = runHook(hook, { tool_name: "Bash", tool_input: { command } });
+    ok(res.stdout.includes("deny"), `${hook} denies inline runtime code reaching a gated action: ${command}`);
+  }
+}
+for (const command of ['node -pe "1+1"', 'perl -0e "print 1"', 'deno --quiet eval "console.log(1)"', 'deno -L debug eval "console.log(1)"']) {
+  for (const hook of ["pr-merge-guard.mjs", "codex-push-guard.mjs"]) {
+    const res = runHook(hook, { tool_name: "Bash", tool_input: { command } });
+    eq(res.stdout.trim(), "", `${hook} silent on harmless inline runtime code: ${command}`);
   }
 }
 for (const command of [

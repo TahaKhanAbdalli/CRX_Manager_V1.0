@@ -111,8 +111,10 @@ export function mayMerge(input) {
     || /\b(?:node|python\d*|py|deno|bun|perl|ruby|php)(?:\.exe)?\b[^|;&\n]*<(?!<)/i.test(text)
     // Inline code given as an argument (`node -e`, `python -c`, `php -r`): the working
     // guard now judges that code (inlineCodeReachesGatedAction, PR #956), so while the
-    // guard is broken any such launch is a possible merge.
-    || /\b(?:node|nodejs|python\d*|py|deno|bun|perl|ruby|php)(?:\.exe)?\b[^|;&\n]*?\s(?:-[epcrE]\S*|(?:--eval|--print|--command|--run)(?:[\s=]|$))/i.test(text);
+    // guard is broken any such launch is a possible merge. A short-option cluster
+    // with a code letter anywhere in it (`-pe`, `-Bc`) counts too, as it does in
+    // the guard. `deno eval` already counts through the `eval` word above.
+    || /\b(?:node|nodejs|python\d*|py|deno|bun|perl|ruby|php)(?:\.exe)?\b[^|;&\n]*?\s(?:-[A-Za-z0-9]*[epcrE]\S*|(?:--eval|--print|--command|--run)(?:[\s=]|$))/i.test(text);
 }
 
 // Every key and string value in a tool call's input, in order.
