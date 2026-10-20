@@ -207,6 +207,39 @@ const PLAIN_REPLY_RE = /^\s*(?:i\s+approve(?:\s+it)?|approve|approved|yes\s*[,.!
 /** True when the whole message is a plain approval with no code. */
 export const isPlainApprovalReply = (prompt) => PLAIN_REPLY_RE.test(String(prompt ?? ""));
 
+// The desktop app puts a whole <system-reminder> block (its "Linked sessions now"
+// note) in front of Mason's words, and the hook's prompt carries it. On 2026-10-20
+// five of his replies arrived that way and none matched the whole-message forms
+// above, so the hook said nothing and an urgent apply stalled for an hour. Whole
+// blocks at the START are not his words (the shape measured: the note first, his
+// words last). Each block ends at its first closing tag, and if any reminder tag
+// is left after them, nothing is removed: text inside a note (a session title)
+// that closes it early and opens another must never become his reply (Luna
+// BLOCKER, this PR).
+const LEADING_REMINDERS_RE = /^(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)+\s*/;
+const REMINDER_TAG_RE = /<\/?system-reminder\b/i;
+
+/** Mason's reply without the whole reminder blocks the app put in front of it. */
+export function replyWithoutReminders(prompt) {
+  const text = String(prompt ?? "");
+  const rest = text.replace(LEADING_REMINDERS_RE, "");
+  return rest !== text && REMINDER_TAG_RE.test(rest) ? text : rest;
+}
+
+/**
+ * When the message is not a whole reply but one of its lines is (other words or
+ * an envelope came with it): which form ("code" or "plain") and that line; else
+ * null. The hook then says it did not count instead of staying silent
+ * (2026-10-20). Every line break counts, a bare CR and U+2028/9 too (Luna MED).
+ */
+export function approvalAttemptIn(prompt) {
+  const lines = String(prompt ?? "").split(/\r\n|[\r\n\p{Zl}\p{Zp}]/u);
+  const code = lines.find((l) => approvalCodeFromReply(l));
+  if (code) return { kind: "code", line: code.trim() };
+  const plain = lines.find((l) => isPlainApprovalReply(l));
+  return plain ? { kind: "plain", line: plain.trim() } : null;
+}
+
 const textOf = (content) => (typeof content === "string" ? content
   : Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => String(b.text ?? "")).join("\n") : "");
 const isTextOnly = (content) => typeof content === "string" || (Array.isArray(content) && content.every((b) => b?.type === "text"));
