@@ -123,14 +123,16 @@ describe('checkOrderTotals', () => {
 
 describe('fetchAllRows', () => {
   it('reads past a server row cap smaller than the page size', async () => {
-    const pages = [[1, 2], [3], []];
+    const pages: Record<number, number[]> = { 0: [1, 2], 2: [3], 3: [] };
     const calls: Array<[number, number]> = [];
     const result = await fetchAllRows(async (from, to) => {
       calls.push([from, to]);
-      return { data: pages[calls.length - 1], error: null };
+      return { data: pages[from], error: null };
     });
     expect(result).toEqual({ data: [1, 2, 3], error: null });
-    expect(calls).toEqual([[0, 999], [2, 1001], [3, 1002]]);
+    // Three requests, then a second read that confirms the list did not change.
+    const pass: Array<[number, number]> = [[0, 999], [2, 1001], [3, 1002]];
+    expect(calls).toEqual([...pass, ...pass]);
   });
 
   it('returns the error instead of a partial read', async () => {

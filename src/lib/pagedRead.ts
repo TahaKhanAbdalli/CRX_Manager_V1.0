@@ -35,28 +35,65 @@ export const LIST_CHANGED_WHILE_LOADING = 'The list changed while it was loading
  * can jump into the part already read, and a burst of inserts can make a page
  * hold only rows already seen. So when the query selects with
  * `{ count: 'exact' }`, the read is checked against the server's count from its
- * last request; a mismatch means the list changed mid-read, and the whole read
- * is repeated, up to MAX_READ_ATTEMPTS, before failing with
- * LIST_CHANGED_WHILE_LOADING rather than returning a list that is wrong.
+ * last request; a mismatch means the list changed mid-read.
+ *
+ * The count cannot see a change that keeps it equal: an insert and a delete
+ * landing in the part already read between two pages leave the count right
+ * while a new row is missed and a deleted one is kept (or, with a sort-key
+ * edit, a row that existed throughout is missed). So a read that needed more
+ * than one request is returned only once a second whole read matches it row
+ * for row: the same rows, field for field, in the same order (so a field edit
+ * between pages cannot mix old and new values either). A one-request read is a single database statement and needs no
+ * confirming. A wrong count or a mismatch repeats the read, up to
+ * MAX_READ_ATTEMPTS, before failing with LIST_CHANGED_WHILE_LOADING rather
+ * than returning a list that is wrong.
  * `src/lib/pagedReadCallSites.test.ts` requires the count on every list read.
  */
 export async function fetchAllRows<T>(
   fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>,
 ): Promise<ReadResult<T>> {
+  // Row keys of the last count-correct multi-request read, awaiting a match.
+  let unconfirmed: string[] | null = null;
   for (let attempt = 1; attempt <= MAX_READ_ATTEMPTS; attempt += 1) {
     const result = await readOnce(fetchPage);
     if (result.error) return { data: null, error: result.error };
-    if (result.serverCount === null || result.serverCount === result.rows.length) {
-      return { data: result.rows, error: null };
+    // A count-wrong pass means the list changed, so confirmation starts over:
+    // only two back-to-back matching reads are returned.
+    if (result.serverCount !== null && result.serverCount !== result.rows.length) {
+      unconfirmed = null;
+      continue;
     }
+    if (result.requests === 1) return { data: result.rows, error: null };
+    const keys = result.rows.map(rowKey);
+    if (unconfirmed !== null && sameKeys(unconfirmed, keys)) return { data: result.rows, error: null };
+    unconfirmed = keys;
   }
   return { data: null, error: { message: LIST_CHANGED_WHILE_LOADING } };
 }
 
+// The whole row, not just its id: an edit landing between pages can leave the
+// ids in place while mixing old and new field values (a ledger recompute sums
+// those values). Object keys are sorted; arrays keep their order, since some
+// array fields (an application's product list) are ordered.
+function rowKey(row: unknown): string {
+  return JSON.stringify(canonical(row));
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.keys(value).sort().map((key) => [key, canonical((value as Record<string, unknown>)[key])]);
+}
+
+function sameKeys(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((key, i) => key === b[i]);
+}
+
 async function readOnce<T>(
   fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>,
-): Promise<{ rows: T[]; serverCount: number | null; error: { message: string } | null }> {
+): Promise<{ rows: T[]; serverCount: number | null; requests: number; error: { message: string } | null }> {
   const rows: T[] = [];
+  let requests = 0;
   let serverCount: number | null = null;
   // Rows this pass may read before it stops as "changed while loading": a list
   // that keeps growing as fast as it is read would otherwise never finish.
@@ -64,12 +101,13 @@ async function readOnce<T>(
   const seenIds = new Set<unknown>();
   for (let from = 0; ;) {
     const { data, error, count } = await fetchPage(from, from + PAGE_SIZE - 1);
-    if (error) return { rows, serverCount, error };
+    requests += 1;
+    if (error) return { rows, serverCount, requests, error };
     if (typeof count === 'number') {
       if (serverCount === null) rowLimit = count * 2 + PAGE_SIZE;
       serverCount = count;
     }
-    if (rows.length > rowLimit) return { rows, serverCount: -1, error: null };
+    if (rows.length > rowLimit) return { rows, serverCount: -1, requests, error: null };
     const page = data ?? [];
     if (page.length === 0) break;
     let newRows = 0;
@@ -88,12 +126,15 @@ async function readOnce<T>(
     // Only the overlap came back: the read has reached the end (or, after a
     // burst of inserts, only looks like it has; the count check catches that).
     if (newRows === 0) break;
+    // The first request already holds every counted row: one statement read
+    // the whole list, so no further page (and no confirming read) is needed.
+    if (from === 0 && serverCount !== null && page.length >= serverCount) break;
     from += everyRowHasId && page.length > SEAM_OVERLAP ? page.length - SEAM_OVERLAP : page.length;
     // A range starting at or past the server's count can be refused outright
     // (PostgREST PGRST103 / 416), so stop here rather than ask for it.
     if (serverCount !== null && from >= serverCount) break;
   }
-  return { rows, serverCount, error: null };
+  return { rows, serverCount, requests, error: null };
 }
 
 function rowId(row: unknown): unknown {

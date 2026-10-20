@@ -943,24 +943,31 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
   - Jobs and Customers show a banner when capped. Deliveries stops silently.
-  - Paging is by position, so records changing during a long load are handled three ways:
+  - Paging is by position, so records changing during a long load are handled four ways:
     - repeats are dropped by `id`, and each page re-reads a 50-row overlap;
     - every list read asks the server for its exact count (`{ count: 'exact' }`, enforced by
       `src/lib/pagedReadCallSites.test.ts`). A read whose distinct rows differ from the count changed
       mid-read, so it is repeated up to three times and then shown as an error, never as a wrong
       list. This covers a record whose sort date is edited into the part already read, and a burst
       of inserts;
+    - **Fixed 2026-10-19 (the insert+delete swap accepted on 2026-10-18):** a list that needed more
+      than one request is read a second time and returned only when two back-to-back reads match row
+      for row (every field of every row, array fields in order, rows in the same order), so a field
+      edited between pages cannot mix old and new values either. An insert and a delete between two
+      pages keep the count equal, so the count alone could show a just-deleted record and miss a
+      just-added one (or, with a sort-date edit, miss a record that existed throughout). Two reads
+      that disagree, or a read with the wrong count, restart the confirmation within the same three
+      attempts, and a list that never settles is shown as an error. A
+      list that fits in one request (every live list on 2026-10-19) is a single database statement
+      and is still read once; only lists that need more than one request (past the 1,000-row page, or
+      a smaller server cap) pay the second read. A list changed
+      identically during both reads is the remaining theoretical gap; a true snapshot needs
+      server-side paging (later Goal 4 step);
     - Customer Transaction Review's function rows have no `id`, so its running-balance chain is also
       checked (`src/lib/transactionLedger.ts`).
   - A list that keeps growing as fast as it is read stops after twice its starting size plus one
     page and is reported as changed. Customer Transaction Review also checks that the server's
     current last row is its own last row whenever it read more than one page.
-  - **Still open (accepted residual, 2026-10-18; both review models rated it HIGH):** an insert and
-    a delete landing between two page reads of the same load can keep the count equal while
-    swapping one row, so the list can show a just-deleted record and miss a just-added one until the
-    next refresh. This needs more than 1,000 rows in the list plus both changes in that window.
-    Live volumes on 2026-10-18 were at most 151 rows. The fix is a consistent snapshot (cursor
-    paging or a database-side read), which is the later Goal 4 step along with server-side search.
   - Deferred from the same reviews:
     - Every page asks for an exact count, which costs one counting pass per page. That is fine at
       today's sizes, but loading around 100,000 rows would count the table about 100 times. Server
