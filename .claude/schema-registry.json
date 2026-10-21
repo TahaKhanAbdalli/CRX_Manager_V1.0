@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-10-20",
+    "generated_at": "2026-10-21",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261021024020",
+    "migrations_high_water": "20261021204100",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -420,6 +420,10 @@
       "20261019220000_start_and_complete_delivery",
       "20261019230000_cost_margin_admin_only_screens_step2",
       "20261019235000_bind_delivery_order_void_replay_receipts_batch3b",
+      "20261020210000_blend_ticket_pricing_guards",
+      "20261021030000_void_order_governed_split_draft_claims",
+      "20261021050000_from_scratch_invoices_charge_lines_only",
+      "20261021070000_blend_invoice_approval_binding",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1510,7 +1514,8 @@
         "convert_quote_to_order",
         "draw_down_quote",
         "restore_quote_version",
-        "duplicate_quote"
+        "duplicate_quote",
+        "create_invoice_from_blend_ticket"
       ],
       "constraints": [
         "below_cost_approvals_operation_check"
@@ -2008,17 +2013,6 @@
         "invoice_delivery_recovery_capabilities_purpose_check"
       ]
     },
-    "invoice_items.price_source": {
-      "values": [
-        "quoted",
-        "tier",
-        "manual"
-      ],
-      "constraints": [
-        "chk_invoice_items_price_source"
-      ],
-      "nullable": true
-    },
     "invoice_items.charge_type": {
       "values": [
         "freight",
@@ -2028,6 +2022,17 @@
       ],
       "constraints": [
         "invoice_items_charge_type_check"
+      ],
+      "nullable": true
+    },
+    "invoice_items.price_source": {
+      "values": [
+        "quoted",
+        "tier",
+        "manual"
+      ],
+      "constraints": [
+        "chk_invoice_items_price_source"
       ],
       "nullable": true
     },
@@ -3273,7 +3278,7 @@
       "table": "invoice_items",
       "constraint": "invoice_items_charge_line_shape_chk",
       "def": "CHECK (((charge_type IS NULL) OR ((product_id IS NULL) AND (order_item_id IS NULL) AND (return_credit_source_item_id IS NULL) AND (description ~ '[^[:space:]]'::text) AND (quantity = (1)::numeric) AND (cost_cents = 0) AND (is_application_fee IS NOT TRUE) AND (unit_price_cents > 0) AND (extended_cents = unit_price_cents))))",
-      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "invoice_items",

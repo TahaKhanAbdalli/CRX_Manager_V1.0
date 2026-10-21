@@ -152,6 +152,11 @@ ships or quarterly, whichever comes first.
   On 2026-10-20 (Central) it was brought to `migrations_high_water` `20261021024020` by delta, adding
   `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`, which changed function bodies, grants and one
   trigger function only, none of which the registry tracks.
+  On 2026-10-21 (~20:50 UTC) it was regenerated from live introspection (all six queries) to
+  `migrations_high_water` `20261021204100`, adding `20261020210000_blend_ticket_pricing_guards`,
+  `20261021030000_void_order_governed_split_draft_claims`, `20261021050000_from_scratch_invoices_charge_lines_only`
+  and `20261021070000_blend_invoice_approval_binding`; `below_cost_approvals.operation` now lists
+  `create_invoice_from_blend_ticket`, and the section counts are unchanged (38 status lists, 120 parsed checks).
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
