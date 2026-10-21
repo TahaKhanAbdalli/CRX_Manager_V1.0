@@ -45,7 +45,7 @@
 | `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
 | `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
 | `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
-| `/prepay` | Prepay | Admin-only. One prepay page with two tabs (`?tab=workspace`, `manager`): **Workspace** (`PrepayWorkspacePanel`: split-panel allocator, left = prepay buckets by check #, right = unpaid invoices; two-phase commit via `batch_apply_prepayments()`) and **Manager** (`PrepaymentManagerPanel`: prepay balances, Split Check entry (bucket-labeled), auto-apply or allocate to the workspace) |
+| `/prepay` | Prepay | Admin-only. One prepay page with two tabs (`?tab=workspace`, `manager`): **Workspace** (`PrepayWorkspacePanel`: split-panel allocator, left = prepay buckets by check #, right = unpaid invoices; two-phase commit via `batch_apply_prepayments()`) and **Manager** (`PrepaymentManagerPanel`: prepay balances, Split Check entry (bucket-labeled), Allocate to the workspace; one-click and bulk apply are disabled, and the Potential Apply card adds up each customer's smaller of prepay and unpaid) |
 | `/prepayments` | Redirect -> `/prepay` (Manager tab) | Admin-only. Old bookmark (`LegacyTabRedirect`) |
 | `/prepay-workspace` | Redirect -> `/prepay` (Workspace tab) | Admin-only. Old bookmark (`LegacyTabRedirect`) |
 | `/financial-dashboard` | FinancialDashboard | Admin-only. Financial KPIs: AR aging, revenue, payments, prepay balances, finance charges. Powered by `financial_dashboard_summary()` RPC |

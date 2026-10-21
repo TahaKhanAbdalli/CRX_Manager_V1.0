@@ -204,6 +204,48 @@ describe('money screens past the 1,000-row server cap', () => {
   });
 });
 
+// A customer's prepay can only pay that customer's own invoices, so the figure is each
+// customer's smaller of prepay and unpaid, added up — not the smaller of the two grand totals.
+describe('the Prepayment Manager potential-apply figure', () => {
+  it("adds up each customer's own smaller figure", async () => {
+    H.tables.customers = [
+      { id: 'cA', farm_name: 'Farm A', prepay_balance_cents: 10000, is_active: true },
+      { id: 'cB', farm_name: 'Farm B', prepay_balance_cents: 100, is_active: true },
+    ];
+    H.tables.invoices = [
+      { id: 'invB', customer_id: 'cB', status: 'posted', balance_cents: 10000, deleted_at: null },
+    ];
+    renderAt(<PrepaymentManagerPanel />);
+    // A: $100 prepay, nothing owed → $0. B: $1 prepay, $100 owed → $1. The old card showed
+    // min($101, $100) = $100.00.
+    await waitFor(() => expect(blockOf('Total Unpaid Invoices').parentElement!).toHaveTextContent('$100.00'));
+    const card = blockOf(/^Potential/).parentElement!;
+    expect(card).toHaveTextContent('$1.00');
+    expect(card).not.toHaveTextContent('$100.00');
+    // It does not claim a one-click apply that is switched off.
+    expect(card).not.toHaveTextContent(/applied now/i);
+    expect(card).toHaveTextContent(/use Allocate/);
+  });
+
+  it('caps each customer who owes at their own prepay', async () => {
+    H.tables.customers = [
+      { id: 'cA', farm_name: 'Farm A', prepay_balance_cents: 10000, is_active: true },
+      { id: 'cB', farm_name: 'Farm B', prepay_balance_cents: 100, is_active: true },
+    ];
+    H.tables.invoices = [
+      { id: 'invA', customer_id: 'cA', status: 'posted', balance_cents: 1000, deleted_at: null },
+      { id: 'invB', customer_id: 'cB', status: 'overdue', balance_cents: 10000, deleted_at: null },
+    ];
+    renderAt(<PrepaymentManagerPanel />);
+    // A: min($100, $10) = $10. B: min($1, $100) = $1. Total $11.00; the smaller of the grand
+    // totals ($101 prepay, $110 owed) is $101.00.
+    await waitFor(() => expect(blockOf('Total Unpaid Invoices').parentElement!).toHaveTextContent('$110.00'));
+    const card = blockOf(/^Potential/).parentElement!;
+    expect(card).toHaveTextContent('$11.00');
+    expect(card).not.toHaveTextContent('$101.00');
+  });
+});
+
 // The daily cron (06:00 UTC, mark_overdue_invoices) flips past-due posted invoices to
 // 'overdue'; they still owe money and apply_prepay_to_invoice accepts them, so both prepay
 // screens count them. Every other status stays out, even with a balance.

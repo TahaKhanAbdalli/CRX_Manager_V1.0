@@ -521,6 +521,10 @@ export default function PrepaymentManagerPanel() {
 
   const totalPrepay = customers.reduce((s, c) => s + c.prepay_balance_cents, 0);
   const totalUnpaid = customers.reduce((s, c) => s + c.unpaid_balance_cents, 0);
+  // A customer's prepay only pays that customer's invoices, so add up each customer's smaller
+  // figure. The smaller of the two grand totals overstated it (one customer's spare prepay
+  // counted against another customer's invoices).
+  const potentialApply = customers.reduce((s, c) => s + Math.min(c.prepay_balance_cents, c.unpaid_balance_cents), 0);
 
   const columns: Column<CustomerPrepay>[] = [
     {
@@ -707,12 +711,12 @@ export default function PrepaymentManagerPanel() {
             <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
               <Zap className="w-5 h-5 text-blue-600" />
             </div>
-            <span className="text-sm text-secondary">Potential Auto-Apply</span>
+            <span className="text-sm text-secondary">Potential Apply</span>
           </div>
           <p className="text-2xl font-semibold font-heading text-blue-600">
-            {fmt(Math.min(totalPrepay, totalUnpaid))}
+            {fmt(potentialApply)}
           </p>
-          <p className="text-xs text-secondary mt-1">can be applied now</p>
+          <p className="text-xs text-secondary mt-1">could be applied (one-click apply is off; use Allocate)</p>
         </Card>
       </div>
 
@@ -929,7 +933,7 @@ export default function PrepaymentManagerPanel() {
             <hr />
             <div className="flex justify-between text-sm font-semibold">
               <span>Estimated Apply</span>
-              <span>{fmt(Math.min(totalPrepay, totalUnpaid))}</span>
+              <span>{fmt(potentialApply)}</span>
             </div>
           </div>
           <div className="flex justify-end gap-3">
