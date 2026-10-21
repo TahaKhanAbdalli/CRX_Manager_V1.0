@@ -1403,6 +1403,38 @@ assert.equal(
   "obsolete blockers-fixed Codex proof is rejected",
 );
 
+// Carried-forward Sol proofs (Mason, 2026-10-21): accepted only in their exact
+// shape, and still bound to this head, this base and the 30-minute window.
+{
+  const carriedProof = {
+    ...codexProof,
+    codex_ran: false,
+    carried_forward: true,
+    carry: { mode: "disjoint", from_head: "d".repeat(40), from_base: "e".repeat(40) },
+  };
+  assert.equal(proofValid(carriedProof, sha, now, base), true, "carried proof bound to this head and base passes");
+  assert.equal(
+    proofValid({ ...carriedProof, carry: { ...carriedProof.carry, mode: "collision_check" } }, sha, now, base),
+    true,
+    "carried proof from a clean collision check passes",
+  );
+  assert.equal(proofValid(carriedProof, sha, now, "f".repeat(40)), false, "carried proof on a moved base fails");
+  assert.equal(proofValid(carriedProof, "b".repeat(40), now, base), false, "carried proof for another head fails");
+  assert.equal(
+    proofValid({ ...carriedProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now, base),
+    false,
+    "carried proof older than 30 minutes fails",
+  );
+  assert.equal(proofValid({ ...carriedProof, carried_forward: false }, sha, now, base), false, "codex_ran:false without the carry flag fails");
+  assert.equal(proofValid({ ...carriedProof, carry: undefined }, sha, now, base), false, "carry flag without carry details fails");
+  assert.equal(proofValid({ ...carriedProof, carry: { ...carriedProof.carry, mode: "trust-me" } }, sha, now, base), false, "unknown carry mode fails");
+  assert.equal(proofValid({ ...carriedProof, carry: { ...carriedProof.carry, from_head: "short" } }, sha, now, base), false, "malformed source head fails");
+  assert.equal(proofValid({ ...carriedProof, carry: { ...carriedProof.carry, from_head: sha } }, sha, now, base), false, "carry onto its own head fails");
+  assert.equal(proofValid({ ...carriedProof, carry: { ...carriedProof.carry, from_base: base } }, sha, now, base), false, "carry onto its own base fails");
+  assert.equal(proofValid({ ...carriedProof, verdict: "blockers" }, sha, now, base), false, "carried non-clean proof fails");
+  assert.equal(proofValid({ ...carriedProof, model: "gpt-6-luna" }, sha, now, base), false, "carried Luna proof fails");
+}
+
 // Base-SHA binding (2026-07-14): when the guard supplies the origin/main it is
 // gating against, the proof's base_sha must match. A moved base — origin/main
 // advanced by a sibling merge fetched locally, without touching HEAD or the

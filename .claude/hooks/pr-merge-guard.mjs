@@ -557,12 +557,14 @@ function gateRequest(request) {
     deny(
       `PR MERGE GATE: this pull request's head ${String(headSha).slice(0, 12)} does not contain the base it will ` +
       `merge onto (${baseSha.slice(0, 12)}), or GitHub could not confirm it (fail closed). The reviewed diff cannot ` +
-      "cover everything the merge lands. Update the branch — merge origin/main into it and push — then re-run the " +
-      "checks and the exact-SHA Sol review of the new head."
+      "cover everything the merge lands. Update the branch — merge origin/main into it and push — then wait for the " +
+      "checks and run `node scripts/write-codex-push-proof.mjs --carry-forward` to keep the earlier clean Sol review " +
+      "(it falls back to telling you to run the full review when it cannot)."
     );
   }
 
   let valid = false;
+  let carried = null;
   outer:
   for (const stateDir of proofSearchDirs(projectDir, listWorktreesFromProjectDir)) {
     try {
@@ -571,7 +573,11 @@ function gateRequest(request) {
         if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(f)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
-        if (proofValid(data, headSha, Date.now(), baseSha)) { valid = true; break outer; }
+        if (proofValid(data, headSha, Date.now(), baseSha)) {
+          valid = true;
+          carried = data.carried_forward === true ? data.carry : null;
+          break outer;
+        }
       }
     } catch { /* unreadable directory means no proof HERE — keep looking */ }
   }
@@ -579,6 +585,12 @@ function gateRequest(request) {
   // chance; the advisory lookup is queued, not run, so a later merge in the same
   // command still reaches its own hard denials first.
   if (valid) {
+    if (carried) {
+      process.stderr.write(
+        `SOL CARRY-FORWARD: the Sol review of head ${String(carried.from_head).slice(0, 12)} was carried to this head ` +
+        `after a conflict-free merge of main (${carried.mode === "disjoint" ? "no shared files, one side documentation-only" : "collision check clean"}; Mason, 2026-10-21).\n`,
+      );
+    }
     advisoryQueue.push(request);
     return;
   }
@@ -608,7 +620,8 @@ function gateRequest(request) {
     `  2. \`git fetch origin\` so local origin/main equals GitHub's real base (${baseSha.slice(0, 12)}...) — the proof is bound to the base GitHub will merge onto.\n` +
     `  3. Run: node scripts/write-codex-push-proof.mjs — it runs an independent read-only Codex review of origin/main...HEAD and requires a machine verdict.\n` +
     `  4. If Codex flags blockers, fix them, push, and re-run until it reports clean; only a clean verdict on a stable, clean worktree mints the proof.\n` +
-    `  5. Retry the merge. (Proof is bound to head ${headSha || "<head>"} and to the base; it expires in 30min, and a moved base or new commits force a fresh review.)\n` +
+    `  5. Retry the merge. (Proof is bound to head ${headSha || "<head>"} and to the base; it expires in 30min, and new commits force a fresh review.)\n` +
+    `If this head only merged a newer main into a branch Sol already reviewed clean, run \`node scripts/write-codex-push-proof.mjs --carry-forward\` instead of step 3.\n` +
     `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify.`
   );
 }

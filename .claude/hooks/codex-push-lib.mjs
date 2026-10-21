@@ -2383,9 +2383,30 @@ function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   return true;
 }
 
-// Validate Claude's existing Codex-review proof shape.
+// A Sol proof CARRIED FORWARD by `write-codex-push-proof.mjs --carry-forward`
+// (Mason, 2026-10-21): an earlier clean review of this PR's own changes, kept
+// after a conflict-free merge of a newer main, either because the two sides
+// share no files or because a focused Sol collision check came back clean. It
+// says so (codex_ran:false), names the head and base it came from, and must
+// still pass every head/base/age check below for the head being gated.
+const CARRY_SHA_RE = /^[0-9a-f]{40}$/i;
+export function carriedSolProof(data) {
+  const carry = data?.carry;
+  return data?.codex_ran === false
+    && data.carried_forward === true
+    && !!carry && typeof carry === "object"
+    && (carry.mode === "disjoint" || carry.mode === "collision_check")
+    && CARRY_SHA_RE.test(String(carry.from_head || ""))
+    && CARRY_SHA_RE.test(String(carry.from_base || ""))
+    && carry.from_head !== data.head_sha
+    && carry.from_base !== data.base_sha;
+}
+
+// Validate Claude's existing Codex-review proof shape (a full review, or a
+// carried one bound to this exact head and base).
 export function proofValid(data, headSha, nowMs, expectedBaseSha) {
-  return reviewProofValid(data, headSha, nowMs, "codex_ran", expectedBaseSha)
+  const candidate = carriedSolProof(data) ? { ...data, codex_ran: true } : data;
+  return reviewProofValid(candidate, headSha, nowMs, "codex_ran", expectedBaseSha)
     && data.model === "gpt-6-sol"
     && data.reasoning_effort === "high";
 }

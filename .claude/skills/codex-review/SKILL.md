@@ -405,6 +405,28 @@ fix push, if its one advisory review arrived), immediately before the migration 
 the merge. The proof binds to that HEAD and to GitHub's real base and expires after 30 minutes, so a
 later commit or a moved base voids it.
 
+**Main moved after a clean Sol pass? Carry it forward (Mason, 2026-10-21).** Do not pay for a second
+full Sol review just because another PR landed. Merge the new main into the branch (`git fetch origin`,
+`git merge origin/main`, push; no other edits in that commit), wait for the checks on the new head,
+then run `node scripts/write-codex-push-proof.mjs --carry-forward` (add `--dry-run` to see the
+decision only) immediately before the merge. It mints a carried proof for the new head only when:
+
+- the new head is a merge whose parents are the Sol-reviewed head and today's origin/main, and its
+  content is exactly the conflict-free `git merge-tree` of those two (a resolved conflict or any hand
+  edit refuses);
+- the reviewed head's proof is a clean `gpt-6-sol`/`high` proof (full or itself carried) under 24 hours
+  old, and for a carried one the original full review is under 24 hours old too (a chain expires);
+- and EITHER the PR's files and main's new files do not overlap and one side is plain documentation
+  (the `docs/reference/sol-exempt-paths.md` definition, which excludes every rule file, and only regular non-executable files: a symlink, submodule or executable named `*.md` is not documentation) — no model
+  call — OR a focused Sol collision check returns CLEAN. Two code or configuration changes always
+  get the check, even in different files (Mason, 2026-10-21). The check centres on the interaction,
+  starting from the database, guard, CI, dependency and rule files (`CARRY_HOT_PATHS`), and counts
+  any other blocker it sees.
+
+Anything else refuses, and the full Step 3B review above is the answer. The carried proof states
+`codex_ran: false, carried_forward: true`, names the head and base it came from, and still expires
+30 minutes after it is minted. Every merge gate accepts it on the same head/base/age terms.
+
 **The one exception: skip Step 3B for a documentation-only change** as defined in
 `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). Both merge gates read the PR's real file
 list and accept it without a Sol proof once every check is green on the exact head (merge pinned
