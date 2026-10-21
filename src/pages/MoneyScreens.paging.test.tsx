@@ -9,7 +9,7 @@
  * against the old screen and passes against the paged one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { buildInMemoryQuery, pagedRpcReply, SERVER_ROW_CAP } from '../test-utils/inMemoryQuery';
 
@@ -201,5 +201,48 @@ describe('money screens past the 1,000-row server cap', () => {
     renderAt(<PrepayWorkspacePanel />, '/?customer=c1');
     // The unpaid-invoice badge sums every invoice: 1,010 at $1.00.
     await waitFor(() => expect(screen.getByText('Unpaid Invoices').parentElement!).toHaveTextContent('$1,010.00'));
+  });
+});
+
+// The daily cron (06:00 UTC, mark_overdue_invoices) flips past-due posted invoices to
+// 'overdue'; they still owe money and apply_prepay_to_invoice accepts them, so both prepay
+// screens count them. Every other status stays out, even with a balance.
+describe('prepay screens include overdue invoices', () => {
+  const invoice = (id: string, status: string, cents: number) => ({
+    id, invoice_number: id.toUpperCase(), customer_id: 'c1', status, deleted_at: null,
+    total_amount_cents: cents, balance_cents: cents, due_date: '2026-09-01', created_at: '2026-08-01T12:00:00Z',
+  });
+  const mixedInvoices = () => [
+    invoice('inv-posted', 'posted', 100),
+    invoice('inv-overdue', 'overdue', 200),
+    invoice('inv-voided', 'voided', 400),
+    invoice('inv-draft', 'draft', 800),
+    invoice('inv-unposted', 'unposted', 1600),
+    invoice('inv-cancelled', 'cancelled', 3200),
+  ];
+
+  it('the Prepayment Manager counts an overdue invoice as unpaid', async () => {
+    H.tables.customers = [{ id: 'c1', farm_name: 'Big Farm', prepay_balance_cents: 500, is_active: true }];
+    H.tables.invoices = mixedInvoices();
+    renderAt(<PrepaymentManagerPanel />);
+    // Posted $1.00 + overdue $2.00; a posted-only read showed $1.00 and 1 invoice.
+    await waitFor(() => expect(blockOf('Total Unpaid Invoices').parentElement!).toHaveTextContent('$3.00'));
+    expect(blockOf('Total Unpaid Invoices').parentElement!).toHaveTextContent('2 invoice(s)');
+  });
+
+  it("the prepay workspace's Apply step offers an overdue invoice", async () => {
+    H.custom.customers = buildInMemoryQuery([{ id: 'c1', farm_name: 'Big Farm', prepay_balance_cents: 500, is_active: true }]);
+    H.tables.prepay_credits = [{ id: 'pc1', customer_id: 'c1', reference_number: '1001', bucket_label: null, original_amount_cents: 500, balance_cents: 500, created_at: '2026-10-01T12:00:00Z' }];
+    H.tables.invoices = mixedInvoices();
+    renderAt(<PrepayWorkspacePanel />, '/?customer=c1');
+    await waitFor(() => expect(screen.getByText('Unpaid Invoices').parentElement!).toHaveTextContent('$3.00'));
+    // Open the credit's Apply box: the invoices it can be applied to.
+    fireEvent.click(screen.getByRole('button', { name: /^Apply$/ }));
+    const applyBox = within(await screen.findByRole('dialog'));
+    expect(applyBox.getByText('INV-POSTED')).toBeInTheDocument();
+    expect(applyBox.getByText('INV-OVERDUE')).toBeInTheDocument();
+    for (const excluded of ['INV-VOIDED', 'INV-DRAFT', 'INV-UNPOSTED', 'INV-CANCELLED']) {
+      expect(screen.queryByText(excluded)).not.toBeInTheDocument();
+    }
   });
 });

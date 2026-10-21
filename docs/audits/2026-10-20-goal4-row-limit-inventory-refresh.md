@@ -161,7 +161,7 @@ The rest are short on purpose, already signalled, or scoped to one small record:
 
 The 2026-10-15 audit's other "Found along the way" items are not row limits, and this plan doesn't fix them. Each is still listed there:
 - the likely broken over-received PO check, which belongs with the Part 2 integrity work if it is confirmed;
-- the Prepay manager's unpaid total leaving out overdue invoices;
+- the Prepay manager's unpaid total leaving out overdue invoices (fixed 2026-10-20 in both prepay screens: `docs/changelog.d/2026-10-20-prepay-overdue-invoices.md`);
 - `reconcile_prepay_balances` skipping inactive customers;
 - the blend-ticket quote price chosen with `LIMIT 1`, which belongs to Goal 3's blend-ticket pricing.
 
