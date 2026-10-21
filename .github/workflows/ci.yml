@@ -311,25 +311,18 @@ jobs:
           fi
           node scripts/check-migration-hard-rules.mjs --base "$compare_base" --head "$compare_head"
 
-  lint-typecheck-test:
-    name: Lint, Type Check, Test, Build
+  lint-typecheck-build:
+    name: Lint, Type Check, Build
     runs-on: ubuntu-latest
-    needs: [phase3-private-artifact-containment, ci-scope, sql-validation]
-    # This is a required branch-protection context. It must execute and turn a
-    # failed prerequisite red; a conditionally skipped job reports success.
-    if: ${{ always() }}
+    needs: [phase3-private-artifact-containment, ci-scope]
+    # 2026-10-21: the former single required job ran every step below and the
+    # two test jobs after it one at a time (median 13.9 min, 17.3 min end to
+    # end). They now run side by side; "Lint, Type Check, Test, Build" below
+    # stays the required check and turns red unless every part passed. This
+    # part runs in both lanes because the documentation checks always run.
+    if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' }}
 
     steps:
-      - name: Bind all prerequisite results into this required check
-        env:
-          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
-          CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}
-          SQL_VALIDATION_RESULT: ${{ needs.sql-validation.result }}
-        run: |
-          test "$CONTAINMENT_RESULT" = "success" || { echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2; exit 1; }
-          test "$CI_SCOPE_RESULT" = "success" || { echo "Trusted CI-scope classification did not pass: $CI_SCOPE_RESULT" >&2; exit 1; }
-          test "$SQL_VALIDATION_RESULT" = "success" || { echo "SQL validation did not pass: $SQL_VALIDATION_RESULT" >&2; exit 1; }
-
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -340,25 +333,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
-
-      - name: Report trusted CI route
-        env:
-          DOCS_ONLY: ${{ needs.ci-scope.outputs.docs_only }}
-          FULL_CI: ${{ needs.ci-scope.outputs.full_ci }}
-          ROUTE_REASON: ${{ needs.ci-scope.outputs.reason }}
-          CHANGED_COUNT: ${{ needs.ci-scope.outputs.changed_count }}
-          EVENT_ROUTE: ${{ needs.ci-scope.outputs.event_route }}
-          PRIOR_FULL_PROOF: ${{ needs.ci-scope.outputs.prior_full_proof }}
-        run: |
-          case "$DOCS_ONLY:$FULL_CI" in
-            true:false|false:true) ;;
-            *) echo "Trusted CI route is not a valid mutually-exclusive result: docs_only=$DOCS_ONLY full_ci=$FULL_CI" >&2; exit 1 ;;
-          esac
-          case "$EVENT_ROUTE:$PRIOR_FULL_PROOF" in
-            code:false|force-full:false|error:false|metadata:false|metadata:true) ;;
-            *) echo "Trusted event route is invalid: event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF" >&2; exit 1 ;;
-          esac
-          echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
 
       - name: CodeRabbit final-review gate regression tests
         run: node .github/scripts/coderabbit-final-review.test.cjs
@@ -451,22 +425,6 @@ jobs:
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.edge-scope.outputs.changed == 'true' }}
         run: deno test --no-prompt --node-modules-dir=none supabase/functions
 
-      - name: Guard-hook regression tests (safety net must not regress)
-        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm run test:correction-guards
-
-      - name: Phase 3C private-artifact regression tests
-        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm run test:supplier-pricing-phase3c-packet
-
-      - name: Phase 2 live-smoke static guard
-        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm run check:pricing-phase2-live-smoke
-
-      - name: Agent workflow truth-state and sync tests
-        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm run test:agent-workflows
-
       - name: Documentation consistency
         run: npm run check:docs
 
@@ -481,9 +439,47 @@ jobs:
           sed -E 's/Updated [^<]+/Updated <date>/' docs/app-workflow-map.html > "$after"
           diff -u "$before" "$after"
 
-      - name: RPC contract and idempotency inventory tests
+      - name: Build (Vite)
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm run test:contracts
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+        run: npm run build
+
+  unit-tests:
+    name: Unit Tests and Coverage (Vitest)
+    runs-on: ubuntu-latest
+    needs: [phase3-private-artifact-containment, ci-scope]
+    # Full lane only. The required check below accepts this job as skipped
+    # only when the trusted classifier chose the documentation-only route.
+    if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Cache node_modules
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        uses: actions/cache@v6
+        id: cache-node-modules
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node-modules-${{ runner.os }}-
+
+      - name: Install dependencies
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.cache-node-modules.outputs.cache-hit != 'true' }}
+        run: npm ci
 
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
         # Unit/coverage tests deliberately use the mock Supabase values from
@@ -500,13 +496,115 @@ jobs:
           path: coverage/
           retention-days: 14
 
-      - name: Build (Vite)
+  regression-tests:
+    name: Guard, Packet, and Contract Regression Tests
+    runs-on: ubuntu-latest
+    needs: [phase3-private-artifact-containment, ci-scope]
+    # Full lane only. The required check below accepts this job as skipped
+    # only when the trusted classifier chose the documentation-only route.
+    if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Cache node_modules
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        uses: actions/cache@v6
+        id: cache-node-modules
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node-modules-${{ runner.os }}-
+
+      - name: Install dependencies
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.cache-node-modules.outputs.cache-hit != 'true' }}
+        run: npm ci
+
+      - name: Guard-hook regression tests (safety net must not regress)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run test:correction-guards
+
+      - name: Phase 3C private-artifact regression tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run test:supplier-pricing-phase3c-packet
+
+      - name: Phase 2 live-smoke static guard
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run check:pricing-phase2-live-smoke
+
+      - name: Agent workflow truth-state and sync tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run test:agent-workflows
+
+      - name: RPC contract and idempotency inventory tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run test:contracts
+
+  lint-typecheck-test:
+    name: Lint, Type Check, Test, Build
+    runs-on: ubuntu-latest
+    needs: [phase3-private-artifact-containment, ci-scope, sql-validation, lint-typecheck-build, unit-tests, regression-tests, phase3c-containment-windows, guard-hooks-windows]
+    # This is a required branch-protection context. It must execute and turn a
+    # failed prerequisite red; a conditionally skipped job reports success.
+    if: ${{ always() }}
+
+    steps:
+      - name: Bind all prerequisite results into this required check
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
-        run: npm run build
+          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+          CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}
+          SQL_VALIDATION_RESULT: ${{ needs.sql-validation.result }}
+          LINT_BUILD_RESULT: ${{ needs.lint-typecheck-build.result }}
+          UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+          REGRESSION_TESTS_RESULT: ${{ needs.regression-tests.result }}
+          WINDOWS_PACKET_RESULT: ${{ needs.phase3c-containment-windows.result }}
+          WINDOWS_GUARD_RESULT: ${{ needs.guard-hooks-windows.result }}
+          FULL_CI: ${{ needs.ci-scope.outputs.full_ci }}
+        run: |
+          test "$CONTAINMENT_RESULT" = "success" || { echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2; exit 1; }
+          test "$CI_SCOPE_RESULT" = "success" || { echo "Trusted CI-scope classification did not pass: $CI_SCOPE_RESULT" >&2; exit 1; }
+          test "$SQL_VALIDATION_RESULT" = "success" || { echo "SQL validation did not pass: $SQL_VALIDATION_RESULT" >&2; exit 1; }
+          test "$LINT_BUILD_RESULT" = "success" || { echo "Lint, type check, and build did not pass: $LINT_BUILD_RESULT" >&2; exit 1; }
+          # The test parts may be skipped only on the trusted documentation-only
+          # route. On the full route anything but success is red.
+          case "$FULL_CI" in
+            true) expected_tests="success" ;;
+            false) expected_tests="skipped" ;;
+            *) echo "Trusted full_ci output is invalid: $FULL_CI" >&2; exit 1 ;;
+          esac
+          test "$UNIT_TESTS_RESULT" = "$expected_tests" || { echo "Unit tests: expected $expected_tests, got $UNIT_TESTS_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
+          test "$REGRESSION_TESTS_RESULT" = "$expected_tests" || { echo "Regression tests: expected $expected_tests, got $REGRESSION_TESTS_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
+          test "$WINDOWS_PACKET_RESULT" = "$expected_tests" || { echo "Windows packet tests: expected $expected_tests, got $WINDOWS_PACKET_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
+          test "$WINDOWS_GUARD_RESULT" = "$expected_tests" || { echo "Windows guard tests: expected $expected_tests, got $WINDOWS_GUARD_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
+
+      - name: Report trusted CI route
+        env:
+          DOCS_ONLY: ${{ needs.ci-scope.outputs.docs_only }}
+          FULL_CI: ${{ needs.ci-scope.outputs.full_ci }}
+          ROUTE_REASON: ${{ needs.ci-scope.outputs.reason }}
+          CHANGED_COUNT: ${{ needs.ci-scope.outputs.changed_count }}
+          EVENT_ROUTE: ${{ needs.ci-scope.outputs.event_route }}
+          PRIOR_FULL_PROOF: ${{ needs.ci-scope.outputs.prior_full_proof }}
+        run: |
+          case "$DOCS_ONLY:$FULL_CI" in
+            true:false|false:true) ;;
+            *) echo "Trusted CI route is not a valid mutually-exclusive result: docs_only=$DOCS_ONLY full_ci=$FULL_CI" >&2; exit 1 ;;
+          esac
+          case "$EVENT_ROUTE:$PRIOR_FULL_PROOF" in
+            code:false|force-full:false|error:false|metadata:false|metadata:true) ;;
+            *) echo "Trusted event route is invalid: event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF" >&2; exit 1 ;;
+          esac
+          echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
 
       - name: Write exact full-CI proof
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' && github.event_name == 'pull_request' }}
@@ -541,6 +639,9 @@ jobs:
     needs: [phase3-private-artifact-containment, ci-scope]
     if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}
     timeout-minutes: 15
+    # 2026-10-21: the packet suite (~5 min) and the guard-hook suite (~6 min)
+    # used to run one after the other in this job; each now has its own
+    # Windows job so they finish together.
     # The containment checker folds path case on win32 only, because that is the
     # platform whose filesystem compares paths case-insensitively. Every other
     # job here is ubuntu-latest, so those branches would never execute and the
@@ -568,6 +669,24 @@ jobs:
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
         run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs
+
+  guard-hooks-windows:
+    name: Guard-Hook Regression Tests (Windows)
+    runs-on: windows-latest
+    needs: [phase3-private-artifact-containment, ci-scope]
+    if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}
+    timeout-minutes: 15
+    # Same win32 rationale as the job above, for the guard-hook suite.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
 
       - name: Report 8.3 short-name generation on the runner volumes
         # 2026-09-05 (Codex GitHub App P2 on #612): review-proof-guard.test.mjs
@@ -600,7 +719,7 @@ jobs:
           }
 
       - name: Guard-hook regression tests (win32 alias and path semantics)
-        # 2026-09-05: the same suite lint-typecheck-test runs on Ubuntu. Here it
+        # 2026-09-05: the same suite regression-tests runs on Ubuntu. Here it
         # executes the win32-only branches — the 8.3 alias cases, the `dir /x`
         # parser, and realpathSync.native handling — that skip on every other
         # platform, so before this step they ran nowhere in CI. Every file in

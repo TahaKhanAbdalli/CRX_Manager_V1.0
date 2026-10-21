@@ -169,7 +169,7 @@ GitHub Actions runs four workflows from `.github/workflows/`:
 
 | Workflow | When it runs | What it does |
 |---|---|---|
-| `ci.yml` | Every pull request into `main` and every push to `main` | The main gate: lint, type check, unit tests with coverage, the production build, SQL migration validation, the documentation check, guard-hook regression tests, and the Phase 3C private-artifact containment check (plus a Windows leg that re-runs the containment and guard-hook tests). **No browser test runs** — see the note below. |
+| `ci.yml` | Every pull request into `main` and every push to `main` | The main gate: lint, type check, unit tests with coverage, the production build, SQL migration validation, the documentation check, guard-hook regression tests, and the Phase 3C private-artifact containment check (plus two Windows jobs that re-run the containment and guard-hook tests). **No browser test runs** — see the note below. |
 | `phase3-private-artifact-containment.yml` | Pull requests into `main` | Standalone containment check for private supplier-pricing artifacts, run from the trusted base branch. |
 | `coderabbit-final-review.yml` | Pull-request events (labels, new commits, and so on) | The CodeRabbit final-review gate: when a frozen candidate is labelled `ready-for-coderabbit`, it rechecks the head and required checks and then asks CodeRabbit for one formal review. See `docs/reference/coderabbit-native-review.md`. |
 | `daily-landing-summary.yml` | Daily on a schedule (and on manual dispatch) | Posts Mason's plain-English daily summary of what merged, what was applied, and what waits on him to one GitHub issue, so GitHub emails it. |
@@ -180,10 +180,23 @@ Two older workflows, `production-migration.yml` and `production-approval-canary.
 exist.
 
 The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
-`sql-validation`, `lint-typecheck-test`, `phase3c-containment-windows`, and
+`sql-validation`, `lint-typecheck-build`, `unit-tests`, `regression-tests`,
+`lint-typecheck-test`, `phase3c-containment-windows`, `guard-hooks-windows`, and
 `e2e-smoke`. `ci-scope` classifies each change fail-closed, so a docs-only pull
 request can skip the expensive proof steps while anything touching code, SQL, or
 the agent surface gets the full run.
+
+Since 2026-10-21 the expensive work runs side by side instead of in one long
+job: `lint-typecheck-build` (audit, lint, type check, Deno, docs, workflow map,
+build), `unit-tests` (Vitest with coverage), and `regression-tests` (guard-hook,
+Phase 3C packet, Phase 2 smoke guard, agent-workflow, and RPC-contract tests)
+start together, alongside `sql-validation`, once containment and `ci-scope` have
+both passed. The two Windows suites likewise run as two parallel jobs
+(`phase3c-containment-windows`, `guard-hooks-windows`). The required check
+**Lint, Type Check, Test, Build** (`lint-typecheck-test`) runs last; it is red
+unless containment, routing, SQL validation, all three Ubuntu parts, and both
+Windows jobs passed (the test and Windows jobs may be skipped only on the
+documentation-only route), and it alone publishes the full-CI proof.
 
 > **`e2e-smoke` is disabled and never runs.** The job is pinned `if: false` in
 > `ci.yml`, so it is skipped on every pull request and every push. **CI currently

@@ -91,9 +91,9 @@ The **pre-push** hook runs private-artifact containment again (over every
 outgoing commit), `npm run typecheck`, and `npm run build`, then refreshes the
 optional local Graphify map.
 
-Neither hook runs ESLint or the unit tests. **CI** (`lint-typecheck-test` in
-`.github/workflows/ci.yml`) runs lint, typecheck, the Vitest suite with
-coverage and the build when its `ci-scope` job (`scripts/classify-ci-scope.mjs`)
+Neither hook runs ESLint or the unit tests. **CI** (`.github/workflows/ci.yml`,
+in parallel jobs whose results the required `lint-typecheck-test` check binds) runs lint,
+typecheck, the Vitest suite with coverage and the build when its `ci-scope` job (`scripts/classify-ci-scope.mjs`)
 routes the pull request to full CI; a change it classifies as docs-only skips
 those steps. The documentation check runs on every pull request. Run `npm run lint` and `npm test`
 yourself before pushing if you want the answer early.

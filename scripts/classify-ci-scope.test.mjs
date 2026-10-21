@@ -372,17 +372,62 @@ for (const requiredFragment of [
   '--github-output "$classifier_output"; then',
   'cat "$classifier_output" >> "$GITHUB_OUTPUT"',
   'needs: [phase3-private-artifact-containment, ci-scope]',
-  'needs: [phase3-private-artifact-containment, ci-scope, sql-validation]',
+  'needs: [phase3-private-artifact-containment, ci-scope, sql-validation, lint-typecheck-build, unit-tests, regression-tests, phase3c-containment-windows, guard-hooks-windows]',
+  'WINDOWS_PACKET_RESULT: ${{ needs.phase3c-containment-windows.result }}',
+  'WINDOWS_GUARD_RESULT: ${{ needs.guard-hooks-windows.result }}',
+  'test "$WINDOWS_PACKET_RESULT" = "$expected_tests"',
+  'test "$WINDOWS_GUARD_RESULT" = "$expected_tests"',
   'CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}',
+  'LINT_BUILD_RESULT: ${{ needs.lint-typecheck-build.result }}',
+  'UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}',
+  'REGRESSION_TESTS_RESULT: ${{ needs.regression-tests.result }}',
+  'test "$LINT_BUILD_RESULT" = "success"',
+  'true) expected_tests="success" ;;',
+  'false) expected_tests="skipped" ;;',
+  '*) echo "Trusted full_ci output is invalid: $FULL_CI" >&2; exit 1 ;;',
+  'test "$UNIT_TESTS_RESULT" = "$expected_tests"',
+  'test "$REGRESSION_TESTS_RESULT" = "$expected_tests"',
   'if: ${{ needs.ci-scope.outputs.full_ci == \'true\' }}',
 ]) {
   equal(workflow.includes(requiredFragment), true, `workflow contract: ${requiredFragment}`);
 }
 equal(
-  /^  lint-typecheck-test:\r?\n    name: Lint, Type Check, Test, Build\r?\n    runs-on: ubuntu-latest\r?\n    needs: \[phase3-private-artifact-containment, ci-scope, sql-validation\]\r?\n(?:    #.*\r?\n){2}    if: \$\{\{ always\(\) \}\}/m.test(workflow),
+  /^  lint-typecheck-test:\r?\n    name: Lint, Type Check, Test, Build\r?\n    runs-on: ubuntu-latest\r?\n    needs: \[phase3-private-artifact-containment, ci-scope, sql-validation, lint-typecheck-build, unit-tests, regression-tests, phase3c-containment-windows, guard-hooks-windows\]\r?\n(?:    #.*\r?\n){2}    if: \$\{\{ always\(\) \}\}/m.test(workflow),
   true,
   'required lint job must execute even after a failed dependency',
 );
+// The required check is a gate over parallel parts; only it may publish the
+// full-CI proof, and only after binding every part's result.
+{
+  const jobSlice = (id) => {
+    const start = workflow.indexOf(`\n  ${id}:\n`);
+    equal(start >= 0, true, `workflow job ${id} exists`);
+    const next = workflow.slice(start + 1).search(/\n  [a-z0-9-]+:\r?\n/);
+    return next < 0 ? workflow.slice(start) : workflow.slice(start, start + 1 + next);
+  };
+  const gate = jobSlice('lint-typecheck-test');
+  equal(gate.indexOf('Bind all prerequisite results') < gate.indexOf('Write exact full-CI proof'), true, 'gate binds part results before writing the proof');
+  equal(workflow.split('name: Publish exact full-CI proof').length, 2, 'exactly one job publishes the full-CI proof');
+  equal(gate.includes('name: Publish exact full-CI proof'), true, 'the required gate publishes the full-CI proof');
+  for (const id of ['unit-tests', 'regression-tests', 'phase3c-containment-windows', 'guard-hooks-windows']) {
+    equal(
+      jobSlice(id).includes("if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}"),
+      true,
+      `${id} skips only on the trusted documentation-only route`,
+    );
+  }
+  equal(jobSlice('lint-typecheck-build').includes("if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' }}"), true, 'lint/build part runs in both lanes');
+  equal(jobSlice('unit-tests').includes('run: npm run test:coverage'), true, 'Vitest coverage runs in the unit-tests part');
+  equal(jobSlice('regression-tests').includes('run: npm run test:correction-guards'), true, 'guard regressions run on Ubuntu');
+  equal(jobSlice('guard-hooks-windows').includes('run: npm run test:correction-guards'), true, 'guard regressions run on Windows');
+  equal(jobSlice('phase3c-containment-windows').includes('run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs'), true, 'packet regressions run on Windows');
+  for (const run of ['npm run lint', 'npm run typecheck', 'npm run build', 'npm audit --audit-level=high', 'npm run test:ci-scope', 'npm run check:docs']) {
+    equal(jobSlice('lint-typecheck-build').includes(`run: ${run}`), true, `lint/build part runs ${run}`);
+  }
+  for (const run of ['npm run test:supplier-pricing-phase3c-packet', 'npm run check:pricing-phase2-live-smoke', 'npm run test:agent-workflows', 'npm run test:contracts']) {
+    equal(jobSlice('regression-tests').includes(`run: ${run}`), true, `regression part runs ${run}`);
+  }
+}
 equal(
   /name: Documentation consistency\r?\n\s+run: npm run check:docs/.test(workflow),
   true,
