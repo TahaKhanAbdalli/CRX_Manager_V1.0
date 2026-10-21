@@ -987,7 +987,8 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
       preview (`FinanceChargePreviewModal.tsx`), check allocation (`PaymentAllocation.tsx`, was a
       customer's first 200 open invoices), the Prepayment Manager (was 500 customers, each with an
       unchecked invoice read) and the prepay workspace's Apply step; a customer's aging card and purchase
-      history (`CustomerDetail.tsx`; the aging card now asks for that one customer's row);
+      history (`CustomerDetail.tsx`; the aging card now asks for that one customer's row), and since
+      2026-10-21 the Team Board notes' customer card (`CustomerContextCard.tsx`) asks for its one row too;
     - AP Aging (`AccountsPayable.tsx`) and Field Profitability;
     - integrity checks 5, 6, 9 and 10 (`src/lib/reconciliation.ts`) and the cleanup panel's lists. The
       cleanup panel's over-received PO list had never worked: its filter compared a column with text,

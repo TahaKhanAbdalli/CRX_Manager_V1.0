@@ -45,9 +45,14 @@ export default function CustomerContextCard({ customerId }: Props) {
         // the capture (it requires `=` immediately before `await`).
         // Chicago's date, as the Accounts Receivable pages use: a UTC date is
         // already tomorrow from about 7pm Central.
-        const { data: arData } = await supabase.rpc('get_ar_aging', {
-          p_as_of_date: todayInBusinessTz(),
-        });
+        // Only this customer's row, as CustomerDetail asks: reading the whole
+        // company's aging and picking one out missed any customer past the
+        // server's 1,000-row cap, and the card showed them as owing $0. A failed
+        // call throws, so it is never read as a $0 balance either.
+        const { data: arData, error: arError } = await supabase
+          .rpc('get_ar_aging', { p_as_of_date: todayInBusinessTz() })
+          .eq('customer_id', customerId);
+        if (arError) throw arError;
         // Parallel: customer info, open orders count, last delivery (no rpc).
         // status-enum-check: exempt
         const [custRes, ordersRes, delRes] = await Promise.all([
