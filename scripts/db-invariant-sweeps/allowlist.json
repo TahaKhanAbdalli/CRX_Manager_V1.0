@@ -556,45 +556,6 @@
     },
     {
       "predicate": "actor-forgery",
-      "violation_key": "create_application_record_from_blend_ticket(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds auth.uid() (3), strictly rejects NULL or differing actor (25-28), then role-gates bound actor (29-31); subsequent attribution is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
-      "dated": "2026-09-12",
-      "suspect_param": "p_performed_by",
-      "reviewed_contracts": {
-        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public.create_application_record_from_blend_ticket(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)": "41a246e182a8628890bfb9a38850267d",
-        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
-        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
-      }
-    },
-    {
-      "predicate": "actor-forgery",
-      "violation_key": "create_direct_order(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid() and rejects supplied non-null mismatch; owner-only delegate independently binds actor (21), rejects mismatch (23-25), role-gates (27-31), uses v_actor for inventory/activity (136-139,159-168). Omitted actor never changes authority. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Reason-parser pin declined 2026-09-23 (CodeRabbit on PR #786), measured from the guard's own body: _begin_below_cost_money_write raises AUTH_REQUIRED on a NULL auth.uid(), ACTOR_MISMATCH on a non-null p_performed_by that differs from it, and INSUFFICIENT_ROLE unless the actor is an active admin/sales_rep -- ALL THREE before it ever calls public._below_cost_reason_from_json(p_payload), whose only effect is the text placed in the app.crx_below_cost_reason GUC. That call sits in the pinned guard's own definition, so the pinned digest already covers whether it is reached. The parser is IMMUTABLE SECURITY INVOKER, takes no actor argument, reads no table, and returns caller-supplied payload text the caller already controls, so no change to it can make forged attribution succeed; it is therefore not 'materially relied on in the semantic review' in the README sense. It also calls public._below_cost_reason_from_text, so pinning every transitive callee rather than every materially-relied-on dependency would expand to an unbounded closure. Pins are live database-side digests (definition+owner+ACL); none was invented here, because a wrong digest would un-match this exception permanently and turn the sweep red.",
-      "dated": "2026-09-12",
-      "suspect_param": "p_performed_by",
-      "reviewed_contracts": {
-        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
-        "public._create_direct_order_below_cost_impl_20260810(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)": "11c0dae1e99f7ec484051d82aa4bee1d",
-        "public.create_direct_order(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)": "914355a8a419481821113fd0634e8d67"
-      }
-    },
-    {
-      "predicate": "actor-forgery",
-      "violation_key": "create_rush_order(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid(), rejects supplied non-null mismatch; owner-only delegate independently binds (20-21), refuses mismatch (22-24), role-gates (25-31), attributes writes to v_actor (145-147,154-163). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Reason-parser pin declined 2026-09-23 (CodeRabbit on PR #786), measured from the guard's own body: _begin_below_cost_money_write raises AUTH_REQUIRED on a NULL auth.uid(), ACTOR_MISMATCH on a non-null p_performed_by that differs from it, and INSUFFICIENT_ROLE unless the actor is an active admin/sales_rep -- ALL THREE before it ever calls public._below_cost_reason_from_json(p_payload), whose only effect is the text placed in the app.crx_below_cost_reason GUC. That call sits in the pinned guard's own definition, so the pinned digest already covers whether it is reached. The parser is IMMUTABLE SECURITY INVOKER, takes no actor argument, reads no table, and returns caller-supplied payload text the caller already controls, so no change to it can make forged attribution succeed; it is therefore not 'materially relied on in the semantic review' in the README sense. It also calls public._below_cost_reason_from_text, so pinning every transitive callee rather than every materially-relied-on dependency would expand to an unbounded closure. Pins are live database-side digests (definition+owner+ACL); none was invented here, because a wrong digest would un-match this exception permanently and turn the sweep red.",
-      "dated": "2026-09-12",
-      "suspect_param": "p_performed_by",
-      "reviewed_contracts": {
-        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
-        "public._create_rush_order_below_cost_impl_20260810(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)": "e621b83b35e7298cd239254910cf184b",
-        "public.create_rush_order(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)": "973554b9c57b2186585e6ef3c1199b99"
-      }
-    },
-    {
-      "predicate": "actor-forgery",
       "violation_key": "delete_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)",
       "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper locks/forwards only; owner-only delegate binds auth.uid() (6), rejects non-null mismatch (8-10), requires active admin on v_actor (12-14), attributes activity to v_actor (43-46). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
       "dated": "2026-09-12",
@@ -696,6 +657,34 @@
         "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
         "public._restore_quote_version_below_cost_impl_20260810(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint)": "274e356d46ecf328f55b6e0a5872f14b",
         "public.restore_quote_version(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)": "f4b556d776e597fd70f2f083413710a2"
+      }
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "save_field_app_invoice(p_invoice_id uuid, p_invoice jsonb, p_locations jsonb, p_chemicals jsonb, p_performed_by uuid, p_application_service_id uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-10-20 (America/Chicago; read 2026-10-21 UTC). Migration 20261019230000 (cost/margin step 2, PR #956, ledger 20261020193610) renamed the reviewed body to _save_field_app_invoice_cost_step2_impl (SECURITY DEFINER, EXECUTE: postgres only) and installed a SECURITY DEFINER wrapper whose FIRST statement is IF auth.uid() IS NULL OR p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE ACTOR_MISMATCH, so a missing login, a NULL actor or any other user is refused before anything else runs; the wrapper then only chooses the admin or server-cost chemical list and forwards p_performed_by. The predicate flags it because that combined IF auth.uid() IS NULL OR ... refusal shape is not credited, so the forward looks unguarded. The private body independently binds v_actor := auth.uid(), raises on NULL, raises when p_performed_by IS DISTINCT FROM v_actor (NULL included), and requires an active admin/sales_rep profile for v_actor, all before the idempotency lookup and any row lock; it then passes v_actor (never p_performed_by) as the actor to _save_field_app_invoice_impl_20260714. It contains no EXCEPTION handler and no dynamic SQL. The inner writer _save_field_app_invoice_impl_20260714 (SECURITY DEFINER, EXECUTE: postgres and service_role only) independently binds v_actor := auth.uid(), raises on NULL and when p_performed_by IS DISTINCT FROM v_actor (lines 66-68), requires is_admin() OR is_sales_rep() (lines 70-72), refuses a non-admin who names another user as salesman_id (lines 78-79; an admin may choose the salesperson, a business field, not the actor), and stamps created_by / activity performed_by from p_performed_by (already equal to v_actor) and the audit actor_role from v_actor. It and the is_sales_rep() helper it calls are pinned too (Luna round 2), so any change to how it authorizes or attributes the write un-matches this exception. This is scanner noise, not an accepted actor-forgery hole. Pins cover the public wrapper, the private body, the inner writer, auth.uid(), public.is_admin() and public.is_sales_rep() (the wrapper calls is_admin() only to choose the cost path; it never decides the actor). The private body's role gate is an inline profiles query (id = v_actor AND is_active = true AND role IN ('admin','sales_rep')) inside the pinned body definition; it calls no role helper such as is_sales_rep(), so no further helper is relied on. Any change to a pinned definition, owner or EXECUTE grant un-matches this exception and the flag returns for a fresh review. Digests were read live 2026-10-20 (America/Chicago) with the sweep's own contract expression, after the review above.",
+      "dated": "2026-10-20",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._save_field_app_invoice_cost_step2_impl(p_invoice_id uuid, p_invoice jsonb, p_locations jsonb, p_chemicals jsonb, p_performed_by uuid, p_application_service_id uuid, p_idempotency_key text)": "16eb5eb7ab8d058b266406862d356c67",
+        "public._save_field_app_invoice_impl_20260714(p_invoice_id uuid, p_invoice jsonb, p_locations jsonb, p_chemicals jsonb, p_performed_by uuid, p_application_service_id uuid, p_idempotency_key text)": "e1bd019fe0e4b3d1b3f978d998b3e9a3",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0",
+        "public.save_field_app_invoice(p_invoice_id uuid, p_invoice jsonb, p_locations jsonb, p_chemicals jsonb, p_performed_by uuid, p_application_service_id uuid, p_idempotency_key text)": "cd62f7d9d8ef141d02dd07e5d741b673"
+      }
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "save_job(p_job_id uuid, p_job_payload jsonb, p_fields jsonb, p_chemicals jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-10-20 (America/Chicago; read 2026-10-21 UTC). Migration 20261019230000 (cost/margin step 2, PR #956, ledger 20261020193610) renamed the reviewed body to _save_job_cost_step2_impl (SECURITY DEFINER, EXECUTE: postgres only) and installed a SECURITY DEFINER wrapper whose FIRST statement is IF auth.uid() IS NULL OR p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE ACTOR_MISMATCH, so a missing login, a NULL actor or any other user is refused before anything else runs; the wrapper then only chooses the admin or server-cost chemical list and forwards p_performed_by. The predicate flags it because that combined IF auth.uid() IS NULL OR ... refusal shape is not credited, so the forward looks unguarded. The private body independently binds v_actor := auth.uid() (line 40), raises AUTH_REQUIRED on NULL (41), ACTOR_MISMATCH on a non-null mismatch (42-44) and INSUFFICIENT_ROLE unless v_actor is an active admin/sales_rep (45-50); it keys idempotency to v_actor, writes jobs.updated_by and request_actor_id from v_actor, and writes jobs.created_by from p_performed_by (1047), which the wrapper has already forced equal to auth.uid(). It contains no EXCEPTION handler and no dynamic SQL. This is scanner noise, not an accepted actor-forgery hole. Pins cover the public wrapper, the private body, auth.uid() and public.is_admin() (the wrapper calls it only to choose the cost path; it never decides the actor). The private body's role gate is an inline profiles query (id = v_actor AND is_active = true AND role IN ('admin','sales_rep')) inside the pinned body definition; it calls no role helper such as is_sales_rep(), so no further helper is relied on. Any change to a pinned definition, owner or EXECUTE grant un-matches this exception and the flag returns for a fresh review. Digests were read live 2026-10-20 (America/Chicago) with the sweep's own contract expression, after the review above.",
+      "dated": "2026-10-20",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._save_job_cost_step2_impl(p_job_id uuid, p_job_payload jsonb, p_fields jsonb, p_chemicals jsonb, p_performed_by uuid, p_idempotency_key text)": "04a2800d9de75f7ae53f556b87d46643",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.save_job(p_job_id uuid, p_job_payload jsonb, p_fields jsonb, p_chemicals jsonb, p_performed_by uuid, p_idempotency_key text)": "b0b4b40a787050beb922827c03397bbf"
       }
     },
     {
