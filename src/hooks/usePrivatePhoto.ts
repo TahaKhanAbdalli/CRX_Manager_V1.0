@@ -5,7 +5,7 @@
  * device comes back online, an unmount aborts the download, and the blob URL is released when
  * the photo leaves the screen.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import type { PrivatePhotoBucket } from '../lib/privatePhotos';
@@ -88,8 +88,10 @@ export function usePrivatePhoto(bucket: PrivatePhotoBucket, path: string | null 
   const failed = loaded?.tag === tag && loaded.state.status === 'error';
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  // Back online after a failure: try again by itself.
-  useEffect(() => {
+  // Back online after a failure: try again by itself. A layout effect listens from the same
+  // commit that shows the failure, so a reconnect right after the placeholder appears is not
+  // missed while a passive effect waits to run.
+  useLayoutEffect(() => {
     if (!failed) return undefined;
     window.addEventListener('online', retry);
     return () => window.removeEventListener('online', retry);
