@@ -14,13 +14,15 @@
 //     part of the message; a message with a reply on one of its lines but other
 //     text as well is refused out loud, never silently (2026-10-20), except a
 //     plain "I approve" line with no request waiting, which is ordinary chat.
+//   - Every message leaves a marker that this session's messages reach this hook;
+//     the request script refuses without it (some sessions never run it, 2026-10-20).
 // Claude Code runs this on each message sent into a session. Nothing stops an
 // agent running it by hand with a made-up message; that is the deliberate
 // forgery Mason accepted as the residual (owner-approval-lib.mjs header).
 
 import { readFileSync } from "node:fs";
 import {
-  approvalAttemptIn, approvalCodeFromReply, isPlainApprovalReply, lastAgentMessageText, ownerRequestDirs, recordReplyApproval, replyMark,
+  approvalAttemptIn, approvalCodeFromReply, isPlainApprovalReply, lastAgentMessageText, ownerRequestDirs, recordPromptHookSeen, recordReplyApproval, replyMark,
   replyWithoutReminders, resolvePlainReply,
 } from "./owner-approval-lib.mjs";
 
@@ -33,6 +35,10 @@ function emit(extra) {
 
 let payload;
 try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
+// Every message, approval or not: proof for the request script that messages in
+// this session reach this hook (some sessions never run it, 2026-10-20).
+try { recordPromptHookSeen({ dirs: ownerRequestDirs([payload?.cwd, process.env.CLAUDE_PROJECT_DIR, process.cwd()]), sessionId: payload?.session_id }); }
+catch { /* a missing marker only makes the request script refuse */ }
 
 // The app's reminder block in front of his words is not part of his reply (2026-10-20).
 const reply = replyWithoutReminders(payload?.prompt);

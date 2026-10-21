@@ -19,6 +19,8 @@
 // Run it from the pull request's own checkout, in the session that will apply it,
 // only once every other proof for the file is fresh. Mason must reply in THAT
 // session: the reply hook only looks in the folders of the session he replies in.
+// It refuses in a session where no message has reached that hook yet (some desktop
+// sessions never run it, 2026-10-20); the fix is a fresh `claude` in a Terminal tab.
 //   node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql
 // then, after his reply, apply with:
 //   node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql [--confirm]
@@ -38,9 +40,11 @@ import {
   assertOwnerTrustFilesReviewed,
   buildApprovalPayload,
   buildSelfTestPayload,
+  hooklessSessionRefusal,
   newApprovalCode,
   ownerApprovalSummary,
   parkedCategories,
+  promptHookSeen,
   writeApprovalRequest,
 } from "../.claude/hooks/owner-approval-lib.mjs";
 
@@ -57,6 +61,9 @@ const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
 if (!/^[0-9A-Za-z_-]{8,128}$/.test(String(sessionId || ""))) {
   die(1, "owner-approve-migration: run this from inside the Claude Code session that will apply the migration (CLAUDE_CODE_SESSION_ID is not set).");
 }
+// Never ask for a reply this conversation cannot hear: some sessions never run
+// message hooks, and Mason's "I approve" was lost there without a word (2026-10-20).
+if (!promptHookSeen({ dirs: [stateDir], sessionId })) die(1, hooklessSessionRefusal({ checkout, sessionId }));
 
 /** Save the request under a fresh code; retry if that code is already pending here. */
 function saveRequest(build) {

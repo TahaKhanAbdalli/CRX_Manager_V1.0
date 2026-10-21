@@ -31,6 +31,7 @@ import {
   buildApprovalPayload,
   buildSelfTestPayload,
   findOwnerApprovals,
+  hooklessSessionRefusal,
   isPlainApprovalReply,
   lastAgentMessageText,
   newApprovalCode,
@@ -38,7 +39,10 @@ import {
   ownerOnceGuardSql,
   ownerRequestDirs,
   parkedCategories,
+  promptHookSeen,
+  promptHookSeenName,
   readUsedNonces,
+  recordPromptHookSeen,
   recordReplyApproval,
   recordUsedApproval,
   replyMark,
@@ -923,6 +927,71 @@ const SHOWN = `Approve this ONE change ...\nTo approve, reply: I approve\n(Refer
       existsSync(path.join(dir, requestFileName("646464"))), "\"I approve\" after other words, with a request waiting, is refused out loud");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ── Hookless sessions (2026-10-20): in session 980692b3 Claude Code ran no message
+// hooks, so Mason's "i approve" (twice) reached nothing and nobody was told. The reply
+// hook marks every message it sees; the request script refuses without that mark.
+{
+  const root = mkdtempSync(path.join(os.tmpdir(), "crx-owner-hookless-"));
+  try {
+    const dir = path.join(root, ".claude", "session-state");
+    mkdirSync(path.join(root, ".claude"));
+    ok(promptHookSeen({ dirs: [dir], sessionId: SID }) === false, "a session with no marker has not been heard");
+    ok(recordPromptHookSeen({ dirs: [dir], sessionId: SID }) === 1 && promptHookSeen({ dirs: [dir], sessionId: SID }),
+      "the marker records that this session's messages reach the hook");
+    ok(promptHookSeen({ dirs: [dir], sessionId: OTHER_SID }) === false, "another session's marker does not count for this one");
+    ok(recordPromptHookSeen({ dirs: [dir], sessionId: "../../evil" }) === 0 && recordPromptHookSeen({ dirs: [dir], sessionId: undefined }) === 0,
+      "a missing or path-like session id writes nothing");
+    const bare = path.join(root, "not-a-project", ".claude", "session-state");
+    ok(recordPromptHookSeen({ dirs: [bare], sessionId: SID }) === 0 && !existsSync(path.dirname(bare)),
+      "a folder with no .claude/ is never given one");
+    writeFileSync(path.join(dir, promptHookSeenName(OTHER_SID)), JSON.stringify({ sessionId: SID }));
+    ok(promptHookSeen({ dirs: [dir], sessionId: OTHER_SID }) === false, "a marker naming a different session inside is not counted");
+    const msg = hooklessSessionRefusal({ checkout: root, sessionId: SID });
+    ok(msg.includes("REFUSED") && msg.includes("do NOT ask Mason") && msg.includes("Terminal tab") && msg.includes(root) && msg.includes("`claude`"),
+      "the refusal tells the agent not to ask, why, and the fix in the same folder");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  // As real processes: the hook (alone and routed) leaves the marker on an ordinary
+  // message, and the script refuses before it and builds the request after.
+  const proj = mkdtempSync(path.join(os.tmpdir(), "crx-owner-hookless-run-"));
+  try {
+    const dir = path.join(proj, ".claude", "session-state");
+    mkdirSync(path.join(proj, ".claude"));
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj, CLAUDE_CODE_SESSION_ID: SID };
+    const script = path.join(OWNER_TRUST_ROOT, "scripts", "owner-approve-migration.mjs");
+    const runScript = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: proj, env, encoding: "utf8", timeout: 30_000 });
+    const requests = () => (existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith("owner-approval-request-")) : []);
+    const hook = (file, sessionId) => spawnSync(process.execPath, [path.join(HERE, file)], {
+      cwd: proj, env, encoding: "utf8", timeout: 30_000,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: sessionId, cwd: proj, prompt: "what is left to do?" }),
+    });
+
+    const before = runScript("--selftest");
+    ok(before.status === 1 && before.stderr.includes("REFUSED") && before.stderr.includes(promptHookSeenName(SID)) && requests().length === 0,
+      `with no message heard in this session, --selftest refuses out loud and builds no request: ${before.stderr}`);
+    const migBefore = runScript("supabase/migrations/x.sql");
+    ok(migBefore.status === 1 && migBefore.stderr.includes("REFUSED"), "a migration request is refused the same way, before anything else");
+
+    const other = hook("prompt-router.mjs", OTHER_SID);
+    ok(other.status === 0 && other.stdout === "" && runScript("--selftest").status === 1,
+      "a message in another session sharing the folder does not unlock this one");
+    const routed = hook("prompt-router.mjs", SID);
+    ok(routed.status === 0 && routed.stdout === "" && promptHookSeen({ dirs: [dir], sessionId: SID }),
+      "an ordinary message through prompt-router leaves the marker and says nothing");
+    const after = runScript("--selftest");
+    ok(after.status === 0 && after.stdout.includes("I approve") && requests().length === 1,
+      `once a message has reached the hook, --selftest builds its request: ${after.stderr}`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir);
+    ok(hook("owner-approval-prompt.mjs", SID).status === 0 && promptHookSeen({ dirs: [dir], sessionId: SID }),
+      "the reply hook run alone leaves the marker too");
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
   }
 }
 

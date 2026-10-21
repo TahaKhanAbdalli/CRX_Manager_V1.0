@@ -549,6 +549,60 @@ export function ownerRequestDirs(sessionFolders) {
   return [...roots.values()].map((r) => path.join(r, ".claude", "session-state"));
 }
 
+// HOOKLESS SESSIONS (2026-10-20). In some desktop sessions Claude Code never runs
+// UserPromptSubmit hooks (session 980692b3: Mason replied "i approve" twice and
+// nothing heard it). The repo cannot make the hook run, so the reply hook leaves
+// this marker on every message it sees, and the request script refuses to ask
+// Mason for a reply in a session with no marker. An agent could write the file by
+// hand; like the reply itself (header above), that is deliberate forgery, not the
+// silent loss this catches.
+const SESSION_ID_RE = /^[0-9A-Za-z_-]{8,128}$/;
+export const promptHookSeenName = (sessionId) => `owner-approval-hook-seen-${sessionId}.json`;
+
+/**
+ * Called by the reply hook on every message: note that a message in this session
+ * reached it. Only in a folder that already has .claude/ (never creates project
+ * folders), and never throws: a missing marker only makes the script refuse.
+ */
+export function recordPromptHookSeen({ dirs, sessionId, now = Date.now() }) {
+  if (!SESSION_ID_RE.test(String(sessionId || ""))) return 0;
+  let wrote = 0;
+  for (const dir of dirs || []) {
+    try {
+      if (!existsSync(path.dirname(dir))) continue;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, promptHookSeenName(sessionId)), `${JSON.stringify({ sessionId, seenAt: new Date(now).toISOString() })}\n`, "utf8");
+      wrote++;
+    } catch { /* best effort */ }
+  }
+  return wrote;
+}
+
+/** Whether a message in this session has reached the reply hook (its marker is in one of `dirs`). */
+export function promptHookSeen({ dirs, sessionId }) {
+  if (!SESSION_ID_RE.test(String(sessionId || ""))) return false;
+  return (dirs || []).some((dir) => {
+    try { return JSON.parse(readFileSync(path.join(dir, promptHookSeenName(sessionId)), "utf8"))?.sessionId === sessionId; }
+    catch { return false; }
+  });
+}
+
+/** What the request script prints instead of a request when the marker is missing. */
+export function hooklessSessionRefusal({ checkout, sessionId }) {
+  return [
+    "owner-approve-migration: REFUSED — do NOT ask Mason to reply \"I approve\" in this conversation.",
+    `No message in this session (${sessionId}) has reached the approval hook: there is no ${promptHookSeenName(sessionId)}`,
+    `in ${path.join(checkout, ".claude", "session-state")}. Usually Claude Code is not running message hooks here (or the hook could not save`,
+    "its marker in that folder); either way his reply could be lost without a word.",
+    "Tell Mason in plain English, then the fix: open a Terminal tab in this same folder,",
+    `  ${checkout}`,
+    "start a fresh `claude` there, and run this script from that session; he replies in that terminal conversation.",
+    "(If this conversation started before this check existed, any new message into it records the marker; then run this again.",
+    "A desktop session in a worktree may run the hooks from the repository's MAIN checkout: if that checkout is behind main,",
+    "its older hook writes no marker, so fast-forward it to main, then any new message records the marker.)",
+  ].join("\n");
+}
+
 /**
  * Turn Mason's reply into an approval: the pending request with this code becomes
  * an approval file beside it, stamped with when he replied. Only the reply hook
