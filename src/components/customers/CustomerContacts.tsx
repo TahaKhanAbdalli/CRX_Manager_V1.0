@@ -3,6 +3,7 @@ import { Edit3, MessageCircle, Phone, Plus, Star, UserX } from 'lucide-react';
 import { sanitizeError, assertRpcResult, checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
+import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
 import type { CustomerContact, CustomerInteraction, InteractionOutcome, InteractionType, PreferredContactMethod } from '../../types';
 import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
@@ -191,21 +192,37 @@ export function CustomerInteractionsHistory({ customerId }: CustomerInteractions
   const [typeFilter, setTypeFilter] = useState<InteractionType | ''>('');
   const [outcomeFilter, setOutcomeFilter] = useState<InteractionOutcome | ''>('');
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadSeq = useRef(0);
   useEffect(() => { void (async () => {
-    setLoading(true);
-    const [{ data: interactionData, error }, { data: contactData }] = await Promise.all([
-      interactionsTable().select('*').eq('customer_id', customerId).order('occurred_at', { ascending: false }).limit(50),
-      contactsTable().select('*').eq('customer_id', customerId),
+    const seq = ++loadSeq.current;
+    setLoading(true); setLoadFailed(false);
+    // Every interaction, newest first, page by page: the old read kept only the
+    // latest 50, so the type and outcome filters never saw older ones (Goal 4 M64).
+    const [{ data: interactionData, error }, { data: contactData, error: contactError }] = await Promise.all([
+      fetchAllRows((from, to) => interactionsTable().select('*', { count: 'exact' }).eq('customer_id', customerId)
+        .order('occurred_at', { ascending: false }).order('id').range(from, to)),
+      fetchAllRows((from, to) => contactsTable().select('*', { count: 'exact' }).eq('customer_id', customerId).order('id').range(from, to)),
     ]);
-    if (error) toast('error', 'Failed to load interactions');
+    if (seq !== loadSeq.current) return;
+    if (error || contactError) {
+      toast('error', 'Failed to load interactions');
+      setInteractions([]); setContacts([]); setLoadFailed(true); setLoading(false);
+      return;
+    }
     const loadedInteractions = (interactionData || []) as CustomerInteraction[];
     setInteractions(loadedInteractions); setContacts((contactData || []) as CustomerContact[]);
     const ownerIds = [...new Set(loadedInteractions.map((item) => item.owner_user_id).filter((value): value is string => Boolean(value)))];
-    if (ownerIds.length) { const { data } = await supabase.from('profile_public_view').select('id, full_name').in('id', ownerIds); setNames(Object.fromEntries((data || []).filter((profile): profile is { id: string; full_name: string | null } => Boolean(profile.id)).map((profile) => [profile.id, profile.full_name || 'Unknown user']))); }
+    if (ownerIds.length) {
+      const { data } = await fetchAllRowsForIds(ownerIds, (idChunk, from, to) => supabase.from('profile_public_view')
+        .select('id, full_name', { count: 'exact' }).in('id', idChunk).order('id').range(from, to));
+      if (seq !== loadSeq.current) return;
+      setNames(Object.fromEntries(((data || []) as Array<{ id: string | null; full_name: string | null }>).filter((profile): profile is { id: string; full_name: string | null } => Boolean(profile.id)).map((profile) => [profile.id, profile.full_name || 'Unknown user'])));
+    }
     setLoading(false);
   })(); }, [customerId, toast]);
   // eslint-disable-next-line react-hooks/purity -- display-only "5m ago" label; refreshing on the next render is fine
   const relative = (value: string) => { const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000); if (minutes < 1) return 'just now'; if (minutes < 60) return `${minutes}m ago`; const hours = Math.round(minutes / 60); if (hours < 24) return `${hours}h ago`; return new Date(value).toLocaleDateString(); };
   const visible = interactions.filter((item) => (!typeFilter || item.interaction_type === typeFilter) && (!outcomeFilter || item.outcome === outcomeFilter));
-  return <Card padding={false}><div className="p-4 sm:p-5"><CardHeader title="Interaction" accent="History" /><div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><select aria-label="Filter interaction type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as InteractionType | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All types</option>{interactionTypes.map((item) => <option key={item} value={item}>{item}</option>)}</select><select aria-label="Filter interaction outcome" value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as InteractionOutcome | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All outcomes</option>{interactionOutcomes.map((item) => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</select></div></div>{loading ? <div className="px-4 pb-4 space-y-2">{[1, 2].map((item) => <div key={item} className="h-16 rounded-lg bg-gray-100 animate-pulse" />)}</div> : visible.length === 0 ? <p className="px-4 pb-5 text-sm text-secondary">No interactions match these filters.</p> : <div className="divide-y divide-gray-100">{visible.map((item) => { const contact = contacts.find((row) => row.id === item.contact_id); return <div key={item.id} className="p-4"><div className="flex gap-3"><MessageCircle className="mt-0.5 h-4 w-4 shrink-0 text-crx-green" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="font-medium capitalize text-nav-dark">{item.interaction_type}</span>{item.direction && <Badge variant="default">{item.direction}</Badge>}{item.outcome && <Badge variant="info">{item.outcome.replace(/_/g, ' ')}</Badge>}</div><p className="mt-1 text-sm text-secondary">{contact?.name || 'No contact selected'} · {names[item.owner_user_id || ''] || 'Unknown user'} · {relative(item.occurred_at)}</p>{item.summary && <p className="mt-2 whitespace-pre-wrap text-sm text-nav-dark">{item.summary}</p>}</div></div></div>; })}</div>}</Card>;
+  return <Card padding={false}><div className="p-4 sm:p-5"><CardHeader title="Interaction" accent="History" /><div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><select aria-label="Filter interaction type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as InteractionType | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All types</option>{interactionTypes.map((item) => <option key={item} value={item}>{item}</option>)}</select><select aria-label="Filter interaction outcome" value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as InteractionOutcome | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All outcomes</option>{interactionOutcomes.map((item) => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</select></div></div>{loading ? <div className="px-4 pb-4 space-y-2">{[1, 2].map((item) => <div key={item} className="h-16 rounded-lg bg-gray-100 animate-pulse" />)}</div> : loadFailed ? <p role="alert" className="px-4 pb-5 text-sm text-red-700">Interaction history could not be loaded. Refresh the page to try again.</p> : visible.length === 0 ? <p className="px-4 pb-5 text-sm text-secondary">No interactions match these filters.</p> : <div className="divide-y divide-gray-100">{visible.map((item) => { const contact = contacts.find((row) => row.id === item.contact_id); return <div key={item.id} className="p-4"><div className="flex gap-3"><MessageCircle className="mt-0.5 h-4 w-4 shrink-0 text-crx-green" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="font-medium capitalize text-nav-dark">{item.interaction_type}</span>{item.direction && <Badge variant="default">{item.direction}</Badge>}{item.outcome && <Badge variant="info">{item.outcome.replace(/_/g, ' ')}</Badge>}</div><p className="mt-1 text-sm text-secondary">{contact?.name || 'No contact selected'} · {names[item.owner_user_id || ''] || 'Unknown user'} · {relative(item.occurred_at)}</p>{item.summary && <p className="mt-2 whitespace-pre-wrap text-sm text-nav-dark">{item.summary}</p>}</div></div></div>; })}</div>}</Card>;
 }

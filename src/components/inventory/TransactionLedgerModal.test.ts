@@ -76,14 +76,17 @@ describe('TransactionLedgerModal', () => {
       delivery: null,
       requires_review: true,
     };
+    // The ledger reads page by page (fetchAllRows), so the fake answers .range with the count.
     const inventoryQuery = {
       select: vi.fn(),
       eq: vi.fn(),
       order: vi.fn(),
+      range: vi.fn(),
     };
     inventoryQuery.select.mockReturnValue(inventoryQuery);
     inventoryQuery.eq.mockReturnValue(inventoryQuery);
-    inventoryQuery.order.mockResolvedValue({ data: [transaction], error: null });
+    inventoryQuery.order.mockReturnValue(inventoryQuery);
+    inventoryQuery.range.mockResolvedValue({ data: [transaction], error: null, count: 1 });
     mockFrom.mockImplementation((table: string) => {
       if (table === 'inventory_transactions') return inventoryQuery;
       throw new Error(`Unexpected table: ${table}`);

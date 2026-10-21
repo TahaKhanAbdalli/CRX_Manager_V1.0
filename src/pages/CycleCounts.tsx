@@ -19,6 +19,7 @@ import {
   type CycleCountWriteIntent,
 } from '../lib/cycleCountWriteIntent';
 import { logActivity } from '../lib/activityLogger';
+import { fetchAllRows } from '../lib/pagedRead';
 import HelpTip from '../components/ui/HelpTip';
 import type { CycleCount, CycleCountItem } from '../types';
 
@@ -216,12 +217,15 @@ export default function CycleCounts() {
         if (countNumError) throw countNumError;
         const countNum = assertRpcResult<string>(countNumData, 'next_cycle_count_number');
 
-        // Fetch inventory items for the selected warehouse
-        const { data: invData, error: invError } = await supabase
+        // Fetch inventory items for the selected warehouse: every one, page by page,
+        // since each becomes a count line (one request stopped at the server's row cap).
+        const { data: invData, error: invError } = await fetchAllRows((from, to) => supabase
           .from('inventory')
-          .select('id, product_id, quantity_available, product:products(product_name)')
+          .select('id, product_id, quantity_available, product:products(product_name)', { count: 'exact' })
           .eq('location', newWarehouse)
-          .order('product_id');
+          .order('product_id')
+          .order('id')
+          .range(from, to));
 
         if (invError) throw invError;
         const invItems = (invData || []) as unknown as InventoryDbRow[];
@@ -355,11 +359,14 @@ export default function CycleCounts() {
       );
     }
 
-    const { data, error } = await supabase
+    // Every line of the count, page by page (one request stops at the server's row cap).
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('cycle_count_items')
-      .select('*, product:products(product_name)')
+      .select('*, product:products(product_name)', { count: 'exact' })
       .eq('cycle_count_id', count.id)
-      .order('created_at');
+      .order('created_at')
+      .order('id')
+      .range(from, to));
 
     // Everything below writes SHARED detail state — the rows on screen, the loading
     // flag, and an error message about them. A superseded call must touch none of
@@ -390,11 +397,14 @@ export default function CycleCounts() {
     cycleCountId: string,
     isCurrentSession: () => boolean
   ): Promise<CountItemRow[] | null> => {
-    const { data, error } = await supabase
+    // Completion checks these lines, so every one is read (page by page).
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('cycle_count_items')
-      .select('*, product:products(product_name)')
+      .select('*, product:products(product_name)', { count: 'exact' })
       .eq('cycle_count_id', cycleCountId)
-      .order('created_at');
+      .order('created_at')
+      .order('id')
+      .range(from, to));
     if (!isCurrentSession()) return null;
     if (error) {
       Sentry.captureException(error);

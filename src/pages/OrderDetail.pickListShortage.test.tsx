@@ -51,7 +51,9 @@ function buildChain(list: unknown[], single: unknown): Record<string, unknown> {
   };
   self.single = () => settle(single);
   self.maybeSingle = () => settle(single);
-  const promise = Promise.resolve({ data: list, error: null });
+  // The count tells a paged read (fetchAllRows) that this one reply holds every row;
+  // without it a fake that ignores `.range` is read again and again.
+  const promise = Promise.resolve({ data: list, error: null, count: Array.isArray(list) ? list.length : null });
   self.then = promise.then.bind(promise);
   self.catch = promise.catch.bind(promise);
   self.finally = promise.finally.bind(promise);

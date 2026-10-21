@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownToLine, ArrowUpFromLine, Truck, RefreshCw, ArrowRightLeft,
   Pencil, Lock, Unlock, XCircle, Undo2, FlaskConical,
 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
+import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
 
 interface Transaction {
   id: string;
@@ -119,31 +120,42 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [position, setPosition] = useState<InventoryPositionSummary | null>(null);
+  const loadSeq = useRef(0);
 
   useEffect(() => {
     if (!open || !productId) return;
     setLoading(true);
     setError('');
     setPosition(null);
+    // Clear the last product's rows so a failed read never shows them under this product.
+    setTransactions([]);
 
     // PR-07 follow-up: dropped performer FK embed; resolved via profile_public_view.
+    // Only the newest load (the product last opened) may fill the modal.
+    const seq = ++loadSeq.current;
     (async () => {
-      const { data, error: err } = await supabase
+      // Every transaction, page by page: one request stops at the server's row
+      // cap, which would cut a busy product's ledger short (Goal 4 M23).
+      const { data, error: err } = await fetchAllRows((from, to) => supabase
         .from('inventory_transactions')
         .select(`
           *,
           order:orders!inventory_transactions_order_id_fkey(order_number, customer:customers(farm_name)),
           purchase_order:purchase_orders!inventory_transactions_purchase_order_id_fkey(po_number),
           delivery:deliveries!inventory_transactions_delivery_id_fkey(delivery_number)
-        `)
+        `, { count: 'exact' })
         .eq('product_id', productId)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .order('id')
+        .range(from, to));
+      if (seq !== loadSeq.current) return;
       if (err) {
         setError(sanitizeError(err));
         setLoading(false);
         return;
       }
       const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
+      if (seq !== loadSeq.current) return;
       if (positionError) {
         setError(sanitizeError(positionError));
         setLoading(false);
@@ -158,11 +170,15 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
       )];
       const performerMap: Record<string, { full_name: string }> = {};
       if (performerIds.length > 0) {
-        const { data: performers } = await supabase
+        // Names only label rows, so a failed lookup leaves them blank rather than failing the ledger.
+        const { data: performers } = await fetchAllRowsForIds(performerIds, (idChunk, from, to) => supabase
           .from('profile_public_view')
-          .select('id, full_name')
-          .in('id', performerIds);
-        (performers || []).forEach((p: { id: string | null; full_name: string | null }) => {
+          .select('id, full_name', { count: 'exact' })
+          .in('id', idChunk)
+          .order('id')
+          .range(from, to));
+        if (seq !== loadSeq.current) return;
+        ((performers || []) as Array<{ id: string | null; full_name: string | null }>).forEach((p) => {
           if (p.id) performerMap[p.id] = { full_name: p.full_name ?? '' };
         });
       }
@@ -199,7 +215,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         <p className="text-sm text-secondary py-8 text-center">No transactions found for this product.</p>
       )}
 
-      {!loading && transactions.length > 0 && (
+      {!loading && !error && transactions.length > 0 && (
         <>
           <div className="max-h-[65vh] overflow-y-auto border rounded-lg">
             <table className="w-full text-sm">

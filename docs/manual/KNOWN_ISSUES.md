@@ -1003,6 +1003,28 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
       their customer, field and applicator pickers (`LogbookReport.tsx`);
     - Notifications: the page lists every notification, and the bell counts unread notifications in the
       database (it counted only the unread among the 20 it loads); a count that cannot be read shows "!".
+  - **Fixed 2026-10-21 (Goal 4, part 2b — lookups and per-record reads):** these also read every row, and
+    a failed read shows an error or stops the action instead of a short result:
+    - a customer's statement (`src/lib/customerStatement.ts`, used by AR Aging and Customer Detail; its
+      rows have no id, so each read is checked with the running balance and the server's last row);
+    - Customer Detail's recent-transactions card (now says "the latest 50 of N"), the interaction
+      history (was the newest 50, so its filters missed older ones) and the open prepay credits;
+    - an order's field allocations, field-billing defaults, pick-list stock and pick-list customer
+      addresses (`OrderDetail.tsx`), and the
+      quantities other deliveries already claim when a scheduled delivery is edited (`DeliveryDetail.tsx`);
+    - a product's inventory ledger, a new cycle count's stock and a count's lines;
+    - the Office Cockpit's lapsed crop-program holds with their quotes and products;
+    - the Jobs list's applicator and customer filters (their dispatch and share reads ignored errors), the
+      Dispatch Board and Field View map boundaries, the license check on a job, the return form's
+      "pick an order", and the credit-limit warning's open-invoice balance;
+    - document scanning (`src/lib/documentOCR.ts`): a PDF over 20 pages is refused with a plain message
+      ("split it into files of 20 pages or fewer"); it used to scan only the first 20 pages and drop the
+      rest without telling anyone.
+    - Open (deferred to part 4, server-side paging): the Jobs list's applicator and customer filters put
+      every matching job id into one `.or('id.in.(...)')` request. Around 1,000 matching jobs that request
+      address grows past about 37 KB and could be refused by the server or a proxy (a failed load then
+      shows "Failed to load jobs", never a short list). On 2026-10-21 there were 2 dispatches and 5 field
+      shares, so it cannot trigger yet.
   - Still capped (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`; the pages
     fixed above are removed):
     - 1000: Customers (shows a banner).
@@ -1018,8 +1040,8 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
   - Complete current inventory (2026-10-20, after part 1): `docs/audits/2026-10-20-goal4-row-limit-inventory-refresh.md`.
-    Part 2a above fixed its Field Invoices, AR/AP/prepay, integrity, compliance and Notifications items; part 2b
-    (the lookups and per-record reads, and the 20-page document-scan limit) is next.
+    Parts 2a and 2b above fixed its part 2 items; next is part 3 (pickers as search boxes), then part 4
+    (server-side paging, including H36's dashboard queue counts).
   - Jobs and Customers show a banner when capped.
   - Paging is by position, so records changing during a long load are handled four ways:
     - repeats are dropped by `id`, and each page re-reads a 50-row overlap;

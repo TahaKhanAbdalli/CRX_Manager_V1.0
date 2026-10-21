@@ -17,17 +17,20 @@ const CALL_PATTERN = /\bfetchAllRows(?:ForIds)?\s*(?:<[^()]*?>)?\s*\(/g;
 
 type CallSite = { file: string; line: number; callback: string };
 
-// Shared readers outside src/pages that page with fetchAllRows. The integrity
-// checks recompute ledgers from these reads, so a short read is a false result.
-const LIB_FILES = ['reconciliation.ts'];
+// Shared readers outside src/pages and src/components that page with
+// fetchAllRows (paths under src). The integrity checks recompute ledgers from
+// reconciliation's reads, so a short read is a false result.
+const SHARED_FILES = ['lib/reconciliation.ts', 'lib/customerStatement.ts', 'hooks/useGuardrails.ts'];
 
 // Components (under src/components) that page with fetchAllRows: Goal 4 part 2's
-// money, check and compliance panels. A file listed here must still exist.
+// money, check, compliance and lookup panels. A file listed here must still exist.
 const COMPONENT_FILES = [
+  'customers/CustomerContacts.tsx',
   'field-invoices/FieldInvoicesListPanel.tsx',
   'field-invoices/FieldInvoicesPostedPanel.tsx',
   'field-invoices/FieldInvoicesUnpostedPanel.tsx',
   'integrity/IntegrityCleanupPanel.tsx',
+  'inventory/TransactionLedgerModal.tsx',
   'invoices/FinanceChargePreviewModal.tsx',
   'prepay/PrepaymentManagerPanel.tsx',
   'prepay/PrepayWorkspacePanel.tsx',
@@ -40,7 +43,7 @@ function findCallSites(): CallSite[] {
   const pageFiles = readdirSync(PAGES_DIR).sort()
     .filter((file) => file.endsWith('.tsx') && !file.endsWith('.test.tsx') && !(file in EXEMPT))
     .map((file) => ({ file: `src/pages/${file}`, path: join(PAGES_DIR, file) }));
-  const libFiles = LIB_FILES.map((file) => ({ file: `src/lib/${file}`, path: join(__dirname, file) }));
+  const libFiles = SHARED_FILES.map((file) => ({ file: `src/${file}`, path: join(__dirname, '..', file) }));
   const componentFiles = COMPONENT_FILES.map((file) => ({ file: `src/components/${file}`, path: join(COMPONENTS_DIR, file) }));
   for (const { file, path } of [...pageFiles, ...libFiles, ...componentFiles]) {
     // Comments are blanked (same length, newlines kept, so lines still match)
@@ -69,7 +72,10 @@ describe('paged list reads request the exact row count', () => {
   it('finds the paged reads (a pattern that matches nothing must fail)', () => {
     expect(sites.length).toBeGreaterThanOrEqual(20);
     expect(sites.filter((site) => site.file === 'src/lib/reconciliation.ts').length).toBeGreaterThanOrEqual(14);
-    // Every listed component is actually scanned and pages at least once.
+    // Every listed shared file and component is actually scanned and pages at least once.
+    for (const file of SHARED_FILES) {
+      expect(sites.some((site) => site.file === `src/${file}`), file).toBe(true);
+    }
     for (const file of COMPONENT_FILES) {
       expect(sites.some((site) => site.file === `src/components/${file}`), file).toBe(true);
     }

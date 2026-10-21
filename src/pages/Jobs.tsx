@@ -14,6 +14,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { JOB_COLUMNS } from '../lib/costFields';
+import { fetchAllRows } from '../lib/pagedRead';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -466,11 +467,23 @@ export default function Jobs() {
     // SERVER-side — same pattern as the customer-share filter below, so the
     // newest-N fetch cap applies to the correct (union) match set.
     if (applied.applicatorIds.length > 0) {
-      const { data: dispJobs } = await supabase
+      // Every matching dispatch, page by page; a failed read stops the load
+      // rather than quietly dropping dispatched jobs (Goal 4 N4).
+      const { data: dispJobs, error: dispError } = await fetchAllRows((from, to) => supabase
         .from('job_location_dispatches')
-        .select('job_id')
+        .select('id, job_id', { count: 'exact' })
         .in('applicator_id', applied.applicatorIds)
-        .eq('dispatch_status', 'dispatched');
+        .eq('dispatch_status', 'dispatched')
+        .order('id')
+        .range(from, to));
+      if (dispError) {
+        Sentry.captureException(dispError, { tags: { source: 'fetch', action: 'load_jobs_applicator_filter' } });
+        // Clear the list: the last one loaded does not match the filters now applied.
+        setJobs([]);
+        toast('error', 'Failed to load jobs');
+        setLoading(false);
+        return;
+      }
       const dispJobIds = [...new Set(((dispJobs || []) as { job_id: string }[]).map((d) => d.job_id))];
       const appList = applied.applicatorIds.join(',');
       query = dispJobIds.length > 0
@@ -487,10 +500,21 @@ export default function Jobs() {
     // the selected customers — so an older job billed to a share customer isn't
     // truncated away (Codex). Pull the share job_ids first, then OR them in.
     if (applied.customerIds.length > 0) {
-      const { data: shareJobs } = await supabase
+      // Every matching share, page by page; a failed read stops the load (Goal 4 N5).
+      const { data: shareJobs, error: shareError } = await fetchAllRows((from, to) => supabase
         .from('job_field_shares')
-        .select('job_id')
-        .in('customer_id', applied.customerIds);
+        .select('id, job_id', { count: 'exact' })
+        .in('customer_id', applied.customerIds)
+        .order('id')
+        .range(from, to));
+      if (shareError) {
+        Sentry.captureException(shareError, { tags: { source: 'fetch', action: 'load_jobs_customer_filter' } });
+        // Clear the list: the last one loaded does not match the filters now applied.
+        setJobs([]);
+        toast('error', 'Failed to load jobs');
+        setLoading(false);
+        return;
+      }
       const shareJobIds = [...new Set(((shareJobs || []) as { job_id: string }[]).map((s) => s.job_id))];
       const custList = applied.customerIds.join(',');
       query = shareJobIds.length > 0
@@ -502,6 +526,7 @@ export default function Jobs() {
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_jobs' } });
+      setJobs([]);
       toast('error', 'Failed to load jobs');
       setLoading(false);
       return;

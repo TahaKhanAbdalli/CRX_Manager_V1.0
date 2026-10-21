@@ -21,6 +21,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { fetchAllRows } from '../lib/pagedRead';
+import { fetchCustomerStatement } from '../lib/customerStatement';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
@@ -74,6 +75,8 @@ export default function ARaging() {
   const [agingFailed, setAgingFailed] = useState(false);
   // Only the newest aging load may set state; an older date's load finishing late is ignored.
   const agingLoadSeq = useRef(0);
+  // Only the newest statement load (the customer last picked) may set state.
+  const statementLoadSeq = useRef(0);
   // Chicago's date, the same day the Accounts Receivable summary strip asks for,
   // so the strip and this table agree whatever the viewer's own clock says.
   const [asOfDate, setAsOfDate] = useState(() => todayInBusinessTz());
@@ -167,22 +170,23 @@ export default function ARaging() {
       toast('error', 'Select a customer first');
       return;
     }
+    const seq = ++statementLoadSeq.current;
     setLoading(true);
     const cust = customers.find((c) => c.id === selectedCustomer);
     setStmtCustomerName(cust?.farm_name || 'Customer');
 
-    const { data, error } = await supabase.rpc('get_customer_statement', {
-      p_customer_id: selectedCustomer,
-      p_start_date: stmtStart,
-      p_end_date: stmtEnd,
-    });
+    // Every row, page by page (src/lib/customerStatement.ts).
+    const { data, error } = await fetchCustomerStatement(selectedCustomer, stmtStart, stmtEnd);
+    if (seq !== statementLoadSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load customer statement');
+      // Never leave the previous customer's statement under this one's name.
+      setStatementData([]);
       setLoading(false);
       return;
     }
-    setStatementData(assertRpcResult<CustomerStatementRow[]>(data, 'get_customer_statement'));
+    setStatementData(data ?? []);
     setTab('statement');
     setLoading(false);
   };
@@ -404,20 +408,21 @@ export default function ARaging() {
   ];
 
   const fetchStatementForCustomer = async (custId: string, custName: string) => {
+    const seq = ++statementLoadSeq.current;
     setLoading(true);
     setStmtCustomerName(custName);
     setSelectedCustomer(custId);
-    const { data, error } = await supabase.rpc('get_customer_statement', {
-      p_customer_id: custId,
-      p_start_date: stmtStart,
-      p_end_date: stmtEnd,
-    });
+    // Every row, page by page (src/lib/customerStatement.ts).
+    const { data, error } = await fetchCustomerStatement(custId, stmtStart, stmtEnd);
+    if (seq !== statementLoadSeq.current) return;
     if (error) {
       toast('error', 'Failed to load statement');
+      // Never leave the previous customer's statement under this one's name.
+      setStatementData([]);
       setLoading(false);
       return;
     }
-    setStatementData(assertRpcResult<CustomerStatementRow[]>(data, 'get_customer_statement'));
+    setStatementData(data ?? []);
     setTab('statement');
     setLoading(false);
   };

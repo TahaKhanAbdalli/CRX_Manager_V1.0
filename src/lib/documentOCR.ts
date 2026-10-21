@@ -8,7 +8,6 @@
  *   if (result.success) { ... result.parsed_data ... }
  */
 
-import { Sentry } from './sentry';
 import * as pdfjsLib from 'pdfjs-dist';
 // Use Vite's asset URL import to bundle the worker locally (avoids CSP violation from CDN)
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -49,6 +48,17 @@ const RENDER_SCALE = 2; // 2x resolution for OCR quality
 const JPEG_QUALITY = 0.85;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
 
+/** Plain on-screen message for a PDF longer than the scanner reads. */
+export function tooManyPagesMessage(pageCount: number): string {
+  return `This PDF has ${pageCount} pages. The scanner reads up to ${MAX_PAGES} pages at a time, so nothing was imported. Split it into files of ${MAX_PAGES} pages or fewer and upload each one.`;
+}
+
+class TooManyPagesError extends Error {
+  constructor(readonly pageCount: number) {
+    super(tooManyPagesMessage(pageCount));
+  }
+}
+
 // ─── PDF → Image Conversion ─────────────────────────────────────────────────
 
 /**
@@ -58,7 +68,11 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
 async function pdfToImages(file: File): Promise<PageImage[]> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const numPages = Math.min(pdf.numPages, MAX_PAGES);
+  // A longer PDF is refused before any page is read: it used to be cut to its
+  // first 20 pages with only a Sentry warning, so the import silently dropped
+  // every line on the later pages (Goal 4).
+  if (pdf.numPages > MAX_PAGES) throw new TooManyPagesError(pdf.numPages);
+  const numPages = pdf.numPages;
   const pages: PageImage[] = [];
 
   for (let i = 1; i <= numPages; i++) {
@@ -83,10 +97,6 @@ async function pdfToImages(file: File): Promise<PageImage[]> {
     // Clean up
     canvas.width = 0;
     canvas.height = 0;
-  }
-
-  if (pdf.numPages > MAX_PAGES) {
-    Sentry.captureException(new Error(`PDF has ${pdf.numPages} pages, only processing first ${MAX_PAGES}`), { level: 'warning' });
   }
 
   return pages;
@@ -212,7 +222,7 @@ export async function processDocumentWithOCR(
       parsed_data: null,
       confidence: 0,
       processing_time_ms: Date.now() - startTime,
-      error: `OCR processing error: ${(err as Error).message}`,
+      error: err instanceof TooManyPagesError ? err.message : `OCR processing error: ${(err as Error).message}`,
     };
   }
 }

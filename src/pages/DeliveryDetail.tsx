@@ -36,6 +36,7 @@ import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { activeInvoiceCoversDelivery } from '../lib/deliveryInvoiceCoverage';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../lib/deliverySplitBilling';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
@@ -587,21 +588,39 @@ export default function DeliveryDetail() {
 
     if (isScheduled) {
       // Step 1: Find OTHER active delivery IDs for this order
-      const { data: otherDeliveries } = await supabase
+      // Both reads go page by page: one request stopped at the server's row cap
+      // and understated what other deliveries already claim (Goal 4, DeliveryDetail
+      // scheduled quantities). A failed read stops editing rather than allowing
+      // a quantity the order cannot cover.
+      const { data: otherDeliveries, error: otherDeliveriesError } = await fetchAllRows((from, to) => supabase
         .from('deliveries')
-        .select('id')
+        .select('id', { count: 'exact' })
         .eq('order_id', delivery.order_id)
         .in('status', ['scheduled', 'in_progress'])
-        .neq('id', delivery.id);
+        .neq('id', delivery.id)
+        .order('id')
+        .range(from, to));
+      if (otherDeliveriesError) {
+        Sentry.captureException(otherDeliveriesError, { extra: { context: 'load_delivery_edit_other_deliveries', deliveryId: delivery.id } });
+        toast('error', 'Failed to load other deliveries for this order');
+        return;
+      }
 
-      const otherDelIds = (otherDeliveries || []).map((d) => d.id);
+      const otherDelIds = ((otherDeliveries || []) as Array<{ id: string }>).map((d) => d.id);
 
       // Step 2: Fetch delivery_items on those other deliveries
       if (otherDelIds.length > 0) {
-        const { data: otherDelItems } = await supabase
+        const { data: otherDelItems, error: otherDelItemsError } = await fetchAllRowsForIds(otherDelIds, (idChunk, from, to) => supabase
           .from('delivery_items')
-          .select('order_item_id, quantity')
-          .in('delivery_id', otherDelIds);
+          .select('id, order_item_id, quantity', { count: 'exact' })
+          .in('delivery_id', idChunk)
+          .order('id')
+          .range(from, to));
+        if (otherDelItemsError) {
+          Sentry.captureException(otherDelItemsError, { extra: { context: 'load_delivery_edit_other_delivery_items', deliveryId: delivery.id } });
+          toast('error', 'Failed to load other deliveries for this order');
+          return;
+        }
 
         for (const row of (otherDelItems || []) as Array<{ order_item_id: string; quantity: number }>) {
           otherScheduledMap[row.order_item_id] = (otherScheduledMap[row.order_item_id] || 0) + Number(row.quantity);

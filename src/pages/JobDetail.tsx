@@ -81,6 +81,7 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
+import { fetchAllRows } from '../lib/pagedRead';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification, UnitConversion } from '../types';
 import type { Json } from '../types/supabase';
 import type { ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
@@ -1698,10 +1699,18 @@ export default function JobDetail() {
     setCropPrograms(parseCropPrograms((cpResult.data as { setting_value?: string } | null)?.setting_value ?? null));
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
-    const licResult = await supabase
+    // Every license row, page by page: one request stopped at the server's row
+    // cap, and a license past it would have read as missing (Goal 4 N11).
+    const licResult = await fetchAllRows((from, to) => supabase
       .from('applicator_licenses')
-      .select('profile_id, expiry_date, is_active')
-      .not('profile_id', 'is', null);
+      .select('id, profile_id, expiry_date, is_active', { count: 'exact' })
+      .not('profile_id', 'is', null)
+      .order('id')
+      .range(from, to));
+    if (licResult.error) {
+      Sentry.captureException(licResult.error, { tags: { source: 'fetch', action: 'job_license_gate' } });
+      toast('error', 'Applicator licenses could not be loaded, so license checks may show a license as missing. Refresh to try again.');
+    }
     const byProfile: Record<string, { expiry_date: string; is_active: boolean }[]> = {};
     ((licResult.data || []) as { profile_id: string; expiry_date: string; is_active: boolean }[]).forEach((l) => {
       (byProfile[l.profile_id] ||= []).push({ expiry_date: l.expiry_date, is_active: l.is_active });

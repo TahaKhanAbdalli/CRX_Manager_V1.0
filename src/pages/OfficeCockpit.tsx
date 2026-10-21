@@ -68,6 +68,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -632,14 +633,17 @@ export default function OfficeCockpit() {
 
       // Already-lapsed planned holds are intentionally not returned by the
       // expiring-holds RPC, so query them separately.
-      supabase
+      // Every lapsed hold, page by page (one request stopped at the server's row cap, Goal 4 M54).
+      fetchAllRows((from, to) => supabase
         .from('inventory_holds')
-        .select('id, product_id, quantity, expires_at, source_id')
+        .select('id, product_id, quantity, expires_at, source_id', { count: 'exact' })
         .eq('hold_type', 'crop_program')
         .eq('is_active', true)
         // Include today to close the live RPC's strict `expires_at > CURRENT_DATE` gap; it is unchangeable here.
         .lte('expires_at', today)
-        .order('expires_at', { ascending: true }),
+        .order('expires_at', { ascending: true })
+        .order('id')
+        .range(from, to)),
     ]);
 
     // Kept OUT of Promise.all: the assertRpcResult coverage checker only
@@ -662,10 +666,12 @@ export default function OfficeCockpit() {
     if (lapsedSourceIds.length > 0 || lapsedProductIds.length > 0) {
       const [lapsedQuotesRes, lapsedProductsRes] = await Promise.all([
         lapsedSourceIds.length > 0
-          ? supabase.from('quotes').select('id, quote_number').in('id', lapsedSourceIds)
+          ? fetchAllRowsForIds(lapsedSourceIds, (idChunk, from, to) => supabase
+            .from('quotes').select('id, quote_number', { count: 'exact' }).in('id', idChunk).order('id').range(from, to))
           : Promise.resolve({ data: [], error: null }),
         lapsedProductIds.length > 0
-          ? supabase.from('products').select('id, product_name').in('id', lapsedProductIds)
+          ? fetchAllRowsForIds(lapsedProductIds, (idChunk, from, to) => supabase
+            .from('products').select('id, product_name', { count: 'exact' }).in('id', idChunk).order('id').range(from, to))
           : Promise.resolve({ data: [], error: null }),
       ]);
       lapsedQuotes = (lapsedQuotesRes.data || []) as RawQuoteNumber[];

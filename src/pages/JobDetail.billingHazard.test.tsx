@@ -34,7 +34,9 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
     'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
     'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
   for (const m of methods) self[m] = method;
-  const promise = Promise.resolve(result);
+  // The count tells a paged read (fetchAllRows) that this one reply holds every row;
+  // without it a fake that ignores `.range` is read again and again.
+  const promise = Promise.resolve({ ...result, count: Array.isArray(result.data) ? result.data.length : null });
   self.then = promise.then.bind(promise);
   self.catch = promise.catch.bind(promise);
   self.finally = promise.finally.bind(promise);

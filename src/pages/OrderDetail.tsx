@@ -18,6 +18,7 @@ import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, describePostInvoiceBlock } from '../lib/db';
 import { Sentry } from '../lib/sentry';
@@ -303,17 +304,31 @@ export default function OrderDetail() {
 
       // Field/acre split: existing per-line allocations for this order, the active fields to pick
       // from (with their owner splits), and a customer-id → name map for the live preview.
-      const { data: allocData } = await supabase
+      // Every read below is paged: one request stops at the server's row cap, which
+      // would drop fields, owner splits or names from the split editor (Goal 4 M36).
+      const { data: allocData, error: allocError } = await fetchAllRows((from, to) => supabase
         .from('order_item_field_allocations')
-        .select('id, order_item_id, field_id, acres, created_at, order_items!inner(order_id)')
-        .eq('order_items.order_id', id!);
+        .select('id, order_item_id, field_id, acres, created_at, order_items!inner(order_id)', { count: 'exact' })
+        .eq('order_items.order_id', id!)
+        .order('id')
+        .range(from, to));
       if (isStale()) return;
       setAllocations(((allocData || []) as unknown as (OrderItemFieldAllocation & { order_items?: unknown })[])
         .map(({ order_items: _oi, ...a }) => a as OrderItemFieldAllocation));
 
       const [fieldsRes, fbdRes] = await Promise.all([
-        supabase.from('fields').select('id, field_name, total_acres, customer_id').eq('is_active', true).order('field_name'),
-        supabase.from('field_billing_defaults').select('field_id, customer_id, split_pct'),
+        fetchAllRows<{ id: string; field_name: string; total_acres: number | null; customer_id: string }>((from, to) => supabase
+          .from('fields')
+          .select('id, field_name, total_acres, customer_id', { count: 'exact' })
+          .eq('is_active', true)
+          .order('field_name')
+          .order('id')
+          .range(from, to)),
+        fetchAllRows<{ id: string; field_id: string; customer_id: string; split_pct: number }>((from, to) => supabase
+          .from('field_billing_defaults')
+          .select('id, field_id, customer_id, split_pct', { count: 'exact' })
+          .order('id')
+          .range(from, to)),
       ]);
       if (isStale()) return;
       // Names for just the customers the preview can show (this order's customer + field owners).
@@ -324,9 +339,15 @@ export default function OrderDetail() {
         ...(fieldsRes.data || []).map((f) => f.customer_id),
         ...(fbdRes.data || []).map((r) => r.customer_id),
       ].filter(Boolean))];
-      const custRes = await supabase.from('customers').select('id, farm_name').in('id', nameIds);
+      // Sent in chunks, so a long id list never overflows the request URL either.
+      const custRes = await fetchAllRowsForIds(nameIds, (idChunk, from, to) => supabase
+        .from('customers')
+        .select('id, farm_name', { count: 'exact' })
+        .in('id', idChunk)
+        .order('id')
+        .range(from, to));
       if (isStale()) return;
-      const allocLoadErrors = [fieldsRes.error, fbdRes.error, custRes.error].filter((e) => e != null);
+      const allocLoadErrors = [allocError, fieldsRes.error, fbdRes.error, custRes.error].filter((e) => e != null);
       for (const err of allocLoadErrors) {
         Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_field_split_lookups_for_order' } });
       }
@@ -438,11 +459,26 @@ export default function OrderDetail() {
     if (!order || !customer) return;
     setPrintingPickList(true);
     try {
-      // Fetch customer addresses + inventory in parallel
+      // Fetch customer addresses + inventory in parallel. Every row is read, page by
+      // page: one request stops at the server's row cap, and a product past it would
+      // print as out of stock (Goal 4 M62).
       const [addrRes, invRes] = await Promise.all([
-        supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
-        supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
+        fetchAllRows((from, to) => supabase
+          .from('customer_addresses')
+          .select('*', { count: 'exact' })
+          .eq('customer_id', customer.id)
+          .order('is_default', { ascending: false })
+          .order('id')
+          .range(from, to)),
+        fetchAllRows<{ id: string; product_id: string; quantity_available: number; quantity_prebooked: number }>((from, to) => supabase
+          .from('inventory')
+          .select('id, product_id, quantity_available, quantity_prebooked', { count: 'exact' })
+          .order('id')
+          .range(from, to)),
       ]);
+      // A pick list printed from part of the stock would flag false shortages.
+      if (invRes.error) throw new Error(`Stock could not be loaded: ${invRes.error.message}`);
+      if (addrRes.error) throw new Error(`Customer addresses could not be loaded: ${addrRes.error.message}`);
 
       // Build inventory map
       const invMap: Record<string, { available: number; prebooked: number }> = {};
@@ -960,6 +996,25 @@ export default function OrderDetail() {
     setInvoiceWarnOpen(false);
     await runCriticalAction({
       action: async () => {
+        // The billing path must follow the order's real field split. A failed or stale
+        // allocation read leaves `allocations` empty or out of date, and an allocated order
+        // sent down the single-invoice path bills the order's customer for every field
+        // owner's share (create_invoice_from_order does not check allocations itself).
+        if (allocLoadFailed) {
+          throw new Error('The field split details failed to load. Refresh the page before creating the invoice.');
+        }
+        const allocCheck = await supabase
+          .from('order_item_field_allocations')
+          .select('id, order_items!inner(order_id)', { count: 'exact' })
+          .eq('order_items.order_id', id)
+          .order('id')
+          .range(0, 0);
+        if (allocCheck.error) {
+          throw new Error(`The order's field split could not be checked: ${allocCheck.error.message}`);
+        }
+        if (typeof allocCheck.count !== 'number' || (allocCheck.count > 0) !== hasAllocations) {
+          throw new Error("The order's field split changed since this page loaded. Refresh the page before creating the invoice.");
+        }
         // Field/acre split: when the order's lines have field allocations, generate one draft
         // invoice per field-owner (billed by acres) instead of a single order-level invoice. The
         // RPC itself falls back to a single invoice when there are no allocations, but we branch
@@ -2014,7 +2069,8 @@ export default function OrderDetail() {
                     <div className="text-sm font-medium text-nav-dark">{it.product_name || 'Line'}</div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-secondary">{fmt(it.total_price)}</span>
-                      {canEdit && !isOpen && (
+                      {/* Not while the split details failed to load: the line's existing fields are unknown. */}
+                      {canEdit && !isOpen && !allocLoadFailed && (
                         <Button variant="ghost" size="sm" icon={<Plus className="w-4 h-4" />} showChevron={false}
                           onClick={() => { setAllocEditorItemId(it.id); setNewAllocFieldId(''); setNewAllocAcres(''); }}>
                           Field

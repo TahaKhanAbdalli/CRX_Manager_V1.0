@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../lib/db';
+import { fetchAllRows } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -41,11 +42,17 @@ export function useCreditLimitCheck() {
       }
 
       // Get current unpaid invoice balance
-      const { data: invoices } = await supabase
+      // Every open invoice, page by page: one request stopped at the server's
+      // row cap and understated the balance (Goal 4 L17). A failed read throws
+      // into the fail-closed branch below instead of reading as a zero balance.
+      const { data: invoices, error: invoicesError } = await fetchAllRows((from, to) => supabase
         .from('invoices')
-        .select('balance_cents')
+        .select('id, balance_cents', { count: 'exact' })
         .eq('customer_id', customerId)
-        .in('status', ['draft', 'unposted', 'posted', 'overdue']);
+        .in('status', ['draft', 'unposted', 'posted', 'overdue'])
+        .order('id')
+        .range(from, to));
+      if (invoicesError) throw new Error(invoicesError.message);
 
       const currentBalance = (invoices || []).reduce(
         (sum, inv) => sum + (inv.balance_cents || 0),

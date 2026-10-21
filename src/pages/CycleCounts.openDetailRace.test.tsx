@@ -81,7 +81,8 @@ vi.mock('../lib/db', async (importOriginal) => {
             const id = scopedId;
             return (resolve: (v: unknown) => void) => {
               const pending = new Promise((r) => { heldItemQueries[id] = r; });
-              return pending.then(() => resolve({ data: itemsFor[id], error: null }));
+              // The count tells the paged read (fetchAllRows) that one page holds every row.
+              return pending.then(() => resolve({ data: itemsFor[id], error: null, count: itemsFor[id].length }));
             };
           }
           return (resolve: (v: unknown) => void) => result().then(resolve);

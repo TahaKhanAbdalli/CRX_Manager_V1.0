@@ -27,6 +27,10 @@ import { Sentry } from '../lib/sentry';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchCustomerStatement } from '../lib/customerStatement';
+
+// The financials tab's Recent Transactions card shows this many of the latest statement rows.
+const RECENT_TRANSACTIONS_SHOWN = 50;
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -658,13 +662,21 @@ export default function CustomerDetail() {
         if (isStale()) return;
         setAging(myAging);
 
-        const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id!, p_start_date: ninetyDaysAgo, p_end_date: today });
-        if (txnError) throw txnError;
-        const txnRows = assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement');
+        // Every statement row, page by page (src/lib/customerStatement.ts); the
+        // card below shows the most recent of them.
+        const { data: txnRows, error: txnError } = await fetchCustomerStatement(id!, ninetyDaysAgo, today);
+        if (txnError) throw new Error(txnError.message);
         if (isStale()) return;
-        setTransactions(txnRows);
+        setTransactions((txnRows ?? []) as TxnRow[]);
 
-        const { data: prepayData, error: prepayError } = await supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0);
+        // Every open prepay credit, page by page, so the prepay total is never short.
+        const { data: prepayData, error: prepayError } = await fetchAllRows((from, to) => supabase
+          .from('prepay_credits')
+          .select('*', { count: 'exact' })
+          .eq('customer_id', id!)
+          .gt('balance_cents', 0)
+          .order('id')
+          .range(from, to));
         if (prepayError) throw prepayError;
         if (isStale()) return;
         setPrepayCredits((prepayData || []) as PrepayRow[]);
@@ -2011,7 +2023,9 @@ export default function CustomerDetail() {
               <Card padding={false}>
                 <div className="p-5">
                   <CardHeader title="Recent" accent="Transactions" />
-                  <p className="text-xs text-secondary mt-1">Last 90 days</p>
+                  <p className="text-xs text-secondary mt-1">
+                    Last 90 days{transactions.length > RECENT_TRANSACTIONS_SHOWN ? ` — the latest ${RECENT_TRANSACTIONS_SHOWN} of ${transactions.length.toLocaleString()}` : ''}
+                  </p>
                 </div>
                 {transactions.length === 0 ? (
                   <div className="px-5 pb-5"><p className="text-sm text-secondary">No transactions in the last 90 days.</p></div>
@@ -2028,7 +2042,9 @@ export default function CustomerDetail() {
                         </tr>
                       </thead>
                       <tbody>
-                        {transactions.slice(0, 50).map((txn, idx) => (
+                        {/* The statement runs oldest first, so the latest rows are its last
+                            ones (this showed the oldest 50 before, Goal 4 M27). */}
+                        {transactions.slice(-RECENT_TRANSACTIONS_SHOWN).map((txn, idx) => (
                           <tr key={idx} className="border-b border-gray-50">
                             <td className="px-5 py-3">{parseLocalDate(txn.transaction_date).toLocaleDateString()}</td>
                             <td className="px-4 py-3 capitalize">{txn.transaction_type}</td>

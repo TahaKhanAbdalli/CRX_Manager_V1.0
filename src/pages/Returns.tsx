@@ -328,14 +328,23 @@ export default function Returns() {
       setCustomerOrders([]);
       return;
     }
-    const { data } = await supabase
+    // Every returnable order for this customer, page by page (Goal 4 N10).
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('orders')
-      .select('id, order_number, order_date')
+      .select('id, order_number, order_date', { count: 'exact' })
       .eq('customer_id', customerId)
       .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
       .is('deleted_at', null)
-      .order('order_date', { ascending: false });
+      .order('order_date', { ascending: false })
+      .order('id')
+      .range(from, to));
     if (requestId !== customerOrdersRequestRef.current) return;
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'return_customer_orders' } });
+      toast('error', "This customer's orders could not be loaded. Pick the customer again to retry.");
+      setCustomerOrders([]);
+      return;
+    }
     setCustomerOrders((data || []) as Order[]);
   };
 

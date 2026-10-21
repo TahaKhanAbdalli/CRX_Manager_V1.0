@@ -46,6 +46,7 @@ import {
   processDocumentWithOCR,
   isOCRSupported,
   isCSVFile,
+  tooManyPagesMessage,
   type DocumentType,
 } from './documentOCR';
 
@@ -246,18 +247,37 @@ describe('processDocumentWithOCR — PDF processing', () => {
     expect(mockGetDocument).toHaveBeenCalled();
   });
 
-  it('limits processing to MAX_PAGES (20) pages', async () => {
+  it('refuses a 21-page PDF with a plain message instead of scanning only the first 20 (Goal 4)', async () => {
     const file = makeFile('big.pdf', 5000, 'application/pdf');
-    mockPdfDocument(25); // 25 pages, but should only process 20
+    mockPdfDocument(21);
     mockInvoke.mockResolvedValue({
       data: { success: true, raw_text: 'text', parsed_data: {}, confidence: 0.8 },
       error: null,
     });
 
-    await processDocumentWithOCR(file, 'invoice');
+    const result = await processDocumentWithOCR(file, 'invoice');
 
-    // getPage should have been called exactly 20 times (not 25)
+    expect(result.success).toBe(false);
+    expect(result.parsed_data).toBeNull();
+    expect(result.error).toBe(tooManyPagesMessage(21));
+    expect(result.error).toContain('This PDF has 21 pages');
+    expect(mockGetPage).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('still scans a 20-page PDF, every page', async () => {
+    const file = makeFile('twenty.pdf', 5000, 'application/pdf');
+    mockPdfDocument(20);
+    mockInvoke.mockResolvedValue({
+      data: { success: true, raw_text: 'text', parsed_data: {}, confidence: 0.8 },
+      error: null,
+    });
+
+    const result = await processDocumentWithOCR(file, 'invoice');
+
+    expect(result.success).toBe(true);
     expect(mockGetPage).toHaveBeenCalledTimes(20);
+    expect(mockInvoke.mock.calls[0][1].body.pages).toHaveLength(20);
   });
 
   it('creates canvas at 2x scale (RENDER_SCALE)', async () => {
