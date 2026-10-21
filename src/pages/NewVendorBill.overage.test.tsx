@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { Sentry } from '../lib/sentry';
@@ -63,6 +63,11 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 
 import NewVendorBill from './NewVendorBill';
+
+// Each save runs IndexedDB intent coordination before the reason prompt or the retry
+// appears. Under a loaded full-suite run that can outlast the 1s default (failed at
+// 1067ms on 2026-10-20).
+configure({ asyncUtilTimeout: 5000 });
 
 const VENDORS = [
   { id: 'v-1', name: 'Acme Chemical', default_payment_terms: null, default_payment_terms_days: null },
