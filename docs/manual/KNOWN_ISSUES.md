@@ -965,6 +965,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     200 most recent completed jobs. Past those counts a record silently cannot be chosen there.
   - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
+  - Complete current inventory (2026-10-20, after part 1): `docs/audits/2026-10-20-goal4-row-limit-inventory-refresh.md`.
+    Notifications is already past its limit: four staff accounts each have over 1,000 unread notifications, the page
+    shows the newest 200 and the bell badge counts only the 20 it loads.
   - Jobs and Customers show a banner when capped.
   - Paging is by position, so records changing during a long load are handled four ways:
     - repeats are dropped by `id`, and each page re-reads a 50-row overlap;

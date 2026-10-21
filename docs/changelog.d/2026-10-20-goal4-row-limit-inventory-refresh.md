@@ -1,0 +1,3 @@
+## 2026-10-20 - Goal 4 row-limit inventory refreshed after part 1
+
+Documentation only. `docs/audits/2026-10-20-goal4-row-limit-inventory-refresh.md` rechecks every item of the 2026-10-15 inventory against `origin/main` at `875a36fe4`: 18 of 40 high-risk items are fixed and 22 remain (Field Invoices, AR/AP/prepay, integrity checks, compliance records, dashboard queue). It adds 13 places the first audit missed (N1–N13, one of them the AR aging card on a customer's page), and finds no new limits in code or database functions added since. Notifications is already past its limit (four staff accounts with over 1,000 unread). The page ends with the plan for parts 2–4. `KNOWN_ISSUES.md` and the Goal 4 section of the direction plan point to it.
