@@ -20,6 +20,7 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
   const price = detail?.unit_price_cents;
   const cost = detail?.locked_unit_cost_cents;
   const hasMoney = price != null && cost != null;
+  const zeroLines = detail?.zero_line_product_names ?? [];
   const shortfall = hasMoney ? cost - price : null;
 
   return (
@@ -48,6 +49,17 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
             <div>
               <p className="font-medium">{detail?.product_name || 'This product'} is priced below its locked cost.</p>
+              {price === 0 && (
+                <p className="mt-1">It is priced at $0, so it will be billed free of charge.</p>
+              )}
+              {zeroLines.length > 1 && (
+                <div className="mt-2">
+                  <p className="font-medium">Your approval covers every product below, each billed at $0:</p>
+                  <ul className="mt-1 list-disc pl-5">
+                    {zeroLines.map((name, index) => <li key={`${index}-${name}`}>{name}</li>)}
+                  </ul>
+                </div>
+              )}
               {hasMoney && shortfall !== null && (
                 <p className="mt-1 tabular-nums">
                   Price {formatCents(price)} · Cost {formatCents(cost)} · Shortfall {formatCents(shortfall)} per unit

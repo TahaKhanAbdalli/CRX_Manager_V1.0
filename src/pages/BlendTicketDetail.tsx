@@ -2,7 +2,8 @@ import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
 import { sanitizeError, supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
-import { runCriticalAction } from '../lib/criticalAction';
+import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
+import { blendQuotePriceSaveErrorMessage, blendTicketMissingPriceMessage, getBlendQuotePriceChoices, type BlendQuotePriceChoice } from '../lib/blendTicketPricing';
 import { Sentry } from '../lib/sentry';
 import { BLEND_TICKET_PRODUCT_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS } from '../lib/costFields';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
@@ -27,9 +28,12 @@ import { validateBlendMath, type BlendMathWarning } from '../lib/blendMathValida
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
+import { withBelowCostReason } from '../lib/belowCostApproval';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import UnitSelect from '../components/blendtickets/UnitSelect';
+import QuotePriceChoiceModal from '../components/blendtickets/QuotePriceChoiceModal';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -102,6 +106,11 @@ export function BlendTicketDetail() {
   const [createInvoiceConfirmOpen, setCreateInvoiceConfirmOpen] = useState(false);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
   const invoiceIdem = useIdempotencyKey('create_invoice_from_blend_ticket', profile?.id || '');
+  const { runWithBelowCostApproval } = useBelowCostApproval();
+  // Goal 3 pricing: the quote lists a product twice at different prices, so staff pick one.
+  const [quotePriceChoices, setQuotePriceChoices] = useState<BlendQuotePriceChoice[] | null>(null);
+  const [savingQuotePrices, setSavingQuotePrices] = useState(false);
+  const quotePriceIdem = useIdempotencyKey('set_blend_ticket_product_quote_price', profile?.id || '');
 
   const [formData, setFormData] = useState({
     customer_id: '',
@@ -936,17 +945,30 @@ export function BlendTicketDetail() {
     await runCriticalAction({
       action: async () => {
         const key = invoiceIdem.getKey();
-        const { data, error } = await supabase.rpc('create_invoice_from_blend_ticket', {
-          p_blend_ticket_id: ticket.id,
-          p_created_by: profile.id,
-          p_idempotency_key: key,
-        });
+        // Goal 3 pricing: a product the quote lists at $0 bills at $0, but only after an admin
+        // approves it with a reason in the below-cost window (the database asks before any invoice
+        // number is used, and records each approval). A refusal saves nothing, so the approved
+        // retry reuses the same key.
+        const { data, error } = await runWithBelowCostApproval((reason) =>
+          supabase.rpc('create_invoice_from_blend_ticket', withBelowCostReason('create_invoice_from_blend_ticket', {
+            p_blend_ticket_id: ticket.id,
+            p_created_by: profile.id,
+            p_idempotency_key: key,
+          }, reason)));
         if (error) {
           // U6 #91a: the ticket's job already has a live invoice — billing the ticket
           // too would double-charge. Give a plain-English reason instead of the raw token.
           if (hasRpcCode(error, RpcErrorCodes.JOB_ALREADY_INVOICED)) {
             throw new Error('This blend ticket is tied to a job that has already been invoiced. Billing the ticket too would double-charge the customer — void that job invoice first if you meant to re-bill here.');
           }
+          // Goal 3 pricing: nothing was invoiced; staff pick the quoted price, then bill again.
+          const choices = getBlendQuotePriceChoices(error);
+          if (choices) {
+            setQuotePriceChoices(choices);
+            throw new CriticalActionHandledError('quote price choice required');
+          }
+          const missingPrice = blendTicketMissingPriceMessage(error);
+          if (missingPrice) throw new Error(missingPrice);
           throw error;
         }
         // Phase 1 (2026-04-29): RPC return shape changed from uuid to
@@ -971,6 +993,55 @@ export function BlendTicketDetail() {
       setLoading: setCreatingInvoice,
       successMessage: 'Invoice created from blend ticket',
       sentryTag: 'create_invoice_from_blend_ticket',
+    });
+  }
+
+  async function handleSaveQuotePrices(picks: Record<string, string>) {
+    if (!ticket || !profile || !quotePriceChoices) return;
+    await runCriticalAction({
+      action: async () => {
+        // Each pick is its own database call. If one fails after others saved, reload, keep only
+        // the unsaved lines in the window and say exactly which saved, so nothing is half-hidden.
+        const saved: string[] = [];
+        for (const choice of quotePriceChoices) {
+          const quoteItemId = picks[choice.blendTicketProductId];
+          if (!quoteItemId) throw new Error(`Pick a price for ${choice.productName} first.`);
+          const scope = `${choice.blendTicketProductId}:${quoteItemId}`;
+          try {
+            const { data, error } = await supabase.rpc('set_blend_ticket_product_quote_price', {
+              p_blend_ticket_product_id: choice.blendTicketProductId,
+              p_quote_item_id: quoteItemId,
+              p_performed_by: profile.id,
+              p_idempotency_key: quotePriceIdem.getKeyFor(scope),
+            });
+            if (error) throw error;
+            const result = assertRpcResult<{ success: boolean; unit_price_cents: number }>(data, 'set_blend_ticket_product_quote_price');
+            if (!result.success) throw new Error('The picked price was not saved.');
+          } catch (err: unknown) {
+            const reason = blendQuotePriceSaveErrorMessage(err) ?? sanitizeError(err);
+            if (saved.length === 0) throw new Error(reason);
+            setQuotePriceChoices(quotePriceChoices.filter((c) => !saved.includes(c.blendTicketProductId)));
+            await loadTicketData();
+            const savedNames = quotePriceChoices
+              .filter((c) => saved.includes(c.blendTicketProductId))
+              .map((c) => c.productName)
+              .join(', ');
+            throw new Error(`Saved the price for ${savedNames}, but not for ${choice.productName}: ${reason}`);
+          }
+          // A confirmed save retires its retry key, so picking this same line again later is a
+          // new request rather than a replay of this one.
+          quotePriceIdem.resetKeyFor(scope);
+          saved.push(choice.blendTicketProductId);
+        }
+        setQuotePriceChoices(null);
+        await loadTicketData();
+      },
+      toast,
+      setLoading: setSavingQuotePrices,
+      successMessage: quotePriceChoices.length > 1
+        ? 'Prices saved. Click Create Invoice again to bill this ticket.'
+        : 'Price saved. Click Create Invoice again to bill this ticket.',
+      sentryTag: 'set_blend_ticket_product_quote_price',
     });
   }
 
@@ -1032,6 +1103,8 @@ export function BlendTicketDetail() {
           navigate(`/orders/${committedOrderId}`);
           return;
         }
+        const missingPrice = blendTicketMissingPriceMessage(error);
+        if (missingPrice) throw new Error(missingPrice);
         throw error;
       }
       createOrderIdem.resetKey();
@@ -1912,6 +1985,14 @@ export function BlendTicketDetail() {
         message={`This will create a draft invoice for ${ticket.customer?.farm_name || 'this customer'} with ${products.length} product(s). The blend ticket will be marked as "billed".`}
         confirmLabel="Create Invoice"
         variant="info"
+      />
+
+      {/* Pick the quoted price (Goal 3 pricing) */}
+      <QuotePriceChoiceModal
+        choices={quotePriceChoices}
+        saving={savingQuotePrices}
+        onClose={() => setQuotePriceChoices(null)}
+        onConfirm={handleSaveQuotePrices}
       />
 
       {/* Link to Order Modal */}

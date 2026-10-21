@@ -16,6 +16,7 @@ const detail = {
   unit_price_cents: 1050,
   locked_unit_cost_cents: 1225,
 };
+const parsed = { ...detail, zero_line_product_names: [] };
 
 describe('parseBelowCostApprovalError', () => {
   it.each([
@@ -26,13 +27,22 @@ describe('parseBelowCostApprovalError', () => {
     expect(parseBelowCostApprovalError({
       code: 'P0001',
       message: `${prefix}:${JSON.stringify(detail)}`,
-    })).toEqual({ kind, detail });
+    })).toEqual({ kind, detail: parsed });
   });
 
   it('parses a thrown Error', () => {
     expect(parseBelowCostApprovalError(new Error(
       `BELOW_COST_REASON_REQUIRED:${JSON.stringify(detail)}`,
-    ))).toEqual({ kind: 'reason', detail });
+    ))).toEqual({ kind: 'reason', detail: parsed });
+  });
+
+  it('lists every $0 line a blend-ticket approval covers', () => {
+    const zero = {
+      ...detail, operation: 'create_invoice_from_blend_ticket', unit_price_cents: 0,
+      zero_lines: [{ line_id: 'l1', product_name: 'Atrazine 4L' }, { line_id: 'l2', product_name: 'Roundup' }, { line_id: 'l3' }],
+    };
+    expect(parseBelowCostApprovalError({ message: `BELOW_COST_REASON_REQUIRED:${JSON.stringify(zero)}` })?.detail?.zero_line_product_names)
+      .toEqual(['Atrazine 4L', 'Roundup']);
   });
 
   it('fails soft when the JSON detail is truncated or malformed', () => {

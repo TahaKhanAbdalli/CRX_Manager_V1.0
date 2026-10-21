@@ -12710,6 +12710,7 @@ export type Database = {
       }
       create_invoice_from_blend_ticket: {
         Args: {
+          p_below_cost_reason?: string
           p_blend_ticket_id: string
           p_created_by: string
           p_idempotency_key?: string
@@ -14805,6 +14806,15 @@ export type Database = {
           p_idempotency_key?: string
           p_lots: Json
           p_performed_by: string
+        }
+        Returns: Json
+      }
+      set_blend_ticket_product_quote_price: {
+        Args: {
+          p_blend_ticket_product_id: string
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_item_id: string
         }
         Returns: Json
       }

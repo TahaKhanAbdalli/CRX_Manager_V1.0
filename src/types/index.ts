@@ -4127,6 +4127,8 @@ export interface BelowCostApprovalDetail {
   product_name: string | null;
   unit_price_cents: number | null;
   locked_unit_cost_cents: number | null;
+  /** Every $0 line one approval covers (blend-ticket invoice, Goal 3); empty when not sent. */
+  zero_line_product_names: string[];
 }
 
 export interface BelowCostApprovalError {

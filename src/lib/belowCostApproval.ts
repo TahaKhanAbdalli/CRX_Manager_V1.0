@@ -47,6 +47,13 @@ function parseDetail(raw: string): BelowCostApprovalDetail | null {
       product_name: nullableString(detail.product_name),
       unit_price_cents: nullableInteger(detail.unit_price_cents),
       locked_unit_cost_cents: nullableInteger(detail.locked_unit_cost_cents),
+      zero_line_product_names: Array.isArray(detail.zero_lines)
+        ? detail.zero_lines
+            .map((line: unknown) => (line && typeof line === 'object'
+              ? nullableString((line as Record<string, unknown>).product_name)
+              : null))
+            .filter((name): name is string => name !== null)
+        : [],
     };
   } catch {
     return null;
@@ -104,7 +111,8 @@ type BelowCostOperation =
   | 'convert_quote_to_order'
   | 'draw_down_quote'
   | 'restore_quote_version'
-  | 'duplicate_quote';
+  | 'duplicate_quote'
+  | 'create_invoice_from_blend_ticket';
 
 export type BelowCostApprovalRunner = <T>(
   attempt: (reason: string | null) => PromiseLike<T>,
@@ -132,6 +140,7 @@ export function withBelowCostReason<T extends Record<string, unknown>>(
     case 'draw_down_quote':
     case 'restore_quote_version':
     case 'duplicate_quote':
+    case 'create_invoice_from_blend_ticket':
       return { ...args, p_below_cost_reason: reason } as T;
   }
 }

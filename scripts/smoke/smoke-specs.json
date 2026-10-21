@@ -265,6 +265,25 @@
         "security"
       ]
     },
+    "blend_ticket_pricing_guards": {
+      "chain": "smoke-blend-ticket-pricing-guards.sql",
+      "container_only": true,
+      "container_prover": "prove-blend-ticket-pricing-guards-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-blend-ticket-pricing-guards-real-schema.mjs, never through run-smoke.mjs against the live database: the chain creates orders and invoices, which draw customer-visible order and invoice numbers from non-transactional sequences that a rollback does not return. 20261020210000 (Goal 3 Pricing): an order made from a blend ticket prices a product with no tier-2 price at its tier-1 price (never $0) and refuses a product with no price at all (BLEND_TICKET_PRICE_MISSING, nothing written); a blend-ticket invoice bills the tier-1 fallback and refuses an unpriced product the same way; a job quote listing a product twice at different prices stops the invoice with BLEND_TICKET_QUOTE_PRICE_CHOICE_REQUIRED and the exact choices in the error detail (a same-price duplicate is not listed); set_blend_ticket_product_quote_price refuses no key, a forged actor, a quote line for another product, a billed ticket and a rep on another rep's ticket, stores the pick, replays exactly and refuses a reused key for another pick; the invoice then bills the pick (and the same-price line) as quoted. A direct write of blend_ticket_products.unit_price_cents (as the owner and as the authenticated role) is refused with BLEND_TICKET_PRICE_PICK_REQUIRED; a pick from another customer's quote is refused; a pick goes stale when the line's product changes (the old price is never billed); a pick or quoted price from a section of a quote other than the job's own quote is ignored (tier price); a $0 quote price is offered as a pick and bills $0 as quoted only with an admin's below-cost reason (BELOW_COST_REASON_REQUIRED before any invoice row; a rep gets BELOW_COST_ADMIN_REQUIRED without the cost), and each $0 line is recorded in below_cost_approvals. Fail-first: step 1 fails before the change (the old body priced the line at $0 and the below-cost line guard refused the order). Uses an active admin and two active sales reps; prices its own [E2E] products through the governed pricing RPCs; terminal rollback.",
+      "covers": [
+        "create_invoice_from_blend_ticket",
+        "create_order_from_blend_ticket",
+        "set_blend_ticket_product_quote_price",
+        "_blend_tier_price_cents_20261020",
+        "_blend_quote_pick_valid_20261020",
+        "_guard_blend_ticket_price_pick_20261020"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "security"
+      ]
+    },
     "cost_margin_admin_only_rpc_leaks": {
       "chain": "smoke-cost_margin_admin_only_rpc_leaks.sql",
       "container_prover": "prove-cost-margin-admin-only-rpc-leaks-real-schema.mjs",

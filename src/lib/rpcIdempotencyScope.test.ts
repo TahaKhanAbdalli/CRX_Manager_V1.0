@@ -272,6 +272,12 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // completed invoice. Migration 20260827041400 only re-emits the established
   // implementation to tighten return-credit order gates.
   _create_invoice_from_order_impl_20260718: ['create_invoice_from_order'],
+  // Direct EXECUTE is revoked (postgres-only). 20261016140000 renamed the original
+  // create_order_from_blend_ticket body to this name behind a same-signature wrapper (ALTER
+  // FUNCTION ... RENAME TO), so the body kept the public operation literal and both layers share
+  // that one receipt namespace. 20261020210000 re-emits the live body under its own name (Goal 3
+  // tier-1 fallback only); changing the literal would orphan existing receipts.
+  _create_order_from_blend_ticket_replay_impl_20261015: ['create_order_from_blend_ticket'],
   // Direct EXECUTE is revoked. This private split-invoice implementation is
   // the implementation half of create_split_invoices_from_order and must use
   // the public operation namespace for one replay result across both layers.
