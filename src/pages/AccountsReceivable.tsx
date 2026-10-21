@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase, assertRpcResult } from '../lib/db';
 import { formatUSD } from '../lib/money';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import { fetchAllRows } from '../lib/pagedRead';
 import Card from '../components/ui/Card';
 import PageHeader from '../components/ui/PageHeader';
@@ -43,7 +44,9 @@ export default function AccountsReceivable() {
     let cancelled = false;
     (async () => {
       try {
-        const today = new Date().toISOString().slice(0, 10);
+        // Chicago's date, not UTC's: from about 7pm Central, UTC is already tomorrow,
+        // and the strip would ask for tomorrow's aging above today's AR Aging table.
+        const today = todayInBusinessTz();
         // Every read below is paged: one request stops at the server's row cap,
         // which would drop customers, credits or memos from these totals silently.
         // Any failed read throws, so the whole strip is hidden (catch sets

@@ -33,7 +33,7 @@ import StatementPrintDialog from '../components/statements/StatementPrintDialog'
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
 import { computeSeason } from '../utils/season';
-import { localToday, parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
+import { localToday, parseLocalDate, localDatePlusDays, todayInBusinessTz } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import type { ARAgingRow as BaseARagingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
@@ -50,6 +50,9 @@ export default function ARaging() {
   const [printingStatement, setPrintingStatement] = useState(false);
   const [printCustomerId, setPrintCustomerId] = useState<string | null>(null);
   const [printCustomerName, setPrintCustomerName] = useState('');
+  // The date of the screen Print Statement was opened from: the aging table's as-of date,
+  // or the Customer Statement tab's end date, so the PDF covers the day on screen.
+  const [printDefaultDate, setPrintDefaultDate] = useState('');
 
   // Batch statement selection
   const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
@@ -71,7 +74,9 @@ export default function ARaging() {
   const [agingFailed, setAgingFailed] = useState(false);
   // Only the newest aging load may set state; an older date's load finishing late is ignored.
   const agingLoadSeq = useRef(0);
-  const [asOfDate, setAsOfDate] = useState(localToday());
+  // Chicago's date, the same day the Accounts Receivable summary strip asks for,
+  // so the strip and this table agree whatever the viewer's own clock says.
+  const [asOfDate, setAsOfDate] = useState(() => todayInBusinessTz());
 
   // Statement
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -313,7 +318,7 @@ export default function ARaging() {
           title="Print Statement"
           onClick={(e) => {
             e.stopPropagation();
-            openStatementDialog(r.customer_id, r.farm_name);
+            openStatementDialog(r.customer_id, r.farm_name, asOfDate);
           }}
         >
           <Printer className="w-4 h-4" />
@@ -421,9 +426,10 @@ export default function ARaging() {
     fetchAging();
   };
 
-  const openStatementDialog = (custId: string, custName: string) => {
+  const openStatementDialog = (custId: string, custName: string, defaultDate: string) => {
     setPrintCustomerId(custId);
     setPrintCustomerName(custName);
+    setPrintDefaultDate(defaultDate);
     setShowStatementDialog(true);
   };
 
@@ -1042,7 +1048,7 @@ export default function ARaging() {
                   icon={<Printer className="w-4 h-4" />}
                   onClick={() => {
                     const cust = customers.find((c) => c.id === selectedCustomer);
-                    openStatementDialog(selectedCustomer, cust?.farm_name || 'Customer');
+                    openStatementDialog(selectedCustomer, cust?.farm_name || 'Customer', stmtEnd);
                   }}
                   loading={printingStatement}
                 >
@@ -1175,18 +1181,23 @@ export default function ARaging() {
 
       {/* Statement Print Dialog */}
       <StatementPrintDialog
+        // The dialog reads defaultDate once, so start it afresh when that date changes.
+        key={`print-${printDefaultDate}`}
         open={showStatementDialog}
         onClose={() => setShowStatementDialog(false)}
         onGenerate={handlePrintStatement}
         loading={printingStatement}
+        defaultDate={printDefaultDate}
       />
 
       {/* Batch Statement Print Dialog */}
       <StatementPrintDialog
+        key={`batch-print-${asOfDate}`}
         open={showBatchStatementDialog}
         onClose={() => setShowBatchStatementDialog(false)}
         onGenerate={handleBatchStatements}
         loading={batchPrinting}
+        defaultDate={asOfDate}
       />
 
       {/* Finance Charge Preview Modal */}
