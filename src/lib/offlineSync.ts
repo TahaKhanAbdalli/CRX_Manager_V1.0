@@ -417,7 +417,7 @@ async function executeAction(
       return;
     }
     case 'update_order_items': {
-      const execute = runWithBelowCostApproval ?? ((attempt) => attempt(null));
+      const execute = runWithBelowCostApproval ?? ((attempt) => attempt(null, null));
       const { data, error } = await execute((reason) => supabase.rpc(
         'update_order_items',
         withBelowCostReason(

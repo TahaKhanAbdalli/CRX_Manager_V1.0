@@ -13,7 +13,7 @@ interface ContextValue {
 }
 
 const BelowCostApprovalContext = createContext<ContextValue>({
-  runWithBelowCostApproval: async (attempt) => attempt(null),
+  runWithBelowCostApproval: async (attempt) => attempt(null, null),
 });
 
 export function BelowCostApprovalProvider({ children }: { children: ReactNode }) {
@@ -36,11 +36,11 @@ export function BelowCostApprovalProvider({ children }: { children: ReactNode })
   }, []);
 
   const runWithBelowCostApproval = useCallback(async <T,>(
-    attempt: (reason: string | null) => PromiseLike<T>,
+    attempt: (reason: string | null, detail: BelowCostApprovalDetail | null) => PromiseLike<T>,
   ): Promise<T> => {
     let firstResult: T;
     try {
-      firstResult = await attempt(null);
+      firstResult = await attempt(null, null);
     } catch (error: unknown) {
       const parsed = parseBelowCostApprovalError(error);
       if (!parsed) throw error;
@@ -65,7 +65,7 @@ export function BelowCostApprovalProvider({ children }: { children: ReactNode })
     }
     const reason = await requestReason(parsed.detail);
     if (!reason) throw new BelowCostApprovalHandledError();
-    return attempt(reason);
+    return attempt(reason, parsed.detail);
   }, [requestReason, toast]);
 
   const value = useMemo(() => ({ runWithBelowCostApproval }), [runWithBelowCostApproval]);

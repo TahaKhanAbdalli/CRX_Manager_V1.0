@@ -133,6 +133,7 @@ export const RpcErrorCodes = {
   // hasRpcCode() instead.
   SHARE_NOT_100: 'SHARE_NOT_100',
   COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
+  COST_BASIS_CENTS_REQUIRED: 'COST_BASIS_CENTS_REQUIRED',
   DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH',
   // Same migration: a draw line that matches no booked price tier, and a tier
   // asked to give up more units than were booked at it. Both are fail-closed
@@ -313,6 +314,10 @@ export const RpcErrorCodes = {
   BLEND_TICKET_PRICE_MISSING: 'BLEND_TICKET_PRICE_MISSING',
   // create_invoice_from_blend_ticket — the quote lists a product twice at different prices
   BLEND_TICKET_QUOTE_PRICE_CHOICE_REQUIRED: 'BLEND_TICKET_QUOTE_PRICE_CHOICE_REQUIRED',
+  // create_invoice_from_blend_ticket (20261021070000) — a line has no product; the $0 lines changed
+  // between the approval window and Approve
+  BLEND_TICKET_PRODUCT_UNMATCHED: 'BLEND_TICKET_PRODUCT_UNMATCHED',
+  BELOW_COST_APPROVAL_STALE: 'BELOW_COST_APPROVAL_STALE',
   // set_blend_ticket_product_quote_price refusals
   BLEND_TICKET_QUOTE_PRICE_INVALID_CHOICE: 'BLEND_TICKET_QUOTE_PRICE_INVALID_CHOICE',
   BLEND_TICKET_QUOTE_PRICE_LOCKED: 'BLEND_TICKET_QUOTE_PRICE_LOCKED',

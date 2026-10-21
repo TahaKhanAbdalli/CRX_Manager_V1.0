@@ -54,6 +54,24 @@ function parseDetail(raw: string): BelowCostApprovalDetail | null {
               : null))
             .filter((name): name is string => name !== null)
         : [],
+      zero_lines: Array.isArray(detail.zero_lines)
+        ? detail.zero_lines.flatMap((line: unknown) => {
+            if (!line || typeof line !== 'object') return [];
+            const row = line as Record<string, unknown>;
+            const lineId = nullableString(row.line_id);
+            const productId = nullableString(row.product_id);
+            return lineId && productId
+              ? [{
+                  line_id: lineId,
+                  product_id: productId,
+                  product_name: nullableString(row.product_name),
+                  kind: nullableString(row.kind),
+                  cost_cents: nullableInteger(row.cost_cents),
+                  basis: nullableString(row.basis),
+                }]
+              : [];
+          })
+        : [],
     };
   } catch {
     return null;
@@ -114,8 +132,12 @@ type BelowCostOperation =
   | 'duplicate_quote'
   | 'create_invoice_from_blend_ticket';
 
+/**
+ * `detail` is the refusal the approved reason answers (null on the first attempt), so a caller
+ * can send back exactly what the admin was shown.
+ */
 export type BelowCostApprovalRunner = <T>(
-  attempt: (reason: string | null) => PromiseLike<T>,
+  attempt: (reason: string | null, detail: BelowCostApprovalDetail | null) => PromiseLike<T>,
 ) => Promise<T>;
 
 /** Add a fresh approval reason using the authoritative wrapper's exact transport. */

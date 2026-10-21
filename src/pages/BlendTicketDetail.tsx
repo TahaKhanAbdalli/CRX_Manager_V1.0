@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
 import { sanitizeError, supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
-import { blendQuotePriceSaveErrorMessage, blendTicketMissingPriceMessage, getBlendQuotePriceChoices, type BlendQuotePriceChoice } from '../lib/blendTicketPricing';
+import { blendQuotePriceSaveErrorMessage, blendTicketInvoiceRefusalMessage, blendTicketMissingPriceMessage, getBlendQuotePriceChoices, type BlendQuotePriceChoice } from '../lib/blendTicketPricing';
 import { Sentry } from '../lib/sentry';
 import { BLEND_TICKET_PRODUCT_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS } from '../lib/costFields';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
@@ -948,12 +948,20 @@ export function BlendTicketDetail() {
         // Goal 3 pricing: a product the quote lists at $0 bills at $0, but only after an admin
         // approves it with a reason in the below-cost window (the database asks before any invoice
         // number is used, and records each approval). A refusal saves nothing, so the approved
-        // retry reuses the same key.
-        const { data, error } = await runWithBelowCostApproval((reason) =>
+        // retry reuses the same key. The approval sends back the exact $0 lines the window showed
+        // (line, product, why it is $0, its cost, and the rate/acres/per-acre-price basis); if any
+        // changed meanwhile the database refuses
+        // (BELOW_COST_APPROVAL_STALE) instead of billing lines the admin never saw.
+        const { data, error } = await runWithBelowCostApproval((reason, detail) =>
           supabase.rpc('create_invoice_from_blend_ticket', withBelowCostReason('create_invoice_from_blend_ticket', {
             p_blend_ticket_id: ticket.id,
             p_created_by: profile.id,
             p_idempotency_key: key,
+            ...(reason ? {
+              p_approved_zero_lines: (detail?.zero_lines ?? []).map(({ line_id, product_id, kind, cost_cents, basis }) => ({
+                line_id, product_id, kind, cost_cents, basis,
+              })),
+            } : {}),
           }, reason)));
         if (error) {
           // U6 #91a: the ticket's job already has a live invoice — billing the ticket
@@ -969,6 +977,9 @@ export function BlendTicketDetail() {
           }
           const missingPrice = blendTicketMissingPriceMessage(error);
           if (missingPrice) throw new Error(missingPrice);
+          const refusal = blendTicketInvoiceRefusalMessage(error, new Map(
+            products.flatMap((p) => (p.product_id ? [[p.product_id, p.product_name] as const] : []))));
+          if (refusal) throw new Error(refusal);
           throw error;
         }
         // Phase 1 (2026-04-29): RPC return shape changed from uuid to

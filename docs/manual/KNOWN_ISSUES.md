@@ -1,8 +1,9 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-21 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-21 05:13 UTC (12:13 AM Central): unchanged since the 04:01 UTC read, 1040 rows / 1033 names,
-`max(version)` `20261021040052`, and still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
+`execute_sql`, 2026-10-21 19:13 UTC (2:13 PM Central): the one change since the 04:01 UTC read is that
+`20261021030000` (PR #987) is now applied (counts in `docs/reference/migration-history.md`); `20261021070000` (PR #995)
+is not applied; at 05:13 UTC still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
 20:55 UTC read are that `20261019220000` (ledger `20261020022222`, PR #964), `20261019230000` (ledger `20261020193610`,
@@ -3033,6 +3034,14 @@ makes the first one reachable more often by emitting several order lines per pro
    Matching the exact quoted line automatically (and splitting a ticket quantity across tiers)
    stays open. A job pointed at another customer's (or a deleted) quote no longer supplies a quoted
    price; the line bills its tier price.
+   **Follow-ups, 2026-10-21 (migration `20261021070000_blend_invoice_approval_binding`, not yet
+   applied when written; live state in `docs/reference/migration-history.md` row 961):** a ticket
+   line with no product is refused instead of billing $0; a grower-share override ticket's $0
+   "included in grower share" chemical takes the same admin approval instead of blocking the
+   invoice; and the approval names the exact $0 lines it was shown, so a re-pick in between is
+   refused ("the $0 lines changed") instead of billing lines the admin never saw; an approval
+   that arrives after every $0 line got a real price is refused the same way. A retry key is now
+   required (`IDEMPOTENCY_KEY_REQUIRED`), so a lost reply can always be replayed.
 
 ## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
 

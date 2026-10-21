@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blendQuotePriceSaveErrorMessage, blendTicketMissingPriceMessage, getBlendQuotePriceChoices } from './blendTicketPricing';
+import { blendQuotePriceSaveErrorMessage, blendTicketInvoiceRefusalMessage, blendTicketMissingPriceMessage, getBlendQuotePriceChoices } from './blendTicketPricing';
 
 const LINE = '22222222-2222-4222-8222-222222222222';
 const QI_A = '33333333-3333-4333-8333-333333333333';
@@ -74,5 +74,27 @@ describe('blendTicketMissingPriceMessage', () => {
   it('falls back when the token arrives bare, and ignores other errors', () => {
     expect(blendTicketMissingPriceMessage({ message: 'BLEND_TICKET_PRICE_MISSING' })).toMatch(/has no price on the Price List/);
     expect(blendTicketMissingPriceMessage({ message: 'SOMETHING_ELSE' })).toBeNull();
+  });
+});
+
+describe('blendTicketInvoiceRefusalMessage', () => {
+  const PRODUCT = '99999999-9999-4999-8999-999999999999';
+
+  it('names the product a cost-basis refusal points at when the ticket knows it', () => {
+    expect(blendTicketInvoiceRefusalMessage({ message: `COST_BASIS_REQUIRED:${PRODUCT}` }, new Map([[PRODUCT, 'Atrazine 4L']])))
+      .toBe('Atrazine 4L has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.');
+    expect(blendTicketInvoiceRefusalMessage({ message: `COST_BASIS_REQUIRED:${PRODUCT}` }))
+      .toBe('A product on this ticket has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.');
+  });
+
+  it('explains a stale approval and an unmatched line', () => {
+    expect(blendTicketInvoiceRefusalMessage({ message: 'BELOW_COST_APPROVAL_STALE:{}' })).toMatch(/changed while the approval was open/);
+    expect(blendTicketInvoiceRefusalMessage({ message: 'BLEND_TICKET_PRODUCT_UNMATCHED: 2 line(s) are not matched to a product' }))
+      .toMatch(/not matched to a product/);
+  });
+
+  it('leaves any other error to the caller', () => {
+    expect(blendTicketInvoiceRefusalMessage({ message: 'BELOW_COST_REASON_REQUIRED:{}' })).toBeNull();
+    expect(blendTicketInvoiceRefusalMessage(null)).toBeNull();
   });
 });

@@ -1035,8 +1035,8 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
       line_id: LINE_ID, product_id: 'prod-1', product_name: 'Atrazine 4L',
       unit_price_cents: 0, locked_unit_cost_cents: 500,
       zero_lines: [
-        { line_id: LINE_ID, product_id: 'prod-1', product_name: 'Atrazine 4L' },
-        { line_id: 'line-2', product_id: 'prod-2', product_name: 'Roundup PowerMax' },
+        { line_id: LINE_ID, product_id: 'prod-1', product_name: 'Atrazine 4L', kind: 'quoted_zero', cost_cents: 500, basis: 'b1' },
+        { line_id: 'line-2', product_id: 'prod-2', product_name: 'Roundup PowerMax', kind: 'quoted_zero', cost_cents: 700, basis: 'b2' },
       ],
     };
     mockFrom.mockReset();
@@ -1072,7 +1072,7 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
     // Every $0 product the one reason approves is listed (Mason, 2026-10-20).
     expect(within(approval).getByText(/covers every product below/)).toBeInTheDocument();
     const listed = within(approval).getAllByRole('listitem').map((item) => item.textContent);
-    expect(listed).toEqual(['Atrazine 4L', 'Roundup PowerMax']);
+    expect(listed).toEqual(['Atrazine 4L — cost $5.00 per unit', 'Roundup PowerMax — cost $7.00 per unit']);
     expect(mockNavigate).not.toHaveBeenCalled();
     // The window clears its reason box in an effect that runs just after it appears. On a busy CI
     // runner that effect can land after the reason is typed and wipe it, so Approve stays disabled,
@@ -1089,9 +1089,15 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
     const calls = mockRpc.mock.calls.filter(([name]) => name === 'create_invoice_from_blend_ticket');
     expect(calls).toHaveLength(2);
     expect(calls[0][1]).toEqual({ p_blend_ticket_id: 'tk-1', p_created_by: 'user-1', p_idempotency_key: 'test-idem-key' });
+    // The approval names exactly the $0 lines the window showed, with why each is $0 and its
+    // cost (20261021070000).
     expect(calls[1][1]).toEqual({
       p_blend_ticket_id: 'tk-1', p_created_by: 'user-1', p_idempotency_key: 'test-idem-key',
       p_below_cost_reason: 'free sample',
+      p_approved_zero_lines: [
+        { line_id: LINE_ID, product_id: 'prod-1', kind: 'quoted_zero', cost_cents: 500, basis: 'b1' },
+        { line_id: 'line-2', product_id: 'prod-2', kind: 'quoted_zero', cost_cents: 700, basis: 'b2' },
+      ],
     });
   });
 
@@ -1165,6 +1171,18 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
     ));
     expect(screen.queryByRole('dialog', { name: 'Pick the quoted price' })).not.toBeInTheDocument();
     expect(mockRpc.mock.calls.some(([name]) => name === 'set_blend_ticket_product_quote_price')).toBe(false);
+  });
+
+  it.each([
+    ['BELOW_COST_APPROVAL_STALE:{"operation":"create_invoice_from_blend_ticket"}',
+      'The $0 lines on this ticket changed while the approval was open, so nothing was invoiced. Create the invoice again to see and approve the current lines.'],
+    ['BLEND_TICKET_PRODUCT_UNMATCHED: 1 line(s) are not matched to a product; match them before invoicing',
+      'A line on this ticket is not matched to a product, so nothing was invoiced. Match every line to a product, then try again.'],
+    ['COST_BASIS_REQUIRED:99999999-9999-4999-8999-999999999999',
+      'A product on this ticket has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.'],
+  ])('shows a plain-English reason for %s (20261021070000)', async (message, expected) => {
+    await createInvoiceWith({ message });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expected));
   });
 
   it('locks header, product, and application-field editing for a billed ticket when invoice SELECT is RLS-empty', async () => {

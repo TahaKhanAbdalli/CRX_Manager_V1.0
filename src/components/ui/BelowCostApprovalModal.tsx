@@ -22,6 +22,24 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
   const hasMoney = price != null && cost != null;
   const zeroLines = detail?.zero_line_product_names ?? [];
   const shortfall = hasMoney ? cost - price : null;
+  // A blend-ticket chemical on a grower-share field is billed inside that field's per-acre price,
+  // so its own line is $0 without being free (20261021070000).
+  const zeroLineDetails = detail?.zero_lines ?? [];
+  // A line can be both: quoted at $0 on one share and inside a grower-share price on another.
+  const isMixed = (kind: string | null) => kind === 'quoted_zero_and_grower_share';
+  const isGrowerShare = (kind: string | null) => kind?.includes('grower_share') ?? false;
+  const anyGrowerShare = zeroLineDetails.some((line) => isGrowerShare(line.kind));
+  const allGrowerShare = zeroLineDetails.length > 0 && zeroLineDetails.every((line) => line.kind === 'grower_share');
+  const lineNote = (kind: string | null) => (isMixed(kind)
+    ? ' (quoted at $0 on one share, included in a grower-share per-acre price on another)'
+    : isGrowerShare(kind) ? ' (included in a grower-share per-acre price)' : '');
+  const listedLines = zeroLineDetails.length === zeroLines.length && zeroLineDetails.length > 0
+    ? zeroLineDetails.map((line, index) => ({
+        name: line.product_name ?? zeroLines[index],
+        // Each approved line's own cost per unit (admins only; the database never sends it to a rep).
+        note: `${line.cost_cents != null ? ` — cost ${formatCents(line.cost_cents)} per unit` : ''}${lineNote(line.kind)}`,
+      }))
+    : zeroLines.map((name) => ({ name, note: '' }));
 
   return (
     <Modal
@@ -50,13 +68,21 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
             <div>
               <p className="font-medium">{detail?.product_name || 'This product'} is priced below its locked cost.</p>
               {price === 0 && (
-                <p className="mt-1">It is priced at $0, so it will be billed free of charge.</p>
+                <p className="mt-1">
+                  {allGrowerShare
+                    ? 'It is included in a grower-share per-acre price, so its own line is billed at $0.'
+                    : zeroLineDetails.length === 1 && isMixed(zeroLineDetails[0].kind)
+                      ? 'It is quoted at $0 on one share and included in a grower-share per-acre price on another, so it is billed at $0 on both.'
+                    : anyGrowerShare
+                      ? 'Each line below is billed at $0: quoted at $0, or included in a grower-share per-acre price.'
+                      : 'It is priced at $0, so it will be billed free of charge.'}
+                </p>
               )}
-              {zeroLines.length > 1 && (
+              {listedLines.length > 1 && (
                 <div className="mt-2">
                   <p className="font-medium">Your approval covers every product below, each billed at $0:</p>
                   <ul className="mt-1 list-disc pl-5">
-                    {zeroLines.map((name, index) => <li key={`${index}-${name}`}>{name}</li>)}
+                    {listedLines.map((line, index) => <li key={`${index}-${line.name}`}>{line.name}{line.note}</li>)}
                   </ul>
                 </div>
               )}

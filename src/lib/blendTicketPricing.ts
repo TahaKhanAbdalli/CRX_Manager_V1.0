@@ -90,6 +90,36 @@ export function blendQuotePriceSaveErrorMessage(error: unknown): string | null {
 }
 
 /**
+ * Plain-English reason create_invoice_from_blend_ticket refused for a reason added after Goal 3
+ * pricing (migration 20261021070000), or `null` for any other error. `productNameById` names the
+ * product a COST_BASIS_REQUIRED refusal points at (the database sends only its id).
+ */
+export function blendTicketInvoiceRefusalMessage(
+  error: unknown,
+  productNameById: ReadonlyMap<string, string> = new Map(),
+): string | null {
+  if (rpcCodeDetail(error, RpcErrorCodes.BELOW_COST_APPROVAL_STALE) !== null) {
+    return 'The $0 lines on this ticket changed while the approval was open, so nothing was invoiced. Create the invoice again to see and approve the current lines.';
+  }
+  if (rpcCodeDetail(error, RpcErrorCodes.BLEND_TICKET_PRODUCT_UNMATCHED) !== null) {
+    return 'A line on this ticket is not matched to a product, so nothing was invoiced. Match every line to a product, then try again.';
+  }
+  const costProductId = rpcCodeDetail(error, RpcErrorCodes.COST_BASIS_REQUIRED);
+  if (costProductId !== null) {
+    const name = productNameById.get(costProductId);
+    return name
+      ? `${name} has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.`
+      : 'A product on this ticket has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.';
+  }
+  const centsProductId = rpcCodeDetail(error, RpcErrorCodes.COST_BASIS_CENTS_REQUIRED);
+  if (centsProductId !== null) {
+    const name = productNameById.get(centsProductId);
+    return `${name ?? 'A product on this ticket'} has a cost that is not a whole number of cents, so nothing was invoiced. Correct its cost on the Price List, then try again.`;
+  }
+  return null;
+}
+
+/**
  * Plain-English reason for a blend-ticket order or invoice refused because a product has no price
  * on the price list, or `null` for any other error.
  */
