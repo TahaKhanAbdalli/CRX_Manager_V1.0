@@ -276,8 +276,8 @@ draft is zeroed only when it carries no paid, prepay, write-off or credit cents,
 operations; `idempotency_keys` holds zero receipts for the three operations; and a keyless live `void_order` call on a
 random uuid was refused with `IDEMPOTENCY_KEY_REQUIRED`.
 
-**Fix written, NOT applied: voiding an order with a governed SPLIT draft invoice still fails, now that batch 3b is live** (migration
-`20261021030000_void_order_governed_split_draft_claims`, PR #987; until it is applied the description after "Found by" is current). The fix
+**FIXED, applied live 2026-10-21 19:10:58 UTC (2:10 PM Central): voiding an order with a governed SPLIT draft invoice no longer fails** (migration
+`20261021030000_void_order_governed_split_draft_claims`, ledger `20261021191058`, PR #987 merged as `05fdc3e40`; live `void_order` md5 `960b7306`, `_void_order_impl_20260714` md5 `8ad84bdc`, one overload each, `void_order` EXECUTE for `authenticated` and not `anon`, read 2026-10-21; the description after "Found by" is the pre-fix history). The fix
 gives `void_order` the same lock, claim, provenance refresh and claim drop as `cancel_order`, reusing the
 `'cancel_order'` claim operation (the guard's exact-cancel shape is the one write the void makes; anyone tightening that
 shape in `guard_split_invoice_provenance_identity` must keep `void_order`'s draft cancel inside it). (Found by the Codex
@@ -288,8 +288,7 @@ same-transaction `split_invoice_mutation_claims` row. `cancel_order` writes one 
 `_cancel_order_provenance_wrapper_20260719` (lock, claim, refresh the provenance, drop the claim); `void_order` does
 not, so its zeroing UPDATE is refused with `SPLIT_INVOICE_PROVENANCE_IMMUTABLE` and the whole void rolls back
 cleanly. This is not a regression: before batch 3b, now live, every nonzero draft already failed. Live impact today is none:
-live has 0 `split_invoice_provenance` rows (read 2026-10-20). Fix: give `void_order` the same governed-invoice
-locking, claim and provenance refresh as `cancel_order`, in its own reviewed migration, before split billing is used.
+live had 0 `split_invoice_provenance` rows (read 2026-10-20 and again 2026-10-21 before the apply), so no real order was ever affected.
 
 **Bound by batch 2 (migration `20261016140000`, applied live 2026-10-19, ledger `20261019010324`).** The thirteen HIGH-stock functions it covers left the table below: `release_inventory_hold`, `retire_inventory_item`, `reconcile_negative_inventory`, `manual_inventory_add`, `create_order_from_blend_ticket`, `create_direct_order`, `create_rush_order`, `close_quote_as_applied`, `close_quote_as_short`, `create_application_record_from_blend_ticket`, `batch_cancel_deliveries`, `reverse_completed_cycle_count` and `create_planned_holds`. The live re-check is recorded in the batch-2 paragraph below the table.
 
