@@ -59,6 +59,9 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Return credits are briefly paused while an accounting update finishes. Retry in a moment'],
   [/^ORDER_INVOICE_TERMINAL\b/i,
    'This order invoice is already final and cannot be changed'],
+  // void_order refuses rather than erase money already recorded on the order's draft invoice.
+  [/^ORDER_VOID_DRAFT_HAS_APPLIED_MONEY\b/,
+   'Nothing was changed. This order\'s draft invoice already has a payment, prepay, write-off or credit recorded. Reverse that first, then void the order'],
   [/^ORDER_LIFECYCLE_BUSY_RETRY\b/i,
    'This order is being updated elsewhere. Wait a moment and retry'],
   [/^RETURN_CREDIT_LEDGER_IMMUTABLE\b/i,

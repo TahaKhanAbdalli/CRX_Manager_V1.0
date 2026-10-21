@@ -148,6 +148,9 @@ describe('sanitizeError', () => {
     expect(sanitizeError('RETURN_CREDIT_LINE_TOTAL_MISMATCH')).toContain('no changes were saved');
     expect(sanitizeError('RETURN_CREDIT_CUTOVER_IN_PROGRESS')).toContain('briefly paused');
     expect(sanitizeError('ORDER_INVOICE_TERMINAL')).toContain('already final');
+    expect(sanitizeError(
+      'ORDER_VOID_DRAFT_HAS_APPLIED_MONEY: draft invoice INV-1 carries a recorded payment, prepay, write-off or credit; reverse it before voiding the order'
+    )).toContain('Reverse that first, then void the order');
     expect(sanitizeError('ORDER_LIFECYCLE_BUSY_RETRY')).toContain('Wait a moment');
     expect(sanitizeError('RETURN_CREDIT_LEDGER_IMMUTABLE')).toContain('source or cost lines');
     expect(sanitizeError('RETURN_CREDIT_HEADER_RESULT_INVALID')).toContain('could not be completed safely');

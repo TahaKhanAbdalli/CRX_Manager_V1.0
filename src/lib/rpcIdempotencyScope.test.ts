@@ -246,6 +246,18 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // exact inventory reversal. Both layers deliberately share the one public
   // cancel_return cache namespace so retries cannot create divergent receipts.
   _cancel_return_intent_impl_20260812: ['cancel_return'],
+  // Direct EXECUTE is revoked (postgres-only). Replay-binding batch 2 (20261016140000) renamed the
+  // live batch_cancel_deliveries body to this name with ALTER FUNCTION ... RENAME TO, so it kept the
+  // public operation literal, and the public wrapper binds that same receipt. Batch 3b
+  // (20261019235000) re-emits the body only to retarget its keyless per-delivery cancel; changing
+  // the literal would orphan the wrapper's receipt binding.
+  _batch_cancel_deliveries_replay_impl_20261015: ['batch_cancel_deliveries'],
+  // Direct EXECUTE is revoked (postgres-only after batch 3b). Migration 20260714222000 renamed the
+  // live void_order body to this name with ALTER FUNCTION ... RENAME TO, so it kept the public
+  // void_order literal, and the public wrapper binds that same receipt. Batch 3b (20261019235000)
+  // re-emits the body only to zero a cancelled draft's money fields; changing the literal would
+  // orphan the wrapper's receipt binding.
+  _void_order_impl_20260714: ['void_order'],
   // Direct EXECUTE is revoked (proacl postgres-only, live 2026-10-13). These are the private
   // layers behind the public save_invoice and post_invoice wrappers, created by ALTER FUNCTION
   // ... RENAME TO, so their bodies kept the public operation literal and every layer shares that

@@ -306,6 +306,24 @@
         "security"
       ]
     },
+    "delivery_order_void_replay_binding_batch3b": {
+      "chain": "smoke-delivery-order-void-replay-binding-batch3b.sql",
+      "container_only": true,
+      "container_prover": "prove-delivery-order-void-replay-binding-batch3b-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-delivery-order-void-replay-binding-batch3b-real-schema.mjs, never through run-smoke.mjs against the live database: the fixtures complete deliveries on orders, which writes their automatic draft invoices, whose customer-visible invoice numbers are drawn by next_invoice_number() from a non-transactional sequence that a rollback does not return (the prover reports which document-number sequences the chain moved), and the chain plants [SMOKE] customers, products, inventory, orders and deliveries, which the LIVE-DATA GUARD refuses. 20261019235000 (replay-binding batch 3b): cancel_delivery, void_delivery and void_order replay a stored idempotency receipt only for the person who wrote it and the exact same request (record and reason). For each: a key reused for a different delivery/order is refused with IDEMPOTENCY_INTENT_MISMATCH and that record is unchanged; the exact retry returns the identical result with one activity/reversal/audit row; an edited reason on the same key is refused; a second active admin presenting the key is refused with IDEMPOTENCY_ACTOR_MISMATCH; a keyless call is refused with IDEMPOTENCY_KEY_REQUIRED (22023). cancel_delivery checks the caller's role before any stored result is returned: the receipt's own author, demoted to applicator, retrying the exact request gets 'Not authorized to cancel deliveries', and an applicator presenting an admin's key gets the same and sees nothing of the result. void_order voids a fulfilled order whose completion wrote a nonzero draft invoice, cancelling that draft with zero money fields and one invoice_cancelled audit row. batch_cancel_deliveries still cancels through cancel_delivery's body with no per-delivery key (count 1, no stray cancel receipt). Every fresh receipt is stamped with the admin and a SHA-256 fingerprint. Fail-first: step a fails before the migration (cancel_delivery hands delivery A's receipt back as success for delivery B). Uses two real active admins and one active applicator; terminal rollback.",
+      "covers": [
+        "cancel_delivery",
+        "void_delivery",
+        "void_order",
+        "batch_cancel_deliveries"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "idempotency",
+        "security"
+      ]
+    },
     "delivery_job_replay_binding_batch3a": {
       "chain": "smoke-delivery-job-replay-binding-batch3a.sql",
       "container_only": true,

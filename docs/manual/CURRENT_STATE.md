@@ -1,8 +1,12 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-20 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-20 19:41 UTC: 1038 rows / 1031 names, `max(version)`
-`20261020193610` = `20261019230000_cost_margin_admin_only_screens_step2` (Goal 1 part 3, step 2 of 3: screens read
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-21 02:43 UTC (9:43 PM Central, 2026-10-20): 1039 rows /
+1032 names, `max(version)` `20261021024020` = `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`
+(replay-binding batch 3b, PR #967 head `ed2bd8733`), applied 2026-10-21 02:40:20 UTC on Mason's in-chat owner
+approval: `cancel_delivery`, `void_delivery` and `void_order` now require a retry key and replay a saved result only
+for the same person and the exact same request. The 2026-10-20 19:41 UTC read before it had 1038 rows / 1031 names,
+`max(version)` `20261020193610` = `20261019230000_cost_margin_admin_only_screens_step2` (Goal 1 part 3, step 2 of 3: screens read
 cost only through the admin-only `get_admin_cost_fields`, except the four purchase-order screens, and job, field-invoice
 and invoice saves work out a non-admin's cost on the server), applied 2026-10-20 19:36:10 UTC; PR #965 merged the
 screens before the apply, so PR #976 carried the apply and merged right after it as `2c448ce4e`. Before it,
@@ -42,10 +46,12 @@ ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-19; migration ledger and registry lines 2026-10-20)
 
-- **Effective ordering high-water: `20261019230000_cost_margin_admin_only_screens_step2`**
-  (ledger version `20261020193610`, UTC; applied live 2026-10-20 19:36 UTC, carried by PR #976 merged as
-  `2c448ce4e`; read-only ledger read 2026-10-20 19:41 UTC: 1038 rows / 1031 names;
-  migration-history row 956). Before it, `20261019220000_start_and_complete_delivery` (ledger
+- **Effective ordering high-water: `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`**
+  (ledger version `20261021024020`, UTC; applied live 2026-10-21 02:40 UTC (9:40 PM Central, 2026-10-20) for
+  PR #967 on Mason's in-chat owner approval; read-only ledger read 2026-10-21 02:43 UTC: 1039 rows / 1032 names;
+  migration-history row 957). Before it, `20261019230000_cost_margin_admin_only_screens_step2` (ledger
+  `20261020193610`, applied 2026-10-20 19:36 UTC, carried by PR #976 merged as `2c448ce4e`, row 956),
+  `20261019220000_start_and_complete_delivery` (ledger
   `20261020022222`, PR #964), `20261019200000_bind_delivery_job_replay_receipts_batch3a` (ledger
   `20261019205246`, PR #954) and `20261019010000_cost_margin_admin_only_rpc_leaks`
   (ledger `20261019182757`, applied 2026-10-19 18:27 UTC, PR #957 merged as `8124ae21c`, row 953). Before those, `20261016140000_bind_stock_replay_receipts_batch2` (ledger
@@ -108,7 +114,9 @@ ships or quarterly, whichever comes first.
   as `9dbc953c3`; 2026-10-19 UTC), `20261019200000_bind_delivery_job_replay_receipts_batch3a` (`20261019205246`); then,
   from PR #964 (merged as `b0cd83b0a`; 2026-10-20 UTC), `20261019220000_start_and_complete_delivery`
   (`20261020022222`); then, carried by PR #976 (merged as `2c448ce4e`; 2026-10-20 UTC; screens in PR #965),
-  `20261019230000_cost_margin_admin_only_screens_step2` (`20261020193610`).
+  `20261019230000_cost_margin_admin_only_screens_step2` (`20261020193610`); then, from PR #967 (head `ed2bd8733`;
+  applied before its merge, 2026-10-21 UTC), `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`
+  (`20261021024020`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -132,6 +140,9 @@ ships or quarterly, whichever comes first.
   `20261019230000_cost_margin_admin_only_screens_step2` (ledger `20261020193610`). Live hashes of the
   sequences, generated columns, CHECK constraints and column lists matched the previous input exactly, so
   only `generated_at`, the high-water and the applied-name list changed (both migrations changed function bodies and grants only).
+  On 2026-10-20 (Central) it was brought to `migrations_high_water` `20261021024020` by delta, adding
+  `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`, which changed function bodies, grants and one
+  trigger function only, none of which the registry tracks.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration

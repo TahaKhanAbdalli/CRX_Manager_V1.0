@@ -293,18 +293,9 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
   'src/pages/PaymentAllocation.tsx': ['allocatePaymentIdem.resetKey'],
   'src/pages/Quotes.tsx': ['duplicateQuoteIdem.resetKey'],
   'src/pages/FieldSetup.tsx': ['saveFieldIdem.resetKey'],
-  // OrderDetail is mostly FIXED — this pins the ONE site deliberately left in main's
-  // order: void_order sends order.id plus a free-text reason, so it needs payload
-  // binding rather than route-id scoping.
-  'src/pages/OrderDetail.tsx': ['voidOrderIdem.resetKey'],
-  // DeliveryDetail is partly fixed: create_followup_delivery is route-bound and was
-  // reordered; complete_delivery is payload-bound (fingerprintIntentPayload) and was
-  // reordered (Goal 5, PR #955). cancel/void send free-text reasons a route-id scope
-  // does not bind, so they stay in main's order pending payload binding.
-  'src/pages/DeliveryDetail.tsx': [
-    'cancelIdem.resetKey',
-    'voidIdem.resetKey',
-  ],
+  // OrderDetail and DeliveryDetail left this list in replay-binding batch 3b (20261019235000):
+  // void_order, cancel_delivery and void_delivery are now bound to the exact request on the
+  // server and keyed per (record, reason) on the screen, so each reset follows its verified reply.
   // ALIASED-RESET CLASS, invisible until this guard learned to resolve destructured
   // names. Both sites were real; BOTH are now fixed, and ONE still appears here.
   //

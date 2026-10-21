@@ -489,8 +489,9 @@ eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the gu
     ok(isKnownSweepQuery(buildSweepQuery({ name: nameOf(p), sql: p.text }, [])), `${p.file}: the no-contract envelope is recognised`);
   }
   // The proof needs real contract keys in play, not only the empty clause.
-  // (Today that is actor-forgery and actor-forgery-fin-audit; the other entries pin no contracts.)
-  ok(wrapped.filter(({ query }) => query.includes("= ANY(ARRAY[")).length >= 2, "sanity: the actor predicates' wrapped queries request function contracts");
+  // (Today that is actor-forgery only: actor-forgery-fin-audit's last pinned exception, cancel_delivery, was
+  // retired after 20261019235000, so it now emits the no-contract envelope; the other entries pin no contracts.)
+  ok(wrapped.filter(({ query }) => query.includes("= ANY(ARRAY[")).length >= 1, "sanity: the actor predicate's wrapped query requests function contracts");
   // ...and the envelope the guard rebuilds is the one the runner emits.
   for (const { p, query } of wrapped.slice(0, 3)) {
     const keys = entriesFor(nameOf(p)).flatMap((e) => Object.keys(e.reviewed_contracts ?? {}));

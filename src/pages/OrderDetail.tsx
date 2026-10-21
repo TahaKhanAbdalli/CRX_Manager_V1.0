@@ -16,7 +16,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, describePostInvoiceBlock } from '../lib/db';
@@ -751,37 +751,22 @@ export default function OrderDetail() {
   const handleVoidOrder = async () => {
     if (!order || !profile) return;
     setVoiding(true);
+    // One key per exact request (this order + this reason): an edited reason or another order gets
+    // its own key, and an exact retry reuses the first key, which the server (replay-binding batch 3b,
+    // 20261019235000) replays only for the same person and the same order and reason.
+    const reason = voidReason.trim() || 'Voided by admin';
+    const voidScope = JSON.stringify([order.id, reason]);
     try {
-      const idemKey = voidOrderIdem.getKey();
+      const idemKey = voidOrderIdem.getKeyFor(voidScope);
       const { data: voidResult, error } = await supabase.rpc('void_order', {
         p_order_id: order.id,
         p_performed_by: profile.id,
-        p_reason: voidReason.trim() || 'Voided by admin',
+        p_reason: reason,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
-      //
-      // Moving this reset after the assert would make the client RETAIN the key, and a
-      // retained key here is exposed to TWO distinct hazards. Keep them separate — the
-      // first has a cheap fix, the second does not (Codex round-4 LOW).
-      //
-      //   1. CROSS-RECORD. voidOrderIdem carries no record scope, this page survives
-      //      order-to-order navigation, and the void modal can stay open across that
-      //      change so the opening-click reset is bypassed — so order A's void receipt
-      //      could replay against order B (Codex round-3 HIGH). A route-id scope, the
-      //      one used for cancel/split/create-invoice above, WOULD close this.
-      //
-      //   2. SAME-ORDER, CHANGED REASON. void_order also sends the free-text
-      //      voidReason, and check_idempotency matches on key plus operation without
-      //      looking at the new payload. So even correctly scoped to one order, a retry
-      //      after editing the reason replays the first receipt and the UI reports a
-      //      reason that was never recorded. Only binding the REQUEST PAYLOAD
-      //      (fingerprintIntentPayload) closes this one.
-      //
-      // Because (2) needs payload binding anyway, this site waits for that work rather
-      // than taking the scope alone — tracked in docs/manual/KNOWN_ISSUES.md.
-      voidOrderIdem.resetKey();
+      // Retire the key only after a confirmed result: an empty reply keeps it, so retrying the same
+      // request replays the server's saved receipt. A binding refusal is retired in the catch.
       const voided = assertRpcResult<{
         inventory_products_restored?: number;
         commissions_cancelled?: number;
@@ -789,6 +774,7 @@ export default function OrderDetail() {
         posted_invoices_flagged?: number;
         paid_commissions_flagged?: number;
       }>(voidResult, 'void_order');
+      voidOrderIdem.resetKeyFor(voidScope);
 
       const parts: string[] = ['Order voided.'];
       if ((voided.inventory_products_restored ?? 0) > 0)
@@ -807,6 +793,14 @@ export default function OrderDetail() {
       setVoidReason('');
       fetchOrder();
     } catch (error: unknown) {
+      // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
+      // used) retires the key; nothing ran for THIS request. A void cannot repeat: the next try runs
+      // fresh and the body refuses an order that is no longer fulfilled. Reload so a void an earlier
+      // attempt already committed shows.
+      if (getIdempotencyBindingRejection(error)) {
+        voidOrderIdem.resetKeyFor(voidScope);
+        fetchOrder();
+      }
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'critical_action', action: 'void_order' } });
       toast('error', sanitizeError(error));
     } finally {
@@ -1491,7 +1485,7 @@ export default function OrderDetail() {
             )}
             {isAdmin && order.status === 'fulfilled' && (
               <button
-                onClick={() => { voidOrderIdem.resetKey(); setVoidModalOpen(true); }}
+                onClick={() => setVoidModalOpen(true)}
                 className="text-xs text-red-500 hover:text-red-700 underline font-medium"
               >
                 Void Order

@@ -201,7 +201,7 @@ BEGIN
   -- void_order requires 'fulfilled' (live guard); confirmed→fulfilled is
   -- enforcer-legal, no override needed.
   UPDATE orders SET status = 'fulfilled', updated_at = now() WHERE id = v_o1;
-  SELECT void_order(v_o1, v_admin, 'smoke S1: void partial draw') INTO v_res;
+  SELECT void_order(v_o1, v_admin, 'smoke S1: void partial draw', 'smk-dlr-s1-void-' || v_o1::text) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'voided' THEN
     RAISE EXCEPTION 'S1: void_order returned %, expected voided', v_res;
   END IF;
@@ -326,7 +326,7 @@ BEGIN
 
   -- void the FINAL draw order
   UPDATE orders SET status = 'fulfilled', updated_at = now() WHERE id = v_o3b;
-  SELECT void_order(v_o3b, v_admin, 'smoke S2: void final draw') INTO v_res;
+  SELECT void_order(v_o3b, v_admin, 'smoke S2: void final draw', 'smk-dlr-s2-void-' || v_o3b::text) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'voided' THEN
     RAISE EXCEPTION 'S2: void_order returned %', v_res;
   END IF;
@@ -363,7 +363,7 @@ BEGIN
 
   -- double-void guard: voiding the already-voided order must raise
   BEGIN
-    PERFORM void_order(v_o3b, v_admin, 'smoke S2: double void must fail');
+    PERFORM void_order(v_o3b, v_admin, 'smoke S2: double void must fail', 'smk-dlr-s2-double-void-' || v_o3b::text);
     RAISE EXCEPTION 'S2: double-void did not raise';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE 'INVALID_ORDER_STATUS%' THEN RAISE; END IF;
@@ -402,7 +402,7 @@ BEGIN
   END IF;
 
   UPDATE orders SET status = 'fulfilled', updated_at = now() WHERE id = v_oc;
-  SELECT void_order(v_oc, v_admin, 'smoke S3: void whole conversion') INTO v_res;
+  SELECT void_order(v_oc, v_admin, 'smoke S3: void whole conversion', 'smk-dlr-s3-void-' || v_oc::text) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'voided' THEN
     RAISE EXCEPTION 'S3: void_order returned %', v_res;
   END IF;

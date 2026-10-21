@@ -709,34 +709,29 @@ export default function DeliveryDetail() {
   const handleCancel = async () => {
     if (!profile) return;
     setCancelling(true);
-    const idemKey = cancelIdem.getKey();
-    const { data: cancelResult, error } = await supabase.rpc('cancel_delivery', {
-      p_delivery_id: id!,
-      p_cancel_reason: cancelReason.trim() || 'Cancelled',
-      p_performed_by: profile.id,
-      p_idempotency_key: idemKey,
-    });
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
-      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
-      //
-      // Moving this reset after the assert would make the client RETAIN the key, which
-      // is only safe when the key binds everything the RPC acts on. cancel_delivery
-      // also sends p_cancel_reason, free text the user can edit and retry: the assert
-      // throws before setCancelOpen(false)/setCancelReason('') below, so the modal
-      // stays open with the reason editable. check_idempotency matches on key plus
-      // operation only, so the retry would replay the FIRST cancellation's receipt and
-      // the UI would report the edited reason as recorded when it was not. Binding
-      // needs the request payload (PR #535's fingerprintIntentPayload), not a reorder
-      // (Codex round-4 MEDIUM).
-      cancelIdem.resetKey();
+    // One key per exact request (this delivery + this reason): an edited reason gets its own key, and
+    // an exact retry reuses the first key, which the server (replay-binding batch 3b, 20261019235000)
+    // replays only for the same person and the same delivery and reason.
+    const reason = cancelReason.trim() || 'Cancelled';
+    const cancelScope = JSON.stringify([id!, reason]);
+    try {
+      const idemKey = cancelIdem.getKeyFor(cancelScope);
+      const { data: cancelResult, error } = await supabase.rpc('cancel_delivery', {
+        p_delivery_id: id!,
+        p_cancel_reason: reason,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      // Retire the key only after a confirmed result: an empty reply keeps it, so retrying the same
+      // request replays the server's saved receipt. A binding refusal is retired in the catch.
       const cancelData = assertRpcResult<{
         items_restored?: number;
         draft_invoices_cancelled?: number;
         draft_invoices_voided?: number;
         posted_invoices_flagged?: number;
       }>(cancelResult, 'cancel_delivery');
+      cancelIdem.resetKeyFor(cancelScope);
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
       if ((cancelData.items_restored ?? 0) > 0) parts.push(`Inventory restored for ${cancelData.items_restored} item(s).`);
@@ -746,8 +741,19 @@ export default function DeliveryDetail() {
       setCancelOpen(false);
       setCancelReason('');
       fetchDelivery();
+    } catch (err) {
+      // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
+      // used) retires the key; nothing ran for THIS request. A cancel cannot repeat: the next try runs
+      // fresh and the body refuses a delivery already cancelled. Reload so a cancel an earlier attempt
+      // already committed shows.
+      if (getIdempotencyBindingRejection(err)) {
+        cancelIdem.resetKeyFor(cancelScope);
+        fetchDelivery();
+      }
+      toast('error', sanitizeError(err));
+    } finally {
+      setCancelling(false);
     }
-    setCancelling(false);
   };
 
   // ── Void Delivery (admin only, completed) ─────────────────────────────
@@ -755,23 +761,21 @@ export default function DeliveryDetail() {
   const handleVoidDelivery = async () => {
     if (!profile || !delivery) return;
     setVoiding(true);
-    const idemKey = voidIdem.getKey();
-    const { data: voidResult, error } = await supabase.rpc('void_delivery', {
-      p_delivery_id: id!,
-      p_reason: voidReason.trim(),
-      p_performed_by: profile.id,
-      p_idempotency_key: idemKey,
-    });
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
-      // F1 DELIBERATELY NOT FIXED HERE — same reason as cancel_delivery above:
-      // void_delivery sends a free-text p_reason the user can edit before retrying, and
-      // check_idempotency matches on key plus operation only, so a retained key would
-      // replay the first void's receipt under a reason that was never recorded
-      // (Codex round-4 MEDIUM).
-      voidIdem.resetKey();
+    // One key per exact request (this delivery + this reason), as for cancel above.
+    const reason = voidReason.trim();
+    const voidScope = JSON.stringify([id!, reason]);
+    try {
+      const idemKey = voidIdem.getKeyFor(voidScope);
+      const { data: voidResult, error } = await supabase.rpc('void_delivery', {
+        p_delivery_id: id!,
+        p_reason: reason,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      // Retire the key only after a confirmed result (an empty reply keeps it for an exact retry).
       const voidData = assertRpcResult<{ posted_invoices_exist?: boolean }>(voidResult, 'void_delivery');
+      voidIdem.resetKeyFor(voidScope);
       const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
       if (voidData.posted_invoices_exist) {
         parts.push('Warning: posted invoices linked to this order require manual review.');
@@ -781,8 +785,17 @@ export default function DeliveryDetail() {
       setVoidOpen(false);
       setVoidReason('');
       fetchDelivery();
+    } catch (err) {
+      // Any binding refusal retires the key (a void cannot repeat: the body refuses a delivery that
+      // is no longer completed); reload so a void an earlier attempt committed shows.
+      if (getIdempotencyBindingRejection(err)) {
+        voidIdem.resetKeyFor(voidScope);
+        fetchDelivery();
+      }
+      toast('error', sanitizeError(err));
+    } finally {
+      setVoiding(false);
     }
-    setVoiding(false);
   };
 
   // ── Reassign (Take This Delivery) ─────────────────────────────────────
