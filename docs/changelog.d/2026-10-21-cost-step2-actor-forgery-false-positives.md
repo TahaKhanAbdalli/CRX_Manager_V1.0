@@ -1,4 +1,4 @@
-## 2026-10-20 — two actor-forgery flags from the cost/margin step-2 wrappers closed as false positives; three stale exceptions removed
+## 2026-10-21 — two actor-forgery flags from the cost/margin step-2 wrappers closed as false positives; three stale exceptions removed
 
 - **Finding.** After migration `20261019230000` (cost/margin step 2, PR #956, ledger `20261020193610`) went
   live, the `actor-forgery` sweep flagged two new rows: `save_job` and `save_field_app_invoice`, both on

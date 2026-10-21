@@ -15,8 +15,9 @@ import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } fr
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
-import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
-import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import type { Invoice, InvoiceChargeType, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
+import { CHARGE_TYPE_OPTIONS, chargeTypeLabel, fromScratchLinesProblem, isFromScratchInvoice } from '../lib/invoiceChargeLines';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { getTierPrice } from '../lib/quoteCalc';
@@ -63,6 +64,8 @@ interface LineItem {
   billing_line_id?: string | null;
   return_credit_cogs_cents?: number | null;
   return_credit_source_item_id?: string | null;
+  /** Goal 3 charge line (freight, application fee, service, other): no product, quantity 1, no cost. */
+  charge_type: InvoiceChargeType | null;
   // Field-application detail — preserved through edits so the machine-fee flag,
   // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
   is_application_fee: boolean;
@@ -74,6 +77,8 @@ interface LineItem {
   epa_registration: string | null;
   product_form: string | null;
 }
+
+const NEGATIVE_PRICE_MESSAGE = 'Enter a price of $0.00 or more. Use a credit memo to give money back.';
 
 const statusBadge = (status: InvoiceStatus) => {
   const map: Record<InvoiceStatus, { variant: 'default' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
@@ -130,7 +135,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const unpostKeysRef = useRef<Record<string, string>>({});
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
-  const isMiscChargeLocked = isNew && searchParams.get('type') === 'misc_charge';
+  // A new invoice made on this page has no order behind it, and save_invoice refuses an orderless
+  // chemical sale, so every new chemical-route invoice is a misc charge (Goal 3; before this a
+  // bare /invoices/new opened as a Chemical Sale that could never be saved).
+  const isMiscChargeLocked = isNew && (routeArea !== 'field' || searchParams.get('type') === 'misc_charge');
 
   // Invoice header
   const [invoice, setInvoice] = useState<Partial<Invoice>>({
@@ -156,6 +164,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     && !invoice.order_id
     && !invoice.blend_ticket_id;
   const isInvoiceTypeLocked = isMiscChargeLocked || isOrderlessMiscCharge;
+  // Goal 3: no order and no delivery behind it -> charge lines only (the database refuses product
+  // lines on such an invoice, migration 20261021050000). Never on the field-invoices route.
+  const isFromScratch = routeArea !== 'field' && isFromScratchInvoice(invoice);
   const [items, setItems] = useState<LineItem[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
@@ -607,6 +618,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
           return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
           return_credit_source_item_id: (it.return_credit_source_item_id as string) ?? null,
+          charge_type: ((it as Record<string, unknown>).charge_type as InvoiceChargeType) ?? null,
           is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
           rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
           total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
@@ -796,6 +808,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         tote_number: null,
         price_source: null,
         quoted_price_cents: null,
+        charge_type: null,
         is_application_fee: false,
         rate_unit: null,
         total_applied: null,
@@ -810,6 +823,41 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     clearProductSearch();
   };
 
+  // Goal 3: an invoice made from scratch takes charge lines only (a type, a description and an
+  // amount; no product, cost or tax). Quantity stays 1, so the amount is the line total.
+  const addChargeLine = () => {
+    setItems((prev) => [
+      ...prev,
+      {
+        product_id: null,
+        product_name: '',
+        description: '',
+        quantity: 1,
+        unit_price_cents: 0,
+        extended_cents: 0,
+        cost_cents: 0,
+        rate_per_acre: null,
+        acres: null,
+        unit_size: null,
+        sort_order: prev.length,
+        notes: null,
+        tote_number: null,
+        price_source: null,
+        quoted_price_cents: null,
+        // No default: staff pick the type, and fromScratchLinesProblem refuses a save until they do.
+        charge_type: null,
+        is_application_fee: false,
+        rate_unit: null,
+        total_applied: null,
+        total_applied_unit: null,
+        total_applied_gl_lb: null,
+        gl_lb_unit: null,
+        epa_registration: null,
+        product_form: null,
+      },
+    ]);
+  };
+
   // Update line item
   const updateItem = (index: number, field: keyof LineItem, value: unknown) => {
     setItems((prev) => {
@@ -818,6 +866,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // Recalculate extended
       if (field === 'quantity' || field === 'unit_price_cents') {
         item.extended_cents = Math.round(item.quantity * item.unit_price_cents);
+      }
+      // Typing an older product-less line makes it a charge line: quantity 1, the amount is the
+      // line total, and it is not a machine fee (the database's charge-line shape check).
+      if (field === 'charge_type' && value) {
+        item.quantity = 1;
+        item.extended_cents = item.unit_price_cents;
+        item.is_application_fee = false;
       }
       updated[index] = item;
       return updated;
@@ -847,6 +902,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     if (!invoice.customer_id) {
       toast('error', 'Please select a customer');
       return;
+    }
+    if (isFromScratch) {
+      const problem = fromScratchLinesProblem(items);
+      if (problem) {
+        toast('error', problem);
+        return;
+      }
     }
     const outcome = await runCriticalAction<'saved' | 'reconciled' | 'blocked'>({
       action: async () => {
@@ -903,6 +965,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           product_form: it.product_form,
           price_source: it.price_source,
           quoted_price_cents: it.quoted_price_cents,
+          charge_type: it.charge_type,
         }));
 
         const idemKey = saveIdem.getKey();
@@ -1962,26 +2025,35 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       <Card>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-nav-dark">Line Items</h2>
-          {editable && (
+          {editable && (isFromScratch ? (
+            <Button size="sm" icon={<Plus className="w-4 h-4" />} onClick={addChargeLine}>
+              Add Charge
+            </Button>
+          ) : (
             <Button size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => setShowProductModal(true)}>
               Add Product
             </Button>
-          )}
+          ))}
         </div>
+        {editable && isFromScratch && (
+          <p className="-mt-2 mb-4 text-xs text-secondary">
+            This invoice has no order or delivery, so it takes charges only (freight, application fee, service or other). Sell product through an order or a quick delivery.
+          </p>
+        )}
 
         {displayItems.length === 0 ? (
           <div className="text-center py-8 text-secondary">
             <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">No line items yet. Add products to this invoice.</p>
+            <p className="text-sm">{isFromScratch ? 'No charges yet. Add a charge to this invoice.' : 'No line items yet. Add products to this invoice.'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-secondary border-b border-gray-100">
-                  <th className="pb-2 pr-4">Product</th>
+                  <th className="pb-2 pr-4">{isFromScratch ? 'Charge' : 'Product'}</th>
                   <th className="pb-2 pr-4 w-24">Qty</th>
-                  <th className="pb-2 pr-4 w-28">Unit Price</th>
+                  <th className="pb-2 pr-4 w-28">{isFromScratch ? 'Amount' : 'Unit Price'}</th>
                   <th className="pb-2 pr-4 w-28">Extended</th>
                   {displayItems.some((i) => i.tote_number) && (
                     <th className="pb-2 pr-4">Tote #</th>
@@ -1993,13 +2065,44 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 {displayItems.map((item, idx) => (
                   <tr key={idx} className="group">
                     <td className="py-2 pr-4">
-                      <div className="font-medium text-nav-dark">{item.product_name || item.description}</div>
-                      {item.unit_size && (
-                        <div className="text-xs text-secondary">{item.unit_size}</div>
+                      {editable && (item.charge_type || (isFromScratch && !item.product_id)) ? (
+                        <div className="flex flex-col gap-1 sm:flex-row">
+                          <select
+                            aria-label="Charge type"
+                            value={item.charge_type ?? ''}
+                            onChange={(e) => updateItem(idx, 'charge_type', (e.target.value || null) as InvoiceChargeType | null)}
+                            className="px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                          >
+                            {!item.charge_type && <option value="">Pick a type</option>}
+                            {CHARGE_TYPE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            aria-label="Charge description"
+                            placeholder="Description"
+                            value={item.description}
+                            onChange={(e) => updateItem(idx, 'description', e.target.value)}
+                            className="min-w-0 flex-1 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                          />
+                        </div>
+                      ) : item.charge_type ? (
+                        <>
+                          <div className="font-medium text-nav-dark">{item.description}</div>
+                          <div className="text-xs text-secondary">{chargeTypeLabel(item.charge_type)}</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-medium text-nav-dark">{item.product_name || item.description}</div>
+                          {item.unit_size && (
+                            <div className="text-xs text-secondary">{item.unit_size}</div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {editable && !item.billing_line_id ? (
+                      {editable && !item.billing_line_id && !item.charge_type && !(isFromScratch && !item.product_id) ? (
                         <input
                           type="number"
                           value={item.quantity}
@@ -2018,10 +2121,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                           type="number"
                           value={(item.unit_price_cents / 100).toFixed(2)}
                           onChange={(e) => {
-                            const cents = parseDollarsToCents(e.target.value);
+                            const cents = parseDollarsToCentsSigned(e.target.value);
                             // null = a third decimal digit. Refuse the keystroke; never store
                             // a $0 unit price that only the below-cost prompt would question.
                             if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
+                            // The unsigned parser flips "-100" to +$100, which would bill a credit
+                            // as a charge (Sol, PR #983). Refuse a negative price instead.
+                            if (cents < 0) { toast('error', NEGATIVE_PRICE_MESSAGE); return; }
                             updateItem(idx, 'unit_price_cents', cents);
                           }}
                           min={0}

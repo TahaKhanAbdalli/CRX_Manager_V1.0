@@ -1403,3 +1403,169 @@ describe('InvoiceDetail — a product added on this screen is priced at the cust
     return saveCall?.[1].p_items as Array<{ product_id: string; unit_price_cents: number }>;
   }
 });
+
+describe('InvoiceDetail — an invoice made from scratch takes charge lines only (Goal 3)', () => {
+  const setupInvoice = (overrides: Record<string, unknown>, items: unknown[] = []) => {
+    let invoiceCalls = 0;
+    const invoice = {
+      id: 'inv-scratch',
+      invoice_number: 'INV-SCRATCH',
+      invoice_type: 'misc_charge',
+      status: 'draft',
+      customer_id: 'cust-1',
+      order_id: null,
+      delivery_id: null,
+      invoice_date: '2026-10-20',
+      due_date: null,
+      payment_terms: null,
+      total_amount_cents: 0,
+      balance_cents: 0,
+      header_notes: '',
+      footer_notes: '',
+      purchase_order_ref: '',
+      created_at: '2026-10-20T00:00:00Z',
+      ...overrides,
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'invoice_items') return buildChain({ data: items, error: null });
+      return buildChain({ data: [], error: null });
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
+  });
+
+  it('a bare New Invoice opens as a locked Misc Charge with Add Charge, never an unsaveable Chemical Sale', async () => {
+    render(
+      <MemoryRouter initialEntries={['/invoices/new']}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail routeArea="chemical" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const typeSelect = await screen.findByDisplayValue('Misc Charge');
+    expect(typeSelect).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add Charge' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Product' })).toBeNull();
+  });
+
+  it('offers Add Charge instead of Add Product, and saves a typed charge with no product or cost', async () => {
+    setupInvoice({});
+    mockIntentAwareRpc({ data: 'inv-scratch', error: null });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    expect(screen.queryByRole('button', { name: 'Add Product' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Charge' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Charge type' }), { target: { value: 'service' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Charge description' }), { target: { value: 'Soil sampling' } });
+    const row = screen.getByRole('textbox', { name: 'Charge description' }).closest('tr')!;
+    fireEvent.change(within(row).getByRole('spinbutton'), { target: { value: '40.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+      expect(saveCall?.[1].p_items).toEqual([expect.objectContaining({
+        charge_type: 'service',
+        product_id: null,
+        description: 'Soil sampling',
+        quantity: 1,
+        unit_price_cents: 4050,
+        extended_cents: 4050,
+        cost_cents: 0,
+      })]);
+    });
+  });
+
+  it('refuses a negative charge amount instead of billing it as a positive charge (Sol, PR #983)', async () => {
+    setupInvoice({});
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Charge' }));
+    const row = screen.getByRole('textbox', { name: 'Charge description' }).closest('tr')!;
+    const amount = within(row).getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(amount, { target: { value: '-100.00' } });
+
+    expect(mockToast).toHaveBeenCalledWith('error', 'Enter a price of $0.00 or more. Use a credit memo to give money back.');
+    expect(amount.value).toBe('0.00');
+    expect(screen.queryByText('$100.00')).toBeNull();
+  });
+
+  it('refuses to save a charge with no description, before calling the server', async () => {
+    setupInvoice({});
+    mockIntentAwareRpc({ data: 'inv-scratch', error: null });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Charge' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Charge type' }), { target: { value: 'freight' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Add a description to every charge.'));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'save_invoice')).toBe(false);
+  });
+
+  it('a new charge starts with no type and cannot be saved until staff pick one', async () => {
+    setupInvoice({});
+    mockIntentAwareRpc({ data: 'inv-scratch', error: null });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Charge' }));
+    expect(screen.getByRole('combobox', { name: 'Charge type' })).toHaveValue('');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Charge description' }), { target: { value: 'Soil sampling' } });
+    const row = screen.getByRole('textbox', { name: 'Charge description' }).closest('tr')!;
+    fireEvent.change(within(row).getByRole('spinbutton'), { target: { value: '40.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Pick a charge type for every line.'));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'save_invoice')).toBe(false);
+  });
+
+  it('refuses to save a from-scratch invoice that still holds a product line', async () => {
+    setupInvoice({ invoice_type: 'chemical_sale' }, [{
+      id: 'item-1', product_id: 'prod-1', product: { product_name: 'Roundup' }, description: 'Roundup',
+      quantity: 2, unit_price_cents: 3000, extended_cents: 6000, cost_cents: 2250, sort_order: 0,
+    }]);
+    mockIntentAwareRpc({ data: 'inv-scratch', error: null });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('cannot carry products')));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'save_invoice')).toBe(false);
+  });
+
+  it('turns an older untyped line into a single charge when a type is picked', async () => {
+    setupInvoice({}, [{
+      id: 'item-old', product_id: null, description: 'Finance charge', quantity: 2,
+      unit_price_cents: 1234, extended_cents: 2468, cost_cents: 0, sort_order: 0, is_application_fee: true,
+    }]);
+    mockIntentAwareRpc({ data: 'inv-scratch', error: null });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Charge type' }), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+      expect(saveCall?.[1].p_items).toEqual([expect.objectContaining({
+        id: 'item-old', charge_type: 'other', quantity: 1, unit_price_cents: 1234, extended_cents: 1234, is_application_fee: false,
+      })]);
+    });
+  });
+
+  it('keeps Add Product on an order-backed invoice', async () => {
+    setupInvoice({ invoice_type: 'chemical_sale', order_id: 'ord-1' });
+    renderInvoiceDetail('inv-scratch');
+    await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
+    expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Charge' })).toBeNull();
+  });
+});

@@ -1731,6 +1731,8 @@ export interface BlendRecipeItem {
 // Phase 2: Billing / Invoices
 
 export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge' | 'credit_memo';
+/** invoice_items.charge_type (CHECK invoice_items_charge_type_check, mig 20261021050000). */
+export type InvoiceChargeType = 'freight' | 'application_fee' | 'service' | 'other';
 export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
 
 export interface Invoice {
@@ -1911,6 +1913,9 @@ export interface InvoiceItem {
   // applied live and the generated schema artifacts are refreshed.
   return_credit_cogs_cents?: number | null;
   return_credit_source_item_id?: string | null;
+  // Goal 3 charge line (mig 20261021050000): set only on a line with no product, quantity 1 and
+  // no cost. Every line of an invoice made from scratch carries one.
+  charge_type?: InvoiceChargeType | null;
   created_at: string;
   updated_at: string;
   product?: Product;

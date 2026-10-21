@@ -2019,6 +2019,18 @@
       ],
       "nullable": true
     },
+    "invoice_items.charge_type": {
+      "values": [
+        "freight",
+        "application_fee",
+        "service",
+        "other"
+      ],
+      "constraints": [
+        "invoice_items_charge_type_check"
+      ],
+      "nullable": true
+    },
     "invoice_line_shares.base_price_source": {
       "values": [
         "manual",
@@ -3256,6 +3268,12 @@
       "constraint": "inventory_holds_quantity_check",
       "def": "CHECK ((quantity >= (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_items",
+      "constraint": "invoice_items_charge_line_shape_chk",
+      "def": "CHECK (((charge_type IS NULL) OR ((product_id IS NULL) AND (order_item_id IS NULL) AND (return_credit_source_item_id IS NULL) AND (description ~ '[^[:space:]]'::text) AND (quantity = (1)::numeric) AND (cost_cents = 0) AND (is_application_fee IS NOT TRUE) AND (unit_price_cents > 0) AND (extended_cents = unit_price_cents))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "invoice_items",
@@ -7267,7 +7285,8 @@
       "vendor",
       "billing_line_id",
       "return_credit_cogs_cents",
-      "return_credit_source_item_id"
+      "return_credit_source_item_id",
+      "charge_type"
     ],
     "invoice_line_allocations": [
       "id",

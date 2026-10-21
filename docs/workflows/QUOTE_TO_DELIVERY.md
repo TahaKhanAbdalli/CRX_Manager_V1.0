@@ -277,6 +277,10 @@ If you change one stage, check everything downstream:
 
 ---
 
+## Invoices Made From Scratch (Goal 3, `20261021050000`)
+
+An invoice with no order and no delivery behind it (a `misc_charge` from the New Invoice page, or any `chemical_sale` without an order or delivery) carries **charge lines only**: staff pick a type (freight, application fee, service, other), then add a description and a dollar amount, with no product, cost or tax (Mason, 2026-10-14 decision 6e and 2026-10-15). Product is sold through an order and a delivery; a counter sale uses a quick delivery. A new invoice on the New Invoice page always opens as a locked Misc Charge, because `save_invoice` refuses a new Chemical Sale without an order. PostgreSQL refuses a product line on such an invoice on every write path and at posting (`FROM_SCRATCH_INVOICE_PRODUCT_LINE_REFUSED`). Field-application invoices (below) and return credit memos are not covered and keep their product lines.
+
 ## Field Application Workflow (Phase 1, 2026-04-29)
 
 Field application invoices are a parallel branch — they don't go through the quote → order → delivery pipeline. There are three entry points:
