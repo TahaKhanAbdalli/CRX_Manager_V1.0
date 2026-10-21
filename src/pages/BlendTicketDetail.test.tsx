@@ -1074,8 +1074,16 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
     const listed = within(approval).getAllByRole('listitem').map((item) => item.textContent);
     expect(listed).toEqual(['Atrazine 4L', 'Roundup PowerMax']);
     expect(mockNavigate).not.toHaveBeenCalled();
+    // The window clears its reason box in an effect that runs just after it appears. On a busy CI
+    // runner that effect can land after the reason is typed and wipe it, so Approve stays disabled,
+    // the click does nothing, and the test sits until its 5 s limit. The window moves focus inside
+    // itself only after that effect has run, so type once it has (same race and fix as
+    // approveBelowCost in QuoteBuilder.test.tsx, PR #930).
+    await waitFor(() => expect(approval).toContainElement(document.activeElement as HTMLElement | null));
     fireEvent.change(within(approval).getByLabelText(/Approval reason/), { target: { value: 'free sample' } });
-    fireEvent.click(within(approval).getByRole('button', { name: 'Approve and Retry' }));
+    const approve = within(approval).getByRole('button', { name: 'Approve and Retry' });
+    expect(approve).toBeEnabled();
+    fireEvent.click(approve);
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/invoices/inv-9'), { timeout: 5000 });
     const calls = mockRpc.mock.calls.filter(([name]) => name === 'create_invoice_from_blend_ticket');
