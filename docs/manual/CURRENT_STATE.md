@@ -1,7 +1,8 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-20 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-21 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows,
+**Last verified:** 2026-10-21 (America/Chicago) for the migration ledger only (read-only
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-21 05:13 UTC (12:13 AM Central): unchanged since
+the 04:01 UTC read; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows,
 `max(version)` `20261021040052` = `20261020210000_blend_ticket_pricing_guards` (Goal 3 blend-ticket pricing, PR #982 merged
 as `948f238ad`), applied 2026-10-21 04:00:52 UTC under the autonomous-landing rule: an order made from a blend ticket
 never prices a product at $0 for a missing tier price, a blend invoice asks staff to pick when the job's quote lists a

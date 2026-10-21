@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-20 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-21 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
+**Last verified: 2026-10-21 (America/Chicago) against the live migration ledger** (read-only
+`execute_sql`, 2026-10-21 05:13 UTC (12:13 AM Central): unchanged since the 04:01 UTC read, 1040 rows / 1033 names,
+`max(version)` `20261021040052`, and still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
 20:55 UTC read are that `20261019220000` (ledger `20261020022222`, PR #964), `20261019230000` (ledger `20261020193610`,
@@ -274,7 +275,12 @@ draft is zeroed only when it carries no paid, prepay, write-off or credit cents,
 operations; `idempotency_keys` holds zero receipts for the three operations; and a keyless live `void_order` call on a
 random uuid was refused with `IDEMPOTENCY_KEY_REQUIRED`.
 
-**Open follow-up: voiding an order with a governed SPLIT draft invoice still fails, now that batch 3b is live** (Codex GitHub review on #967,
+**Fix written, NOT applied: voiding an order with a governed SPLIT draft invoice still fails, now that batch 3b is live** (migration
+`20261021030000_void_order_governed_split_draft_claims`, PR #987; until it is applied the description after "Found by" is current). The fix
+gives `void_order` the same lock, claim, provenance refresh and claim drop as `cancel_order`, reusing the
+`'cancel_order'` claim operation (the guard's exact-cancel shape is the one write the void makes; anyone tightening that
+shape in `guard_split_invoice_provenance_identity` must keep `void_order`'s draft cancel inside it). (Found by the Codex
+GitHub review on #967,
 verified against the live definitions 2026-10-20). A draft made by `create_split_invoices_from_order` has a
 `split_invoice_provenance` row, and `guard_split_invoice_provenance_identity` lets its total change only under a
 same-transaction `split_invoice_mutation_claims` row. `cancel_order` writes one through
