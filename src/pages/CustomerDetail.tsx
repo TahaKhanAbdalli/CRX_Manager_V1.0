@@ -26,6 +26,7 @@ import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
+import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -164,6 +165,8 @@ export default function CustomerDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
   const [fields, setFields] = useState<(Field & { customer_name: string })[]>([]);
   const [history, setHistory] = useState<PurchaseHistoryItem[]>([]);
+  // The last purchase-history load failed: an error shows instead of "no history".
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [customerRemainders, setCustomerRemainders] = useState<DeliveryRemainder[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [emailError, setEmailError] = useState('');
@@ -440,6 +443,7 @@ export default function CustomerDetail() {
     setDeliveries([]);
     setFields([]);
     setHistory([]);
+    setHistoryFailed(false);
     setCustomerRemainders([]);
     setTimeline([]);
     setAging(null);
@@ -642,10 +646,13 @@ export default function CustomerDetail() {
         // restoration (audit finding B2) traded the test's 0-debt baseline for
         // parallelism; the parallel-session audit (2026-05-26 §10.8) reverted
         // it to honor the codebase convention. ~2× slower on this tab only.
-        const { data: agingData, error: agingError } = await supabase.rpc('get_ar_aging', { p_as_of_date: today });
+        // Only this customer's row: reading the whole company's aging and picking
+        // one out missed any customer past the server's 1,000-row cap.
+        const { data: agingData, error: agingError } = await supabase
+          .rpc('get_ar_aging', { p_as_of_date: today })
+          .eq('customer_id', id!);
         if (agingError) throw agingError;
-        const allAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging');
-        const myAging = allAging.find((a) => a.customer_id === id) || null;
+        const myAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging').find((a) => a.customer_id === id) || null;
         if (isStale()) return;
         setAging(myAging);
 
@@ -709,21 +716,37 @@ export default function CustomerDetail() {
         if (!isStale()) setTimelineLoading(false);
       }
     } else if (selectedTab === 'history') {
-      // GAP FIX #15: Fetch purchase history — all products this customer has ordered
-      const { data: orderIds, error: orderIdsError } = await supabase
+      // GAP FIX #15: Fetch purchase history — all products this customer has ordered.
+      // Both reads are paged (one request stops at the server's row cap), and a
+      // failed read shows an error, never a partial total.
+      setHistoryFailed(false);
+      const { data: orderIds, error: orderIdsError } = await fetchAllRows<{ id: string }>((from, to) => supabase
         .from('orders')
-        .select('id')
+        .select('id', { count: 'exact' })
         .eq('customer_id', id!)
-        .is('deleted_at', null);
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to));
       if (isStale()) return;
-      if (orderIdsError) toast('error', 'Failed to load order history');
-      if (orderIds && orderIds.length > 0) {
-        const { data: allItems, error: allItemsError } = await supabase
+      if (orderIdsError) {
+        toast('error', 'Failed to load order history');
+        setHistory([]);
+        setHistoryFailed(true);
+      } else if (orderIds && orderIds.length > 0) {
+        const { data: allItems, error: allItemsError } = await fetchAllRowsForIds(orderIds.map((o) => o.id), (idChunk, from, to) => supabase
           .from('order_items')
-          .select('product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id')
-          .in('order_id', orderIds.map((o: { id: string }) => o.id));
+          .select('id, product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id', { count: 'exact' })
+          .in('order_id', idChunk)
+          .order('id')
+          .range(from, to));
         if (isStale()) return;
-        if (allItemsError) toast('error', 'Failed to load purchase history');
+        if (allItemsError) {
+          toast('error', 'Failed to load purchase history');
+          setHistory([]);
+          setHistoryFailed(true);
+          setTabLoading(false);
+          return;
+        }
         // Aggregate by product
         const productMap: Record<string, PurchaseHistoryItem> = {};
         (allItems || []).forEach((item: { product_name: string; total_units_needed: number | null; total_price: number | null; quantity_delivered: number | null }) => {
@@ -2065,6 +2088,11 @@ export default function CustomerDetail() {
               {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
               ))}
+            </div>
+          ) : historyFailed ? (
+            // Not "no purchase history": a failed read must not look like a new customer.
+            <div className="px-5 pb-5">
+              <p role="alert" className="text-sm text-red-600">Purchase history could not be loaded. Reload the page to try again.</p>
             </div>
           ) : history.length === 0 ? (
             <div className="px-5 pb-5">

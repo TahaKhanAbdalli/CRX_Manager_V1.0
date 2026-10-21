@@ -29,6 +29,7 @@ import { formatCents as fmt } from '../../lib/money';
 import { SkeletonTable, SkeletonCard } from '../ui/Skeleton';
 import MobileCardList from '../ui/MobileCardList';
 import { openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
+import { fetchAllRows } from '../../lib/pagedRead';
 import SeasonTag from '../invoices/SeasonTag';
 
 // Field / Application invoices are the SECOND, segregated sale type (the work CRX
@@ -77,6 +78,8 @@ export default function FieldInvoicesListPanel() {
   const { profile } = useAuth();
   const [invoices, setInvoices] = useState<FieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last load failed: the panel shows an error instead of an empty or partial list.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   const [cardFilter, setCardFilter] = useState<'unposted' | 'posted' | 'outstanding' | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -129,12 +132,16 @@ export default function FieldInvoicesListPanel() {
     };
   }, [manualInvoiceMenuOpen]);
 
+  // A refresh after an action is a multi-page read; an older, slower load must
+  // not overwrite a newer one, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchInvoices = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const QUERY_LIMIT = 2000;
-    const { data, error } = await supabase
+    // Read every page: a single request is silently cut off at the server's row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`)
+      .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
       .eq('invoice_type', 'field_application')
       .is('deleted_at', null)
       // Open invoices show from EVERY season; closed ones (paid / voided / cancelled)
@@ -142,17 +149,18 @@ export default function FieldInvoicesListPanel() {
       // src/lib/invoiceSeasonWindow.ts.
       .or(openOrInSeasonFilter('created_at'))
       .order('created_at', { ascending: false })
-      .limit(QUERY_LIMIT);
+      .order('id')
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices' } });
       toast('error', 'Failed to load field invoices');
+      // No list, counts or totals: a short list would look complete.
+      setInvoices([]);
+      setLoadFailed(true);
       setLoading(false);
       return;
-    }
-
-    if (data && data.length === QUERY_LIMIT) {
-      toast('error', `Showing first ${QUERY_LIMIT} field invoices — some may be hidden. Contact admin if you need the full list.`);
     }
 
     const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string } }>).map((inv) => ({
@@ -160,6 +168,7 @@ export default function FieldInvoicesListPanel() {
       customer_name: inv.customer?.farm_name || 'Unknown',
     })) as unknown as FieldInvoiceRow[];
     setInvoices(rows);
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -462,6 +471,18 @@ export default function FieldInvoicesListPanel() {
           <SkeletonCard />
         </div>
         <SkeletonTable rows={8} />
+      </div>
+    );
+  }
+
+  // No counts, totals or list: zeros or a short list would look complete.
+  if (loadFailed) {
+    return (
+      <div className="min-w-0 space-y-4">
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Field Invoices</h2>
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Field invoices could not be loaded. Reload to try again.</p>
+        </Card>
       </div>
     );
   }

@@ -6,6 +6,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { assertRpcResult, supabase } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
+import { fetchAllRows } from '../lib/pagedRead';
 import { formatCents } from '../lib/money';
 import { computeSeason } from '../utils/season';
 import type { FieldProfitabilityRow } from '../types';
@@ -67,6 +68,8 @@ export default function FieldProfitability() {
   const [selectedSeason, setSelectedSeason] = useState<string | null>(String(currentSeason));
   const [rows, setRows] = useState<FieldProfitabilityRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last load failed: an error shows instead of "no data" and $0 totals.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [sort, setSort] = useState<SortState>({ key: 'margin_cents', direction: 'desc' });
 
   useEffect(() => {
@@ -75,17 +78,30 @@ export default function FieldProfitability() {
     async function loadReport() {
       setLoading(true);
       try {
-        const { data, error } = await supabase.rpc(
-          'get_field_profitability' as never,
-          { p_season: selectedSeason } as never,
-        );
+        // Read every page: the server cuts a function's rows off at 1,000. One row
+        // per field, billed customer and season (field_id is empty for the
+        // unassigned-field row), so that trio is the unique tie-break.
+        // No season means every season (the argument is left out, so the function's NULL default applies).
+        const { data, error } = await fetchAllRows((from, to) => supabase
+          .rpc('get_field_profitability', { p_season: selectedSeason ?? undefined }, { count: 'exact' })
+          // The function's own order (customer, field, season), then the unique key.
+          .order('customer_name')
+          .order('field_name')
+          .order('season')
+          .order('field_id')
+          .order('customer_id')
+          .range(from, to));
         if (error) throw error;
 
         const result = assertRpcResult<FieldProfitabilityRow[]>(data, 'get_field_profitability');
-        if (active) setRows(result.map(normalizeRow));
+        if (active) {
+          setRows(result.map(normalizeRow));
+          setLoadFailed(false);
+        }
       } catch (_error: unknown) {
         if (active) {
           setRows([]);
+          setLoadFailed(true);
           toast('error', 'Failed to load field profitability.');
         }
       } finally {
@@ -174,7 +190,7 @@ export default function FieldProfitability() {
           icon={<Download className="h-4 w-4" />}
           showChevron={false}
           onClick={handleExport}
-          disabled={rows.length === 0}
+          disabled={loading || rows.length === 0}
         >
           Export CSV
         </Button>
@@ -201,6 +217,9 @@ export default function FieldProfitability() {
             <Loader2 className="h-5 w-5 animate-spin text-crx-green" />
             Loading field profitability…
           </div>
+        ) : loadFailed ? (
+          // Not "no data": a failed read must not look like an empty season.
+          <p role="alert" className="py-16 text-center text-sm text-red-600">Field profitability could not be loaded. Reload the page to try again.</p>
         ) : rows.length === 0 ? (
           <div className="py-16 text-center">
             <p className="font-medium text-nav-dark">No field profitability data</p>

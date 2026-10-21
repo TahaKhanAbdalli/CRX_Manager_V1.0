@@ -21,13 +21,28 @@ type CallSite = { file: string; line: number; callback: string };
 // checks recompute ledgers from these reads, so a short read is a false result.
 const LIB_FILES = ['reconciliation.ts'];
 
+// Components (under src/components) that page with fetchAllRows: Goal 4 part 2's
+// money, check and compliance panels. A file listed here must still exist.
+const COMPONENT_FILES = [
+  'field-invoices/FieldInvoicesListPanel.tsx',
+  'field-invoices/FieldInvoicesPostedPanel.tsx',
+  'field-invoices/FieldInvoicesUnpostedPanel.tsx',
+  'integrity/IntegrityCleanupPanel.tsx',
+  'invoices/FinanceChargePreviewModal.tsx',
+  'prepay/PrepaymentManagerPanel.tsx',
+  'prepay/PrepayWorkspacePanel.tsx',
+  'reports/LogbookReport.tsx',
+];
+const COMPONENTS_DIR = join(__dirname, '..', 'components');
+
 function findCallSites(): CallSite[] {
   const sites: CallSite[] = [];
   const pageFiles = readdirSync(PAGES_DIR).sort()
     .filter((file) => file.endsWith('.tsx') && !file.endsWith('.test.tsx') && !(file in EXEMPT))
     .map((file) => ({ file: `src/pages/${file}`, path: join(PAGES_DIR, file) }));
   const libFiles = LIB_FILES.map((file) => ({ file: `src/lib/${file}`, path: join(__dirname, file) }));
-  for (const { file, path } of [...pageFiles, ...libFiles]) {
+  const componentFiles = COMPONENT_FILES.map((file) => ({ file: `src/components/${file}`, path: join(COMPONENTS_DIR, file) }));
+  for (const { file, path } of [...pageFiles, ...libFiles, ...componentFiles]) {
     // Comments are blanked (same length, newlines kept, so lines still match)
     // so a comment mentioning the count cannot satisfy the check. Blanking only
     // removes text, so a misread string can only make a site fail, never pass.
@@ -53,7 +68,11 @@ describe('paged list reads request the exact row count', () => {
 
   it('finds the paged reads (a pattern that matches nothing must fail)', () => {
     expect(sites.length).toBeGreaterThanOrEqual(20);
-    expect(sites.filter((site) => site.file === 'src/lib/reconciliation.ts').length).toBeGreaterThanOrEqual(10);
+    expect(sites.filter((site) => site.file === 'src/lib/reconciliation.ts').length).toBeGreaterThanOrEqual(14);
+    // Every listed component is actually scanned and pages at least once.
+    for (const file of COMPONENT_FILES) {
+      expect(sites.some((site) => site.file === `src/components/${file}`), file).toBe(true);
+    }
   });
 
   it("every fetchAllRows / fetchAllRowsForIds call selects with { count: 'exact' }", () => {

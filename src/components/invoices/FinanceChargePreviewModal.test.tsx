@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import FinanceChargePreviewModal from './FinanceChargePreviewModal';
 import type { FinanceChargePreview } from '../../types';
+import { pagedRpcReply } from '../../test-utils/inMemoryQuery';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
@@ -16,7 +17,8 @@ const { mockRpc, mockToast } = vi.hoisted(() => {
 });
 
 vi.mock('../../lib/db', async () => ({
-  supabase: { rpc: mockRpc },
+  // The preview is read page by page; pagedRpcReply serves the mocked reply like the server.
+  supabase: { rpc: (...args: unknown[]) => pagedRpcReply(mockRpc(...args)) },
   assertRpcResult: (data: unknown) => data,
   // The REAL sanitizeError, never a stub. A stub shaped
   // `e instanceof Error ? e.message : …` would re-implement the defect this
@@ -96,7 +98,7 @@ describe('FinanceChargePreviewModal', () => {
     await waitFor(() => {
       expect(mockRpc).toHaveBeenCalledWith('preview_finance_charges', {
         p_as_of_date: '2026-01-15',
-      });
+      }, { count: 'exact' });
     });
   });
 

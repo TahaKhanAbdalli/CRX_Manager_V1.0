@@ -16,6 +16,10 @@ import { vi } from 'vitest';
  */
 
 type Row = Record<string, unknown>;
+
+/** The live PostgREST `max-rows`: every reply stops at 1,000 rows. */
+export const SERVER_ROW_CAP = 1000;
+
 type Predicate = (row: Row) => boolean;
 
 function splitTopLevel(expr: string): string[] {
@@ -77,6 +81,30 @@ function parseTerm(term: string): Predicate {
   return comparison(term.slice(0, firstDot), term.slice(firstDot + 1, secondDot), term.slice(secondDot + 1));
 }
 
+/**
+ * Wrap a mocked `supabase.rpc(...)` reply so the page sees the server's
+ * behaviour for a function's rows: `.order()` / `.eq()` chain, `.range()`
+ * returns that slice, no reply holds more than SERVER_ROW_CAP rows (paged or
+ * not, so an unpaged read stops there silently), and an array reply carries
+ * its full length as the exact count. A non-array reply passes through.
+ */
+export function pagedRpcReply(reply: unknown) {
+  let range: [number, number] | null = null;
+  const chain: Record<string, unknown> = {};
+  const self = () => chain;
+  for (const m of ['order', 'eq', 'limit']) chain[m] = vi.fn(self);
+  chain.range = vi.fn((from: number, to: number) => { range = [from, to]; return chain; });
+  chain.then = (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+    Promise.resolve(reply).then((value) => {
+      const res = value as { data?: unknown; error?: unknown } | undefined;
+      if (!res || !Array.isArray(res.data)) return value;
+      const rows = res.data as unknown[];
+      const page = range ? rows.slice(range[0], range[1] + 1) : rows;
+      return { ...res, data: page.slice(0, SERVER_ROW_CAP), count: rows.length };
+    }).then(resolve, reject);
+  return chain;
+}
+
 export interface InMemoryQueryLog {
   /** Every `.or(...)` expression the page sent, in order. */
   orExpressions: string[];
@@ -102,6 +130,11 @@ export function buildInMemoryQuery(rows: Row[], log?: InMemoryQueryLog) {
   chain.is = vi.fn((c: string, v: unknown) => {
     if (v !== null) throw new Error('inMemoryQuery: only is(null) is supported');
     predicates.push((r) => cell(r, c) === null);
+    return chain;
+  });
+  chain.not = vi.fn((c: string, op: string, v: unknown) => {
+    if (op !== 'is' || v !== null) throw new Error(`inMemoryQuery: unsupported not.${op}.${String(v)}`);
+    predicates.push((r) => cell(r, c) !== null);
     return chain;
   });
   chain.in = vi.fn((c: string, values: unknown[]) => {
@@ -136,6 +169,9 @@ export function buildInMemoryQuery(rows: Row[], log?: InMemoryQueryLog) {
     }
     if (rangeEnd !== null) matched = matched.slice(offset, rangeEnd + 1);
     if (limit !== null) matched = matched.slice(0, limit);
+    // Like the live server, no reply holds more than SERVER_ROW_CAP rows, whatever
+    // the limit or range asked for, so a single unpaged read stops there silently.
+    matched = matched.slice(0, SERVER_ROW_CAP);
     return headCount
       ? { data: null, error: null, count }
       : { data: matched, error: null, count };

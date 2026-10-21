@@ -5,7 +5,7 @@
  * provides a view of RUP products, and a RUP Sales Register for
  * state regulatory compliance (FIFRA).
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, AlertTriangle, Award, Package, FileText, Download, MapPin } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -21,6 +21,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { fetchAllRows } from '../lib/pagedRead';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCurrency } from '../lib/money';
 import type { ApplicatorLicense, RUPSalesRecord } from '../types';
@@ -65,6 +66,15 @@ export default function Compliance() {
 
   // RUP Sales Register
   const [rupSales, setRUPSales] = useState<RUPSalesRecord[]>([]);
+  // The last register load failed: an error shows instead of an empty register.
+  const [rupFailed, setRupFailed] = useState(false);
+  // A register load is in flight (its own flag: the page-wide one can be cleared by an older load).
+  const [rupLoading, setRupLoading] = useState(false);
+  // Only the newest register load may set state.
+  const rupLoadSeq = useRef(0);
+  // The last license load failed: an error shows instead of zero counts.
+  const [licensesFailed, setLicensesFailed] = useState(false);
+  const licenseLoadSeq = useRef(0);
   const [rupStartDate, setRUPStartDate] = useState(() => {
     // Default: current season start (Oct 1 of previous year or current year)
     const now = new Date();
@@ -114,11 +124,17 @@ export default function Compliance() {
   const [saving, setSaving] = useState(false);
 
   const fetchLicenses = useCallback(async () => {
+    // Only the newest load may set state: the refresh after adding a license can
+    // overlap an earlier load, which must not put back the older list.
+    const seq = ++licenseLoadSeq.current;
     const [licRes, staffRes] = await Promise.all([
-      supabase
+      // Every license, page by page: the expired / expiring counts come from this list.
+      fetchAllRows((from, to) => supabase
         .from('applicator_licenses')
-        .select('*, customer:customers(farm_name)')
-        .order('expiry_date', { ascending: true }),
+        .select('*, customer:customers(farm_name)', { count: 'exact' })
+        .order('expiry_date', { ascending: true })
+        .order('id')
+        .range(from, to)),
       // Staff names for staff-held licenses (and the modal dropdown) — PII-safe view
       supabase
         .from('profile_public_view')
@@ -126,12 +142,16 @@ export default function Compliance() {
         .eq('is_active', true)
         .order('full_name'),
     ]);
+    if (seq !== licenseLoadSeq.current) return;
 
     if (licRes.error) {
       toast('error', 'Failed to load licenses');
       Sentry.captureException(licRes.error);
+      setLicenses([]);
+      setLicensesFailed(true);
       return;
     }
+    setLicensesFailed(false);
 
     const staffRows = (staffRes.data || []) as { id: string; full_name: string; role: string }[];
     setStaff(staffRows);
@@ -169,18 +189,37 @@ export default function Compliance() {
   }, [toast]);
 
   const fetchRUPSales = useCallback(async () => {
-    const { data, error } = await supabase.rpc('get_rup_sales_register', {
-      p_start_date: rupStartDate,
-      p_end_date: rupEndDate,
-      p_compliance_status: rupComplianceFilter || undefined,
-    });
+    const seq = ++rupLoadSeq.current;
+    // The previous dates' rows must not stay up (or export) as if they were this range's.
+    setRUPSales([]);
+    setRupFailed(false);
+    setRupLoading(true);
+    // Read every page: the server cuts a function's rows off at 1,000.
+    const { data, error } = await fetchAllRows((from, to) => supabase
+      .rpc('get_rup_sales_register', {
+        p_start_date: rupStartDate,
+        p_end_date: rupEndDate,
+        p_compliance_status: rupComplianceFilter || undefined,
+      }, { count: 'exact' })
+      // The function's own order (newest sale, then buyer), then the unique record id.
+      .order('sale_date', { ascending: false })
+      .order('buyer_name')
+      .order('id')
+      .range(from, to));
+    // Newer dates or a newer filter were picked while this one loaded.
+    if (seq !== rupLoadSeq.current) return;
+    setRupLoading(false);
 
     if (error) {
       toast('error', 'Failed to load RUP sales register');
       Sentry.captureException(error);
+      // No register rather than the previous dates' rows or a partial one.
+      setRUPSales([]);
+      setRupFailed(true);
       return;
     }
     setRUPSales(assertRpcResult<RUPSalesRecord[]>(data, 'get_rup_sales_register'));
+    setRupFailed(false);
   }, [rupStartDate, rupEndDate, rupComplianceFilter, toast]);
 
   const fetchFieldListings = useCallback(async () => {
@@ -541,7 +580,13 @@ export default function Compliance() {
       </div>
 
       {/* ========== LICENSES TAB ========== */}
-      {tab === 'licenses' && (
+      {/* A failed load shows no counts or list: "0 expired" would look like good news. */}
+      {tab === 'licenses' && licensesFailed && (
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Licenses could not be loaded. Reload to try again.</p>
+        </Card>
+      )}
+      {tab === 'licenses' && !licensesFailed && (
         <>
           {/* Alert Cards */}
           {(expiredCount > 0 || expiringCount > 0) && (
@@ -729,8 +774,14 @@ export default function Compliance() {
             </div>
           </Card>
 
+          {rupFailed && (
+            <Card>
+              <p role="alert" className="text-center text-red-600 py-8 text-sm">The RUP sales register could not be loaded. Press Refresh to try again.</p>
+            </Card>
+          )}
+
           {/* Summary */}
-          {rupSales.length > 0 && (
+          {!rupFailed && rupSales.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Card>
                 <p className="text-xs text-secondary mb-1">Total Records</p>
@@ -758,12 +809,13 @@ export default function Compliance() {
           )}
 
           {/* Data Table */}
+          {!rupFailed && (
           <Card padding={false}>
             <div className="p-5">
               <DataTable<RUPSalesRecord>
                 columns={rupSalesColumns}
                 data={rupSales}
-                loading={loading}
+                loading={loading || rupLoading}
                 searchable
                 searchPlaceholder="Search RUP sales..."
                 searchKeys={['buyer_name', 'product_name', 'epa_registration', 'buyer_certification_number']}
@@ -772,6 +824,7 @@ export default function Compliance() {
               />
             </div>
           </Card>
+          )}
         </>
       )}
 

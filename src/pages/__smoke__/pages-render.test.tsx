@@ -52,7 +52,9 @@ const H = vi.hoisted(() => {
 
   const supabaseStub = {
     from: () => makeBuilder(),
-    rpc: () => Promise.resolve({ data: [], error: null }),
+    // Chainable like a table read: a page may page a function's rows with
+    // .order().range() (Goal 4), and awaiting it still resolves { data: [], error: null }.
+    rpc: () => makeBuilder(),
     auth: {
       getUser: () => Promise.resolve({ data: { user: { id: 'u' } }, error: null }),
       getSession: () => Promise.resolve({ data: { session: null }, error: null }),

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, BellOff, CheckCheck } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -9,6 +9,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeError, supabase, checkMutationResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
+import { fetchAllRows } from '../lib/pagedRead';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {
@@ -17,26 +18,52 @@ export default function Notifications() {
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last load failed: an error shows instead of "You're all caught up!".
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Only the newest load may set state.
+  const loadSeq = useRef(0);
+  // Whose notifications are on screen (null: nobody's).
+  const shownProfileId = useRef<string | null>(null);
 
   const fetchNotifications = useCallback(async () => {
+    // A new person (or none) supersedes any read still in flight, and the last
+    // person's list leaves the screen at once rather than when the new read lands.
+    const seq = ++loadSeq.current;
+    if (shownProfileId.current !== (profile?.id ?? null)) {
+      shownProfileId.current = profile?.id ?? null;
+      setNotifications([]);
+      setLoadFailed(false);
+    }
     // Guard: Ensure profile is loaded
     if (!profile) {
       setLoading(false);
       return;
     }
 
-    const { data } = await supabase
+    // Every notification, newest first, page by page: the page showed only the
+    // newest 200 while some staff have over 1,000 unread (2026-10-20).
+    const { data, error } = await fetchAllRows<NotificationType>((from, to) => supabase
       .from('notifications')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('user_id', profile.id)
       .order('created_at', { ascending: false })
-      .limit(200);
-    setNotifications((data || []) as NotificationType[]);
+      .order('id')
+      .range(from, to));
+    if (seq !== loadSeq.current) return;
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'load_notifications' } });
+      setNotifications([]);
+      setLoadFailed(true);
+    } else {
+      setNotifications((data || []) as NotificationType[]);
+      setLoadFailed(false);
+    }
     setLoading(false);
   }, [profile]);
 
   useEffect(() => {
-    if (profile) fetchNotifications();
+    // Runs signed out too, so the last person's notifications are cleared.
+    fetchNotifications();
   }, [profile, fetchNotifications]);
 
   const markAsRead = async (notification: NotificationType) => {
@@ -136,7 +163,11 @@ export default function Notifications() {
         )}
       </div>
 
-      {notifications.length === 0 ? (
+      {loadFailed ? (
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Notifications could not be loaded. Reload to try again.</p>
+        </Card>
+      ) : notifications.length === 0 ? (
         <Card>
           <EmptyState
             icon={<BellOff className="w-6 h-6 text-gray-400" />}

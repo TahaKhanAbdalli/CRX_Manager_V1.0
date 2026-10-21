@@ -4,7 +4,7 @@
  * Shows summary cards (Total Owed, Due This Week, Due This Month, Overdue),
  * AP aging buckets, and a vendor breakdown. Admin-only.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Clock, AlertTriangle, FileText, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
+import { fetchAllRows } from '../lib/pagedRead';
 import { formatCents as fmt } from '../lib/money';
 import type { APAgingRow, APDashboardSummary } from '../types';
 
@@ -24,6 +25,10 @@ export default function AccountsPayable() {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<APDashboardSummary | null>(null);
   const [agingData, setAgingData] = useState<APAgingRow[]>([]);
+  // The last aging load failed: an error shows instead of an empty table.
+  const [agingFailed, setAgingFailed] = useState(false);
+  // Only the newest aging load may set state.
+  const agingLoadSeq = useRef(0);
 
   // Audit #35: split the dashboard fetch into two so changing the as-of-date
   // only re-runs the aging query (which depends on it). The summary query is
@@ -39,14 +44,26 @@ export default function AccountsPayable() {
   }, [toast]);
 
   const fetchAging = useCallback(async () => {
+    const seq = ++agingLoadSeq.current;
     // The server owns the Chicago business date for this current-only report.
-    const { data, error } = await supabase.rpc('get_ap_aging');
+    // Read every page: the server cuts a function's rows off at 1,000.
+    const { data, error } = await fetchAllRows<APAgingRow>((from, to) => supabase
+      .rpc('get_ap_aging', undefined, { count: 'exact' })
+      // The function's own order (largest balance first), then the unique vendor id.
+      .order('total_outstanding', { ascending: false })
+      .order('vendor_id')
+      .range(from, to));
+    if (seq !== agingLoadSeq.current) return;
     if (error) {
       Sentry.captureException(error);
       toast('error', 'Failed to load AP aging data');
+      // No rows or totals: an empty table would read as "all vendor bills are paid".
+      setAgingData([]);
+      setAgingFailed(true);
       return;
     }
     setAgingData(assertRpcResult<APAgingRow[]>(data, 'get_ap_aging'));
+    setAgingFailed(false);
   }, [toast]);
 
   // Initial load: both queries fire in parallel, drop loading state when both settle.
@@ -250,16 +267,20 @@ export default function AccountsPayable() {
           </div>
         </div>
 
-        <DataTable<APAgingRow>
-          columns={agingColumns}
-          data={agingData}
-          loading={loading}
-          searchable
-          searchPlaceholder="Search vendors..."
-          searchKeys={['vendor_name']}
-          emptyTitle="No outstanding payables"
-          emptyDescription="All vendor bills are paid."
-        />
+        {agingFailed ? (
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">AP aging could not be loaded. Press Refresh to try again.</p>
+        ) : (
+          <DataTable<APAgingRow>
+            columns={agingColumns}
+            data={agingData}
+            loading={loading}
+            searchable
+            searchPlaceholder="Search vendors..."
+            searchKeys={['vendor_name']}
+            emptyTitle="No outstanding payables"
+            emptyDescription="All vendor bills are paid."
+          />
+        )}
       </Card>
 
       {/* Aging Totals */}

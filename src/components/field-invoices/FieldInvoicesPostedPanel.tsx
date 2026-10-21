@@ -28,6 +28,7 @@ import { isCurrentSeason, openOrInSeasonFilter } from '../../lib/invoiceSeasonWi
 import { computeSeason, seasonStartDate } from '../../utils/season';
 import SeasonTag from '../invoices/SeasonTag';
 import { SkeletonTable } from '../ui/Skeleton';
+import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
 import {
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
@@ -54,9 +55,6 @@ import {
 // view/print/email only; the editor opens read-only paths. Money is integer
 // cents end-to-end (display via formatCents). Unpost is gated to #28 (no
 // unpost_invoice RPC exists yet) — the button is present for parity but inert.
-
-const QUERY_LIMIT = 2000;
-// One page of the Unpost All split-group member check; at or below the server’s response cap.
 
 // Same one-round-trip select as the Unposted list: invoice + customer + linked
 // job number + engine-built per-location rows + line items (chemicals).
@@ -91,6 +89,8 @@ export default function FieldInvoicesPostedPanel() {
 
   const [rows, setRows] = useState<FieldInvoiceListRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last load failed: the panel shows an error instead of an empty or partial list.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [filters, setFilters] = useState<FieldInvoiceListFilters>(emptyFieldInvoiceFilters);
   const [scope, setScope] = useState<PostedScope>(defaultPostedScope);
   const [busy, setBusy] = useState(false);
@@ -104,31 +104,44 @@ export default function FieldInvoicesPostedPanel() {
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
 
+  // A refresh after Unpost All is a multi-page read; an older, slower load must not
+  // overwrite a newer one, so only the latest may set state.
+  const fetchSeq = useRef(0);
   const fetchInvoices = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
+    // A failed load shows an error with no rows, so Unpost All cannot act on a
+    // short or out-of-date list.
+    const fail = () => {
+      setRows([]);
+      setLoadFailed(true);
+      setLoading(false);
+    };
     // Posted / overdue invoices still have money to collect, so they show from EVERY
     // season; paid ones stay this-season only. The season window is on invoice_date —
     // the same field the Trans. Date filter/column and the monthly batch
     // (date_trunc('month', invoice_date)) key off. See src/lib/invoiceSeasonWindow.ts.
-    const { data, error } = await supabase
+    // Read every page: a single request is silently cut off at the server's row cap.
+    // The embedded lists are sorted too, so the confirming read compares like with like.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select(LIST_SELECT)
+      .select(LIST_SELECT, { count: 'exact' })
       .eq('invoice_type', 'field_application')
       .in('status', [...STATUS_POSTED])
       .is('deleted_at', null)
       .or(openOrInSeasonFilter('invoice_date'))
       .order('invoice_date', { ascending: false })
-      .limit(QUERY_LIMIT);
+      .order('id')
+      .order('id', { referencedTable: 'field_app_locations' })
+      .order('id', { referencedTable: 'invoice_items' })
+      .range(from, to));
+    if (seq !== fetchSeq.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices-posted' } });
       toast('error', 'Failed to load posted field invoices');
-      setLoading(false);
+      fail();
       return;
-    }
-
-    if (data && data.length === QUERY_LIMIT) {
-      toast('error', `Showing first ${QUERY_LIMIT} posted field invoices — some may be hidden.`);
     }
 
     const raws = (data || []) as unknown as RawFieldInvoiceRow[];
@@ -143,15 +156,18 @@ export default function FieldInvoicesPostedPanel() {
     )];
 
     if (groupIds.length > 0) {
-      const { data: groupLocs, error: groupErr } = await supabase
+      const { data: groupLocs, error: groupErr } = await fetchAllRowsForIds(groupIds, (idChunk, from, to) => supabase
         .from('field_app_locations')
-        .select('invoice_group_id, applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)')
-        .in('invoice_group_id', groupIds);
+        .select('id, invoice_group_id, applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)', { count: 'exact' })
+        .in('invoice_group_id', idChunk)
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchSeq.current) return;
 
       if (groupErr) {
         Sentry.captureException(groupErr, { tags: { source: 'fetch_group_locations', page: 'field-invoices-posted' } });
         toast('error', 'Failed to load split-invoice locations');
-        setLoading(false);
+        fail();
         return;
       }
 
@@ -172,6 +188,7 @@ export default function FieldInvoicesPostedPanel() {
     }
 
     setRows(raws.map(mapFieldInvoiceRow));
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -491,6 +508,18 @@ export default function FieldInvoicesPostedPanel() {
     return (
       <div className="p-6 space-y-6">
         <SkeletonTable rows={8} />
+      </div>
+    );
+  }
+
+  // No totals, list or Unpost All: a short list would look complete.
+  if (loadFailed) {
+    return (
+      <div className="min-w-0 space-y-4">
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Posted Field Application Invoices</h2>
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Posted field invoices could not be loaded. Reload to try again.</p>
+        </Card>
       </div>
     );
   }

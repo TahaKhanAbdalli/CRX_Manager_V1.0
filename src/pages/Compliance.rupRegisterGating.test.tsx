@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import { pagedRpcReply } from '../test-utils/inMemoryQuery';
 
 const H = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -28,7 +29,8 @@ vi.mock('../lib/db', async (importOriginal) => {
       return () => builder;
     },
   });
-  return { ...actual, supabase: { from: () => builder, rpc: H.rpc } };
+  // The register is read page by page; pagedRpcReply serves the mocked reply like the server.
+  return { ...actual, supabase: { from: () => builder, rpc: (...args: unknown[]) => pagedRpcReply(H.rpc(...args)) } };
 });
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -54,6 +56,9 @@ async function renderPage() {
 }
 
 const registerTab = () => screen.queryByRole('button', { name: /RUP Sales Register/ });
+// Matched by name, whatever the other arguments: a never-called check must not
+// pass just because the call's argument list changed shape.
+const registerCalls = () => H.rpc.mock.calls.filter(([name]) => name === 'get_rup_sales_register');
 
 beforeEach(() => {
   H.rpc.mockReset();
@@ -72,7 +77,7 @@ describe('Compliance RUP Sales Register gating', () => {
     expect(screen.getByRole('button', { name: /RUP Products/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Field Listing/ })).toBeTruthy();
     expect(registerTab()).toBeNull();
-    expect(H.rpc).not.toHaveBeenCalledWith('get_rup_sales_register', expect.anything());
+    expect(registerCalls()).toHaveLength(0);
   });
 
   it('hides the register tab from an inactive admin profile and never calls the register', async () => {
@@ -80,20 +85,20 @@ describe('Compliance RUP Sales Register gating', () => {
     await renderPage();
     await screen.findByRole('button', { name: /Applicator Licenses/ });
     expect(registerTab()).toBeNull();
-    expect(H.rpc).not.toHaveBeenCalledWith('get_rup_sales_register', expect.anything());
+    expect(registerCalls()).toHaveLength(0);
   });
 
   it('lets an admin open the register', async () => {
     await renderPage();
     const tab = await screen.findByRole('button', { name: /RUP Sales Register/ });
     fireEvent.click(tab);
-    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('get_rup_sales_register', expect.anything()));
+    await waitFor(() => expect(registerCalls().length).toBeGreaterThan(0));
   });
 
   it('falls back to Licenses when an admin on the register is demoted in place', async () => {
     const view = await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /RUP Sales Register/ }));
-    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('get_rup_sales_register', expect.anything()));
+    await waitFor(() => expect(registerCalls().length).toBeGreaterThan(0));
     const calls = H.rpc.mock.calls.length;
 
     H.role.current = 'sales_rep';

@@ -23,6 +23,7 @@ import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCen
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
 import { getIdempotencyBindingRejection } from '../../lib/idempotency';
+import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -84,6 +85,8 @@ export default function PrepaymentManagerPanel() {
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last load failed: an error shows instead of $0 totals and an empty table.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [applying, setApplying] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmCustomer, setConfirmCustomer] = useState<CustomerPrepay | null>(null);
@@ -116,45 +119,62 @@ export default function PrepaymentManagerPanel() {
   const [bucketSplits, setBucketSplits] = useState<BucketSplit[]>([{ label: '', amount: '' }]);
   const [savingCheck, setSavingCheck] = useState(false);
 
+  // Only the newest load may set state; a refresh after an apply is several reads.
+  const loadSeq = useRef(0);
   const fetchCustomers = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
+    // A failed read shows an error with no rows or totals, so neither the
+    // summary nor the CSV can show a short list as if it were complete.
+    const fail = () => {
+      toast('error', 'Failed to load prepayments');
+      setCustomers([]);
+      setLoadFailed(true);
+      setLoading(false);
+    };
 
-    // Get customers with prepay balances
-    const { data: custData, error } = await supabase
+    // Every customer with a prepay balance, page by page (was the first 500).
+    const { data: custData, error } = await fetchAllRows<{ id: string; farm_name: string; prepay_balance_cents: number }>((from, to) => supabase
       .from('customers')
-      .select('id, farm_name, prepay_balance_cents')
+      .select('id, farm_name, prepay_balance_cents', { count: 'exact' })
       .gt('prepay_balance_cents', 0)
       .eq('is_active', true)
       .order('farm_name')
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== loadSeq.current) return;
+    if (error) { fail(); return; }
+    const customerRows = custData || [];
 
-    if (error) {
-      toast('error', 'Failed to load prepayments');
-      setLoading(false);
-      return;
+    // Their unpaid invoices in one paged read per chunk of customers (was one
+    // unchecked read per customer, whose failure counted as "no unpaid invoices").
+    const { data: invData, error: invError } = await fetchAllRowsForIds(customerRows.map((c) => c.id), (idChunk, from, to) => supabase
+      .from('invoices')
+      .select('id, customer_id, balance_cents', { count: 'exact' })
+      .in('customer_id', idChunk)
+      .eq('status', 'posted')
+      .gt('balance_cents', 0)
+      .is('deleted_at', null)
+      .order('id')
+      .range(from, to));
+    if (seq !== loadSeq.current) return;
+    if (invError) { fail(); return; }
+    const unpaidByCustomer = new Map<string, { count: number; cents: number }>();
+    for (const inv of (invData || []) as Array<{ customer_id: string; balance_cents: number | null }>) {
+      const sum = unpaidByCustomer.get(inv.customer_id) ?? { count: 0, cents: 0 };
+      sum.count += 1;
+      sum.cents += inv.balance_cents ?? 0;
+      unpaidByCustomer.set(inv.customer_id, sum);
     }
 
-    // Enrich with unpaid invoice info
-    const enriched: CustomerPrepay[] = [];
-    for (const c of (custData || []) as Array<{ id: string; farm_name: string; prepay_balance_cents: number }>) {
-      const { data: invData } = await supabase
-        .from('invoices')
-        .select('id, balance_cents')
-        .eq('customer_id', c.id)
-        .eq('status', 'posted')
-        .gt('balance_cents', 0)
-        .is('deleted_at', null);
-
-      enriched.push({
-        id: c.id,
-        farm_name: c.farm_name,
-        prepay_balance_cents: c.prepay_balance_cents || 0,
-        unpaid_invoice_count: (invData || []).length,
-        unpaid_balance_cents: (invData || []).reduce((s: number, i: { balance_cents: number | null }) => s + (i.balance_cents ?? 0), 0),
-      });
-    }
-
-    setCustomers(enriched);
+    setCustomers(customerRows.map((c) => ({
+      id: c.id,
+      farm_name: c.farm_name,
+      prepay_balance_cents: c.prepay_balance_cents || 0,
+      unpaid_invoice_count: unpaidByCustomer.get(c.id)?.count ?? 0,
+      unpaid_balance_cents: unpaidByCustomer.get(c.id)?.cents ?? 0,
+    })));
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -629,6 +649,8 @@ export default function PrepaymentManagerPanel() {
           <Button
             variant="secondary"
             size="sm"
+            // A failed or unfinished load must not export as if it were the whole list.
+            disabled={loadFailed || loading}
             onClick={() =>
               exportToCSV(
                 customers as unknown as Record<string, unknown>[],
@@ -647,6 +669,13 @@ export default function PrepaymentManagerPanel() {
         </div>
       </div>
 
+      {/* A failed load shows no totals or table: $0 would read as "no prepay to apply". */}
+      {loadFailed ? (
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Prepayments could not be loaded. Press Refresh to try again.</p>
+        </Card>
+      ) : (
+      <>
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
@@ -773,6 +802,8 @@ export default function PrepaymentManagerPanel() {
           )}
         </div>
       </Card>
+      </>
+      )}
 
       {/* Edit Credit Modal */}
       <Modal open={!!editCredit} onClose={() => setEditCredit(null)} title="Edit Prepay Credit">

@@ -854,9 +854,11 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 5: Commission splits ─────────────────────────────────
   try {
-    const { data, error: commErr } = await supabase
+    const { data, error: commErr } = await fetchAllRows((from, to) => supabase
       .from('commissions')
-      .select('order_id, job_id, invoice_id, status, order_number, split_percentage');
+      .select('id, order_id, job_id, invoice_id, status, order_number, split_percentage', { count: 'exact' })
+      .order('id')
+      .range(from, to));
     if (commErr) throw new Error(`Commissions query failed: ${commErr.message}`);
 
     const commissions = (data ?? []) as CommissionRow[];
@@ -882,13 +884,17 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   // ── Check 6: Quote-Hold Parity ──────────────────────────────────
   try {
     const [quotesRes, holdsRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('quotes')
-        .select('id, quote_number, is_planned, status')
-        .is('deleted_at', null),
-      supabase
+        .select('id, quote_number, is_planned, status', { count: 'exact' })
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('inventory_holds')
-        .select('source_id, is_active'),
+        .select('id, source_id, is_active', { count: 'exact' })
+        .order('id')
+        .range(from, to)),
     ]);
 
     if (quotesRes.error) throw new Error(`Quotes query failed: ${quotesRes.error.message}`);
@@ -1017,10 +1023,12 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 9: Return-Credit Linkage ──────────────────────────────
   try {
-    const { data: returnsData, error: retErr } = await supabase
+    const { data: returnsData, error: retErr } = await fetchAllRows((from, to) => supabase
       .from('returns')
-      .select('id, return_number, status, credit_invoice_id')
-      .is('deleted_at', null);
+      .select('id, return_number, status, credit_invoice_id', { count: 'exact' })
+      .is('deleted_at', null)
+      .order('id')
+      .range(from, to));
     if (retErr) throw new Error(`Returns query failed: ${retErr.message}`);
 
     const returns = (returnsData ?? []) as ReturnCheckRow[];
@@ -1045,10 +1053,12 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 10: Customer AR Consistency ───────────────────────────
   try {
-    const { data: arInvoiceData, error: arErr } = await supabase
+    const { data: arInvoiceData, error: arErr } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select('id, invoice_number, customer_id, balance_cents, status')
-      .is('deleted_at', null);
+      .select('id, invoice_number, customer_id, balance_cents, status', { count: 'exact' })
+      .is('deleted_at', null)
+      .order('id')
+      .range(from, to));
     if (arErr) throw new Error(`AR invoices query failed: ${arErr.message}`);
 
     const arInvoices = (arInvoiceData ?? []) as CustomerARInvoiceRow[];

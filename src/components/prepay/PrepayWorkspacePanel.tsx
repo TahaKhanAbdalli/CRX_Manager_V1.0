@@ -5,7 +5,7 @@
  * Layout: Left panel (prepay buckets by check) | Right panel (unpaid invoices)
  * Bottom toolbar: Save Allocations | Reset
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, DollarSign, RotateCcw, Save,
@@ -25,6 +25,7 @@ import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { localToday } from '../../lib/dateUtils';
 import { formatCents as fmt } from '../../lib/money';
+import { fetchAllRows } from '../../lib/pagedRead';
 
 interface PrepayBucket {
   id: string;
@@ -67,6 +68,10 @@ export default function PrepayWorkspacePanel() {
   const [pendingAllocations, setPendingAllocations] = useState<PendingAllocation[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  // The last load failed: an error shows instead of the Apply panels.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Only the newest customer's load may set state.
+  const loadSeq = useRef(0);
 
   // Apply modal state
   const [applyBucket, setApplyBucket] = useState<PrepayBucket | null>(null);
@@ -85,33 +90,48 @@ export default function PrepayWorkspacePanel() {
 
   const fetchData = useCallback(async () => {
     if (!selectedCustomerId) {
+      // A load still running for the previous customer must not refill the panels.
+      loadSeq.current += 1;
+      setLoading(false);
+      setLoadFailed(false);
       setBuckets([]);
       setInvoices([]);
       return;
     }
+    const seq = ++loadSeq.current;
     setLoading(true);
 
+    // Both lists are read page by page (one request stops at the server's row cap).
     const [bucketsRes, invoicesRes] = await Promise.all([
-      supabase
+      fetchAllRows<PrepayBucket>((from, to) => supabase
         .from('prepay_credits')
-        .select('id, customer_id, reference_number, bucket_label, original_amount_cents, balance_cents, created_at')
+        .select('id, customer_id, reference_number, bucket_label, original_amount_cents, balance_cents, created_at', { count: 'exact' })
         .eq('customer_id', selectedCustomerId)
         .gt('balance_cents', 0)
-        .order('created_at', { ascending: true }),
-      supabase
+        .order('created_at', { ascending: true })
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('invoices')
-        .select('id, invoice_number, total_amount_cents, balance_cents, due_date, created_at')
+        .select('id, invoice_number, total_amount_cents, balance_cents, due_date, created_at', { count: 'exact' })
         .eq('customer_id', selectedCustomerId)
         .eq('status', 'posted')
         .gt('balance_cents', 0)
         .is('deleted_at', null)
-        .order('due_date', { ascending: true }),
+        .order('due_date', { ascending: true })
+        .order('id')
+        .range(from, to)),
     ]);
+    // Another customer was picked while this one loaded.
+    if (seq !== loadSeq.current) return;
 
     if (bucketsRes.error) toast('error', 'Failed to load prepay credits');
     if (invoicesRes.error) toast('error', 'Failed to load invoices');
-    setBuckets((bucketsRes.data || []) as PrepayBucket[]);
-    setInvoices((invoicesRes.data || []) as UnpaidInvoice[]);
+    // A failed read clears BOTH lists: applying credits against half a picture is unsafe.
+    const failed = Boolean(bucketsRes.error || invoicesRes.error);
+    setBuckets(failed ? [] : (bucketsRes.data || []));
+    setInvoices(failed ? [] : ((invoicesRes.data || []) as UnpaidInvoice[]));
+    setLoadFailed(failed);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId]);
@@ -264,7 +284,13 @@ export default function PrepayWorkspacePanel() {
         </select>
       </Card>
 
-      {selectedCustomerId && !loading && (
+      {selectedCustomerId && !loading && loadFailed && (
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">This customer&apos;s credits and invoices could not be loaded. Reload the page to try again.</p>
+        </Card>
+      )}
+
+      {selectedCustomerId && !loading && !loadFailed && (
         <>
           {/* Split Panel */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

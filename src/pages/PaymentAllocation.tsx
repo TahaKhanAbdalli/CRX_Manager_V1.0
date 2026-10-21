@@ -6,7 +6,7 @@
  * Sprint 16: Unified Payment Allocation
  * AR Single Source of Truth: This is now the sole payment entry point.
  */
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   DollarSign,
   Search,
@@ -26,6 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { fetchAllRows } from '../lib/pagedRead';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
@@ -93,6 +94,10 @@ export default function PaymentAllocation() {
   // Invoice list + allocations
   const [invoices, setInvoices] = useState<PaymentAllocationEntry[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  // The last invoice load failed: an error shows instead of "no open invoices".
+  const [invoicesFailed, setInvoicesFailed] = useState(false);
+  // Only the newest customer's invoice load may set state.
+  const invoiceLoadSeq = useRef(0);
 
   // Submission
   const [submitting, setSubmitting] = useState(false);
@@ -144,11 +149,16 @@ export default function PaymentAllocation() {
   /* ── Load invoices when customer selected ──────────────────────────── */
 
   const fetchInvoices = useCallback(async (customerId: string) => {
+    const seq = ++invoiceLoadSeq.current;
     setLoadingInvoices(true);
+    // The previous customer's invoices must never stay on screen to be paid against.
+    setInvoices([]);
     const today = new Date();
-    const { data, error } = await supabase
+    // Every open invoice, page by page: a check could only be applied to the
+    // customer's first 200 before (2026-10-20 Goal 4 part 2).
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select('id, invoice_number, invoice_date, due_date, invoice_type, total_amount_cents, balance_cents')
+      .select('id, invoice_number, invoice_date, due_date, invoice_type, total_amount_cents, balance_cents', { count: 'exact' })
       .eq('customer_id', customerId)
       // U1 (#41): include 'overdue' — the 6am cron flips past-due posted invoices to
       // 'overdue', which made exactly the invoices checks arrive for vanish from this
@@ -158,13 +168,18 @@ export default function PaymentAllocation() {
       .is('deleted_at', null)
       .order('invoice_date', { ascending: true })
       .order('created_at', { ascending: true })
-      .limit(200);
+      .order('id')
+      .range(from, to));
+    // Another customer was picked (or cleared) while this one loaded.
+    if (seq !== invoiceLoadSeq.current) return;
 
     if (error) {
       toast('error', 'Failed to load invoices');
+      setInvoicesFailed(true);
       setLoadingInvoices(false);
       return;
     }
+    setInvoicesFailed(false);
 
     const mapped = ((data || []) as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string | null; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv): PaymentAllocationEntry => ({
       invoice_id: inv.id,
@@ -191,6 +206,10 @@ export default function PaymentAllocation() {
   }, [fetchInvoices]);
 
   const clearCustomer = useCallback(() => {
+    // A load still running for the cleared customer must not refill the list.
+    invoiceLoadSeq.current += 1;
+    setLoadingInvoices(false);
+    setInvoicesFailed(false);
     setSelectedCustomer(null);
     setCustomerSearch('');
     setInvoices([]);
@@ -256,8 +275,16 @@ export default function PaymentAllocation() {
 
   /* ── Submit payment ──────────────────────────────────────────────── */
 
+  // Without the customer's open invoices on screen, a check would go entirely to
+  // prepay credit by default, so nothing is applied until they have loaded.
+  const invoicesNotReady = loadingInvoices || invoicesFailed;
+
   const handleSubmit = async () => {
     if (!selectedCustomer || !profile) return;
+    if (invoicesNotReady) {
+      toast('error', 'Wait for the open invoices to load before applying the check.');
+      return;
+    }
     if (checkAmountRefused) {
       toast('error', MONEY_PRECISION_MESSAGE);
       return;
@@ -286,6 +313,10 @@ export default function PaymentAllocation() {
   const executeSubmit = async () => {
     if (!selectedCustomer || !profile) return;
     setPrepayConfirmOpen(false);
+    if (invoicesNotReady) {
+      toast('error', 'Wait for the open invoices to load before applying the check.');
+      return;
+    }
     setSubmitting(true);
     try {
       const allocations = invoices
@@ -542,6 +573,11 @@ export default function PaymentAllocation() {
                   <div className="flex items-center justify-center py-12">
                     <div className="w-6 h-6 border-3 border-crx-green border-t-transparent rounded-full animate-spin" />
                   </div>
+                ) : invoicesFailed ? (
+                  // Not "no open invoices": a failed read must not look like a paid-up customer.
+                  <p role="alert" className="text-center py-12 text-red-600 text-sm">
+                    Open invoices could not be loaded, so the check cannot be applied. Search for the customer and pick them again to retry.
+                  </p>
                 ) : invoices.length === 0 ? (
                   <div className="text-center py-12 text-secondary text-sm">
                     No open invoices for this customer
@@ -657,6 +693,7 @@ export default function PaymentAllocation() {
                     onClick={handleSubmit}
                     loading={submitting}
                     disabled={
+                      invoicesNotReady ||
                       remaining < 0 ||
                       hasValidationError ||
                       checkCents <= 0 ||

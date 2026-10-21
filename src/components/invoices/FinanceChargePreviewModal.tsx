@@ -7,7 +7,7 @@
  * with per-customer checkbox selection. Users can generate charges for
  * selected customers or all at once.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { parseLocalDate } from '../../lib/dateUtils';
 import { Zap, CheckSquare, Square } from 'lucide-react';
 import { logActivity } from '../../lib/activityLogger';
@@ -19,6 +19,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { fetchAllRows } from '../../lib/pagedRead';
 import type { FinanceChargePreview } from '../../types';
 import { formatCents as fmtCents } from '../../lib/money';
 
@@ -43,31 +44,52 @@ export default function FinanceChargePreviewModal({
   const [generating, setGenerating] = useState(false);
   const [previews, setPreviews] = useState<FinanceChargePreview[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // The last preview failed: an error shows instead of "no charges to generate".
+  const [previewFailed, setPreviewFailed] = useState(false);
+  // Only the newest preview may set state; one for an older date finishing late is ignored.
+  const previewLoadSeq = useRef(0);
 
   const fetchPreview = useCallback(async () => {
+    const seq = ++previewLoadSeq.current;
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('preview_finance_charges', {
-        p_as_of_date: asOfDate,
-      });
+      // Read every page: the server cuts a function's rows off at 1,000, and
+      // "Generate" charges only the customers previewed here.
+      const { data, error } = await fetchAllRows<FinanceChargePreview>((from, to) => supabase
+        .rpc('preview_finance_charges', { p_as_of_date: asOfDate }, { count: 'exact' })
+        // The function's own order (customer name), then the unique customer id.
+        .order('customer_name')
+        .order('customer_id')
+        .range(from, to));
       if (error) throw error;
       const rows = assertRpcResult<FinanceChargePreview[]>(data, 'preview_finance_charges');
+      if (seq !== previewLoadSeq.current) return;
       setPreviews(rows);
+      setPreviewFailed(false);
       // Select all by default
       setSelected(new Set(rows.map((r) => r.customer_id)));
     } catch (err: unknown) {
+      if (seq !== previewLoadSeq.current) return;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'FinanceChargePreviewModal.fetchPreview' } });
       toast('error', sanitizeError(err));
+      // Nothing to generate from a failed preview, so no stale or partial list stays selectable.
+      setPreviews([]);
+      setSelected(new Set());
+      setPreviewFailed(true);
     }
-    setLoading(false);
+    if (seq === previewLoadSeq.current) setLoading(false);
   }, [asOfDate, toast]);
 
   useEffect(() => {
     if (open) {
       fetchPreview();
     } else {
+      // A preview still loading when the modal closed must not fill it later.
+      previewLoadSeq.current += 1;
+      setLoading(false);
       setPreviews([]);
       setSelected(new Set());
+      setPreviewFailed(false);
     }
   }, [open, asOfDate, fetchPreview]);
 
@@ -164,6 +186,9 @@ export default function FinanceChargePreviewModal({
               <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse" />
             ))}
           </div>
+        ) : previewFailed ? (
+          // Not "nothing to charge": a failed preview must not read as an empty one.
+          <p role="alert" className="text-center py-8 text-sm text-red-600">The preview could not be loaded. Close and reopen to try again.</p>
         ) : previews.length === 0 ? (
           <div className="text-center py-8">
             <Zap className="w-10 h-10 text-gray-300 mx-auto mb-2" />

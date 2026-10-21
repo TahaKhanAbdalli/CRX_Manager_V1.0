@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { buildInMemoryQuery, SERVER_ROW_CAP } from '../test-utils/inMemoryQuery';
 
 const {
   mockFrom,
@@ -476,6 +477,31 @@ describe('CustomerDetail stale whole-record save', () => {
     })));
   });
 
+  it('totals purchase history over every order line, past the 1,000-row server cap (Goal 4 H23)', async () => {
+    // The fake server caps every reply at 1,000 rows like the real one. 1,010 orders,
+    // one $10.00 line each: one unpaged read of either table stopped at 1,000.
+    const total = SERVER_ROW_CAP + 10;
+    const orders = Array.from({ length: total }, (_, i) => ({ id: `order-${String(i).padStart(4, '0')}`, customer_id: 'customer-1', deleted_at: null }));
+    const lines = orders.map((o, i) => ({
+      id: `line-${String(i).padStart(4, '0')}`, order_id: o.id, product_name: 'Roundup', price_per_unit: 10,
+      total_units_needed: 1, total_price: 10, quantity_delivered: 1, section_name: null,
+    }));
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      if (table === 'orders') return buildInMemoryQuery(orders);
+      if (table === 'order_items') return buildInMemoryQuery(lines);
+      return query({ data: [], error: null });
+    });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'history' }));
+
+    const row = (await screen.findByText('Roundup')).closest('tr')!;
+    expect(row).toHaveTextContent(String(total));
+    expect(row).toHaveTextContent('$10,100.00');
+  });
+
   it('reloads the financials tab when the route switches customers without remounting the page', async () => {
     // The financials tab caches its fetch in a ref. CustomerDetail is not
     // remounted when only :id changes, so before this guard existed the tab
@@ -487,13 +513,13 @@ describe('CustomerDetail stale whole-record save', () => {
     });
     mockRpc.mockImplementation((name: string) => {
       if (name === 'get_ar_aging') {
-        return Promise.resolve({
-          data: [
-            { customer_id: 'customer-1', farm_name: 'Original Farm', current_amount: 1234, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 1234 },
-            { customer_id: 'customer-2', farm_name: 'Second Farm', current_amount: 5678, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 5678 },
-          ],
-          error: null,
-        });
+        const rows: Record<string, unknown>[] = [
+          { customer_id: 'customer-1', farm_name: 'Original Farm', current_amount: 1234, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 1234 },
+          { customer_id: 'customer-2', farm_name: 'Second Farm', current_amount: 5678, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 5678 },
+        ];
+        // The tab asks the server for this customer's row only (Goal 4 N1), so the
+        // reply is filtered like PostgREST filters a function's rows.
+        return { eq: (column: string, value: unknown) => Promise.resolve({ data: rows.filter((r) => r[column] === value), error: null }) };
       }
       if (name === 'get_customer_statement') return Promise.resolve({ data: [], error: null });
       return Promise.resolve({ data: null, error: null });

@@ -26,32 +26,70 @@ export default function NotificationsPanel() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Unread notifications in the database; null when the count could not be read.
+  const [unreadCount, setUnreadCount] = useState<number | null>(0);
+  const loadSeq = useRef(0);
+  // Whose notifications are on screen (null: nobody's).
+  const shownProfileId = useRef<string | null>(null);
+  // The last list read failed: the dropdown says so instead of "No notifications".
+  const [listFailed, setListFailed] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const fetchNotifications = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    // Signed out, or another person signed in: drop the last account's list and
+    // count at once (the bumped sequence also discards any read of theirs still in
+    // flight), rather than leaving them up, clickable, until the new read lands.
+    if (shownProfileId.current !== (profile?.id ?? null)) {
+      shownProfileId.current = profile?.id ?? null;
+      setNotifications([]);
+      setUnreadCount(0);
+      setListFailed(false);
+      setLoading(Boolean(profile));
+    }
     if (!profile) return;
 
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', profile.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
+    // The dropdown shows the newest 20 on purpose; the badge counts every unread
+    // notification in the database (it used to count only the unread among those 20).
+    const [listRes, unreadRes] = await Promise.all([
+      supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .limit(20),
+      supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', profile.id)
+        .eq('is_read', false),
+    ]);
+    // Realtime events can start several refreshes; only the newest may set state.
+    if (seq !== loadSeq.current) return;
 
-    if (error) {
+    // An unknown count shows a warning badge, never a number that looks right.
+    setUnreadCount(unreadRes.error || typeof unreadRes.count !== 'number' ? null : unreadRes.count);
+    if (unreadRes.error) {
+      Sentry.captureException(unreadRes.error, { extra: { context: 'count_unread_notifications' } });
+    }
+    if (listRes.error) {
       toast('error', 'Failed to load notifications');
+      // Never leave an earlier list (possibly another signed-in account's) on screen.
+      setNotifications([]);
+      setListFailed(true);
       setLoading(false);
       return;
     }
-    setNotifications((data || []) as Notification[]);
+    setNotifications((listRes.data || []) as Notification[]);
+    setListFailed(false);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile]);
 
   useEffect(() => {
-    if (profile) {
-      fetchNotifications();
-    }
+    // Runs signed out too, so the last account's notifications are cleared.
+    fetchNotifications();
   }, [profile, fetchNotifications]);
 
   useEffect(() => {
@@ -150,17 +188,23 @@ export default function NotificationsPanel() {
     return date.toLocaleDateString();
   };
 
-  const unreadCount = notifications.filter(n => !n.is_read).length;
+  const countUnknown = unreadCount === null;
+  // With the count unknown, Mark all still shows when any loaded one is unread.
+  const hasUnread = countUnknown ? notifications.some((n) => !n.is_read) : unreadCount > 0;
 
   return (
     <div className="relative" ref={panelRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 text-secondary hover:text-nav-dark rounded-lg hover:bg-gray-100 transition-colors"
-        title="Notifications"
+        title={countUnknown ? 'Notifications (unread count could not be loaded)' : 'Notifications'}
       >
         <Bell className="w-5 h-5" />
-        {unreadCount > 0 && (
+        {countUnknown ? (
+          <span className="absolute top-1 right-1 w-4 h-4 bg-amber-500 rounded-full text-white text-xs flex items-center justify-center font-medium" aria-label="Unread count could not be loaded">
+            !
+          </span>
+        ) : unreadCount > 0 && (
           <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full text-white text-xs flex items-center justify-center font-medium">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
@@ -173,14 +217,14 @@ export default function NotificationsPanel() {
             <h3 className="font-semibold text-nav-dark flex items-center gap-2">
               <Bell className="w-5 h-5" />
               Notifications
-              {unreadCount > 0 && (
+              {!countUnknown && unreadCount > 0 && (
                 <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs font-medium rounded-full">
-                  {unreadCount}
+                  {unreadCount.toLocaleString()} unread
                 </span>
               )}
             </h3>
             <div className="flex items-center gap-1">
-              {unreadCount > 0 && (
+              {hasUnread && (
                 <button
                   onClick={markAllAsRead}
                   className="p-1.5 text-xs text-secondary hover:text-crx-green rounded"
@@ -209,6 +253,9 @@ export default function NotificationsPanel() {
                   </div>
                 ))}
               </div>
+            ) : listFailed ? (
+              // Not "No notifications": a failed read must not look like an empty inbox.
+              <p role="alert" className="p-8 text-center text-sm text-red-600">Notifications could not be loaded.</p>
             ) : notifications.length === 0 ? (
               <div className="p-8 text-center">
                 <Bell className="w-12 h-12 text-gray-300 mx-auto mb-2" />

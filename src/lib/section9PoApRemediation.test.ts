@@ -86,7 +86,9 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     const page = source('src', 'pages', 'AccountsPayable.tsx');
     expect(page).toContain('Current AP only.');
     expect(page).toContain('Exact historical AP is unavailable');
-    expect(page).toContain("supabase.rpc('get_ap_aging')");
+    // Still no as-of date argument: the page is read in pages (Goal 4), with the
+    // server's own Chicago business date.
+    expect(page).toContain(".rpc('get_ap_aging', undefined, { count: 'exact' })");
     expect(page).not.toContain('requestAsOfDate');
     expect(page).not.toContain('chicagoBusinessToday');
     expect(page).toContain('Server-determined Chicago business date');

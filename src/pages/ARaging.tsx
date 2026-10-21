@@ -11,7 +11,7 @@
  * credit-reduced figure. This is intentional — aging tracks what is owed, not net
  * position; credits are reflected against AR when applied via payment allocation.
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack, Mail, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -20,6 +20,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { fetchAllRows } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
@@ -66,6 +67,10 @@ export default function ARaging() {
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
+  // The last aging load failed: the tab shows an error instead of zero totals.
+  const [agingFailed, setAgingFailed] = useState(false);
+  // Only the newest aging load may set state; an older date's load finishing late is ignored.
+  const agingLoadSeq = useRef(0);
   const [asOfDate, setAsOfDate] = useState(localToday());
 
   // Statement
@@ -95,17 +100,34 @@ export default function ARaging() {
   };
 
   const fetchAging = useCallback(async () => {
+    const seq = ++agingLoadSeq.current;
     setLoading(true);
-    const { data, error } = await supabase.rpc('get_ar_aging', {
-      p_as_of_date: asOfDate,
-    });
+    // Read every page: the server cuts a function's rows off at 1,000, which
+    // dropped the smallest balances from the list and the totals.
+    const { data, error } = await fetchAllRows<ARAgingRow>((from, to) => supabase
+      .rpc('get_ar_aging', { p_as_of_date: asOfDate }, { count: 'exact' })
+      // The function's own order (largest balance first), then the unique customer id.
+      .order('total_outstanding', { ascending: false })
+      .order('customer_id')
+      .range(from, to));
+    // A newer as-of date was picked while this one loaded.
+    if (seq !== agingLoadSeq.current) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load AR aging data');
+      // No rows and no totals: the previous date's or a partial list would look current.
+      setAgingData([]);
+      setSelectedCustomers(new Set());
+      setAgingFailed(true);
       setLoading(false);
       return;
     }
-    setAgingData(assertRpcResult<ARAgingRow[]>(data, 'get_ar_aging'));
+    const rows = assertRpcResult<ARAgingRow[]>(data, 'get_ar_aging');
+    setAgingData(rows);
+    // Batch statements act on the selection: keep only customers on this date's list.
+    const onList = new Set(rows.map((r) => r.customer_id));
+    setSelectedCustomers((prev) => new Set([...prev].filter((id) => onList.has(id))));
+    setAgingFailed(false);
     setLoading(false);
   }, [asOfDate, toast]);
 
@@ -872,6 +894,8 @@ export default function ARaging() {
                 <Button
                   variant="secondary"
                   size="sm"
+                  // A failed or unfinished load must not export as if it were the whole list.
+                  disabled={agingFailed || loading}
                   onClick={() =>
                     exportToCSV(
                       agingData as unknown as Record<string, unknown>[],
@@ -894,6 +918,13 @@ export default function ARaging() {
             </div>
           </Card>
 
+          {/* A failed load shows no totals or table: zeros would read as "nothing owed". */}
+          {agingFailed ? (
+            <Card>
+              <p role="alert" className="text-center text-red-600 py-8 text-sm">AR aging could not be loaded. Press Refresh to try again.</p>
+            </Card>
+          ) : (
+          <>
           {/* Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <Card>
@@ -947,6 +978,8 @@ export default function ARaging() {
                 <span className="font-mono font-semibold">{fmt(agingTotals.total)}</span>
               </div>
             </Card>
+          )}
+          </>
           )}
         </>
       )}

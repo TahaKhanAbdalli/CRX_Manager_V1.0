@@ -4,7 +4,7 @@
  *
  * Sprint 9: Reporting Engine
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Card from '../ui/Card';
 import DataTable, { type Column } from '../ui/DataTable';
 import Badge from '../ui/Badge';
@@ -12,6 +12,7 @@ import ReportShell from './ReportShell';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useToast } from '../ui/Toast';
 import { exportToCSV, fmtDateCSV } from '../../lib/csvExport';
+import { fetchAllRows } from '../../lib/pagedRead';
 import { downloadReportPdf, type ReportPdfColumn } from '../../lib/reportPdf';
 import type { LogbookRow, FAALogbookRow, ApplicationProduct } from '../../types';
 
@@ -46,27 +47,66 @@ export default function LogbookReport() {
   const [data, setData] = useState<LogbookRow[]>([]);
   const [faaData, setFaaData] = useState<FAALogbookRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // The last logbook load failed: an error shows instead of an empty table.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Only the newest logbook load, and the newest tab's picker list, may set state.
+  const logbookLoadSeq = useRef(0);
+  const entityLoadSeq = useRef(0);
+  // The current tab's picker choices failed to load.
+  const [entitiesFailed, setEntitiesFailed] = useState(false);
+  // The tab whose picker the current choice (entityId) was made in.
+  const entityTabRef = useRef<LogbookTab>(tab);
 
   // Load entity options when tab changes
   useEffect(() => {
     setEntityId('');
+    setEntities([]);
+    setEntitiesFailed(false);
     setData([]);
     setFaaData([]);
+    setLoadFailed(false);
+    // A logbook still loading for the previous tab must not fill this one.
+    logbookLoadSeq.current += 1;
+    setLoading(false);
+    // Every choice, page by page (customers and fields were capped at 500,
+    // applicators at 200). Only the newest tab's list may fill the picker.
+    const seq = ++entityLoadSeq.current;
     if (tab === 'faa') return;
 
     async function loadEntities() {
       if (tab === 'customer') {
-        const { data: rows, error } = await supabase.from('customers').select('id, farm_name').order('farm_name').limit(500);
-        if (error) { toast('error', 'Failed to load customers'); return; }
+        const { data: rows, error } = await fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
+          .from('customers')
+          .select('id, farm_name', { count: 'exact' })
+          .order('farm_name')
+          .order('id')
+          .range(from, to));
+        if (seq !== entityLoadSeq.current) return;
+        if (error) { toast('error', 'Failed to load customers'); setEntitiesFailed(true); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.farm_name })));
       } else if (tab === 'applicator') {
         // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
-        const { data: rows, error } = await supabase.from('profile_public_view').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
-        if (error) { toast('error', 'Failed to load applicators'); return; }
+        const { data: rows, error } = await fetchAllRows<{ id: string | null; full_name: string | null }>((from, to) => supabase
+          .from('profile_public_view')
+          .select('id, full_name, role', { count: 'exact' })
+          .in('role', ['applicator', 'admin', 'sales_rep'])
+          .eq('is_active', true)
+          .order('full_name')
+          .order('id')
+          .range(from, to));
+        if (seq !== entityLoadSeq.current) return;
+        if (error) { toast('error', 'Failed to load applicators'); setEntitiesFailed(true); return; }
         setEntities((rows || []).map((r) => ({ id: r.id ?? '', label: r.full_name ?? '' })));
       } else if (tab === 'field') {
-        const { data: rows, error } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
-        if (error) { toast('error', 'Failed to load fields'); return; }
+        const { data: rows, error } = await fetchAllRows((from, to) => supabase
+          .from('fields')
+          .select('id, field_name, customer:customers(farm_name)', { count: 'exact' })
+          .eq('is_active', true)
+          .order('field_name')
+          .order('id')
+          .range(from, to));
+        if (seq !== entityLoadSeq.current) return;
+        if (error) { toast('error', 'Failed to load fields'); setEntitiesFailed(true); return; }
         // Supabase's inferred type for the embedded customer join doesn't narrow
         // cleanly, so assert the exact row shape we selected (no `any`).
         type FieldEntityRow = { id: string; field_name: string; customer: { farm_name: string } | null };
@@ -77,48 +117,77 @@ export default function LogbookReport() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Each logbook is read page by page (the server cuts a function's rows off at
+  // 1,000), sorted on the functions' own order (newest application first) and then
+  // the unique record id. Only the newest load may set state, and a failed load
+  // shows an error with no rows, never the previous logbook or a partial one.
   const fetchLogbook = useCallback(async () => {
+    const seq = ++logbookLoadSeq.current;
     setLoading(true);
+    // The previous selection's records must not stay exportable under the new
+    // selection's title and dates while this one loads.
+    setData([]);
     // PR-19 follow-up: per-branch literal rpc names so the assertRpcCoverage
     // regex can match each capture (it only counts string literals, not
     // variable references). Was a single `supabase.rpc(rpcName, ...)` call
     // with a computed name — assert was correctly placed but uncounted.
     const dateParams = { p_start_date: startDate, p_end_date: endDate };
+    let result: { rows: LogbookRow[] } | { error: { message: string } };
     if (tab === 'customer') {
-      const { data: rows, error } = await supabase.rpc('get_logbook_by_customer', {
-        p_customer_id: entityId,
-        ...dateParams,
-      });
-      if (error) toast('error', `Failed to load logbook: ${error.message}`);
-      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_customer'));
+      const { data: rows, error } = await fetchAllRows((from, to) => supabase
+        .rpc('get_logbook_by_customer', { p_customer_id: entityId, ...dateParams }, { count: 'exact' })
+        .order('application_date', { ascending: false })
+        .order('application_time', { ascending: false, nullsFirst: false })
+        .order('record_id')
+        .range(from, to));
+      result = error ? { error } : { rows: assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_customer') };
     } else if (tab === 'applicator') {
-      const { data: rows, error } = await supabase.rpc('get_logbook_by_applicator', {
-        p_applicator_id: entityId,
-        ...dateParams,
-      });
-      if (error) toast('error', `Failed to load logbook: ${error.message}`);
-      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_applicator'));
+      const { data: rows, error } = await fetchAllRows((from, to) => supabase
+        .rpc('get_logbook_by_applicator', { p_applicator_id: entityId, ...dateParams }, { count: 'exact' })
+        .order('application_date', { ascending: false })
+        .order('application_time', { ascending: false, nullsFirst: false })
+        .order('record_id')
+        .range(from, to));
+      result = error ? { error } : { rows: assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_applicator') };
     } else {
-      const { data: rows, error } = await supabase.rpc('get_logbook_by_field', {
-        p_field_id: entityId,
-        ...dateParams,
-      });
-      if (error) toast('error', `Failed to load logbook: ${error.message}`);
-      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_field'));
+      const { data: rows, error } = await fetchAllRows((from, to) => supabase
+        .rpc('get_logbook_by_field', { p_field_id: entityId, ...dateParams }, { count: 'exact' })
+        .order('application_date', { ascending: false })
+        .order('application_time', { ascending: false, nullsFirst: false })
+        .order('record_id')
+        .range(from, to));
+      result = error ? { error } : { rows: assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_field') };
+    }
+    if (seq !== logbookLoadSeq.current) return;
+    if ('error' in result) {
+      toast('error', `Failed to load logbook: ${result.error.message}`);
+      setData([]);
+      setLoadFailed(true);
+    } else {
+      setData(result.rows);
+      setLoadFailed(false);
     }
     setLoading(false);
   }, [tab, entityId, startDate, endDate, toast]);
 
   const fetchFAA = useCallback(async () => {
+    const seq = ++logbookLoadSeq.current;
     setLoading(true);
-    const { data: rows, error } = await supabase.rpc('get_logbook_faa', {
-      p_start_date: startDate,
-      p_end_date: endDate,
-    });
+    setFaaData([]);
+    const { data: rows, error } = await fetchAllRows((from, to) => supabase
+      .rpc('get_logbook_faa', { p_start_date: startDate, p_end_date: endDate }, { count: 'exact' })
+      .order('application_date', { ascending: false })
+      .order('application_time', { ascending: false, nullsFirst: false })
+      .order('record_id')
+      .range(from, to));
+    if (seq !== logbookLoadSeq.current) return;
     if (error) {
       toast('error', `Failed to load FAA logbook: ${error.message}`);
+      setFaaData([]);
+      setLoadFailed(true);
     } else {
       setFaaData(assertRpcResult<FAALogbookRow[]>(rows, 'get_logbook_faa'));
+      setLoadFailed(false);
     }
     setLoading(false);
   }, [startDate, endDate, toast]);
@@ -128,7 +197,9 @@ export default function LogbookReport() {
     if (tab === 'faa') {
       if (startDate && endDate) fetchFAA();
     } else {
-      if (entityId && startDate && endDate) fetchLogbook();
+      // On a tab switch this effect still sees the previous tab's choice for one
+      // render (its reset to '' lands next render); never send it to this tab's logbook.
+      if (entityId && entityTabRef.current === tab && startDate && endDate) fetchLogbook();
     }
   }, [tab, entityId, startDate, endDate, fetchFAA, fetchLogbook]);
 
@@ -296,8 +367,8 @@ export default function LogbookReport() {
 
       <ReportShell
         onDateChange={handleDateChange}
-        onExportCSV={currentData.length > 0 ? handleCSV : undefined}
-        onExportPDF={currentData.length > 0 ? handlePDF : undefined}
+        onExportCSV={!loading && currentData.length > 0 ? handleCSV : undefined}
+        onExportPDF={!loading && currentData.length > 0 ? handlePDF : undefined}
         extraControls={
           tab !== 'faa' ? (
             <div>
@@ -306,7 +377,7 @@ export default function LogbookReport() {
               </label>
               <select
                 value={entityId}
-                onChange={(e) => setEntityId(e.target.value)}
+                onChange={(e) => { entityTabRef.current = tab; setEntityId(e.target.value); }}
                 aria-label={`Select ${tab}`}
                 className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
               >
@@ -315,13 +386,20 @@ export default function LogbookReport() {
                   <option key={e.id} value={e.id}>{e.label}</option>
                 ))}
               </select>
+              {/* An empty picker after a failed read must not look like "no choices". */}
+              {entitiesFailed && (
+                <p role="alert" className="mt-1 text-xs text-red-600">The choices could not be loaded. Reload the page to try again.</p>
+              )}
             </div>
           ) : undefined
         }
       >
         <Card padding={false}>
           <div className="p-5">
-            {tab === 'faa' ? (
+            {loadFailed && !loading ? (
+              // Not "no records": a failed read must not look like an empty logbook.
+              <p role="alert" className="text-center text-red-600 py-8 text-sm">The logbook could not be loaded. Change the dates or selection to try again.</p>
+            ) : tab === 'faa' ? (
               <DataTable
                 data={faaData as unknown as Record<string, unknown>[]}
                 columns={faaCols as unknown as Column<Record<string, unknown>>[]}

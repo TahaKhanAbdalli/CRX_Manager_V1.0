@@ -11,6 +11,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../../hooks/useUnresolvedIntent';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
 import { fetchBilledOutsideCrxDeliveryIds } from '../../lib/deliveryExternalBilling';
+import { fetchAllRows } from '../../lib/pagedRead';
 
 interface NegativeInvRow {
   id: string;
@@ -124,6 +125,8 @@ export default function IntegrityCleanupPanel() {
   const [invoiceCoverageFailed, setInvoiceCoverageFailed] = useState(false);
   const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
   const [alerts, setAlerts] = useState<IntegrityAlertRow[]>([]);
+  // Sections whose last read failed (their lists are cleared, not left stale).
+  const [failedSections, setFailedSections] = useState<string[]>([]);
   const [resolveBusy, setResolveBusy] = useState<Record<string, boolean>>({});
 
   // Per-row reconcile inputs
@@ -133,7 +136,12 @@ export default function IntegrityCleanupPanel() {
   const [verifyConfirmId, setVerifyConfirmId] = useState<string | null>(null);
   const reconcileInFlightRef = useRef(new Set<string>());
 
+  // Only the newest load may set state: a refresh after a cleanup action can
+  // overlap an earlier one, which must not restore rows that were just fixed.
+  const fetchSeq = useRef(0);
   const fetchAll = useCallback(async () => {
+    const seq = ++fetchSeq.current;
+    const isStale = () => seq !== fetchSeq.current;
     setRefreshing(true);
     setInvoiceCoverageFailed(false);
     try {
@@ -141,33 +149,51 @@ export default function IntegrityCleanupPanel() {
       // failure (e.g. the manufactured_at_delivery query erroring during the
       // window between code deploy and migration apply) doesn't drop the
       // three other sections' data.
+      // The negative-stock, unbilled, manufactured and alert lists are read page
+      // by page: one request stops at the server's row cap, which hid rows past it.
       const [negSettled, overSettled, unbilledSettled, manufacturedSettled, alertsSettled] = await Promise.allSettled([
-        supabase
+        fetchAllRows((from, to) => supabase
           .from('inventory')
-          .select('id, product_id, location, quantity_available, quantity_prebooked, quantity_on_order, product:products(product_name)')
-          .or('quantity_available.lt.0,quantity_prebooked.lt.0,quantity_on_order.lt.0'),
-        supabase
+          .select('id, product_id, location, quantity_available, quantity_prebooked, quantity_on_order, product:products(product_name)', { count: 'exact' })
+          .or('quantity_available.lt.0,quantity_prebooked.lt.0,quantity_on_order.lt.0')
+          .order('id')
+          .range(from, to)),
+        // A filter cannot compare two columns: `.gt('quantity_received', 'quantity_ordered')`
+        // compared against the TEXT "quantity_ordered", so the server refused it every
+        // time (22P02) and this section always looked empty. Read every line received
+        // at all, page by page, and keep the over-received ones below.
+        fetchAllRows((from, to) => supabase
           .from('purchase_order_items')
-          .select('id, product_name, quantity_ordered, quantity_received, purchase_order:purchase_orders(po_number)')
-          .gt('quantity_received', 'quantity_ordered'),
-        supabase
+          .select('id, product_name, quantity_ordered, quantity_received, purchase_order:purchase_orders(po_number)', { count: 'exact' })
+          .gt('quantity_received', 0)
+          .order('id')
+          .range(from, to)),
+        fetchAllRows((from, to) => supabase
           .from('deliveries')
-          .select('id, delivery_number, order_id, completed_at, customer:customers(farm_name), items:delivery_items(id)')
+          .select('id, delivery_number, order_id, completed_at, customer:customers(farm_name), items:delivery_items(id)', { count: 'exact' })
           .eq('status', 'completed')
           .not('order_id', 'is', null)
-          .order('completed_at', { ascending: false }),
-        supabase
+          .order('completed_at', { ascending: false })
+          .order('id')
+          // The embedded item list is sorted too, so the confirming read compares like with like.
+          .order('id', { referencedTable: 'items' })
+          .range(from, to)),
+        fetchAllRows((from, to) => supabase
           .from('inventory')
-          .select('id, product_id, location, quantity_available, updated_at, product:products(product_name)')
+          .select('id, product_id, location, quantity_available, updated_at, product:products(product_name)', { count: 'exact' })
           .eq('manufactured_at_delivery', true)
-          .order('updated_at', { ascending: false }),
+          .order('updated_at', { ascending: false })
+          .order('id')
+          .range(from, to)),
         // integrity_alerts is admin-only (RLS) and not yet in the generated types —
         // query via the untyped client; open alerts have resolved_at IS NULL.
-        supabaseUntyped
+        fetchAllRows((from, to) => supabaseUntyped
           .from('integrity_alerts')
-          .select('id, alert_type, entity_table, entity_id, details, detected_at')
+          .select('id, alert_type, entity_table, entity_id, details, detected_at', { count: 'exact' })
           .is('resolved_at', null)
-          .order('detected_at', { ascending: false }),
+          .order('detected_at', { ascending: false })
+          .order('id')
+          .range(from, to)),
       ]);
 
       const negRes = negSettled.status === 'fulfilled' ? negSettled.value : { data: null, error: negSettled.reason };
@@ -175,6 +201,14 @@ export default function IntegrityCleanupPanel() {
       const unbilledRes = unbilledSettled.status === 'fulfilled' ? unbilledSettled.value : { data: null, error: unbilledSettled.reason };
       const manufacturedRes = manufacturedSettled.status === 'fulfilled' ? manufacturedSettled.value : { data: null, error: manufacturedSettled.reason };
       const alertsRes = alertsSettled.status === 'fulfilled' ? alertsSettled.value : { data: null, error: alertsSettled.reason };
+      if (isStale()) return;
+      setFailedSections([
+        ['integrity alerts', alertsRes],
+        ['negative inventory', negRes],
+        ['over-received POs', overRes],
+        ['unbilled deliveries', unbilledRes],
+        ['stock made at delivery', manufacturedRes],
+      ].filter(([, res]) => !(res as { data: unknown }).data).map(([label]) => label as string));
 
       // Report any individual-section failures to Sentry so we can detect
       // deploy-ordering issues, but don't block the other sections from rendering.
@@ -238,7 +272,8 @@ export default function IntegrityCleanupPanel() {
           purchase_order?: { po_number: string } | { po_number: string }[] | null;
         }>;
         setOverReceived(
-          rows.map((r) => {
+          // Only the lines received past what was ordered (the comparison the query cannot make).
+          rows.filter((r) => Number(r.quantity_received) > Number(r.quantity_ordered)).map((r) => {
             const po = Array.isArray(r.purchase_order) ? r.purchase_order[0] : r.purchase_order;
             return {
               id: r.id,
@@ -250,6 +285,9 @@ export default function IntegrityCleanupPanel() {
             };
           }),
         );
+      } else {
+        if (overRes.error) Sentry.captureException(overRes.error);
+        setOverReceived([]);
       }
 
       if (manufacturedRes.data) {
@@ -274,10 +312,17 @@ export default function IntegrityCleanupPanel() {
             };
           }),
         );
+      } else {
+        // A failed read clears the list rather than leaving the last one up as current.
+        if (manufacturedRes.error) Sentry.captureException(manufacturedRes.error);
+        setManufactured([]);
       }
 
       if (alertsRes.data) {
         setAlerts(alertsRes.data as unknown as IntegrityAlertRow[]);
+      } else {
+        if (alertsRes.error) Sentry.captureException(alertsRes.error);
+        setAlerts([]);
       }
 
       // Filter unbilled deliveries client-side (the .not.exists pattern is awkward in PostgREST)
@@ -306,6 +351,7 @@ export default function IntegrityCleanupPanel() {
             fetchActiveInvoiceCoveragePages(orderIds),
             fetchBilledOutsideCrxDeliveryIds(),
           ]);
+          if (isStale()) return;
           const invoiceCoverageError = coverageError ?? externalBillingRes.error;
           if (invoiceCoverageError) {
             Sentry.captureException(invoiceCoverageError);
@@ -339,6 +385,7 @@ export default function IntegrityCleanupPanel() {
             const { data: splitIds, error: splitError } = await fetchSplitBillingOrderIds(
               filtered.map((d) => d.order_id),
             );
+            if (isStale()) return;
             if (splitError) {
               // Fail OPEN: keep the buttons. The server still refuses, and the
               // refusal now reaches the operator intact (see handleBackfillInvoice).
@@ -362,10 +409,13 @@ export default function IntegrityCleanupPanel() {
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
-      toast('error', 'Failed to load cleanup data');
+      if (!isStale()) toast('error', 'Failed to load cleanup data');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      // A superseded load leaves the spinner to the newer one still running.
+      if (!isStale()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [toast]);
 
@@ -582,6 +632,15 @@ export default function IntegrityCleanupPanel() {
         </button>
       </div>
 
+      {/* A section that could not be read shows empty below; say so, so an empty
+          section is never mistaken for "nothing to fix". */}
+      {failedSections.length > 0 && (
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>These sections could not be loaded and may be incomplete: {failedSections.join(', ')}. Press Refresh to try again.</span>
+        </div>
+      )}
+
       {/* Section 0: Data-integrity sentinel alerts (daily 06:45 UTC sweep) */}
       <section className="space-y-3">
         <header className="flex items-center gap-2">
@@ -596,7 +655,9 @@ export default function IntegrityCleanupPanel() {
           record, fix it if needed, then mark the alert resolved (a brand-new problem of the
           same kind will alert again).
         </p>
-        {alerts.length === 0 ? (
+        {failedSections.includes('integrity alerts') ? (
+          <p className="text-sm text-red-600 ml-7">Could not be loaded, so this is not known to be clear.</p>
+        ) : alerts.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No open alerts. The daily sweep found nothing new.</p>
         ) : (
           <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
@@ -642,7 +703,9 @@ export default function IntegrityCleanupPanel() {
           <h2 className="text-lg font-semibold text-gray-900">Negative inventory</h2>
           <span className="text-sm text-gray-500">({negatives.length} rows)</span>
         </header>
-        {negatives.length === 0 ? (
+        {failedSections.includes('negative inventory') ? (
+          <p className="text-sm text-red-600 ml-7">Could not be loaded, so this is not known to be clear.</p>
+        ) : negatives.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No rows. Inventory bucket values are non-negative.</p>
         ) : (
           <div className="rounded-lg border border-red-200 bg-red-50 overflow-hidden">
@@ -724,7 +787,9 @@ export default function IntegrityCleanupPanel() {
           the over-shipment was kept or returned to the vendor; no automated action is
           provided since the inventory side has already been recorded.
         </p>
-        {overReceived.length === 0 ? (
+        {failedSections.includes('over-received POs') ? (
+          <p className="text-sm text-red-600 ml-7">Could not be loaded, so this is not known to be clear.</p>
+        ) : overReceived.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No rows. PO receiving totals match orders.</p>
         ) : (
           <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
@@ -835,7 +900,9 @@ export default function IntegrityCleanupPanel() {
           body raises rather than auto-creates, so this list should normally stay empty;
           rows here usually mean a regression or an older code path manufactured them.
         </p>
-        {manufactured.length === 0 ? (
+        {failedSections.includes('stock made at delivery') ? (
+          <p className="text-sm text-red-600 ml-7">Could not be loaded, so this is not known to be clear.</p>
+        ) : manufactured.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No phantom rows. Inventory rows have a verified origin.</p>
         ) : (
           <div className="rounded-lg border border-purple-200 bg-purple-50 overflow-hidden">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase, assertRpcResult } from '../lib/db';
 import { formatUSD } from '../lib/money';
+import { fetchAllRows } from '../lib/pagedRead';
 import Card from '../components/ui/Card';
 import PageHeader from '../components/ui/PageHeader';
 import ARaging from './ARaging';
@@ -43,25 +44,37 @@ export default function AccountsReceivable() {
     (async () => {
       try {
         const today = new Date().toISOString().slice(0, 10);
-        const { data: arData } = await supabase.rpc('get_ar_aging', { p_as_of_date: today });
+        // Every read below is paged: one request stops at the server's row cap,
+        // which would drop customers, credits or memos from these totals silently.
+        // Any failed read throws, so the whole strip is hidden (catch sets
+        // owed=null) rather than showing a wrong number (Codex P2).
+        const { data: arData, error: arErr } = await fetchAllRows<{ customer_id: string; total_outstanding?: number }>((from, to) => supabase
+          .rpc('get_ar_aging', { p_as_of_date: today }, { count: 'exact' })
+          // The function's own order (largest balance first), then the unique customer id.
+          .order('total_outstanding', { ascending: false })
+          .order('customer_id')
+          .range(from, to));
+        if (arErr) throw arErr;
         const arRows = assertRpcResult<Array<{ total_outstanding?: number }>>(arData, 'get_ar_aging');
         const owedSum = (arRows || []).reduce((s, r) => s + Number(r.total_outstanding || 0), 0);
-        // A failed prepay load must NOT silently become $0 — that would overstate
-        // the Net Position finance total. Throw so the whole card is suppressed
-        // (catch sets owed=null) rather than showing a wrong number (Codex P2).
-        const { data: prepayRows, error: prepayErr } = await supabase.from('prepay_credits').select('balance_cents');
+        const { data: prepayRows, error: prepayErr } = await fetchAllRows<{ id: string; balance_cents: number | null }>((from, to) => supabase
+          .from('prepay_credits')
+          .select('id, balance_cents', { count: 'exact' })
+          .order('id')
+          .range(from, to));
         if (prepayErr) throw prepayErr;
         const prepaySum = (prepayRows || []).reduce((s, r) => s + Number(r.balance_cents || 0), 0) / 100;
         // Open credit memos: posted credit_memo invoices whose (negative)
-        // balance hasn't been fully applied. Same suppress-on-error rule as
-        // prepay — a wrong $0 here would overstate Net Position.
-        const { data: creditRows, error: creditErr } = await supabase
+        // balance hasn't been fully applied.
+        const { data: creditRows, error: creditErr } = await fetchAllRows<{ id: string; balance_cents: number | null }>((from, to) => supabase
           .from('invoices')
-          .select('balance_cents')
+          .select('id, balance_cents', { count: 'exact' })
           .eq('invoice_type', 'credit_memo')
           .eq('status', 'posted')
           .lt('balance_cents', 0)
-          .is('deleted_at', null);
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to));
         if (creditErr) throw creditErr;
         const creditSum = (creditRows || []).reduce((s, r) => s + -Number(r.balance_cents ?? 0), 0) / 100;
         if (!cancelled) {
