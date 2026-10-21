@@ -1126,3 +1126,52 @@ describe('CustomerDetail tab loads bind to a customer, not only to call order', 
     expect(screen.queryByText('Loading timeline...')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The Financials tab asks for this customer's aging on Chicago's date, as the Accounts
+ * Receivable pages and the customer card do. It used to ask for the browser's own date, so a
+ * computer outside Central time could show a different balance than those screens. The clock is
+ * pinned to 8:30pm Central with the computer set to UTC, where the browser's date is tomorrow.
+ */
+describe("CustomerDetail Financials tab uses Chicago's date for the aging", () => {
+  const originalTz = process.env.TZ;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    customerIdempotencyState.reset();
+    dirtyStates.length = 0;
+    process.env.TZ = 'UTC';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 8:30pm Central (CDT, UTC-5) on Tuesday 2026-10-20 is 01:30 UTC on Wednesday 2026-10-21.
+    vi.setSystemTime(new Date('2026-10-21T01:30:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    // Assigning undefined would set the string "undefined", not unset it.
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it("asks get_ar_aging for Chicago's date in the evening, not the computer's tomorrow", async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    const agingDates: string[] = [];
+    mockRpc.mockImplementation((name: string, args: { p_as_of_date?: string }) => {
+      if (name === 'get_ar_aging') {
+        agingDates.push(args.p_as_of_date ?? '');
+        const rows = [{ customer_id: 'customer-1', farm_name: 'Original Farm', current_amount: 1234, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 1234 }];
+        return { eq: () => Promise.resolve({ data: rows, error: null }) };
+      }
+      return Promise.resolve({ data: [], error: null });
+    });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'financials' }));
+    expect(await screen.findByText('$1,234.00')).toBeInTheDocument();
+    expect(agingDates).toEqual(['2026-10-20']);
+  });
+});

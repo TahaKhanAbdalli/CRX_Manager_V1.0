@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { DollarSign, ShoppingCart, Truck, Star } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
+import { todayInBusinessTz } from '../../lib/dateUtils';
 
 interface CustomerContext {
   farm_name: string;
@@ -42,8 +43,10 @@ export default function CustomerContextCard({ customerId }: Props) {
         // PR-19 follow-up: pulled get_ar_aging out of Promise.all into its own
         // `= await supabase.rpc(...)` so the assertRpcCoverage regex can see
         // the capture (it requires `=` immediately before `await`).
+        // Chicago's date, as the Accounts Receivable pages use: a UTC date is
+        // already tomorrow from about 7pm Central.
         const { data: arData } = await supabase.rpc('get_ar_aging', {
-          p_as_of_date: new Date().toISOString().slice(0, 10),
+          p_as_of_date: todayInBusinessTz(),
         });
         // Parallel: customer info, open orders count, last delivery (no rpc).
         // status-enum-check: exempt
