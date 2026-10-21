@@ -1,7 +1,9 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-20 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-21 02:43 UTC (9:43 PM Central, 2026-10-20): 1039 rows / 1032 names; the changes since the 2026-10-19
+`execute_sql`, 2026-10-21 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
+Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
+02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
 20:55 UTC read are that `20261019220000` (ledger `20261020022222`, PR #964), `20261019230000` (ledger `20261020193610`,
 PR #965 via #976) and replay-binding batch 3b `20261019235000` (ledger `20261021024020`, PR #967) are now applied; batch 3b
 re-certified the replay-binding entry below (three wrappers, five postgres-only bodies and the 27-operation guard read
@@ -2992,8 +2994,8 @@ makes the first one reachable more often by emitting several order lines per pro
    defect today, independent of PR #404 — multi-line bookings already exist as quote data whether or
    not the draw splits order lines. Deliberately not fixed in PR #404: it needs its own design
    decision about how a ticket quantity is split across tiers.
-   **Guarded 2026-10-20 (Goal 3, migration `20261020210000_blend_ticket_pricing_guards`, not yet
-   applied when written; live state in `docs/reference/migration-history.md`).** Mason (2026-10-15)
+   **Guarded 2026-10-20 (Goal 3, migration `20261020210000_blend_ticket_pricing_guards`, applied
+   live 2026-10-21 04:00:52 UTC, ledger `20261021040052`, PR #982 merged as `948f238ad`).** Mason (2026-10-15)
    made automatic exact-line matching future work and asked for a small guard instead: when the
    job's quote lists the product more than once at *different* prices, the invoice now stops before
    anything is written and the Blend Ticket screen asks staff to pick the quoted price; the pick is

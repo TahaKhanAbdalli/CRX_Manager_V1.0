@@ -1,7 +1,12 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-20 (America/Chicago) for the migration ledger only (read-only
-`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-21 02:43 UTC (9:43 PM Central, 2026-10-20): 1039 rows /
+`execute_sql` against project `rhyzpcqhnizqbxphqdkr`, 2026-10-21 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows,
+`max(version)` `20261021040052` = `20261020210000_blend_ticket_pricing_guards` (Goal 3 blend-ticket pricing, PR #982 merged
+as `948f238ad`), applied 2026-10-21 04:00:52 UTC under the autonomous-landing rule: an order made from a blend ticket
+never prices a product at $0 for a missing tier price, a blend invoice asks staff to pick when the job's quote lists a
+product at two prices, and a $0 quoted line bills $0 only with an admin's below-cost reason. The read before it,
+2026-10-21 02:43 UTC (9:43 PM Central, 2026-10-20): 1039 rows /
 1032 names, `max(version)` `20261021024020` = `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`
 (replay-binding batch 3b, PR #967 head `ed2bd8733`), applied 2026-10-21 02:40:20 UTC on Mason's in-chat owner
 approval: `cancel_delivery`, `void_delivery` and `void_order` now require a retry key and replay a saved result only
@@ -46,10 +51,12 @@ ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-19; migration ledger and registry lines 2026-10-20)
 
-- **Effective ordering high-water: `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`**
-  (ledger version `20261021024020`, UTC; applied live 2026-10-21 02:40 UTC (9:40 PM Central, 2026-10-20) for
-  PR #967 on Mason's in-chat owner approval; read-only ledger read 2026-10-21 02:43 UTC: 1039 rows / 1032 names;
-  migration-history row 957). Before it, `20261019230000_cost_margin_admin_only_screens_step2` (ledger
+- **Effective ordering high-water: `20261020210000_blend_ticket_pricing_guards`**
+  (ledger version `20261021040052`, UTC; applied live 2026-10-21 04:00 UTC (11:00 PM Central, 2026-10-20) for
+  PR #982 under the autonomous-landing rule; read-only ledger read 2026-10-21 04:01 UTC: 1040 rows;
+  migration-history row 958). Before it, `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`
+  (ledger `20261021024020`, applied 2026-10-21 02:40 UTC for PR #967 on Mason's in-chat owner approval, row 957),
+  `20261019230000_cost_margin_admin_only_screens_step2` (ledger
   `20261020193610`, applied 2026-10-20 19:36 UTC, carried by PR #976 merged as `2c448ce4e`, row 956),
   `20261019220000_start_and_complete_delivery` (ledger
   `20261020022222`, PR #964), `20261019200000_bind_delivery_job_replay_receipts_batch3a` (ledger
@@ -116,7 +123,8 @@ ships or quarterly, whichever comes first.
   (`20261020022222`); then, carried by PR #976 (merged as `2c448ce4e`; 2026-10-20 UTC; screens in PR #965),
   `20261019230000_cost_margin_admin_only_screens_step2` (`20261020193610`); then, from PR #967 (head `ed2bd8733`;
   applied before its merge, 2026-10-21 UTC), `20261019235000_bind_delivery_order_void_replay_receipts_batch3b`
-  (`20261021024020`).
+  (`20261021024020`); then, from PR #982 (head `4a392f1ab`; applied before its merge, which landed as `948f238ad`,
+  2026-10-21 UTC), `20261020210000_blend_ticket_pricing_guards` (`20261021040052`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
