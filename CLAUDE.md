@@ -4,11 +4,10 @@
 
 `AGENTS.md` is the canonical shared contract. This file holds only Claude-specific routing and never weakens shared policy.
 
-- Follow the `AGENTS.md` routing table; load nothing extra at session start. For architecture, difficult debugging, tracing, structural audits, and PR impact, invoke `graphify` before broad searching. It narrows source reads and never replaces source or live verification; documentation is outside its code-only corpus, so inspect docs directly.
-- Search `.claude/schema-registry.json` by table or column (too large to read whole); refresh it after schema changes.
+- Follow the `AGENTS.md` routing table; load nothing extra at session start. Graphify narrows source reads; it never replaces source or live verification.
+- Refresh `.claude/schema-registry.json` after schema changes with `regen-schema-registry`.
 - Read `docs/reference/claude-model-tuning.md` only when choosing models or effort, delegating, or writing reviewer prompts.
 - Cloud sessions may lack `node_modules`, `gh`, Codex, Graphify, or the Supabase MCP: say early which gates cannot run, finish what can, and deliver a draft PR. Never report an unrun gate as passed.
-- `docs/manual/` is the synthesis layer: onboarding, architecture, decisions, known issues, current state, and Mason's owner playbook.
 
 ## Workflows
 
