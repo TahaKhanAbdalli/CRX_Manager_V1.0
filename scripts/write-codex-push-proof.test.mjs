@@ -1127,7 +1127,12 @@ function collisionPromptSkipsWork(prompt) {
   assert.ok(carrySourceProofProblem({ ...source, codex_ran: false }, { headSha: head, nowMs }), "carry: a source no review produced is refused");
   assert.ok(carrySourceProofProblem({ ...source, head_sha: "3".repeat(40) }, { headSha: head, nowMs }), "carry: a source for another head is refused");
   assert.ok(carrySourceProofProblem({ ...source, base_sha: "" }, { headSha: head, nowMs }), "carry: a source with no base is refused");
-  const carried = buildCarryForwardProof({ headSha: "4".repeat(40), baseSha: "5".repeat(40), source, mode: "disjoint" });
+  // Dated from the pinned clock, not the real one: a real-clock stamp lands after
+  // nowMs once the wall clock passes it, and the age check refuses a future proof.
+  const carried = buildCarryForwardProof({
+    headSha: "4".repeat(40), baseSha: "5".repeat(40), source, mode: "disjoint",
+    timestamp: new Date(nowMs - 30_000).toISOString(),
+  });
   assert.equal(carried.codex_ran, false, "carry: a carried proof never claims a full review ran");
   assert.deepEqual(carried.carry.root_review, { head_sha: head, base_sha: source.base_sha, timestamp: source.timestamp }, "carry: records the full review it came from");
   assert.equal(carrySourceProofProblem(carried, { headSha: "4".repeat(40), nowMs }), null, "carry: a carried proof can itself be carried");
