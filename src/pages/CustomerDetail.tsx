@@ -18,7 +18,7 @@ import { useLatestRef } from '../hooks/useLatestRef';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
-import { parseLocalDate, localToday } from '../lib/dateUtils';
+import { parseLocalDate, localToday, todayInBusinessTz } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
@@ -647,9 +647,11 @@ export default function CustomerDetail() {
         // parallelism; the parallel-session audit (2026-05-26 §10.8) reverted
         // it to honor the codebase convention. ~2× slower on this tab only.
         // Only this customer's row: reading the whole company's aging and picking
-        // one out missed any customer past the server's 1,000-row cap.
+        // one out missed any customer past the server's 1,000-row cap. Chicago's
+        // date, as the Accounts Receivable pages and the customer card use, so a
+        // browser outside Central time shows the same balance they do.
         const { data: agingData, error: agingError } = await supabase
-          .rpc('get_ar_aging', { p_as_of_date: today })
+          .rpc('get_ar_aging', { p_as_of_date: todayInBusinessTz() })
           .eq('customer_id', id!);
         if (agingError) throw agingError;
         const myAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging').find((a) => a.customer_id === id) || null;
