@@ -117,6 +117,7 @@ describe('PrivatePhoto', () => {
     render(<PrivatePhoto bucket="team-note-attachments" path="team-note-attachments/u1/1.jpg" alt="Note photo" />);
     await screen.findByRole('img', { name: 'Note photo unavailable' });
     expect(document.querySelector('img')).toBeNull();
+    expect(H.download).toHaveBeenCalledTimes(1);
   });
 
   it('ends a dropped connection in a retryable placeholder, not an endless spinner, and retries on tap', async () => {
@@ -176,6 +177,119 @@ describe('PrivatePhoto', () => {
     }
   });
 
+  it('retries by itself when the device reconnected while a stalled download was still running', async () => {
+    vi.useFakeTimers();
+    try {
+      H.download
+        .mockImplementationOnce(() => new Promise(() => {})) // stalls until the 30 s timeout
+        .mockResolvedValue({ data: blob(), error: null });
+      render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      act(() => { window.dispatchEvent(new Event('online')); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('img', { name: 'Delivery photo' }).getAttribute('src')).toMatch(/^blob:/);
+      expect(H.download).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries by itself when the device reconnected while a download was running and it then dropped', async () => {
+    let drop: (e: unknown) => void = () => {};
+    H.download
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { drop = reject; }))
+      .mockResolvedValue({ data: blob(), error: null });
+    render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" />);
+    await waitFor(() => expect(H.download).toHaveBeenCalledTimes(1));
+    act(() => { window.dispatchEvent(new Event('online')); });
+    await act(async () => { drop(new TypeError('Failed to fetch')); });
+    const img = await screen.findByRole('img', { name: 'Delivery photo' });
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(H.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries by itself when the device reconnects after the download failed but before the placeholder shows', async () => {
+    const { Sentry } = await import('./sentry');
+    // The hook reports the failure right after recording it and before React shows it: firing
+    // "online" from that report lands exactly in the gap (a stricter stand-in for a browser task
+    // that runs before React commits).
+    vi.mocked(Sentry.captureException).mockClear();
+    vi.mocked(Sentry.captureException).mockImplementationOnce(() => {
+      window.dispatchEvent(new Event('online'));
+      return '';
+    });
+    H.download.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue({ data: blob(), error: null });
+    // A path no other test uses, so this failure is reported (one report per photo per page load).
+    render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/gap.jpg" alt="Delivery photo" />);
+    const img = await screen.findByRole('img', { name: 'Delivery photo' });
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(H.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for the next reconnect when the device went offline again before the download failed', async () => {
+    let drop: (e: unknown) => void = () => {};
+    H.download
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { drop = reject; }))
+      .mockResolvedValue({ data: blob(), error: null });
+    const onLine = vi.spyOn(window.navigator, 'onLine', 'get');
+    try {
+      render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" />);
+      await waitFor(() => expect(H.download).toHaveBeenCalledTimes(1));
+      act(() => { window.dispatchEvent(new Event('online')); });
+      onLine.mockReturnValue(false);
+      await act(async () => { drop(new TypeError('Failed to fetch')); });
+      await screen.findByRole('img', { name: 'Delivery photo unavailable' });
+      expect(H.download).toHaveBeenCalledTimes(1);
+      onLine.mockReturnValue(true);
+      act(() => { window.dispatchEvent(new Event('online')); });
+      await screen.findByRole('img', { name: 'Delivery photo' });
+      expect(H.download).toHaveBeenCalledTimes(2);
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('stops listening for a failed attempt once a tap has replaced it', async () => {
+    H.download
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockImplementationOnce(() => new Promise(() => {})); // the tapped retry is still running
+    render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry loading Delivery photo' }));
+    await waitFor(() => expect(H.download).toHaveBeenCalledTimes(2));
+    act(() => { window.dispatchEvent(new Event('online')); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(H.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a refusal only once per reconnect, never in a loop, and never after a success', async () => {
+    let answer: (v: unknown) => void = () => {};
+    H.download
+      .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }))
+      .mockResolvedValue({ data: null, error: new Error('Object not found') });
+    render(<PrivatePhoto bucket="team-note-attachments" path="team-note-attachments/u1/1.jpg" alt="Note photo" />);
+    await waitFor(() => expect(H.download).toHaveBeenCalledTimes(1));
+    act(() => { window.dispatchEvent(new Event('online')); });
+    await act(async () => { answer({ data: null, error: new Error('Object not found') }); });
+    await waitFor(() => expect(H.download).toHaveBeenCalledTimes(2));
+    await screen.findByRole('img', { name: 'Note photo unavailable' });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(H.download).toHaveBeenCalledTimes(2);
+    cleanup();
+
+    H.download.mockReset();
+    let finish: (v: unknown) => void = () => {};
+    H.download.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<PrivatePhoto bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" />);
+    await waitFor(() => expect(H.download).toHaveBeenCalledTimes(1));
+    act(() => { window.dispatchEvent(new Event('online')); });
+    await act(async () => { finish({ data: blob(), error: null }); });
+    await screen.findByRole('img', { name: 'Delivery photo' });
+    act(() => { window.dispatchEvent(new Event('online')); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(H.download).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a placeholder without downloading when there is no path', () => {
     render(<PrivatePhoto bucket="delivery-photos" path={null} alt="Delivery photo" />);
     expect(screen.getByRole('img', { name: 'Delivery photo unavailable' })).toBeTruthy();
@@ -186,7 +300,9 @@ describe('PrivatePhoto', () => {
     H.download.mockResolvedValue({ data: blob(), error: null });
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     render(<PrivatePhotoButton bucket="delivery-photos" path="delivery-photos/d1/1.jpg" alt="Delivery photo" viewerTitle="Drop site" />);
-    fireEvent.click(await screen.findByRole('button', { name: 'View Delivery photo' }));
+    // The button is there (disabled) while the thumbnail loads; a click then does nothing.
+    await screen.findByRole('img', { name: 'Delivery photo' });
+    fireEvent.click(screen.getByRole('button', { name: 'View Delivery photo' }));
     await screen.findByRole('dialog', { name: 'Drop site' });
     const imgs = screen.getAllByRole('img', { name: 'Delivery photo' });
     expect(imgs).toHaveLength(2);
