@@ -717,6 +717,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
               application_service_id: null,
               invoice_group_id: null,
               total_amount_cents: 100000,
+              invoice_post_version: 'v1:inv-solo',
             },
           ],
         },
@@ -1057,6 +1058,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       application_service_id: 'svc-1',
       invoice_group_id: 'grp-xyz',
       total_amount_cents: 100000,
+      invoice_post_version: 'v1:header',
     };
     const siblings = siblingStatuses.map((s, i) => ({
       id: `inv-grp-${i + 1}`,
@@ -1065,6 +1067,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       customer: { farm_name: `Farm ${i + 1}` },
       total_amount_cents: 50000,
       status: s,
+      invoice_post_version: `v1:sibling-${i + 1}`,
     }));
     mockFrom.mockImplementation(
       makeFromMock({
@@ -1104,6 +1107,9 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     expect(groupCall[1]).toMatchObject({
       p_invoice_group_id: 'grp-xyz',
       p_performed_by: 'user-1',
+      // This invoice keeps the version read with its own row; each sibling sends the one the
+      // sibling read returned.
+      p_expected_versions: { 'inv-grp-1': 'v1:header', 'inv-grp-2': 'v1:sibling-2' },
       p_idempotency_key: 'test-idem-key',
     });
   });

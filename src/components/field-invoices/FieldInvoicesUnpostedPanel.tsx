@@ -10,7 +10,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError, describePostInvoiceBlock } from '../../lib/db';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
-import { INVOICE_COLUMNS } from '../../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS } from '../../lib/costFields';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { logActivity } from '../../lib/activityLogger';
@@ -37,6 +37,7 @@ import {
   type FieldInvoiceListRow,
   type FieldInvoiceListFilters,
 } from '../../lib/fieldInvoiceList';
+import { requirePostVersion } from '../../lib/invoicePostVersion';
 
 // Field-app parity #22: the dedicated "Unposted Field Application Invoices"
 // working tray (ChemMan's /#/invoices/unposted). Lists ONLY not-yet-posted
@@ -47,6 +48,8 @@ import {
 
 type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
   invoice_group_id: string | null;
+  /** Version loaded with the row; Post All refuses an invoice changed since. */
+  invoice_post_version: string | null;
 };
 
 // PostgREST select: the invoice + customer + linked job number + engine-built
@@ -54,6 +57,7 @@ type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
 // trip; everything else is derived client-side by mapFieldInvoiceRow.
 const LIST_SELECT = `
   ${INVOICE_COLUMNS},
+  ${INVOICE_POST_VERSION_COLUMNS},
   customer:customers!invoices_customer_id_fkey(farm_name),
   job:jobs!invoices_job_id_fkey(job_number),
   field_app_locations(applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)),
@@ -194,6 +198,7 @@ export default function FieldInvoicesUnpostedPanel() {
     setRows(raws.map((raw) => ({
       ...mapFieldInvoiceRow(raw),
       invoice_group_id: raw.invoice_group_id ?? null,
+      invoice_post_version: raw.invoice_post_version ?? null,
     })));
     setLoadFailed(false);
     setLoading(false);
@@ -396,12 +401,12 @@ export default function FieldInvoicesUnpostedPanel() {
   // then posts (Codex Sol HIGH on PR #895). A split group is posted from its invoice page
   // until the database itself refuses a group with an other-season member.
   const postAllPlan = useMemo(() => {
-    const individualTargets: { id: string; invoice_number: string }[] = [];
+    const individualTargets: { id: string; invoice_number: string; invoice_post_version: string | null }[] = [];
     const skippedRows: UnpostedFieldInvoiceRow[] = [];
     const skippedGroupIds = new Set<string>();
     for (const row of visible) {
       if (row.invoice_group_id) skippedGroupIds.add(row.invoice_group_id);
-      else if (isCurrentSeason(row.season)) individualTargets.push({ id: row.id, invoice_number: row.invoice_number });
+      else if (isCurrentSeason(row.season)) individualTargets.push({ id: row.id, invoice_number: row.invoice_number, invoice_post_version: row.invoice_post_version });
       else skippedRows.push(row);
     }
     return { individualTargets, skippedRows, skippedGroupCount: skippedGroupIds.size };
@@ -431,6 +436,8 @@ export default function FieldInvoicesUnpostedPanel() {
             await supabase
               .rpc('post_invoice', {
                 p_invoice_id: target.id,
+                // Refused, one row at a time, if the invoice changed since this list loaded it.
+                p_expected_version: requirePostVersion(target.invoice_post_version),
                 p_idempotency_key: postKeysRef.current[target.id],
               })
               .throwOnError();

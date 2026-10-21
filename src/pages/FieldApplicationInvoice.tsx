@@ -74,7 +74,8 @@ import {
   type ProofDraft,
 } from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { requireGroupVersions, requirePostVersion } from '../lib/invoicePostVersion';
 import {
   carryoverRowsFromRecords,
   realApplicatorName,
@@ -247,6 +248,8 @@ export default function FieldApplicationInvoice() {
   // step in performSave).
   const billingKeysRef = useRef<Record<string, UnansweredKey>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  // invoice_post_version of this invoice and each split sibling, as the last load read them.
+  const postVersionsRef = useRef<Record<string, string | null>>({});
   // Keep receipt ownership scoped by invoice id even though the route wrapper now
   // remounts per record. Reset only after assertRpcResult confirms success.
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
@@ -1018,9 +1021,12 @@ export default function FieldApplicationInvoice() {
       }
     }
 
+    // invoice_post_version comes in the same read as the row, before the lines and siblings, so
+    // Post binds what this load showed (a save landing mid-load makes the post refuse).
+    postVersionsRef.current = {};
     const { data: rawInv, error } = await supabase
       .from('invoices')
-      .select(INVOICE_COLUMNS)
+      .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
       .eq('id', id)
       .single();
 
@@ -1222,6 +1228,7 @@ export default function FieldApplicationInvoice() {
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
+    const loadedVersions: Record<string, string | null> = { [id]: (rawInv as { invoice_post_version?: string | null }).invoice_post_version ?? null };
 
     // Helper: cents → typed dollars string for the Discount Earned editor (blank at 0).
     const centsToDollars = (cents: number | null | undefined) =>
@@ -1231,12 +1238,16 @@ export default function FieldApplicationInvoice() {
     if (groupId) {
       const { data: sibs } = await supabase
         .from('invoices')
-        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (!isCurrentLoad()) return;
       if (sibs) {
+        // Post sends every member this load saw; this invoice keeps the version read with its row.
+        for (const s of sibs as Array<{ id: string; invoice_post_version?: string | null }>) {
+          if (s.id !== id) loadedVersions[s.id] = s.invoice_post_version ?? null;
+        }
         setSiblings(
           (sibs as Array<Record<string, unknown>>).map((s) => ({
             id: s.id as string,
@@ -1272,6 +1283,7 @@ export default function FieldApplicationInvoice() {
         },
       });
     }
+    postVersionsRef.current = loadedVersions;
 
     // Locations: when grouped, locations are keyed by invoice_group_id;
     // otherwise by invoice_id.
@@ -2212,10 +2224,13 @@ export default function FieldApplicationInvoice() {
     try {
       const key = postIdem.getKey();
       // Group-aware: route through post_invoice_group when a group exists, otherwise post_invoice.
+      // Both send the versions this page loaded; the server refuses if the saved invoice, a
+      // sibling, or the group's membership changed since.
       if (invoiceGroupId) {
         const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoiceGroupId,
           p_performed_by: profile.id,
+          p_expected_versions: requireGroupVersions(postVersionsRef.current),
           p_idempotency_key: key,
         });
         if (error) throw error;
@@ -2224,6 +2239,7 @@ export default function FieldApplicationInvoice() {
         // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
         await supabase.rpc('post_invoice', {
           p_invoice_id: id,
+          p_expected_version: requirePostVersion(postVersionsRef.current[id]),
           p_idempotency_key: key,
         }).throwOnError();
       }

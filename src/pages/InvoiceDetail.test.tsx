@@ -67,6 +67,13 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   sanitizeError: (e: unknown) => sanitizeError(e),
+  // Posting refusals fall through to sanitizeError here; the token check mirrors db.ts's prefix rule.
+  describePostInvoiceBlock: () => null,
+  hasRpcCode: (e: unknown, code: string) => {
+    const message = e instanceof Error ? e.message : String((e as { message?: unknown } | null)?.message ?? '');
+    return message === code || message.startsWith(`${code}:`) || message.startsWith(`${code} `);
+  },
+  RpcErrorCodes: new Proxy({}, { get: (_target, name) => name }),
 }));
 
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockCaptureException } }));
@@ -131,6 +138,14 @@ vi.mock('../lib/dateUtils', () => ({
 // parseCents is deliberately NOT mocked: the real parser refuses more than two
 // decimals (null) and a rounding stand-in would let this page's refusal branches
 // pass whether or not they work (2026-09-03).
+// useBlocker needs a data router; MemoryRouter is not one. Record what the page asks it to guard.
+const { unsavedGuardCalls } = vi.hoisted(() => ({ unsavedGuardCalls: [] as boolean[] }));
+vi.mock('../hooks/useUnsavedChanges', () => ({
+  useUnsavedChanges: (isDirty: boolean) => {
+    unsavedGuardCalls.push(isDirty);
+    return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() };
+  },
+}));
 vi.mock('../components/invoices/WriteOffModal', () => ({ default: () => null }));
 vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => null }));
 
@@ -1567,5 +1582,90 @@ describe('InvoiceDetail — an invoice made from scratch takes charge lines only
     await waitFor(() => expect(screen.getAllByText('INV-SCRATCH').length).toBeGreaterThan(0));
     expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add Charge' })).toBeNull();
+  });
+});
+
+/**
+ * Goal 3 "Post uses what was saved and reviewed" (migration 20261021200000). Post is blocked while
+ * the form has unsaved edits, sends the invoice_post_version this screen loaded, and a server
+ * refusal because the invoice changed elsewhere reloads the invoice.
+ */
+describe('InvoiceDetail — Post uses the saved, reviewed invoice', () => {
+  const savedInvoice = {
+    id: 'inv-123', invoice_number: 'INV-0200', status: 'draft', invoice_type: 'chemical_sale',
+    customer_id: 'cust-1', order_id: 'ord-1', total_amount_cents: 2000, balance_cents: 2000,
+    invoice_date: '2026-03-15', due_date: null, created_at: '2026-03-15T00:00:00Z',
+    invoice_group_id: null, invoice_post_version: 'v1:loaded',
+  };
+  let invoiceReads = 0;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
+    unsavedGuardCalls.length = 0;
+    invoiceReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceReads += 1;
+        // Preflight and full read return the row; the order's sibling list returns none.
+        return buildChain({ data: invoiceReads % 3 === 0 ? [] : savedInvoice, error: null });
+      }
+      if (table === 'invoice_items') {
+        return buildChain({ data: [{ id: 'it-1', product_id: 'p-1', description: 'Chem', quantity: 2, unit_price_cents: 1000, extended_cents: 2000, sort_order: 0 }], error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  async function openLoaded() {
+    renderInvoiceDetail();
+    await waitFor(() => expect(screen.getAllByText('INV-0200').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Post$/ })).toBeEnabled());
+  }
+
+  it('posts with the version this screen loaded', async () => {
+    const posted = vi.fn((_args: unknown) => Promise.resolve({ data: null, error: null }));
+    mockRpc.mockImplementation((name: string, args: unknown) => {
+      if (name === 'post_invoice') return { throwOnError: () => posted(args) };
+      return Promise.resolve({ data: null, error: null });
+    });
+    await openLoaded();
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Invoice' }));
+    await waitFor(() => expect(posted).toHaveBeenCalledWith(expect.objectContaining({
+      p_invoice_id: 'inv-123',
+      p_expected_version: 'v1:loaded',
+    })));
+  });
+
+  it('greys out Post, explains why, and guards leaving while there are unsaved edits', async () => {
+    await openLoaded();
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(false);
+    fireEvent.change(screen.getByPlaceholderText('Customer PO #'), { target: { value: 'PO-77' } });
+    const post = screen.getByRole('button', { name: /^Post$/ });
+    expect(post).toBeDisabled();
+    expect(screen.getByText(/Save your changes before posting/)).toBeInTheDocument();
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(true);
+    // Undoing the edit is not an unsaved change.
+    fireEvent.change(screen.getByPlaceholderText('Customer PO #'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: /^Post$/ })).toBeEnabled();
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(false);
+  });
+
+  it('reloads the invoice when the server says it changed since this screen loaded it', async () => {
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'post_invoice') {
+        return { throwOnError: () => Promise.reject(new Error('INVOICE_CHANGED_SINCE_LOADED: invoice INV-0200 was changed after this screen loaded it. Reload it, check it, then post again.')) };
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    await openLoaded();
+    const readsBefore = invoiceReads;
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Invoice' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('was changed after this screen loaded it')));
+    await waitFor(() => expect(invoiceReads).toBeGreaterThan(readsBefore));
   });
 });

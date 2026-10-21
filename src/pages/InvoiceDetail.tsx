@@ -11,7 +11,10 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
-import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { requireGroupVersions, requirePostVersion } from '../lib/invoicePostVersion';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
@@ -38,7 +41,7 @@ import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 
 interface LineItem {
   id?: string;
@@ -278,7 +281,62 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // has no valid applicator license — posting is the legal point of sale.
   const [rupPostWarning, setRupPostWarning] = useState<string | null>(null);
 
+  // ── Post binds the saved, reviewed invoice (Goal 3, migration 20261021200000) ──────────────
+  // post_invoice / post_invoice_group post what is SAVED, and refuse if the saved invoice (or a
+  // split sibling, or the group's membership) changed since this screen loaded it. So everything
+  // Post sends or checks comes from the last load, never from the form: the version, and the
+  // customer, total and products the credit-limit and RUP warnings run on.
+  const savedPostRef = useRef<{
+    version: string | null;
+    customerId: string | null;
+    totalCents: number;
+    productIds: string[];
+    groupVersions: Record<string, string | null>;
+  } | null>(null);
+
+  // Unsaved edits: a snapshot of every editable field is taken after each load (and each save,
+  // which reloads); any difference from it is an unsaved edit. Post is blocked until they are
+  // saved, because the version check above cannot see edits that exist only in the browser.
+  // Optional text fields are normalized the way handleSave sends them (`|| null`), so typing
+  // into an empty field and deleting it again is not an unsaved edit.
+  const editSnapshot = JSON.stringify({
+    customer_id: invoice.customer_id ?? null,
+    invoice_type: invoice.invoice_type ?? null,
+    invoice_date: invoice.invoice_date ?? null,
+    salesman_id: invoice.salesman_id || null,
+    purchase_order_ref: invoice.purchase_order_ref || null,
+    header_notes: invoice.header_notes || null,
+    footer_notes: invoice.footer_notes || null,
+    paymentTerms,
+    customDueDate,
+    customTermsText,
+    items,
+  });
+  const [savedEditSnapshot, setSavedEditSnapshot] = useState<string | null>(null);
+  // Bumped when a load finishes, so the snapshot is taken from the committed loaded state.
+  const [loadVersion, setLoadVersion] = useState(0);
+  useEffect(() => {
+    if (loadVersion === 0) return;
+    setSavedEditSnapshot(editSnapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- capture only when a load completes
+  }, [loadVersion]);
+  const hasUnsavedChanges = !isNew && savedEditSnapshot !== null && editSnapshot !== savedEditSnapshot;
+  const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
+  // Leaving with unsaved edits asks first; a new invoice counts once it has a line. A navigation
+  // straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
+  const skipUnsavedPromptRef = useRef(false);
+  const unsavedBlocker = useUnsavedChanges(isNew ? items.length > 0 : hasUnsavedChanges, skipUnsavedPromptRef);
+
   const openPostConfirm = async () => {
+    if (hasUnsavedChanges) {
+      toast('error', UNSAVED_POST_MESSAGE);
+      return;
+    }
+    const saved = savedPostRef.current;
+    if (!saved) {
+      toast('error', 'This invoice has not finished loading. Wait a moment, then post again.');
+      return;
+    }
     postIdem.resetKey();
     let warning: string | null = null;
     // The RUP check must NEVER block posting — any failure falls through to the
@@ -290,10 +348,24 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         // WHOLE group, not just the displayed invoice — a non-RUP sibling could
         // otherwise post a RUP sibling with no warning. Check each sibling's own
         // (customer, products) and aggregate. Still advisory, never a gate.
+        // The siblings are read with their versions: if any changed (or the membership did) since
+        // this screen loaded, the post would be refused, so reload now and show what would post.
         const { data: grp } = await supabase
           .from('invoices')
-          .select('id, invoice_number, customer_id, invoice_items(product_id)')
-          .eq('invoice_group_id', invoice.invoice_group_id);
+          .select(`id, invoice_number, customer_id, ${INVOICE_POST_VERSION_COLUMNS}, invoice_items(product_id)`)
+          .eq('invoice_group_id', invoice.invoice_group_id)
+          .is('deleted_at', null);
+        if (grp) {
+          const current = Object.fromEntries(grp.map((m) => [m.id, m.invoice_post_version]));
+          const loaded = saved.groupVersions;
+          const same = Object.keys(current).length === Object.keys(loaded).length
+            && Object.entries(current).every(([memberId, version]) => loaded[memberId] === version);
+          if (!same) {
+            toast('error', 'This split group was changed somewhere else since you opened it. It has been reloaded — check it, then post again.');
+            fetchInvoice(id!);
+            return;
+          }
+        }
         const parts: string[] = [];
         for (const inv of (grp || []) as Array<{ invoice_number: string; customer_id: string | null; invoice_items: { product_id: string | null }[] | null }>) {
           const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
@@ -308,9 +380,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
         }
       } else {
-        const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
-        if (invoice?.customer_id && productIds.length > 0) {
-          const res = await checkRUPCompliance(invoice.customer_id, productIds);
+        // The SAVED customer and lines — what post_invoice posts — not the on-screen copy.
+        const productIds = saved.productIds;
+        if (saved.customerId && productIds.length > 0) {
+          const res = await checkRUPCompliance(saved.customerId, productIds);
           if (res.hasRUPProducts && !res.hasValidLicense) {
             // #6: align the warning's stated disposition with what the DB actually
             // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
@@ -347,6 +420,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // in-flight fetch must not render the previous invoice's amounts.
     const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
+    // No baseline and nothing to post while (re)loading; the end of this load sets both.
+    setSavedEditSnapshot(null);
+    savedPostRef.current = null;
 
     // #3 segregation PREFLIGHT (Codex r11): resolve the route-area redirect from a
     // MINIMAL row (invoice_type/job_id/status) BEFORE the full select('*') below, so
@@ -400,9 +476,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
 
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
+    // invoice_post_version is read in this same query, before the lines below, so Post binds
+    // what this load shows: a save landing mid-load makes the post refuse, never slip through.
     const { data, error } = await supabase
       .from('invoices')
-      .select(`${INVOICE_COLUMNS}, customer:customers(farm_name)`)
+      .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}, customer:customers(farm_name)`)
       .eq('id', invoiceId)
       .single();
 
@@ -574,14 +652,37 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setParentQuote(null);
     }
 
+    // A split invoice posts its whole group: keep every member's version as this load saw it.
+    const groupVersions: Record<string, string | null> = { [invoiceId]: data.invoice_post_version ?? null };
+    if (data.invoice_group_id) {
+      const { data: members } = await supabase
+        .from('invoices')
+        .select(`id, ${INVOICE_POST_VERSION_COLUMNS}`)
+        .eq('invoice_group_id', data.invoice_group_id)
+        .is('deleted_at', null);
+      if (isStale()) return;
+      for (const m of members ?? []) if (m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
+    }
+
     // Fetch items
-    const { data: rawItemData } = await supabase
+    const { data: rawItemData, error: itemError } = await supabase
       .from('invoice_items')
       .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name)`)
       .eq('invoice_id', invoiceId)
       .order('sort_order');
 
     if (isStale()) return;
+    // What Post posts and checks: the saved header and lines from this load. A failed line read
+    // leaves nothing to post, so the credit and RUP warnings never run on a partial invoice.
+    savedPostRef.current = itemError ? null : {
+      version: data.invoice_post_version ?? null,
+      customerId: data.customer_id ?? null,
+      totalCents: Number(data.total_amount_cents ?? 0),
+      productIds: ((rawItemData ?? []) as Array<{ product_id: string | null }>)
+        .map((it) => it.product_id)
+        .filter((p): p is string => Boolean(p)),
+      groupVersions,
+    };
     let itemData = rawItemData;
     if (itemData) {
       try {
@@ -649,6 +750,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
+    // The screen now matches the saved invoice: take a new unsaved-edit baseline.
+    setLoadVersion((v) => v + 1);
   }, [toast, navigate, routeArea, isAdmin]);
 
   // Fetch existing invoice
@@ -1001,6 +1104,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             await fetchInvoice(committedInvoiceId);
             toast('warning', 'The earlier save already completed. The saved invoice has been reopened so you can review it before making another change.');
             if (id !== committedInvoiceId) {
+              skipUnsavedPromptRef.current = true;
               navigate(`/invoices/${committedInvoiceId}`, { replace: true });
             }
             return 'reconciled';
@@ -1019,6 +1123,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         saveIdem.resetKey();
         legacySaveIntentRef.current = null;
         if (isNew) {
+          // Everything is saved: let this navigation past the leave-page prompt.
+          skipUnsavedPromptRef.current = true;
           navigate(`/invoices/${savedId}`, { replace: true });
         } else {
           await fetchInvoice(id!);
@@ -1036,8 +1142,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Post invoice
   const handlePost = async () => {
-    const totalCents = items.reduce((sum, i) => sum + (i.extended_cents || 0), 0);
-    const creditOk = await checkCreditLimit({ customerId: invoice.customer_id!, newAmountCents: totalCents });
+    if (hasUnsavedChanges) {
+      toast('error', UNSAVED_POST_MESSAGE);
+      return;
+    }
+    const saved = savedPostRef.current;
+    if (!saved) {
+      toast('error', 'This invoice has not finished loading. Wait a moment, then post again.');
+      return;
+    }
+    // Credit-limit check on the SAVED customer and total — the account and amount post_invoice
+    // posts. Limitation (unchanged): for a split group this checks THIS invoice's total only,
+    // although post_invoice_group posts every sibling; it is a dismissible warning, not a gate.
+    const creditOk = await checkCreditLimit({ customerId: saved.customerId!, newAmountCents: saved.totalCents });
     if (!creditOk && !creditWarning?.dismissed) return;
     setPosting(true);
     try {
@@ -1045,17 +1162,23 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // Phase 1 (2026-04-29): when the invoice belongs to a split group, route
       // through post_invoice_group so all siblings post atomically. Posting just
       // one member of a group would leave the group in a half-posted state.
+      // Both send the versions this screen loaded; the server refuses if anything changed since.
       if (invoice.invoice_group_id) {
         const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoice.invoice_group_id,
           p_performed_by: (profile?.id ?? null) as string,
+          p_expected_versions: requireGroupVersions(saved.groupVersions),
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
         assertRpcResult(data, 'post_invoice_group');
       } else {
         // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
-        await supabase.rpc('post_invoice', { p_invoice_id: id!, p_idempotency_key: idemKey }).throwOnError();
+        await supabase.rpc('post_invoice', {
+          p_invoice_id: id!,
+          p_expected_version: requirePostVersion(saved.version),
+          p_idempotency_key: idemKey,
+        }).throwOnError();
       }
       postIdem.resetKey();
       toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
@@ -1069,6 +1192,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // to do next, anything else falls through to sanitizeError.
       const blocked = describePostInvoiceBlock(err);
       toast('error', blocked ?? sanitizeError(err));
+      // Saved somewhere else since this screen loaded: show the current invoice, so the next
+      // Post is of what the person has actually seen.
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) fetchInvoice(id!);
     }
     setPosting(false);
   };
@@ -1654,9 +1780,25 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdminOrRep && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
+            <Button
+              variant="secondary"
+              icon={<Send className="w-4 h-4" />}
+              onClick={openPostConfirm}
+              loading={posting}
+              disabled={hasUnsavedChanges}
+              title={hasUnsavedChanges ? UNSAVED_POST_MESSAGE : undefined}
+              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
+            >
               Post
             </Button>
+          )}
+          {!isNew && editable && isAdminOrRep && hasUnsavedChanges && (
+            <span
+              id="invoice-unsaved-post-note"
+              className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md"
+            >
+              {UNSAVED_POST_MESSAGE}
+            </span>
           )}
           {/* #27: reverse Transfer to Scheduling — only for an editable (draft/unposted)
               field invoice that came from a job. Pushes the invoice back to the job. */}
@@ -2455,6 +2597,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         hasShares={shares.length > 1}
         onPrint={handlePrint}
         loading={printing}
+      />
+
+      <UnsavedChangesModal
+        open={unsavedBlocker.state === 'blocked'}
+        onStay={() => unsavedBlocker.reset?.()}
+        onLeave={() => unsavedBlocker.proceed?.()}
       />
 
       {/* Post Invoice Confirm */}

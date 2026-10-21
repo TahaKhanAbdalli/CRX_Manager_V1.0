@@ -1746,6 +1746,11 @@ export interface Invoice {
   season: number;
   salesman_id: string | null;
   created_by: string;
+  /**
+   * Computed field `invoice_post_version` (migration 20261021200000), present only when a query
+   * selects it. Posting sends it back; the server refuses if the saved invoice changed since.
+   */
+  invoice_post_version?: string | null;
 
   // Financial (stored in cents)
   total_amount_cents: number;

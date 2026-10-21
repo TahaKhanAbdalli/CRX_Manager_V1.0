@@ -28,12 +28,13 @@ import {
   type InvoicePdfData,
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS } from '../lib/costFields';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
 import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
+import { postInvoiceTarget } from '../lib/invoicePostVersion';
 import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
 
@@ -137,7 +138,8 @@ export default function Invoices() {
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data, error } = await fetchAllRows((from, to) => supabase
       .from('invoices')
-      .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
+      // invoice_post_version: posting refuses a row changed since this list loaded it.
+      .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
       .is('deleted_at', null)
       // Segregation (Mason 2026-06-19): field-application invoices live in their
       // own area (/field-invoices). This Chemical Sales list excludes them so a
@@ -299,7 +301,8 @@ export default function Invoices() {
       toast('error', 'Admin or sales access is required to post invoices');
       return;
     }
-    const targets = buildInvoicePostTargets(selectedPostable);
+    // A split group's versions come from every member this list loaded, not just the selected ones.
+    const targets = buildInvoicePostTargets(selectedPostable, invoices);
     if (targets.length === 0) {
       toast('error', 'No postable invoices selected');
       return;
@@ -317,22 +320,9 @@ export default function Invoices() {
             );
           }
           try {
-            if (target.operation === 'post_invoice_group') {
-              const { data, error } = await supabase.rpc('post_invoice_group', {
-                p_invoice_group_id: target.invoiceGroupId!,
-                p_performed_by: profile.id,
-                p_idempotency_key: postKeysRef.current[target.key],
-              });
-              if (error) throw error;
-              assertRpcResult(data, 'post_invoice_group');
-            } else {
-              // post_invoice RETURNS void — the canonical void-RPC pattern is
-              // .throwOnError() with no result capture.
-              await supabase.rpc('post_invoice', {
-                p_invoice_id: target.invoiceId!,
-                p_idempotency_key: postKeysRef.current[target.key],
-              }).throwOnError();
-            }
+            // Each target carries the version its rows were loaded with; a row changed since
+            // is refused on its own with a "reload" message, and the others still post.
+            await postInvoiceTarget(target, profile.id, postKeysRef.current[target.key]);
             completedActions++;
             delete postKeysRef.current[target.key];
           } catch (err: unknown) {
