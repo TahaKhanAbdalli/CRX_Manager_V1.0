@@ -103,6 +103,8 @@ BEGIN
     IF (SELECT status FROM public.invoices WHERE id = v_draft) NOT IN ('draft', 'unposted') THEN
       RAISE EXCEPTION 'SMOKE_FAIL: the refused draft changed status';
     END IF;
+  ELSE
+    RAISE NOTICE 'SMOKE_SKIP: no standalone draft exists, so the stale-version refusal was not exercised live (the container prover covers it)';
   END IF;
 
   -- Grants: API roles reach only the four public entry points.
