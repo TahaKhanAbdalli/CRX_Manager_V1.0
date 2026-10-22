@@ -35,8 +35,18 @@ const NO_THREADS_JSON = JSON.stringify({ data: { repository: { pullRequest: {
 } } } });
 function withThreadDefault(runGh) {
   if (typeof runGh !== "function") return runGh;
+  // The head the fixture's answers describe: learned from its PR JSON (read by
+  // the hard gates first) or its thread answer, so the default thread and
+  // requirement answers agree with it — the gate reads the requirement BEFORE
+  // the threads and trusts them only when both name the same head.
+  let threadHead = "f".repeat(40);
   return (args, ...rest) => {
     const out = runGh(args, ...rest);
+    try {
+      const parsed = JSON.parse(out);
+      const seen = parsed?.headRefOid || parsed?.data?.repository?.pullRequest?.headRefOid;
+      if (typeof seen === "string" && /^[0-9a-f]{40}$/i.test(seen)) threadHead = seen;
+    } catch { /* not JSON — nothing to learn */ }
     // The thread lookup first asks `gh pr view --json number,url`; a fixture that
     // answers every call with the PR JSON has no url, so supply one.
     if (Array.isArray(args) && args.includes("number,url")) {
@@ -51,11 +61,35 @@ function withThreadDefault(runGh) {
         const pr = JSON.parse(out)?.data?.repository?.pullRequest;
         if (pr && typeof pr === "object" && "reviewThreads" in pr) return out;
       } catch { /* not thread data — fall through to the default */ }
-      return NO_THREADS_JSON;
+      return JSON.stringify({ data: { repository: { pullRequest: {
+        headRefOid: threadHead,
+        reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      } } } });
+    }
+    // The money-PR CodeRabbit requirement read (Mason, 2026-10-21): default to a
+    // non-money PR at the head the thread answer described, unless the fixture
+    // answered it itself.
+    if (Array.isArray(args) && args[0] === "api" && args[1] === "graphql" && args.some((a) => /status \{ contexts/.test(String(a)))) {
+      try {
+        const pr = JSON.parse(out)?.data?.repository?.pullRequest;
+        if (pr && typeof pr === "object" && "commits" in pr) return out;
+      } catch { /* not requirement data — fall through to the default */ }
+      return requirementJson({ head: threadHead });
+    }
+    // The REST file list the requirement read always makes (rename sources):
+    // default to the default requirement answer's one non-money file.
+    if (Array.isArray(args) && args.some((a) => String(a).includes("/files?per_page"))) {
+      return /^[\[{]/.test(String(out).trim()) ? "docs/readme.md\t\n" : out;
     }
     return out;
   };
 }
+const requirementJson = ({ files = ["docs/readme.md"], statuses = [], head = "f".repeat(40) } = {}) => JSON.stringify({ data: { repository: { pullRequest: {
+  headRefOid: head,
+  labels: { totalCount: 0, nodes: [] },
+  files: { totalCount: files.length, nodes: files.map((p) => ({ path: p })) },
+  commits: { totalCount: 1, nodes: [{ commit: { oid: head, parents: { totalCount: 1 }, status: { contexts: statuses } } }] },
+} } } });
 const evaluateProductionAction = (options) => evaluateProductionActionRaw(
   options?.rawThreads ? options : { ...options, runGh: withThreadDefault(options?.runGh) },
 );
@@ -397,6 +431,36 @@ try {
     toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo,
     nowMs: Date.now(), runGh: () => ordinaryPrJson,
   }).blocked, false, "...and merges once the exact-SHA Sol proof exists");
+  // Money PRs need a completed CodeRabbit review of the head (Mason, 2026-10-21).
+  // Same merge-ready, Sol-proven PR; only the requirement answer changes.
+  const withRequirement = (answer) => (args) => {
+    if (Array.isArray(args) && args[0] === "api" && args.some((a) => /status \{ contexts/.test(String(a)))) {
+      return typeof answer === "function" ? answer() : answer;
+    }
+    // The REST file list (rename sources): the money file these fixtures change.
+    if (Array.isArray(args) && args.some((a) => String(a).includes("/files?per_page"))) return "src/lib/invoiceMath.ts\t\n";
+    return ordinaryPrJson;
+  };
+  const moneyMerge = (answer) => evaluateProductionAction({
+    toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo,
+    nowMs: Date.now(), runGh: withRequirement(answer),
+  });
+  const crDone = (login = "coderabbitai") => [{ context: "CodeRabbit", state: "SUCCESS", description: "Review completed", creator: { login } }];
+  const unreviewed = moneyMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }));
+  assert.equal(unreviewed.blocked, true, "a money PR with no completed CodeRabbit review of its head is refused");
+  assert.match(unreviewed.reason, /needs a clean CodeRabbit review of its current head/, "and the denial says why");
+  assert.match(unreviewed.reason, /@coderabbitai full review/, "and names the one request to post");
+  assert.equal(moneyMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"],
+    statuses: [{ context: "CodeRabbit", state: "SUCCESS", description: "Review rate limited", creator: { login: "coderabbitai" } }] })).blocked,
+  true, "a rate-limited CodeRabbit status is not a review");
+  assert.equal(moneyMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"], statuses: crDone("masonwells1") })).blocked,
+    true, "a 'Review completed' status posted from Mason's account (an agent) does not count");
+  assert.equal(moneyMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"], statuses: crDone() })).blocked,
+    false, "a money PR CodeRabbit completed a review of merges");
+  assert.equal(moneyMerge(() => { throw new Error("gh down"); }).blocked, true,
+    "a failed requirement read refuses (fail closed)");
+  assert.equal(moneyMerge(requirementJson({ files: ["src/lib/invoiceMath.ts"], statuses: crDone(), head: "e".repeat(40) })).blocked,
+    true, "a requirement answer for a different head than the thread answer is not trusted");
   // Sol HIGH, round 3: the same merge-ready PR without the head pin is refused —
   // a push racing the merge would otherwise land unreviewed.
   const unpinned = evaluateProductionAction({
@@ -2331,6 +2395,10 @@ try {
     nowMs: now,
     rawThreads: true,
     runGh: (args) => {
+      // The money-PR requirement read (2026-10-21): a non-money PR at this head.
+      if (Array.isArray(args) && args.some((a) => /status \{ contexts/.test(String(a)))) {
+        return requirementJson({ head: risky.sha });
+      }
       if (Array.isArray(args) && args.includes("graphql")) {
         return JSON.stringify({ data: { repository: { pullRequest: { headRefOid: risky.sha,
           reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } });
@@ -2380,6 +2448,10 @@ try {
   // advisory IS reached for each of them — deferral is not deletion.
   let chainedControlAttempts = 0;
   const chainedControlGh = (args) => {
+    // The money-PR requirement read (2026-10-21): a non-money PR at this head.
+    if (Array.isArray(args) && args.some((a) => /status \{ contexts/.test(String(a)))) {
+      return requirementJson({ head: risky.sha });
+    }
     if (Array.isArray(args) && args.includes("graphql")) {
       chainedControlAttempts += 1;
       // A complete, empty thread list: since 2026-10-19 a failed read would deny.
@@ -2410,7 +2482,9 @@ try {
   let dedupePrViews = 0;
   const dedupeGh = (args) => {
     if (Array.isArray(args) && args.includes("graphql")) {
-      dedupeAdvisoryAttempts += 1;
+      // Count the thread lookup (one per advisory run); the money-PR requirement
+      // read that follows it (2026-10-21) falls to the default answer.
+      if (args.some((a) => /reviewThreads/.test(String(a)))) dedupeAdvisoryAttempts += 1;
       return NO_THREADS_JSON; // a complete, empty read (a failed one denies since 2026-10-19)
     }
     if (isAdvisoryMetaCall(args)) return advisoryMetaJson;

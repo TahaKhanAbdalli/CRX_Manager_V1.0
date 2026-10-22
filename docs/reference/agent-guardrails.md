@@ -38,7 +38,21 @@
 > (CodeRabbit only comments), `auto_incremental_review: false` (one review per PR, when opened non-draft or marked
 > ready), `ignore_title_keywords: ["docs("]`. Agents open PRs as drafts, mark them ready once the head is frozen, fix or
 > refute every CodeRabbit comment that arrives before the merge in one push, do not wait for a review that has not
-> arrived, and never post `@coderabbitai review`. A failed CodeRabbit pre-merge check (all `warning` mode since 2026-10-19) is a finding, not a
+> arrived, and never post `@coderabbitai review`. Exception (Mason, 2026-10-21): a PR that touches money, invoices,
+> payments, inventory, or costs in any way, or one Mason asks to have reviewed, needs a clean CodeRabbit review of its
+> current head plus a clean Sol, and the agent posts `@coderabbitai full review` once for its frozen, green head (one
+> retry after a stated wait; any fix commit moves the head and needs a new request; drop `docs(` from the title before
+> marking it ready). Both merge gates and the migration landing gate enforce it (`evaluateCodeRabbitRequirement()` in
+> `.claude/hooks/codex-bot-review-lib.mjs`): a PR that changes a migration, an Edge Function, a money-named `src/` file,
+> or carries the `needs-coderabbit` label needs CodeRabbit's own "Review completed" commit status on the head, or on an
+> earlier commit followed only by merges whose PR-own changes (three-dot compare, per-file status, blob and rename source) are identical at both
+> commits; each gate reads that status BEFORE the review threads, so a review finishing mid-check cannot pair with a
+> stale thread list; the file list is always read in full over REST, and a renamed file's source path is classified too (a money file
+> renamed to a generic name still qualifies); in the Claude guard every requirement and thread-page call is capped at 5s and only started if it can finish
+> before the advisory deadline; an unreadable answer (including a GraphQL answer carrying errors, or a
+> file or label entry with no name), or a lookup that could outlive the
+> hook, refuses (rules: `docs/reference/coderabbit-native-review.md`). The guidance check pins the trigger sentence in `AGENTS.md`
+> and, in that reference, the timing, the in-progress wait, the `docs(` title step, the stated wait and the retry cap. A failed CodeRabbit pre-merge check (all `warning` mode since 2026-10-19) is a finding, not a
 > blocker; accepted loss: its "edit to an already-applied migration" check no longer blocks (the mandatory Sol review
 > of any migration change and the CI migration check remain). Mentions of CodeRabbit APPROVED below are history.
 >

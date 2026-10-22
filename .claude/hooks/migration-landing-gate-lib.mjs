@@ -36,6 +36,7 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_PAGE_SIZE,
   coderabbitThreadCount,
+  readCodeRabbitRequirement,
   collectCodexThreads,
 } from "./codex-bot-review-lib.mjs";
 
@@ -165,6 +166,24 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
   if (pullRequestReviewBlocked(pr)) return refuse(`${number} has an unresolved CHANGES_REQUESTED review.`);
   if (!pullRequestChecksGreen(pr)) {
     return refuse(`${number} is not merge-ready: mergeStateStatus must be CLEAN and the newest run of every check green.`);
+  }
+  // A money PR needs a completed CodeRabbit review of its head before it merges
+  // (Mason, 2026-10-21), so it needs one before its migration applies too —
+  // otherwise production could take a migration whose PR cannot merge. Read
+  // BEFORE the threads (Codex App P1 on #1009): a review finishing between the
+  // two reads would otherwise pair "Review completed" with a stale empty thread list.
+  let coderabbitReview;
+  try {
+    coderabbitReview = readCodeRabbitRequirement(gh, { owner: "{owner}", name: "{repo}", number: pr.number });
+  } catch (error) {
+    if (OUT(error)) throw error;
+    return refuse(`could not read ${number}'s labels, files and commit statuses to check the CodeRabbit review requirement (${error?.message || error}); fail closed.`);
+  }
+  if (coderabbitReview.status === "unreadable" || coderabbitReview.headOid !== head.toLowerCase()) {
+    return refuse(`${number}'s CodeRabbit review requirement could not be read for this exact head (fail closed) — re-run on the current head.`);
+  }
+  if (coderabbitReview.status === "missing") {
+    return refuse(`${number} needs a clean CodeRabbit review of its current head before its migration applies, because ${coderabbitReview.why}. Post "@coderabbitai full review" once (docs/reference/coderabbit-native-review.md), answer its threads, then re-run.`);
   }
   // CodeRabbit is advisory (2026-10-19), but its unanswered threads block the
   // merge gates, so they block an apply too — otherwise production could take a

@@ -14,7 +14,15 @@ import {
   CODEX_BOT_LOGINS,
   CODEX_THREADS_QUERY,
   CODEX_THREAD_MAX_PAGES,
+  CODERABBIT_REQUIRED_LABEL,
   codexBotFindingsDenial,
+  coderabbitCompletedCommit,
+  coderabbitRequirementArgs,
+  coderabbitReviewMissingDenial,
+  evaluateCodeRabbitRequirement,
+  isMoneyPath,
+  prOwnChangesUnchanged,
+  readCodeRabbitRequirement,
   codexBotThreads,
   coderabbitFindingsDenial,
   coderabbitThreadCount,
@@ -573,7 +581,8 @@ for (const [label, source] of [["Claude", guardSource], ["Codex", codexGuardSour
     `the ${label} guard's advisory budget (${budgetMs}ms) must stay at or under half its ${hookBudgetMs}ms hook timeout`,
   );
   ok(
-    /collectCodexThreads\([\s\S]{0,2000}?\{ deadlineMs(?:, now: clock)? \}\)/.test(source),
+    // The Claude guard passes a tighter deadline (one capped call earlier) since #1009.
+    /collectCodexThreads\([\s\S]{0,2000}?\{ deadlineMs(?:: deadlineMs - REQUIREMENT_CALL_TIMEOUT_MS)?(?:, now: clock)? \}\)/.test(source),
     `the ${label} guard actually PASSES the deadline to collectCodexThreads — declaring a budget it never applies is decoration`,
   );
 }
@@ -600,5 +609,175 @@ eq(
   "b".repeat(40),
   "a deadline that has not passed leaves the walk untouched",
 );
+
+// ── Money PRs need a completed CodeRabbit review of the head (2026-10-21) ────
+const MID = "4a1b2c3d4e5f60718293a4b5c6d7e8f901234567";
+const crStatus = (description, { login = "coderabbitai", state = "SUCCESS", context = "CodeRabbit" } = {}) =>
+  ({ context, state, description, creator: { login } });
+const commit = (oid, { parents = 1, statuses = [] } = {}) =>
+  ({ commit: { oid, parents: { totalCount: parents }, status: statuses === null ? null : { contexts: statuses } } });
+const facts = ({ files = ["src/lib/invoiceMath.ts"], labels = [], commits = [commit(HEAD, { statuses: [crStatus("Review completed")] })],
+  headRefOid = HEAD, filesTotal = files.length } = {}) => ({
+  headRefOid,
+  labels: { totalCount: labels.length, nodes: labels.map((name) => ({ name })) },
+  files: { totalCount: filesTotal, nodes: files.map((filePath) => ({ path: filePath })) },
+  commits: { totalCount: commits.length, nodes: commits },
+});
+
+// Which PRs qualify.
+ok(isMoneyPath("src/lib/invoiceMath.ts") && isMoneyPath("src/pages/Inventory.tsx") && isMoneyPath("src\\lib\\prepayApply.ts"),
+  "src money/inventory paths qualify, either slash");
+ok(isMoneyPath("src/lib/chemCalculator.ts"), "the chemical calculator (quantities x unit prices) qualifies (Sol, PR #1009)");
+ok(isMoneyPath("supabase/migrations/20261021000000_anything.sql") && isMoneyPath("supabase/functions/send-email/index.ts"),
+  "every migration and Edge Function qualifies");
+ok(!isMoneyPath("docs/reference/invoices.md") && !isMoneyPath(".claude/hooks/x.mjs") && !isMoneyPath("src/lib/pagedRead.ts")
+  && !isMoneyPath("src/components/Map.tsx"), "docs, hooks and non-money src files do not");
+eq(evaluateCodeRabbitRequirement(facts({ files: ["docs/x.md", "src/components/Map.tsx"], commits: [commit(HEAD)] })).status,
+  "not-required", "a non-money PR with no label is not gated");
+eq(evaluateCodeRabbitRequirement(facts({ files: ["docs/x.md"], labels: [CODERABBIT_REQUIRED_LABEL], commits: [commit(HEAD)] })).status,
+  "missing", "the needs-coderabbit label makes any PR qualify");
+eq(evaluateCodeRabbitRequirement(facts({ files: ["docs/x.md"], filesTotal: 250, commits: [commit(HEAD)] })).status,
+  "missing", "a cut-short file list cannot prove the PR is not a money PR");
+
+// The DENY direction: a money PR with no completed review is refused.
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD)] })).status, "missing", "no CodeRabbit status at all is missing");
+for (const description of ["Review rate limited", "Review skipped: incremental reviews are disabled", "Review in progress"]) {
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD, { statuses: [crStatus(description)] })] })).status,
+    "missing", `"${description}" is not a completed review`);
+}
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD, { statuses: [crStatus("Review completed", { login: "masonwells1" })] })] })).status,
+  "missing", "a 'Review completed' status posted by anyone but CodeRabbit (an agent via Mason's account) does not count");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD, { statuses: [crStatus("Review completed", { context: "CodeRabbit-fake" })] })] })).status,
+  "missing", "another context name does not count");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD, { statuses: [crStatus("Review completed", { state: "PENDING" })] })] })).status,
+  "missing", "a non-success state does not count");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] }), commit(HEAD)] })).status,
+  "missing", "an ordinary commit after the reviewed one needs a new review");
+
+// The ALLOW direction.
+const reviewedHead = evaluateCodeRabbitRequirement(facts());
+eq([reviewedHead.status, reviewedHead.reviewedOid], ["reviewed", HEAD], "a completed review of the head passes");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] }),
+  commit(MID, { parents: 2 }), commit(HEAD, { parents: 2, statuses: [crStatus("Review skipped: incremental reviews are disabled")] })] })).status,
+  "reviewed", "only merge commits after the reviewed commit keep the earlier review");
+ok(coderabbitCompletedCommit({ status: { contexts: [crStatus("Review completed", { login: "coderabbitai[bot]" })] } }),
+  "both CodeRabbit login spellings count");
+
+// Unreadable answers fail closed.
+eq(evaluateCodeRabbitRequirement(null).status, "unreadable", "no data is unreadable");
+eq(evaluateCodeRabbitRequirement({ headRefOid: HEAD }).status, "unreadable", "missing lists are unreadable");
+// A partial answer is never "not required" (Sol, PR #1009).
+{
+  const partialFiles = facts({ files: ["docs/x.md"], commits: [commit(HEAD)] });
+  partialFiles.files.nodes.push({ path: null });
+  partialFiles.files.totalCount = 2;
+  eq(evaluateCodeRabbitRequirement(partialFiles).status, "unreadable", "a file entry with no path is unreadable, not exempt");
+  const partialLabels = facts({ files: ["docs/x.md"], commits: [commit(HEAD)] });
+  partialLabels.labels = { totalCount: 1, nodes: [{ name: null }] };
+  eq(evaluateCodeRabbitRequirement(partialLabels).status, "unreadable", "a label entry with no name is unreadable, not exempt");
+  let threw = false;
+  try {
+    readCodeRabbitRequirement(() => JSON.stringify({ errors: [{ message: "partial" }],
+      data: { repository: { pullRequest: facts({ files: ["docs/x.md"], commits: [commit(HEAD)] }) } } }), { owner: "o", name: "r", number: 1 });
+  } catch { threw = true; }
+  ok(threw, "a GraphQL answer carrying errors is refused even when it includes data");
+}
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] })] })).status,
+  "unreadable", "a commit list that does not end at the head is not trusted");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [] })).status, "unreadable", "an empty commit list is not trusted");
+
+// A label list cut short cannot prove the label is absent (Luna round 5).
+eq(evaluateCodeRabbitRequirement({ ...facts({ files: ["docs/x.md"], commits: [commit(HEAD)] }),
+  labels: { totalCount: 150, nodes: [] } }).status, "missing", "an incomplete label list makes the PR qualify");
+
+// The merge walk is only provisional (Luna round 5, BLOCKER): the PR's own
+// changes must be byte-identical at the reviewed commit and at the head.
+const BASE40 = "b".repeat(40);
+const walkFacts = { ...facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] }), commit(HEAD, { parents: 2 })] }), baseRefOid: BASE40 };
+const prFiles = [{ filename: "src/lib/invoiceMath.ts", status: "modified", sha: "1".repeat(40) }];
+const fakeGh = ({ atReview = prFiles, atHead = prFiles, onCall = () => {} } = {}) => (args) => {
+  onCall(args);
+  const target = String(args[1] || "");
+  if (args[1] === "graphql") return JSON.stringify({ data: { repository: { pullRequest: walkFacts } } });
+  if (target.includes("/files?per_page")) return "src/lib/invoiceMath.ts\t\n";
+  if (target.endsWith(`...${OLD}`)) return JSON.stringify(atReview);
+  if (target.endsWith(`...${HEAD}`)) return JSON.stringify(atHead);
+  throw new Error(`unexpected gh ${args.join(" ")}`);
+};
+const read = (gh, extra = {}) => readCodeRabbitRequirement(gh, { owner: "o", name: "r", number: 9, ...extra });
+eq(read(fakeGh()).status, "reviewed", "a merge-only walk with identical PR changes keeps the earlier review");
+eq(read(fakeGh({ atHead: [{ ...prFiles[0], sha: "2".repeat(40) }] })).status, "missing",
+  "a merge that changed a PR file voids the earlier review");
+eq(read(fakeGh({ atHead: [...prFiles, { filename: "src/lib/newMoney.ts", status: "added", sha: "3".repeat(40) }] })).status, "missing",
+  "a merge that added a file to the PR's own changes voids the earlier review");
+{
+  // Identical on both sides, so only the cap can refuse it.
+  const capped = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, status: "modified", sha: "4".repeat(40) }));
+  eq(read(fakeGh({ atReview: capped, atHead: capped })).status,
+    "missing", "a compare at GitHub's 300-file cap cannot prove anything, even when both sides match");
+}
+ok(read(fakeGh({ onCall: (args) => ok(!String(args[1]).includes("compare/") || /compare\/b{40}\.\.\./.test(args[1]), "compares against the PR's base") })),
+  "the compare is three-dot against the PR's base");
+eq(prOwnChangesUnchanged(null, prFiles), false, "an unreadable compare is never 'unchanged'");
+{
+  const renamed = (from) => [{ filename: "src/lib/newName.ts", status: "renamed", sha: "5".repeat(40), previous_filename: from }];
+  eq(prOwnChangesUnchanged(renamed("src/lib/a.ts"), renamed("src/lib/a.ts")), true, "the same rename is unchanged");
+  eq(prOwnChangesUnchanged(renamed("src/lib/a.ts"), renamed("src/lib/b.ts")), false,
+    "a rename from a different source path is a different change (Codex App P2)");
+}
+// A review AT the head needs no compare at all.
+{
+  let calls = 0;
+  const headGh = (args) => {
+    calls += 1;
+    if (args[1] === "graphql") return JSON.stringify({ data: { repository: { pullRequest: { ...facts(), baseRefOid: BASE40 } } } });
+    if (String(args[1]).includes("/files?per_page")) return "src/lib/invoiceMath.ts\t";
+    throw new Error("no compare expected");
+  };
+  eq(read(headGh).status, "reviewed", "a review of the head passes");
+  eq(calls, 2, "…with the GraphQL read and the file list only (no compare)");
+}
+// A money file renamed to a generic name and edited still qualifies (Sol, PR #1009):
+// GraphQL reports only the new path; the REST list names the source too.
+{
+  const renameFacts = { ...facts({ files: ["src/lib/math.ts"], commits: [commit(HEAD)] }), baseRefOid: BASE40 };
+  const renameGh = (rows) => (args) => (args[1] === "graphql"
+    ? JSON.stringify({ data: { repository: { pullRequest: structuredClone(renameFacts) } } })
+    : rows);
+  eq(read(renameGh("src/lib/math.ts\tsrc/lib/invoiceMath.ts\n")).status, "missing",
+    "invoiceMath.ts renamed to math.ts qualifies through its source path");
+  eq(read(renameGh("src/lib/math.ts\t\n")).status, "not-required", "CONTROL: the same generic file with no money source does not");
+  eq(read(renameGh("src/lib/math.ts\t\nsrc/lib/other.ts\t\n")).status, "missing",
+    "a REST list whose count disagrees with GitHub's total cannot prove the PR exempt");
+}
+// A PR with more than 100 files: the full list is read over REST (Luna round 6).
+{
+  const big = Array.from({ length: 150 }, (_, i) => `docs/page-${i}.md`);
+  const bigFacts = { ...facts({ files: big.slice(0, 100), filesTotal: 150, commits: [commit(HEAD)] }), baseRefOid: BASE40 };
+  const bigGh = (list) => (args) => (args[1] === "graphql"
+    ? JSON.stringify({ data: { repository: { pullRequest: structuredClone(bigFacts) } } })
+    : list.join("\n"));
+  eq(read(bigGh(big)).status, "not-required", "a 150-file docs PR is read in full and stays advisory");
+  eq(read(bigGh([...big.slice(0, 149), "src/lib/invoiceMath.ts"])).status, "missing",
+    "…but a money file on a later page still makes it qualify");
+  eq(read(bigGh(big.slice(0, 120))).status, "missing", "a full list whose count does not match stays incomplete (fail closed)");
+}
+
+// Budget: a call is not started unless it can finish before the deadline.
+{
+  let threw = false;
+  try { read(fakeGh(), { deadlineMs: 10_000, callTimeoutMs: 5_000, now: () => 6_000 }); } catch { threw = true; }
+  ok(threw, "a call that could outlive the budget is not started — the read throws (callers refuse)");
+  eq(read(fakeGh(), { deadlineMs: 10_000, callTimeoutMs: 5_000, now: () => 1_000 }).status, "reviewed",
+    "a call that fits the budget runs");
+}
+
+// The query and denial carry what the agent needs.
+ok(coderabbitRequirementArgs("o", "r", 5).includes("number=5")
+  && /status \{ contexts \{ context state description creator/.test(coderabbitRequirementArgs("o", "r", 5)[3]),
+  "the query reads each commit's status contexts with their creator");
+ok(/@coderabbitai full review/.test(coderabbitReviewMissingDenial("X", "7", "it changes money", HEAD))
+  && /pr comment 7/.test(coderabbitReviewMissingDenial("X", "7", "w", HEAD)),
+  "the denial tells the agent the exact one request to post");
 
 console.log(`codex-bot-review-lib: ${pass} assertions passed`);

@@ -56,10 +56,13 @@ import {
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
   coderabbitFindingsDenial,
+  coderabbitRequirementUnreadableDenial,
+  coderabbitReviewMissingDenial,
   coderabbitThreadCount,
   coderabbitUnreadableDenial,
   collectCodexThreads,
   evaluateCodexBotReview,
+  readCodeRabbitRequirement,
 } from "../../.claude/hooks/codex-bot-review-lib.mjs";
 import { solExemptionOnGitHub } from "../../.claude/hooks/sol-exempt-lib.mjs";
 
@@ -1334,6 +1337,7 @@ const CODEX_CALL_TIMEOUT_MS = 5_000;
 function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), deadlineMs = clock() + CODEX_ADVISORY_BUDGET_MS }) {
   let codexVerdict = null;
   let coderabbitOpen = null; // null = not read completely → fail closed below
+  let coderabbitReview = null; // null = not read → fail closed below
   try {
     const metaArgs = ["pr", "view"];
     if (request.selector) metaArgs.push(String(request.selector));
@@ -1342,6 +1346,14 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
     const meta = JSON.parse(runGh(metaArgs, repoDir));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
+      // Money PRs need a completed CodeRabbit review of the head — mirror of
+      // pr-merge-guard.mjs: read the completion status BEFORE the threads (Codex
+      // App P1 on #1009), inside the same budget; a throw leaves it null → refuse.
+      // Each call also passes the hard-gate budget's admit() inside runGh, which
+      // refuses a call that could outlive the hook.
+      const verdict = readCodeRabbitRequirement((args) => runGh(args, repoDir), {
+        owner: slug[1], name: slug[2], number: meta.number, deadlineMs, now: clock,
+      });
       const node = collectCodexThreads((cursor) => {
         const args = [
           "api", "graphql",
@@ -1357,6 +1369,9 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
       }, { deadlineMs, now: clock });
       if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
       coderabbitOpen = coderabbitThreadCount(node);
+      if (verdict.headOid && verdict.headOid === String(node.headRefOid || "").trim().toLowerCase()) {
+        coderabbitReview = verdict;
+      }
     }
   } catch {
     codexVerdict = null; // never a deny
@@ -1368,6 +1383,12 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
   }
   if (coderabbitOpen > 0) {
     return denied(coderabbitFindingsDenial("CODEX PRODUCTION GATE", request.selector, coderabbitOpen));
+  }
+  if (!coderabbitReview || coderabbitReview.status === "unreadable") {
+    return denied(coderabbitRequirementUnreadableDenial("CODEX PRODUCTION GATE", request.selector));
+  }
+  if (coderabbitReview.status === "missing") {
+    return denied(coderabbitReviewMissingDenial("CODEX PRODUCTION GATE", request.selector, coderabbitReview.why, coderabbitReview.headOid));
   }
   if (codexVerdict?.status === "findings-at-head") {
     return denied(codexBotFindingsDenial("CODEX PRODUCTION GATE", request.selector, codexVerdict.unresolvedAtHead));

@@ -86,7 +86,9 @@ reviews:
   # drafts (unreviewed) and marked ready once the head is frozen, so that single
   # review lands on the finished change. Titles containing "docs(" are skipped
   # entirely: documentation records need no outside review. Agents never post
-  # `@coderabbitai review` to buy a re-review (.claude/commands/ship.md).
+  # `@coderabbitai review` to buy a re-review (.claude/commands/ship.md); the one
+  # exception is a single `@coderabbitai full review` on a money or Mason-named PR
+  # (Mason, 2026-10-21; docs/reference/coderabbit-native-review.md).
   #
   # History: 2026-09-26 turned on a review of every push because the merge gates
   # then required CodeRabbit's APPROVED verdict on the exact head. That

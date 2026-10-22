@@ -721,6 +721,30 @@ ok(/let coderabbitOpen = null;/.test(guardSource)
   "the Claude merge guard denies a PR with unresolved CodeRabbit threads");
 ok(/if \(coderabbitOpen === null\) \{\s*deny\(coderabbitUnreadableDenial\("PR MERGE GATE"/.test(guardSource),
   "…and fails CLOSED when the thread read failed or was partial (Luna round 3)");
+// Money PRs need a completed CodeRabbit review of the head (Mason, 2026-10-21);
+// behaviour is proven in codex-bot-review-lib.test.mjs, this pins the wiring.
+ok(/let coderabbitReview = null;/.test(guardSource)
+  && /coderabbitReview = verdict;/.test(guardSource)
+  && /if \(!coderabbitReview \|\| coderabbitReview\.status === "unreadable"\) \{\s*deny\(coderabbitRequirementUnreadableDenial\("PR MERGE GATE"/.test(guardSource)
+  && /if \(coderabbitReview\.status === "missing"\) \{\s*deny\(coderabbitReviewMissingDenial\("PR MERGE GATE"/.test(guardSource),
+  "the Claude merge guard refuses a money PR with no completed CodeRabbit review, and fails closed on an unreadable answer");
+// Codex App P1 on #1009 (budget): every thread-page call in the Claude guard is
+// capped and only started if it can finish before the advisory deadline.
+ok(/gh\(args, REQUIREMENT_CALL_TIMEOUT_MS\)\)\?\.data\?\.repository\?\.pullRequest/.test(guardSource)
+  && /\{ deadlineMs: deadlineMs - REQUIREMENT_CALL_TIMEOUT_MS \}/.test(guardSource),
+  "the Claude guard's thread walk uses the short call cap and stops while a capped call still fits the budget");
+// Codex App P1 on #1009: the completion status is read BEFORE the threads, in
+// every gate, so a review finishing mid-check cannot pair with a stale thread list.
+{
+  const codexGuardSource = readFileSync(path.join(__dirname, "..", "..", ".codex", "hooks", "production-action-guard.mjs"), "utf8");
+  const landingSource = readFileSync(path.join(__dirname, "migration-landing-gate-lib.mjs"), "utf8");
+  for (const [label, source] of [["Claude merge guard", guardSource], ["Codex merge guard", codexGuardSource], ["migration landing gate", landingSource]]) {
+    const requirementAt = source.indexOf("readCodeRabbitRequirement(");
+    const threadsAt = source.indexOf("collectCodexThreads((cursor)");
+    ok(requirementAt > 0 && threadsAt > 0 && requirementAt < threadsAt,
+      `${label}: the CodeRabbit completion status is read before the review threads`);
+  }
+}
 ok(/if\s*\(\s*!pullRequestChecksGreen\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
   "the green-pipeline denial is unconditional (no --auto exemption left)");
 ok(!/riskyFiles|contentIsRisky|advisoryQueue\.push\(request\);\s*return;\s*\}\s*\/\/[^\n]*risky/i.test(gateRequestSource),
