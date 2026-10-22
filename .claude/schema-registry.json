@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-10-21",
+    "generated_at": "2026-10-22",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261021204100",
+    "migrations_high_water": "20261022002748",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -424,6 +424,8 @@
       "20261021030000_void_order_governed_split_draft_claims",
       "20261021050000_from_scratch_invoices_charge_lines_only",
       "20261021070000_blend_invoice_approval_binding",
+      "20261021140000_po_cost_admin_only_and_corrections",
+      "20261021141000_po_cost_columns_admin_only",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3984,6 +3986,24 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "purchase_order_item_cost_changes",
+      "constraint": "po_item_cost_changes_cents_check",
+      "def": "CHECK (((new_unit_cost_cents >= 0) AND ((old_unit_cost_cents IS NULL) OR (old_unit_cost_cents >= 0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_item_cost_changes",
+      "constraint": "po_item_cost_changes_reason_length",
+      "def": "CHECK (((reason IS NULL) OR ((char_length(reason) >= 1) AND (char_length(reason) <= 500))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_item_cost_changes",
+      "constraint": "po_item_cost_changes_received_reason",
+      "def": "CHECK (((source <> 'set_by_admin'::text) OR (quantity_received_at_change = (0)::numeric) OR (reason IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "purchase_order_items",
       "constraint": "chk_poi_qty_ordered",
       "def": "CHECK ((quantity_ordered >= (0)::numeric))",
@@ -4014,9 +4034,21 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "purchase_order_items",
+      "constraint": "purchase_order_items_unit_cost_whole_cents_chk",
+      "def": "CHECK (((unit_cost IS NULL) OR ((unit_cost = round(unit_cost, 2)) AND (unit_cost > '-Infinity'::numeric) AND (unit_cost < 'Infinity'::numeric) AND (unit_cost >= (0)::numeric) AND (unit_cost = ((unit_cost_cents)::numeric / 100.0)))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "purchase_orders",
       "constraint": "purchase_orders_total_cost_whole_cents",
       "def": "CHECK (((total_cost >= (0)::numeric) AND (total_cost = ((total_cost_cents)::numeric / 100.0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_orders",
+      "constraint": "purchase_orders_total_cost_whole_cents_chk",
+      "def": "CHECK (((total_cost IS NULL) OR ((total_cost = round(total_cost, 2)) AND (total_cost > '-Infinity'::numeric) AND (total_cost < 'Infinity'::numeric) AND (total_cost >= (0)::numeric) AND (total_cost = ((total_cost_cents)::numeric / 100.0)))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
