@@ -1,6 +1,6 @@
 ## 2026-10-22 — Goal 1 step 3: cost, profit and margin columns locked on the remaining cost tables
 
-**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 969; written, not
+**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 970; written, not
 yet applied) takes the cost,
 profit and margin columns of `products`, `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`,
 `order_items`, `invoices`, `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions` out of

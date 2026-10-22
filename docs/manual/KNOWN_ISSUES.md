@@ -98,7 +98,7 @@ profit or margin column through the Data API; admins read them through `get_admi
 through `get_quote_versions`. Where `authenticated` held direct `INSERT`/`UPDATE` (`quotes`, `orders`, `jobs`,
 `job_chemicals`, `blend_ticket_products`, `commissions`), the cost columns become unwritable too. A read-only
 inventory before the change found no screen, Edge Function, function or trigger that would break (details in the
-PR and `docs/reference/migration-history.md` row 969). **Apply order:** PR #1018's `invoice_post_version` computed
+PR and `docs/reference/migration-history.md` row 970). **Apply order:** PR #1018's `invoice_post_version` computed
 field reads a whole `invoices` row, which needs `SELECT` on every column, so this lock must ship together with an
 id-keyed replacement for it and may not be applied before that swap (the migration's preflight refuses while any
 whole-row function is executable by an API role). **Correction to the text below:** reps could NOT write
