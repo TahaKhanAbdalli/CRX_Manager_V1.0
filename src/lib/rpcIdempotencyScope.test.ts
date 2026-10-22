@@ -278,6 +278,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // completed invoice. Migration 20260827041400 only re-emits the established
   // implementation to tighten return-credit order gates.
   _create_invoice_from_order_impl_20260718: ['create_invoice_from_order'],
+  // Direct EXECUTE is revoked (postgres-only, live 2026-10-21). The idempotency layer between the
+  // public create_invoice_from_order wrapper and the implementation above owns that wrapper's
+  // receipts (it is the only layer the wrapper's key reaches). 20261022021000 re-emits its live body
+  // only to add the field-split refusal; changing the literal would orphan every existing receipt.
+  _create_invoice_from_order_idem_impl_20260721: ['create_invoice_from_order'],
   // Direct EXECUTE is revoked (postgres-only). 20261016140000 renamed the original
   // create_order_from_blend_ticket body to this name behind a same-signature wrapper (ALTER
   // FUNCTION ... RENAME TO), so the body kept the public operation literal and both layers share

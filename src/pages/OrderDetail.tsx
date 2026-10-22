@@ -999,7 +999,8 @@ export default function OrderDetail() {
         // The billing path must follow the order's real field split. A failed or stale
         // allocation read leaves `allocations` empty or out of date, and an allocated order
         // sent down the single-invoice path bills the order's customer for every field
-        // owner's share (create_invoice_from_order does not check allocations itself).
+        // owner's share. Since 20261022021000 create_invoice_from_order refuses such an order
+        // itself (ORDER_HAS_FIELD_SPLIT); this check keeps the page on the right path first.
         if (allocLoadFailed) {
           throw new Error('The field split details failed to load. Refresh the page before creating the invoice.');
         }

@@ -155,6 +155,11 @@ describe('sanitizeError', () => {
     expect(sanitizeError('RETURN_CREDIT_CUTOVER_IN_PROGRESS')).toContain('briefly paused');
     expect(sanitizeError('ORDER_INVOICE_TERMINAL')).toContain('already final');
     expect(sanitizeError(
+      'ORDER_HAS_FIELD_SPLIT: this order is split across fields; bill it per field owner through create_split_invoices_from_order'
+    )).toBe("Nothing was billed. This order's lines are split across fields, so it is billed by field. Refresh the page, then choose Create Invoice again");
+    expect(sanitizeError('INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID: invoice and order customer must match'))
+      .toContain("only be for that order's customer");
+    expect(sanitizeError(
       'ORDER_VOID_DRAFT_HAS_APPLIED_MONEY: draft invoice INV-1 carries a recorded payment, prepay, write-off or credit; reverse it before voiding the order'
     )).toContain('Reverse that first, then void the order');
     expect(sanitizeError('ORDER_LIFECYCLE_BUSY_RETRY')).toContain('Wait a moment');

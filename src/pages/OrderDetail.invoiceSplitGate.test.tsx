@@ -6,7 +6,8 @@
  * (create_split_invoices_from_order). The page chose the billing RPC from the allocations
  * it had loaded, so a failed (or stale) allocation read left the list empty and sent an
  * allocated order down the single-invoice path: one invoice to the order's customer for
- * every owner's share. create_invoice_from_order does not check allocations itself.
+ * every owner's share. Since 20261022021000 create_invoice_from_order also refuses such an
+ * order itself (ORDER_HAS_FIELD_SPLIT); the page still has to choose the right path first.
  *
  * This drives the real page and clicks Create Invoice.
  */

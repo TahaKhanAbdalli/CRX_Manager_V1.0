@@ -56,6 +56,8 @@ supabase/migrations/20261015200000_quotes_rep_own_name.sql text eol=lf
 # Its pre/postflight and its contract test pin the LF md5 of the guard body it installs.
 supabase/migrations/20261021150000_split_invoice_cross_customer_lineage.sql text eol=lf
 supabase/migrations/20261021155000_split_payer_return_credit.sql text eol=lf
+# Its pre/postflight and its contract test pin the LF md5 of the idempotency-layer body it installs.
+supabase/migrations/20261022021000_order_invoice_refuses_field_split.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
 # next_invoice_number year -> Chicago (2026-09-05). PARKED, not yet applied, but

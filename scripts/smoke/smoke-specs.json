@@ -249,6 +249,21 @@
         "security"
       ]
     },
+    "order_invoice_refuses_field_split": {
+      "chain": "smoke-order-invoice-refuses-field-split.sql",
+      "container_only": true,
+      "container_prover": "prove-order-invoice-refuses-field-split-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-order-invoice-refuses-field-split-real-schema.mjs, never through run-smoke.mjs against the live database: the chain creates invoices, which draw customer-visible invoice numbers from non-transactional sequences that a rollback does not return. 20261022021000: create_invoice_from_order refuses an order whose lines are split across fields (any order_item_field_allocations row) with ORDER_HAS_FIELD_SPLIT, SQLSTATE 23514, leaving no invoice, no saved key and no drawn invoice number; one allocated line of two is enough. The refusal runs after the replay lookup: an invoice created before its order was split still replays exactly under its key, a reused key with other arguments is still IDEMPOTENCY_ARGUMENT_MISMATCH, and a new key is refused. create_split_invoices_from_order still bills the allocated order as a governed per-owner draft (on a field the ordering customer owns, to keep it to one draft; billing another owner through a split, 20261021150000, has its own chain); a cancelled allocated order is still ORDER_INVOICE_TERMINAL; an allocated order with a live delivery gets the billing core's own live-delivery refusal, word for word. Fail-first against the pre-fix implementation. Uses the earliest active admin; prices its own [E2E] product through the governed pricing RPCs; terminal rollback. The companion container proof also runs a two-connection race (an uncommitted allocation makes the call wait on the line lock, then refuse).",
+      "covers": [
+        "create_invoice_from_order",
+        "create_split_invoices_from_order",
+        "_create_invoice_from_order_idem_impl_20260721"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
+    },
     "orders_blend_tickets_rep_own_name": {
       "chain": "smoke-orders-blend-tickets-rep-own-name.sql",
       "container_only": true,
