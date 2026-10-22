@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const { mockNavigate, mockRpc, mockToast, mockGenerateIdempotencyKey } = vi.hoisted(() => ({
+const { mockNavigate, mockRpc, mockToast, mockGenerateIdempotencyKey, mockAuth } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
   mockGenerateIdempotencyKey: vi.fn(),
+  mockAuth: { role: 'sales_rep' },
 }));
 
 const product = {
@@ -47,7 +48,14 @@ vi.mock('../lib/idempotency', () => ({
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', role: 'sales_rep', full_name: 'Sales User' } }),
+  useAuth: () => ({ profile: { id: 'user-1', role: mockAuth.role, full_name: 'Sales User' } }),
+}));
+
+// A non-admin's catalog carries no cost; an admin's carries the real one.
+vi.mock('../lib/costFields', () => ({
+  PRODUCT_COLUMNS: 'id',
+  withAdminCosts: async (_table: string, rows: Array<Record<string, unknown>>, isAdmin: boolean) =>
+    rows.map((row) => (isAdmin ? row : { ...row, current_cost: undefined })),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -81,6 +89,7 @@ async function fillValidPurchaseOrder() {
 describe('NewPurchaseOrder save and submit workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAuth.role = 'sales_rep';
     const counts = new Map<string, number>();
     mockGenerateIdempotencyKey.mockImplementation((operation: string) => {
       const count = (counts.get(operation) ?? 0) + 1;
@@ -153,5 +162,23 @@ describe('NewPurchaseOrder save and submit workflow', () => {
     expect(saveCalls[0][1].p_po_payload.po_number).toBeNull();
     expect(saveCalls[1][1].p_po_payload.po_number).toBeNull();
     expect(saveCalls[0][1].p_idempotency_key).toBe(saveCalls[1][1].p_idempotency_key);
+  });
+
+  it('a rep promoted to admin mid-draft saves the catalog cost, never the hidden placeholder $0 (Codex)', async () => {
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') return { data: { po_id: 'po-3', po_number: 'PO-TEST-3' }, error: null };
+      throw new Error(`Unexpected RPC ${name}`);
+    });
+
+    await fillValidPurchaseOrder();
+    mockAuth.role = 'admin';
+    // Promotion in place: the next render reloads the costed catalog.
+    fireEvent.change(screen.getByPlaceholderText('Enter or select vendor...'), { target: { value: 'Test Vendor 2' } });
+    await waitFor(() => expect(screen.getByDisplayValue('12.5')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save as Draft' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_purchase_order', expect.anything()));
+    const [, args] = mockRpc.mock.calls.find(([name]) => name === 'save_purchase_order')!;
+    expect(args.p_items).toEqual([expect.objectContaining({ unit_cost_cents: 1250, unit_cost: 12.5 })]);
   });
 });

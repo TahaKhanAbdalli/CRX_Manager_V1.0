@@ -28,12 +28,14 @@ import { fetchAllRows } from '../lib/pagedRead';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { formatUSD as fmt } from '../lib/money';
+import { purchaseOrderCentsToDollars, purchaseOrderLineTotalCents } from '../lib/purchaseOrderMoney';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import BulkPOImport from '../components/purchase-orders/BulkPOImport';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import type { PurchaseOrder } from '../types';
+import { PURCHASE_ORDER_COLUMNS, withAdminCosts } from '../lib/costFields';
 
 const CANCELLABLE = ['draft', 'submitted'];
 
@@ -53,15 +55,23 @@ interface OutstandingItem {
   unit_size: string | null;
   expected_delivery_date: string | null;
   outstanding_value: number;
+  outstanding_value_cents: number;
 }
 
 export default function PurchaseOrders() {
   const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  // Purchase cost is admin-only (Mason, 2026-10-18).
+  const isAdmin = role === 'admin';
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  /* Admins: purchase orders with a rep line at an unconfirmed catalog cost (20261021140000) */
+  const [costReviewPoIds, setCostReviewPoIds] = useState<Set<string>>(new Set());
+  const [costReviewOnly, setCostReviewOnly] = useState(false);
+  // False when the flag read failed: the filter is then off and disabled, never an empty queue that hides every PO.
+  const [costReviewFlagsLoaded, setCostReviewFlagsLoaded] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -84,20 +94,55 @@ export default function PurchaseOrders() {
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data, error } = await fetchAllRows((from, to) => supabase
       .from('purchase_orders')
-      .select('*', { count: 'exact' })
+      .select(PURCHASE_ORDER_COLUMNS, { count: 'exact' })
       .order('created_at', { ascending: false })
       .order('id')
       .range(from, to));
     if (seq !== fetchPOsSeq.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_purchase_orders' } });
+    let rows = (data || []) as unknown as PurchaseOrder[];
+    let loadError: unknown = error;
+    if (!error) {
+      try {
+        rows = await withAdminCosts('purchase_orders', rows, isAdmin);
+      } catch (costErr) {
+        loadError = costErr;
+      }
+      if (seq !== fetchPOsSeq.current) return;
+    }
+    // Admins: which purchase orders have a rep line whose catalog cost nobody has confirmed yet.
+    // Cancelled purchase orders are left out: their cost can no longer change. A failure here only
+    // costs the filter its count; the list itself still loads.
+    let reviewIds = new Set<string>();
+    let flagsLoaded = true;
+    if (!loadError && isAdmin) {
+      const { data: flagged, error: flaggedError } = await fetchAllRows((from, to) => supabase
+        .from('purchase_order_items')
+        .select('id, purchase_order_id, purchase_orders!inner(status)', { count: 'exact' })
+        .eq('cost_needs_review', true)
+        .neq('purchase_orders.status', 'cancelled')
+        .order('id')
+        .range(from, to));
+      if (seq !== fetchPOsSeq.current) return;
+      if (flaggedError) {
+        Sentry.captureException(flaggedError, { tags: { source: 'fetch', action: 'load_po_cost_review_flags' } });
+        toast('warning', 'Could not load which purchase orders have costs to confirm.');
+        flagsLoaded = false;
+      } else {
+        reviewIds = new Set(((flagged || []) as Array<{ purchase_order_id: string }>).map((r) => r.purchase_order_id));
+      }
+    }
+    if (loadError) {
+      Sentry.captureException(loadError, { tags: { source: 'fetch', action: 'load_purchase_orders' } });
       toast('error', 'Failed to load purchase orders. Please try again.');
       setLoading(false);
       return;
     }
-    setPos((data || []) as PurchaseOrder[]);
+    setPos(rows);
+    setCostReviewPoIds(reviewIds);
+    setCostReviewFlagsLoaded(flagsLoaded);
+    if (!flagsLoaded) setCostReviewOnly(false);
     setLoading(false);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   // Same stale-load guard: only the latest outstanding-items read may set state.
   const fetchOutstandingSeq = useRef(0);
@@ -115,7 +160,6 @@ export default function PurchaseOrders() {
         product_name,
         quantity_ordered,
         quantity_received,
-        unit_cost,
         unit_size,
         product:products(product_name),
         purchase_orders!inner(po_number, vendor, status, expected_delivery_date)
@@ -124,13 +168,23 @@ export default function PurchaseOrders() {
       .order('id')
       .range(from, to));
     if (seq !== fetchOutstandingSeq.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_outstanding_items' } });
+    let costedRows = (data || []) as unknown as Array<Record<string, unknown> & { id: string }>;
+    let loadError: unknown = error;
+    if (!error) {
+      try {
+        costedRows = await withAdminCosts('purchase_order_items', costedRows, isAdmin);
+      } catch (costErr) {
+        loadError = costErr;
+      }
+      if (seq !== fetchOutstandingSeq.current) return;
+    }
+    if (loadError) {
+      Sentry.captureException(loadError, { tags: { source: 'fetch', action: 'load_outstanding_items' } });
       toast('error', 'Failed to load outstanding items.');
       setOutstandingLoading(false);
       return;
     }
-    const items: OutstandingItem[] = ((data || []) as Record<string, unknown>[])
+    const items: OutstandingItem[] = (costedRows as Record<string, unknown>[])
       .map((row) => {
         const po = row.purchase_orders as Record<string, unknown>;
         const ordered = row.quantity_ordered as number;
@@ -147,17 +201,21 @@ export default function PurchaseOrders() {
           quantity_ordered: ordered,
           quantity_received: received,
           quantity_remaining: remaining,
-          unit_cost: row.unit_cost as number,
+          // Absent for non-admins, who never see unit cost or value.
+          unit_cost: (row.unit_cost as number | null | undefined) ?? 0,
           unit_size: row.unit_size as string | null,
           expected_delivery_date: po.expected_delivery_date as string | null,
-          outstanding_value: remaining * (row.unit_cost as number),
+          // Exact whole cents (CodeRabbit money check); dollars only for display.
+          outstanding_value_cents: purchaseOrderLineTotalCents(remaining, (row.unit_cost as number | null | undefined) ?? 0),
+          outstanding_value: purchaseOrderCentsToDollars(
+            purchaseOrderLineTotalCents(remaining, (row.unit_cost as number | null | undefined) ?? 0)),
         };
       })
       .filter((item) => item.quantity_remaining > 0)
       .sort((a, b) => a.vendor.localeCompare(b.vendor) || a.po_number.localeCompare(b.po_number));
     setOutstandingItems(items);
     setOutstandingLoading(false);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   useEffect(() => {
     fetchPOs();
@@ -181,6 +239,8 @@ export default function PurchaseOrders() {
 
   const filtered = pos.filter((p) => {
     if (statusFilter && p.status !== statusFilter) return false;
+    // Admin-only: a role change mid-session hides the button, so the filter must stop applying too.
+    if (isAdmin && costReviewOnly && costReviewFlagsLoaded && !costReviewPoIds.has(p.id)) return false;
     return true;
   });
 
@@ -198,7 +258,8 @@ export default function PurchaseOrders() {
   const outstandingStats = useMemo(() => {
     const totalItems = filteredOutstanding.length;
     const totalQty = filteredOutstanding.reduce((s, i) => s + i.quantity_remaining, 0);
-    const totalValue = filteredOutstanding.reduce((s, i) => s + i.outstanding_value, 0);
+    const totalValue = purchaseOrderCentsToDollars(
+      filteredOutstanding.reduce((s, i) => s + i.outstanding_value_cents, 0));
     const vendorCount = new Set(filteredOutstanding.map((i) => i.vendor)).size;
     const overdue = filteredOutstanding.filter((i) => {
       if (!i.expected_delivery_date) return false;
@@ -242,7 +303,7 @@ export default function PurchaseOrders() {
       key: 'total_cost',
       header: 'Total Cost',
       sortable: true,
-      render: (row) => <span className="font-mono text-sm">{fmt(row.total_cost)}</span>,
+      render: (row) => <span className="font-mono text-sm">{fmt(row.total_cost ?? 0)}</span>,
     },
     {
       key: 'submitted_date',
@@ -262,7 +323,9 @@ export default function PurchaseOrders() {
     },
   ];
 
-  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+  // Purchase cost is admin-only (Mason, 2026-10-18).
+  const visibleDataColumns = isAdmin ? dataColumns : dataColumns.filter((c) => c.key !== 'total_cost');
+  const columns = canBulkAction ? [checkboxCol, ...visibleDataColumns] : visibleDataColumns;
 
   /* ── Outstanding items columns ── */
   const outstandingColumns: Column<OutstandingItem>[] = [
@@ -347,7 +410,7 @@ export default function PurchaseOrders() {
       { key: 'po_number', header: 'PO #' },
       { key: 'vendor', header: 'Vendor' },
       { key: 'status', header: 'Status' },
-      { key: 'total_cost', header: 'Total Cost', format: (v) => fmtCSV(v as number) },
+      ...(isAdmin ? [{ key: 'total_cost', header: 'Total Cost', format: (v: unknown) => fmtCSV(v as number) }] : []),
       { key: 'submitted_date', header: 'Submitted', format: (v) => fmtDateCSV(v as string) },
       { key: 'expected_delivery_date', header: 'Expected Delivery', format: (v) => fmtDateCSV(v as string) },
     ], 'purchase_orders');
@@ -361,7 +424,7 @@ export default function PurchaseOrders() {
         { header: 'PO #', key: 'po_number' },
         { header: 'Vendor', key: 'vendor' },
         { header: 'Status', key: 'status' },
-        { header: 'Total Cost', key: 'total_cost', align: 'right', format: (v) => fmt(Number(v)) },
+        ...(isAdmin ? [{ header: 'Total Cost', key: 'total_cost', align: 'right' as const, format: (v: unknown) => fmt(Number(v)) }] : []),
         { header: 'Submitted', key: 'submitted_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
         { header: 'Expected', key: 'expected_delivery_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
       ];
@@ -387,8 +450,10 @@ export default function PurchaseOrders() {
       { key: 'quantity_ordered', header: 'Qty Ordered' },
       { key: 'quantity_received', header: 'Qty Received' },
       { key: 'quantity_remaining', header: 'Qty Remaining' },
-      { key: 'unit_cost', header: 'Unit Cost', format: (v) => fmtCSV(v as number) },
-      { key: 'outstanding_value', header: 'Outstanding Value', format: (v) => fmtCSV(v as number) },
+      ...(isAdmin ? [
+        { key: 'unit_cost', header: 'Unit Cost', format: (v: unknown) => fmtCSV(v as number) },
+        { key: 'outstanding_value', header: 'Outstanding Value', format: (v: unknown) => fmtCSV(v as number) },
+      ] : []),
       { key: 'po_status', header: 'PO Status' },
       { key: 'expected_delivery_date', header: 'Expected Delivery', format: (v) => fmtDateCSV(v as string) },
     ], 'outstanding_po_items');
@@ -405,7 +470,7 @@ export default function PurchaseOrders() {
         { header: 'Ordered', key: 'quantity_ordered', align: 'right' },
         { header: 'Received', key: 'quantity_received', align: 'right' },
         { header: 'Remaining', key: 'quantity_remaining', align: 'right' },
-        { header: 'Value', key: 'outstanding_value', align: 'right', format: (v) => fmt(Number(v)) },
+        ...(isAdmin ? [{ header: 'Value', key: 'outstanding_value', align: 'right' as const, format: (v: unknown) => fmt(Number(v)) }] : []),
         { header: 'Expected', key: 'expected_delivery_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
       ];
       await downloadReportPdf({
@@ -653,6 +718,19 @@ export default function PurchaseOrders() {
                         Clear
                       </button>
                     )}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => setCostReviewOnly((on) => !on)}
+                        disabled={!costReviewFlagsLoaded}
+                        aria-pressed={costReviewOnly}
+                        className={`px-3 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${costReviewOnly
+                          ? 'border-amber-300 bg-amber-50 text-amber-800'
+                          : 'border-gray-200 text-secondary hover:text-nav-dark'}`}
+                      >
+                        Costs to confirm ({costReviewFlagsLoaded ? costReviewPoIds.size : '?'})
+                      </button>
+                    )}
                     {canBulkAction && filtered.length > 0 && (
                       <button
                         onClick={toggleAll}
@@ -694,6 +772,7 @@ export default function PurchaseOrders() {
                 {outstandingStats.totalQty.toLocaleString()}
               </p>
             </Card>
+            {isAdmin && (
             <Card>
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">
@@ -703,6 +782,7 @@ export default function PurchaseOrders() {
               </div>
               <p className="text-2xl font-semibold font-heading text-crx-green">{fmt(outstandingStats.totalValue)}</p>
             </Card>
+            )}
             <Card>
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
@@ -728,7 +808,7 @@ export default function PurchaseOrders() {
             <div className="p-5">
               <DataTable<OutstandingItem>
                 data={filteredOutstanding}
-                columns={outstandingColumns}
+                columns={isAdmin ? outstandingColumns : outstandingColumns.filter((c) => c.key !== 'outstanding_value')}
                 searchable
                 searchPlaceholder="Search by product, vendor, or PO#..."
                 searchKeys={['product_name', 'vendor', 'po_number']}

@@ -184,7 +184,11 @@ it treats `NaN` as equal to `NaN` and greater than every finite value. That make
 (`col >= 0 AND col = (col_cents::numeric / 100.0)`) against a `GENERATED ALWAYS ... STORED` cents
 column. Mason accepted those two on 2026-08-19 after the guarantee was proven read-only against
 live. That exception covers those two columns only; the mirror form is **not** a second approved
-shape, and anything new or changed uses the predicate above. See the 2026-08-19 entry.
+shape, and anything new or changed uses the predicate above. See the 2026-08-19 entry. Because
+`20261021140000` (purchase-order cost corrections) adds a new writer to both columns, it also gives
+each the finite whole-cent CHECK (`purchase_order_items_unit_cost_whole_cents_chk`,
+`purchase_orders_total_cost_whole_cents_chk`: the full predicate above, plus non-negative and equal
+to the cents column); the mirror CHECKs stay.
 
 **Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` only skips
 the initial scan; a CHECK is re-evaluated against the whole new row on every later UPDATE, whatever
