@@ -89,7 +89,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 written as migration `20261022030000_cost_columns_admin_only`, NOT YET APPLIED; this entry becomes FIXED only after its post-apply live read; two residuals below stay for Mason) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
+## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 written as migration `20261022030000_cost_columns_admin_only`, NOT YET APPLIED; this entry becomes FIXED only after its post-apply live read; two residuals below accepted by Mason for now, 2026-10-21) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
 
 **Step 3 (written 2026-10-22, `20261022030000`, not yet applied).** Once applied, the column lock covers the remaining cost tables: `products`,
 `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`, `order_items`, `invoices`, `invoice_items`,
@@ -145,10 +145,11 @@ filter); `set_purchase_order_item_costs` is the governed, admin-only correction 
 a line has been received), and every cost change is kept in the admin-only, append-only `purchase_order_item_cost_changes`;
 `20261021141000` then locks the purchase-order cost columns from every API role (live read 2026-10-22 00:27 UTC: `authenticated` and
 `anon` can no longer read `purchase_order_items.unit_cost` or `purchase_orders.total_cost`). Still open: step 3's lock on the other
-tables (product `current_cost` and the rest stay readable through the Data API). Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
+tables (product `current_cost` and the rest stay readable through the Data API). Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals ACCEPTED for now by Mason on 2026-10-21 (Central), in chat ("Accept both known gaps for now; keep them recorded"), no fix planned: a commission amount and rate together still imply
 profit to the rep who earns it; and a rep can still find a product's cost by trial and error, because a price below cost is
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
-logged or limited).
+logged or limited). Closing the first would mean hiding commission amounts from reps or no longer basing
+commission on profit; closing the second, a softer below-cost warning or a limit on refused attempts.
 
 ## OPEN 2026-10-19 (MED) — a driver's completion receipt can be skipped when the customer row is hidden from them
 

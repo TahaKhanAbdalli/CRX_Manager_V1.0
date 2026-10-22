@@ -18,8 +18,9 @@ Functions read them only with the service role. Every function or trigger that r
 rights (SECURITY DEFINER) or is a helper only those call; the triggers that run as the caller only touch the row being
 written, which needs no column privilege. None of the tables feeds a realtime subscription.
 
-**Docs.** `KNOWN_ISSUES.md` entry closed (two residuals stay for Mason: commission amount and rate imply profit; a
-below-cost refusal lets a rep narrow a cost by trial and error) and corrected: reps could not write `invoice_items`
+**Docs.** `KNOWN_ISSUES.md` entry updated, to be closed after the apply (two residuals accepted for now by Mason on
+2026-10-21: commission amount and rate imply profit; a below-cost refusal lets a rep narrow a cost by trial and
+error) and corrected: reps could not write `invoice_items`
 directly. `gotchas.md`: the column-carved table list now names all twelve tables. Goals doc: Goal 1 status.
 
 **Proof.** `node scripts/smoke/prove-cost-columns-admin-only-real-schema.mjs` builds the production schema in a
