@@ -368,7 +368,7 @@ describe('BulkPOImport', () => {
     );
   });
 
-  it('normalizes an OCR fractional-cent unit cost before saving', async () => {
+  it('refuses an OCR unit cost with more than two decimals until the admin fixes it', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
       raw_text: 'parsed',
@@ -393,6 +393,19 @@ describe('BulkPOImport', () => {
       target: { files: [new File(['one'], 'INV-FRACTIONAL.pdf', { type: 'application/pdf' })] },
     });
     fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+
+    // Refused, never rounded: the PO is not importable until the admin fixes the cost.
+    expect(await screen.findByRole('button', { name: /import 0 pos/i })).toBeDisabled();
+    const costInput = screen.getByRole('spinbutton', { name: /unit cost for/i });
+    expect(costInput).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText(/no more than two decimal places/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
+    // The footer total dashes too: an invalid cost is never shown as a rounded aggregate.
+    expect(screen.getByText('PO Total').closest('tr')).toHaveTextContent('—');
+    expect(screen.getByText('PO Total').closest('tr')).not.toHaveTextContent('$');
+
+    fireEvent.change(costInput, { target: { value: '3.33' } });
+    expect(screen.getByText('PO Total').closest('tr')).toHaveTextContent('$6.66');
     fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
 
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
@@ -404,6 +417,161 @@ describe('BulkPOImport', () => {
         })],
       }),
     ));
+  });
+
+  it('a sales rep can still import a document whose OCR cost has more than two decimals (no cost is sent)', async () => {
+    mocks.role = 'sales_rep';
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: 'Vendor A',
+        invoice_number: 'INV-REP-FRACTIONAL',
+        invoice_date: '2026-07-16',
+        items: [{ product_name: product.product_name, quantity: 2, unit_cost: 3.334, unit_size: 'GAL' }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-REP-FRACTIONAL.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('save_purchase_order', expect.anything()));
+    const call = mocks.rpc.mock.calls.find(([name]) => name === 'save_purchase_order')!;
+    const items = (call[1] as { p_items: Array<Record<string, unknown>> }).p_items;
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item).not.toHaveProperty('unit_cost');
+      expect(item).not.toHaveProperty('unit_cost_cents');
+    }
+  });
+
+  it('treats a cleared cost box as missing, not $0, until the admin types a cost', async () => {
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: 'Vendor A',
+        invoice_number: 'INV-CLEARED',
+        invoice_date: '2026-07-16',
+        items: [{ product_name: product.product_name, quantity: 2, unit_cost: 3.334, unit_size: 'GAL' }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-CLEARED.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    await screen.findByRole('button', { name: /import 0 pos/i });
+
+    const costInput = screen.getByRole('spinbutton', { name: /unit cost for/i });
+    fireEvent.change(costInput, { target: { value: '' } });
+
+    expect(await screen.findByRole('button', { name: /import 0 pos/i })).toBeDisabled();
+    expect(costInput).toHaveAccessibleDescription(/enter a unit cost/i);
+
+    // An explicit 0 is the admin's choice and imports.
+    fireEvent.change(costInput, { target: { value: '0' } });
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({
+        p_items: [expect.objectContaining({ unit_cost: 0, unit_cost_cents: 0 })],
+      }),
+    ));
+  });
+
+  it('keeps an explicit typed 0 when the admin then picks the product (no catalog cost fallback)', async () => {
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: 'Vendor A',
+        invoice_number: 'INV-PICK',
+        invoice_date: '2026-07-16',
+        items: [{ product_name: 'Unknown Product', quantity: 2, unit_cost: 5, unit_size: 'GAL' }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-PICK.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    await screen.findByRole('button', { name: /import 0 pos/i });
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: /unit cost for/i }), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: /select product/i }));
+
+    fireEvent.change(await screen.findByPlaceholderText(/search by name/i), { target: { value: 'atrazine' } });
+    const pickerRows = await screen.findAllByRole('button', { name: /atrazine 4l/i });
+    fireEvent.click(pickerRows[pickerRows.length - 1]);
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({
+        p_items: [expect.objectContaining({ unit_cost: 0, unit_cost_cents: 0 })],
+      }),
+    ));
+  });
+
+  it('refuses a typed cost whose dollar number cannot carry its exact cents, and saves agreeing dollars and cents otherwise', async () => {
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-LARGEST.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    await screen.findByRole('button', { name: /import 1 po/i });
+
+    // 90071992547409.91 has exact cents (9007199254740991), but as a JSON number its dollars read
+    // 90071992547409.9, so save_purchase_order would refuse the pair (PO_UNIT_COST_CENTS_MISMATCH).
+    // It is refused here instead, before anything is sent.
+    const costInput = screen.getByRole('spinbutton', { name: /unit cost for/i });
+    fireEvent.change(costInput, { target: { value: '90071992547409.91' } });
+    expect(await screen.findByRole('button', { name: /import 0 pos/i })).toBeDisabled();
+    expect(costInput).toHaveAttribute('aria-invalid', 'true');
+    expect(costInput).toHaveAccessibleDescription(/too large to save exactly/i);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
+
+    // A large but real cost: the dollars and the cents sent agree exactly.
+    fireEvent.change(costInput, { target: { value: '1234567.89' } });
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({ p_items: [expect.objectContaining({ unit_cost: 1234567.89, unit_cost_cents: 123456789 })] }),
+    ));
+  });
+
+  it('refuses a typed cost too precise for a number instead of shortening it', async () => {
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-TYPED.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    await screen.findByRole('button', { name: /import 1 po/i });
+
+    // parseFloat('10.0000000000000001') is exactly 10; the typed text must still be refused.
+    const costInput = screen.getByRole('spinbutton', { name: /unit cost for/i });
+    fireEvent.change(costInput, { target: { value: '10.0000000000000001' } });
+
+    expect(await screen.findByRole('button', { name: /import 0 pos/i })).toBeDisabled();
+    expect(costInput).toHaveAttribute('aria-invalid', 'true');
+    expect(costInput).toHaveAccessibleDescription(/no more than two decimal places/i);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
   });
 
   it('a sales rep import sends no cost and shows no cost columns (purchase cost is admin-only)', async () => {
