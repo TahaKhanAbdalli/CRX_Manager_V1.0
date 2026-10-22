@@ -816,6 +816,50 @@ async function races() {
   assert.equal(posted('7'), 'posted,posted');
   console.log('[prover] RACE 7: a draft inserted into a split group during its post waits, then is refused because the group is now posted (INVOICE_POSTED_LOCKED)');
 
+  // R8: a line share (per-line split allocation) written while Post holds its line locks. The old
+  // prevent_invoice_line_shares_edit_after_post trigger reads the still-draft status before the
+  // foreign key waits on the line, so without the new trigger the insert lands on the posted
+  // invoice (MUTATION 6). With it, the insert waits for the post and is refused; a share moved onto
+  // a line of the posting invoice is refused at once.
+  const billingLine = () => scalar(`WITH s AS (INSERT INTO public.field_app_billing_sets (created_by) VALUES ('${U.ADMIN}') RETURNING id)
+    INSERT INTO public.field_app_billing_lines (billing_set_id, line_kind, description) SELECT id, 'flat_fee', 'Prover flat fee' FROM s RETURNING id;`);
+  const lineShareSql = (inv) => `INSERT INTO public.invoice_line_shares (billing_line_id, invoice_item_id, customer_id, split_mode, split_micro_pct, base_unit_price_cents, base_price_source, unit_price_cents, amount_cents, calculation_hash, vector_hash, created_by)
+    SELECT '${billingLine()}', ii.id, '${CUST}', 'custom', 100000000, 2500, 'flat', 2500, 2500, 'prover', 'prover', '${U.ADMIN}' FROM public.invoice_items ii WHERE ii.invoice_id = '${inv}' RETURNING id;`;
+  const lineShares = (inv) => scalar(`SELECT count(*) FROM public.invoice_line_shares ls JOIN public.invoice_items ii ON ii.id = ls.invoice_item_id WHERE ii.invoice_id = '${inv}';`);
+  inv = created();
+  let startedR8 = Date.now();
+  w = await heldPostRace(inv, 'r8i', lineShareSql(inv));
+  assert.ok(Date.now() - startedR8 >= 2000, 'race 8: the line-share insert did not wait for the post');
+  assert.match(w.out, /INVOICE_POSTED_LOCKED/, `race 8 line-share insert was not refused:\n${w.out}`);
+  assert.equal(lineShares(inv), '0');
+  assert.equal(state(inv), 'posted:2500:Freight to farm');
+  const shareHome = created();
+  const movedLineShare = scalar(lineShareSql(shareHome));
+  const shareTarget = created();
+  startedR8 = Date.now();
+  w = await heldPostRace(shareTarget, 'r8v', `UPDATE public.invoice_line_shares SET invoice_item_id = (SELECT id FROM public.invoice_items WHERE invoice_id = '${shareTarget}') WHERE id = '${movedLineShare}';`);
+  assert.match(w.out, /INVOICE_GROUP_BUSY/, `race 8 line-share move onto a posting invoice was not refused:\n${w.out}`);
+  assert.equal(lineShares(shareTarget), '0');
+  assert.equal(lineShares(shareHome), '1');
+  // Outside a race a line share on a draft is still written, and one on a posted invoice is refused.
+  const draftInv = created();
+  assert.match(scalar(lineShareSql(draftInv)), /^[0-9a-f-]{36}$/, 'a line share on a draft was refused');
+  const postedInsert = psql(lineShareSql(inv), { allowFailure: true });
+  assert.match(postedInsert.stdout + postedInsert.stderr, /posted/i, 'a line share on a posted invoice was not refused');
+  console.log('[prover] RACE 8: a line-share insert started while Post holds its line locks waits, then is refused (INVOICE_POSTED_LOCKED); a line share moved onto the posting invoice is refused at once (INVOICE_GROUP_BUSY); a draft still takes line shares');
+  psql('DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_line_shares;');
+  try {
+    inv = created();
+    w = await heldPostRace(inv, 'r8m', lineShareSql(inv));
+    assert.doesNotMatch(w.out, /ERROR/, `MUTATION 6: without the trigger the waiting line-share insert should land:\n${w.out}`);
+    assert.equal(lineShares(inv), '1');
+    assert.equal(scalar(`SELECT status FROM public.invoices WHERE id = '${inv}';`), 'posted');
+    console.log('[prover] MUTATION 6: without the line-share trigger the waiting insert passes the old status check and lands on the posted invoice, so the new trigger is what refuses it');
+  } finally {
+    psql(`CREATE TRIGGER trg_refuse_posted_invoice_child_write BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
+      FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();`);
+  }
+
   // MUTATION 1: without the line lock, race 2 posts and the line changes under a posted invoice.
   try {
     psql(POST_INVOICE_SQL.replace(/\n\s*PERFORM 1 FROM public\.invoice_items WHERE invoice_id = p_invoice_id ORDER BY id FOR UPDATE;/, ''));

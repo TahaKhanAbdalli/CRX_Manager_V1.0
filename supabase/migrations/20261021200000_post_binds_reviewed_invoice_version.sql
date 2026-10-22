@@ -58,6 +58,7 @@
 --   DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_items;
 --   DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_shares;
 --   DROP TRIGGER trg_zz_refuse_posted_invoice_child_write ON public.field_app_locations;
+--   DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_line_shares;
 --   DROP FUNCTION public._refuse_posted_invoice_child_write();
 --   DROP FUNCTION public._lock_invoice_post_inputs(uuid[]);
 --   DROP FUNCTION public.invoice_post_version(public.invoices);
@@ -271,12 +272,15 @@ CREATE TRIGGER trg_serialize_invoice_group_writes
   BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
   FOR EACH ROW EXECUTE FUNCTION public._serialize_invoice_group_writes();
 
--- A write to an invoice's lines, billing shares or field locations that waited behind a post
--- (on the row lock the post holds) would otherwise commit right after it, changing a posted
+-- A write to an invoice's lines, billing shares, line shares or field locations that waited behind
+-- a post (on the row lock the post holds) would otherwise commit right after it, changing a posted
 -- invoice that nobody reviewed. This trigger refuses such writes once the invoice is posted, paid
 -- or overdue (the same test as prevent_invoice_line_shares_edit_after_post). It reads the status
 -- AFTER the wait: an UPDATE or DELETE runs it only once it holds its row; an INSERT first takes a
--- share lock on the parent invoice, which waits for an in-flight post. Group-keyed field
+-- share lock on the parent invoice, which waits for an in-flight post. A line share has no
+-- invoice_id: its INSERT takes a key-share lock on its line instead (the lock its foreign key
+-- would take later, after prevent_invoice_line_shares_edit_after_post has already passed it), and
+-- every post locks its lines first, so it waits too and reads the line's invoice afterwards. Group-keyed field
 -- locations (invoice_id NULL) check every live member; trg_serialize_invoice_group_writes has
 -- already taken the group lock. Draft, unposted, voided, cancelled, soft-deleted and missing
 -- parents pass. Two writes stay allowed on a posted invoice: return-credit lines inserted into
@@ -293,6 +297,7 @@ DECLARE
   v_row jsonb;
   v_invoice uuid;
   v_group uuid;
+  v_item uuid;
 BEGIN
   IF TG_TABLE_NAME = 'invoice_items' AND TG_OP = 'UPDATE'
      AND (to_jsonb(NEW) - ARRAY['cost_cents', 'return_credit_cogs_cents', 'tote_number', 'updated_at'])
@@ -305,6 +310,28 @@ BEGIN
       CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END]) r
      WHERE r IS NOT NULL
   LOOP
+    IF TG_TABLE_NAME = 'invoice_line_shares' THEN
+      v_item := (v_row ->> 'invoice_item_id')::uuid;
+      IF TG_OP = 'INSERT' THEN
+        SELECT invoice_id INTO v_invoice FROM public.invoice_items WHERE id = v_item FOR KEY SHARE;
+      ELSIF TG_OP = 'UPDATE' AND v_item IS DISTINCT FROM (to_jsonb(OLD) ->> 'invoice_item_id')::uuid THEN
+        -- Moved onto another line: refuse at once if that line is locked, as for a moved row below.
+        BEGIN
+          SELECT invoice_id INTO v_invoice FROM public.invoice_items WHERE id = v_item FOR KEY SHARE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+          RAISE EXCEPTION 'INVOICE_GROUP_BUSY: the invoice line this line share is moving to is being posted or saved right now; try again'
+            USING ERRCODE = '55P03';
+        END;
+      ELSE
+        SELECT invoice_id INTO v_invoice FROM public.invoice_items WHERE id = v_item;
+      END IF;
+      IF EXISTS (SELECT 1 FROM public.invoices
+                  WHERE id = v_invoice AND deleted_at IS NULL AND status IN ('posted', 'paid', 'overdue')) THEN
+        RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this invoice was posted, so its line shares cannot change; unpost it first'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      CONTINUE;
+    END IF;
     v_invoice := (v_row ->> 'invoice_id')::uuid;
     v_group := CASE WHEN TG_TABLE_NAME = 'field_app_locations' AND v_invoice IS NULL
                     THEN (v_row ->> 'invoice_group_id')::uuid END;
@@ -352,6 +379,9 @@ CREATE TRIGGER trg_refuse_posted_invoice_child_write
   FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
 CREATE TRIGGER trg_zz_refuse_posted_invoice_child_write
   BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
+  FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
+CREATE TRIGGER trg_refuse_posted_invoice_child_write
+  BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
   FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
 
 REVOKE ALL ON FUNCTION public._refuse_posted_invoice_child_write() FROM PUBLIC, anon, authenticated;

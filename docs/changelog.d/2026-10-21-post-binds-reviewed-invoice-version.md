@@ -34,6 +34,11 @@
   only cost, return-credit cost, tote number or updated_at. Payment allocations are not covered
   (payments and voids write them on posted invoices). Prover races R4 (now refused after waiting)
   and R6-R7, mutation 5; a draft cannot join a split group that was posted while it waited.
+- The same trigger now covers per-line split allocations (`invoice_line_shares`, Codex GitHub App
+  P1 on PR #1018): the older posted-status trigger read the still-draft status before the insert
+  waited on its line, so an allocation started during a post could land on the posted invoice. An
+  insert now takes a key-share lock on its line first (waiting for the post), and a share moved
+  onto a line of the posting invoice is refused at once. Prover race R8, mutation 6.
 - Codex Sol advisory plan review (Mason's request, 2026-10-21) led to: a trigger so a direct write
   adding a group member or a group-level field location waits for an in-flight group post; the
   version map normalized and checked for duplicate ids before the retry check; the rep's
