@@ -1,7 +1,7 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-21 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); the pending candidates `20261021150000_split_invoice_cross_customer_lineage` (row 964) and `20261021155000_split_payer_return_credit` (row 965), PR #1010, are not applied; the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
+**Last verified: 2026-10-22 (America/Chicago) against the live migration ledger** (read-only
+`execute_sql`, 2026-10-22 12:03 UTC (7:03 AM Central): 1047 rows, `max(version)` `20261022115547` = `20261021155000_split_payer_return_credit` and before it `20261022114024` = `20261021150000_split_invoice_cross_customer_lineage` (rows 965 and 964, PR #1010 merged as `d8dd88a6d`; both applied on Mason's in-chat `I approve`); effective ordering high-water `20261021155000`; the read before it, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); rows 964 and 965 (PR #1010) were then still pending; the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
 at 05:13 UTC still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
@@ -136,7 +136,7 @@ profit to the rep who earns it; and a rep can still find a product's cost by tri
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
 logged or limited).
 
-## FIX PENDING APPLY 2026-10-21 (migration `20261021150000`) — split billing could not bill a field owner who is not the order's customer
+## FIXED 2026-10-22 (migration `20261021150000`, applied live as ledger `20261022114024`, PR #1010) — split billing could not bill a field owner who is not the order's customer
 
 `create_split_invoices_from_order` bills each field owner its share of a field-allocated order, but
 `guard_invoice_terminal_order` (since `20260721014858`) refused any order invoice whose customer
@@ -154,7 +154,7 @@ Left open, by design or for later (reviewers on the PR, 2026-10-21):
   to any field and edit a field's owner or billing defaults, so a split can bill any customer those
   rows name. Claims and provenance stay unforgeable; the scope question (should an allocation be tied
   to the order's customer or the field's owners?) is Mason's.
-- **FIX PENDING APPLY (`20261021155000`, same PR): a non-order owner could not get an order-backed
+- **FIXED 2026-10-22 (`20261021155000`, same PR, applied live as ledger `20261022115547`): a non-order owner could not get an order-backed
   return credit.** The return paths required the return's customer to equal the order's
   (`RETURN_ORDER_CUSTOMER_MISMATCH`), and `guard_mono_invoice_split_billing_post` refused every posted
   ungrouped invoice on a split order, so no return on a split order could be credited, even the order
@@ -705,7 +705,7 @@ else on `main`. None blocks this branch cleanup; they are recorded here for foll
 The cleanup's second salvage pass compared every line each old branch added with `main`'s whole tree.
 These came out of it. Each says how it was checked.
 
-- **FIX PENDING APPLY (`20261021150000`, see the 2026-10-21 entry near the top).** **Splitting an order's bill to a landlord always fails (MED). Mason, 2026-10-13: it should work**
+- **FIXED 2026-10-22 (`20261021150000`, applied live, PR #1010; see the entry near the top).** **Splitting an order's bill to a landlord always fails (MED). Mason, 2026-10-13: it should work**
   ("landlord yes"). Read from the live database 2026-10-13: the invoice trigger
   `trg_guard_invoice_terminal_order` (function `guard_invoice_terminal_order`) raises
   `INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID` whenever an invoice's customer is not its order's customer,
