@@ -1,7 +1,7 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-21 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
+`execute_sql`, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); the pending candidates `20261021150000_split_invoice_cross_customer_lineage` (row 964) and `20261021155000_split_payer_return_credit` (row 965), PR #1010, are not applied; the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
 at 05:13 UTC still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
@@ -135,6 +135,75 @@ tables (product `current_cost` and the rest stay readable through the Data API).
 profit to the rep who earns it; and a rep can still find a product's cost by trial and error, because a price below cost is
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
 logged or limited).
+
+## FIX PENDING APPLY 2026-10-21 (migration `20261021150000`) — split billing could not bill a field owner who is not the order's customer
+
+`create_split_invoices_from_order` bills each field owner its share of a field-allocated order, but
+`guard_invoice_terminal_order` (since `20260721014858`) refused any order invoice whose customer
+differs from the order's (`INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID`), split drafts included, so a split
+onto another customer's field rolled back. Live, read-only 2026-10-21: 0 field-allocated orders and 0
+split invoices, so nobody hit it. `20261021150000` lets a governed split invoice name such an owner,
+only inside the split call's creation claim for a customer the order's field split resolves to, and
+afterward only under its `split_invoice_provenance` row. This is the 2026-10-13 item "Splitting an
+order's bill to a landlord always fails" (Mason: "landlord yes"). Found again while building
+`20261021120000` (PR #1006, which makes `create_invoice_from_order` refuse split orders); Sol on #1006
+required this first. Proof: `scripts/smoke/prove-split-invoice-cross-customer-lineage-real-schema.mjs`.
+
+Left open, by design or for later (reviewers on the PR, 2026-10-21):
+- **Who a split may bill follows editable tables.** Any admin or sales rep may allocate an order line
+  to any field and edit a field's owner or billing defaults, so a split can bill any customer those
+  rows name. Claims and provenance stay unforgeable; the scope question (should an allocation be tied
+  to the order's customer or the field's owners?) is Mason's.
+- **FIX PENDING APPLY (`20261021155000`, same PR): a non-order owner could not get an order-backed
+  return credit.** The return paths required the return's customer to equal the order's
+  (`RETURN_ORDER_CUSTOMER_MISMATCH`), and `guard_mono_invoice_split_billing_post` refused every posted
+  ungrouped invoice on a split order, so no return on a split order could be credited, even the order
+  customer's. Mason first accepted the gap, then chose "Build split returns first" (`DECISION_LOG.md`,
+  2026-10-21). `20261021155000` lets a payer a posted governed split invoice bills return its own
+  billed share, priced from its own billed cents; on any order with split-billing evidence every payer,
+  the order's customer included, is capped at its own billed share; and the credit memo is created
+  inside the credit's private claim. The Returns screen reads each payer's allowance through two
+  read-only lookups. They follow `invoices_select`: a sales rep sees a split order's allowance only
+  for a payer invoice the rep created or is the salesperson on (an admin sees all), so until reps may
+  read every invoice (Mason, 2026-10-13, not yet shipped) such a rep cannot start that payer's return
+  from the screen; an admin can. Proof:
+  `scripts/smoke/prove-split-payer-return-credit-real-schema.mjs`. Both `receive_return` and `issue_return_credit`
+  check a split return's share while holding the per-line locks a source void or edit try-takes, so a
+  void cannot slip between the check and the restock or credit. Each split return is priced from what is
+  left of the payer's billed cents after its other open returns, so cancelling or rejecting an earlier
+  return of the same line leaves a later one's price stale; `receive_return` and `issue_return_credit`
+  then refuse it (`RETURN_SPLIT_SHARE_REPRICED`: staff cancel and recreate the return) instead of
+  crediting a stale price, and the Returns screen shows what is left of the share in quantity and cents
+  rather than a per-unit average (Codex App on PR #1010). A split return stores a price derived from
+  the payer's own invoices, so `create_return` lets a non-admin create one only when `invoices_select`
+  lets them read every active invoice billing that payer on the order (`RETURN_SPLIT_INVOICE_NOT_VISIBLE`;
+  Codex App P1 on PR #1010). Left open (LOW): once created, the return's lines are readable under
+  `return_items_select` (live 2026-10-22: admin, any sales rep, or the requester), so another rep can see
+  that price; this matches Mason's 2026-10-13 direction that reps may read every invoice (not yet
+  shipped), and narrowing it would be a permissions change. An order line with no unit (`order_items.unit_size`
+  is nullable; live, read-only 2026-10-22: 4 of 289 lines, all from March to May 2026, one invoiced, none
+  split) cannot get a return credit on ANY order: its invoice lines carry no unit, the return line is
+  `ea`, and `_issue_return_credit_impl` has refused that pair since `20260827041100`
+  (`RETURN_CREDIT_UNIT_MISMATCH`, "broken lineage"). `20261021155000` makes the split invoice writer
+  bill such a line as `ea`, so a split payer can be credited for it (Sol on PR #1010), and
+  `create_return` refuses a split line whose posted sale lines carry another unit up front, with that
+  same code, before anything is restocked. Still OPEN outside split billing: `create_invoice_from_order`
+  copies the empty unit, so a mono-billed line with no unit cannot be credited (give those lines a unit,
+  or bill them as `ea` there too). Left open, by design (Luna on PR #1010):
+  a split payer's credit is not auto-applied (as for every return credit, staff apply it); a return is
+  not tied to one invoice line, so when a payer was billed for the same order line on two invoices at
+  different prices it is credited at its average billed price (the caps still keep the total at or
+  under what it was billed, and its whole share credits exactly that); and `create_return` checks the
+  split share without the per-line locks, so a split invoice voided while a return is being created
+  can leave that return requested but no longer receivable (no money moves; staff reject or cancel it).
+- **A billing-default edit committed mid-split can refuse that split (LOW, availability).** The guard
+  re-reads the owners when each draft is written; a change committed by another session in between
+  rolls the split back. It never admits a customer the split did not choose. CLOSED by
+  `20261021155000` (same PR; Codex App P1): the split reads each field's percentages in a separate
+  statement, so an edit that kept the same owners (50/50 to 70/30) could also have mixed old and new
+  percentages across lines and passed the guard. The split writer now locks the allocated fields'
+  rows (FOR SHARE) and then `field_billing_defaults` in SHARE mode before it reads them, so no
+  billing-default write can commit until the split does (the same order `save_field` writes them).
 
 ## OPEN 2026-10-19 (MED) — a driver's completion receipt can be skipped when the customer row is hidden from them
 
@@ -636,7 +705,7 @@ else on `main`. None blocks this branch cleanup; they are recorded here for foll
 The cleanup's second salvage pass compared every line each old branch added with `main`'s whole tree.
 These came out of it. Each says how it was checked.
 
-- **Splitting an order's bill to a landlord always fails (MED). Mason, 2026-10-13: it should work**
+- **FIX PENDING APPLY (`20261021150000`, see the 2026-10-21 entry near the top).** **Splitting an order's bill to a landlord always fails (MED). Mason, 2026-10-13: it should work**
   ("landlord yes"). Read from the live database 2026-10-13: the invoice trigger
   `trg_guard_invoice_terminal_order` (function `guard_invoice_terminal_order`) raises
   `INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID` whenever an invoice's customer is not its order's customer,

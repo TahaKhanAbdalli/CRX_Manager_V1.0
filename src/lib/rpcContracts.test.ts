@@ -3079,6 +3079,11 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   record_commission_settlement_event:
     'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
+  // The NOT APPLIED candidate 20261021150000 re-emits this guard; prune once it is in the
+  // applied-name snapshot. It writes nothing: the detector reads its existing error text
+  // ("cannot attach or update a nonterminal invoice") as an UPDATE.
+  guard_invoice_terminal_order:
+    'trigger-only invoice lineage and terminal-order guard (RETURNS trigger, no DML); every non-owner EXECUTE is revoked and the invoice write owns the transaction',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

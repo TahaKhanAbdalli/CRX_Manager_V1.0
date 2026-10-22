@@ -13703,6 +13703,16 @@ export type Database = {
           this_season_cents: number
         }[]
       }
+      get_return_line_allowances: {
+        Args: { p_customer_id: string; p_order_id: string }
+        Returns: {
+          order_item_id: string
+          returnable_qty: number
+          share_left_cents: number
+          share_left_qty: number
+          share_mode: boolean
+        }[]
+      }
       get_rup_sales_register: {
         Args: {
           p_compliance_status?: string
@@ -13798,6 +13808,10 @@ export type Database = {
           season_a_val: number
           season_b_val: number
         }[]
+      }
+      get_split_payer_return_orders: {
+        Args: { p_customer_id: string }
+        Returns: string[]
       }
       get_supplier_market_evidence: {
         Args: { p_product_ids?: string[] }

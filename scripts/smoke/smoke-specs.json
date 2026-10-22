@@ -1096,6 +1096,48 @@
         "lifecycle"
       ]
     },
+    "split_invoice_cross_customer_lineage": {
+      "chain": "smoke-split-invoice-cross-customer-lineage.sql",
+      "container_only": true,
+      "container_prover": "prove-split-invoice-cross-customer-lineage-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-split-invoice-cross-customer-lineage-real-schema.mjs, never through run-smoke.mjs against the live database: the chain creates and posts invoices, which draw customer-visible invoice numbers from non-transactional sequences that a rollback does not return. 20261021150000: guard_invoice_terminal_order lets a governed split invoice name a field owner other than the order's customer, and nothing else. create_split_invoices_from_order on an order for A whose lines are on a field billed 50/50 to A and B, on C's field (no defaults) and on X's field billed wholly to Y creates four governed drafts (A 10.00, B 10.00, C 20.00, Y 20.00, one group, provenance each), replays exactly; post_invoice_group posts all four and void_invoice_group voids them. Refused with INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID at the exception's limits: a grouped invoice for D (owning no field of the split) inside a hand-made creation claim on the split order; a grouped invoice for B inside a hand-made claim on A's unsplit order; an ungrouped invoice for B inside a claim on the split order; a grouped invoice for X (owning a field whose billing defaults exclude X) in that claim. The unchanged rule still refuses a plain invoice for B on A's unsplit order and re-pointing A's ordinary invoice to B; re-pointing a posted split invoice is SPLIT_INVOICE_PROVENANCE_IMMUTABLE (the older identity trigger fires first). Fail-first against the pre-fix guard. Uses the earliest active admin; prices its own [E2E] product through the governed pricing RPCs; terminal rollback.",
+      "covers": [
+        "guard_invoice_terminal_order",
+        "create_split_invoices_from_order",
+        "post_invoice_group",
+        "void_invoice_group",
+        "create_invoice_from_order"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
+    },
+    "split_payer_return_credit": {
+      "chain": "smoke-split-payer-return-credit.sql",
+      "container_only": true,
+      "container_prover": "prove-split-payer-return-credit-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-split-payer-return-credit-real-schema.mjs, never through run-smoke.mjs against the live database: the chain delivers, invoices and credits, which draw customer-visible numbers from non-transactional sequences that a rollback does not return. 20261021155000: a field owner billed through a split (a customer other than the order's, such as a landlord) can return its billed share and receive its own return credit, and no payer can return another payer's share. An order for A with two lines on a field billed 50/50 to A and B is delivered through complete_delivery, split and posted. B returns 1 GL of line 1, priced 10.00 from its own billed cents; refused: B beyond its open share and A beyond its billed share (RETURN_QUANTITY_EXCEEDS_BILLED_SHARE), D billed nothing (RETURN_ORDER_CUSTOMER_MISMATCH). B's return is approved, received (restocked) and credited: one posted -10.00 credit memo for B on A's order, backed by B's own split line, the claim gone; the memo applies to B's split invoice. B's whole share of an unevenly split line (1 GL at 10.01) returns, receives and credits exactly what B was billed (quantities chosen so the order-price formula misses either way). The guard still refuses a credit memo for B on A's order outside a claim and a memo for D inside a claim for B (INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID). Fail-first against the pre-fix return path. Uses the earliest active admin; prices its own [E2E] product through the governed pricing RPCs; terminal rollback.",
+      "covers": [
+        "create_return",
+        "approve_return",
+        "receive_return",
+        "issue_return_credit",
+        "apply_credit_memo_to_invoice",
+        "guard_invoice_terminal_order",
+        "complete_delivery",
+        "create_split_invoices_from_order",
+        "post_invoice_group",
+        "guard_mono_invoice_split_billing_post",
+        "get_split_payer_return_orders",
+        "get_return_line_allowances"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "lifecycle"
+      ]
+    },
     "unpost_invoice_group": {
       "chain": "smoke-unpost-invoice-group.sql",
       "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through the REAL unpost_invoice_group: HAPPY (a posted 2-member split group unposts in ONE call — both members posted->unposted, posted_by/at cleared, one invoice_unposted audit row per member, one invoice_group_unposted activity row); ALL-OR-NOTHING (a posted group where one member is PAID/money-applied -> the whole call RAISES the money-guard error and NOTHING changes — both still posted, 0 unpost audit rows; no half-unpost reachable); ROLE GATE (an applicator caller -> 'admin or sales role required'); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH, no mutation); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
