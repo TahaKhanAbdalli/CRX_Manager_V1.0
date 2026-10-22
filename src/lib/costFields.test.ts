@@ -255,7 +255,7 @@ function versionReadsOffView(src: string): number[] {
 
 /** An ALTER TABLE on public.invoices that adds, drops or renames a column. */
 function changesInvoiceColumns(sql: string): boolean {
-  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?(?:public\.)?"?invoices"?\s+([^;]*);/gi)) {
+  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:"?public"?\s*\.\s*)?"?invoices"?\s+([^;]*);/gi)) {
     // ADD/DROP COLUMN, or the bare form `ADD name type` / `DROP name` (not a constraint, nor an
     // ALTER COLUMN sub-action such as DROP NOT NULL / DROP DEFAULT / DROP EXPRESSION / DROP IDENTITY).
     if (/\b(ADD|DROP)\s+(COLUMN\b|(?!(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE|NOT|DEFAULT|EXPRESSION|IDENTITY)\b)\w+\s)/i.test(m[1])) return true;
@@ -323,5 +323,8 @@ describe('the posting version is read only from invoices_postable', () => {
     expect(changesInvoiceColumns('ALTER TABLE public.invoices ALTER COLUMN zz SET DEFAULT 0;')).toBe(false);
     expect(changesInvoiceColumns('ALTER TABLE public.invoices ALTER COLUMN zz DROP NOT NULL, ALTER COLUMN yy DROP DEFAULT;')).toBe(false);
     expect(changesInvoiceColumns('ALTER TABLE public.invoices ADD zz integer;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE "public"."invoices" ADD COLUMN zz text;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE IF EXISTS ONLY "invoices" DROP COLUMN zz;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE "public"."invoices_postable" ADD COLUMN zz text;')).toBe(false);
   });
 });
