@@ -1325,6 +1325,33 @@
         "billing",
         "idempotency"
       ]
+    },
+    "post_binds_reviewed_invoice_version": {
+      "chain": "smoke-post-binds-reviewed-invoice-version.sql",
+      "container_prover": "prove-post-binds-reviewed-invoice-version-real-schema.mjs",
+      "description": "Goal 3 \"Post uses what was saved and reviewed\" (20261021200000). Live, rollback-only, plants no rows: the old posting signatures are gone; post_invoice refuses a NULL key, a blank version and a missing invoice; post_invoice_group refuses an empty version map and a missing group; batch_post_invoices refuses an item without a version; invoice_post_version returns a SHA-256 version for an admin equal to the internal helper; when a standalone draft exists, it is posted with a stale version, refused (INVOICE_CHANGED_SINCE_LOADED) and keeps its status (otherwise the chain prints a SMOKE_SKIP notice for that check); API grants. The full matrix (real posts, a second tab and a second user saving before Post, groups, batch, replay, seven two-connection races, five mutations) runs in the container prover. Terminal rollback.",
+      "covers": [
+        "post_invoice",
+        "post_invoice_group",
+        "batch_post_invoices",
+        "invoice_post_version"
+      ],
+      "area": [
+        "billing",
+        "idempotency"
+      ]
+    },
+    "invoices_postable_view": {
+      "chain": "smoke-invoices-postable-view.sql",
+      "container_prover": "prove-post-binds-reviewed-invoice-version-real-schema.mjs",
+      "description": "The posting version on invoices_postable (20261022025000). Live, rollback-only, plants and writes nothing: the view is security_invoker with every invoices column but total_cost_cents, SELECT-only for authenticated and service_role and closed to anon and PUBLIC; invoice_post_version(invoices_postable) is SECURITY DEFINER for authenticated only; and on a real invoice an admin's version from the view equals _invoice_post_version.",
+      "covers": [
+        "invoice_post_version",
+        "invoices_postable"
+      ],
+      "area": [
+        "billing"
+      ]
     }
   }
 }

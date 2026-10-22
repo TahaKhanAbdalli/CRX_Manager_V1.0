@@ -20,7 +20,8 @@ const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({
 
 vi.mock('../../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../../lib/db')>('../../lib/db');
-  return { ...actual, supabase: { from: mockFrom, rpc: mockRpc } };
+  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  return { ...actual, supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc } };
 });
 vi.mock('../../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../../lib/activityLogger', () => ({ logActivity: vi.fn() }));
@@ -48,6 +49,7 @@ function fieldInvoice(i: number, status: string) {
   const n = String(i).padStart(4, '0');
   return {
     id: `fa-${status}-${n}`,
+    invoice_post_version: `v1:fa-${status}-${n}`,
     invoice_number: `FA-${n}`,
     invoice_type: 'field_application',
     status,

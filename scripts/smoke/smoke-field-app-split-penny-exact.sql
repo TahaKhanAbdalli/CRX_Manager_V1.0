@@ -25,6 +25,7 @@
 -- ============================================================================
 DO $smoke$
 DECLARE
+  v_versioned boolean;  -- 20261021200000 applied: posting takes the loaded invoice version
   v_admin uuid;
   v_sfx   text := substr(gen_random_uuid()::text,1,8);
   v_cust_a uuid; v_cust_b uuid;
@@ -241,14 +242,25 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the save lock wrapper';
   END IF;
-  SELECT prosrc INTO v_post_group_source
-  FROM pg_proc
-  WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
+  -- Since 20261021200000 posting takes the invoice version the screen loaded. This chain also runs
+  -- in an older container proof that replays only up to its own candidate, so it checks whichever
+  -- signature the database has.
+  v_versioned := to_regprocedure('public.post_invoice_group(uuid,uuid,jsonb,text)') IS NOT NULL;
+  IF v_versioned THEN
+    SELECT prosrc INTO v_post_group_source
+    FROM pg_proc
+    WHERE oid = 'public.post_invoice_group(uuid,uuid,jsonb,text)'::regprocedure;
+  ELSE
+    SELECT prosrc INTO v_post_group_source
+    FROM pg_proc
+    WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
+  END IF;
   IF v_post_group_source NOT LIKE '%pg_advisory_xact_lock%'
      OR v_post_group_source NOT LIKE '%ORDER BY id%'
      OR v_post_group_source NOT LIKE '%FOR UPDATE%'
      OR v_post_group_source NOT LIKE '%check_idempotency%'
-     OR v_post_group_source NOT LIKE '%IDEMPOTENCY_PAYLOAD_CONFLICT%'
+     OR v_post_group_source NOT LIKE (CASE WHEN v_versioned THEN '%IDEMPOTENCY_ARGUMENT_MISMATCH%' ELSE '%IDEMPOTENCY_PAYLOAD_CONFLICT%' END)
+     OR (v_versioned AND v_post_group_source NOT LIKE '%INVOICE_CHANGED_SINCE_LOADED%')
      OR v_post_group_source NOT LIKE '%_post_invoice_group_customer_scope_impl%' THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): public group post lost serialized scope/idempotency wrapper';
   END IF;
@@ -271,7 +283,11 @@ BEGIN
   END IF;
 
   BEGIN
-    PERFORM post_invoice(v_ids[1], 'smoke-split-direct-post-' || v_sfx);
+    IF v_versioned THEN
+      PERFORM post_invoice(v_ids[1], public._invoice_post_version(v_ids[1]), 'smoke-split-direct-post-' || v_sfx);
+    ELSE
+      PERFORM post_invoice(v_ids[1], 'smoke-split-direct-post-' || v_sfx);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL(P6): one split-group member posted directly';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -281,7 +297,15 @@ BEGIN
     END IF;
   END;
 
-  PERFORM post_invoice_group(v_group, v_admin, 'smoke-split-post-' || v_sfx);
+  IF v_versioned THEN
+    PERFORM post_invoice_group(
+      v_group, v_admin,
+      (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id))
+         FROM invoices i WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL),
+      'smoke-split-post-' || v_sfx);
+  ELSE
+    PERFORM post_invoice_group(v_group, v_admin, 'smoke-split-post-' || v_sfx);
+  END IF;
   SELECT count(*) INTO v_item_count
   FROM invoice_items
   WHERE invoice_id = ANY(v_ids);

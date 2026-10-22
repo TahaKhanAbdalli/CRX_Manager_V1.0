@@ -51,7 +51,8 @@ function buildPendingChain(): Record<string, unknown> {
 }
 
 vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
+  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   describePostInvoiceBlock: vi.fn(() => null),
@@ -307,12 +308,12 @@ describe('OrderDetail', () => {
     };
     const splitDrafts = [
       {
-        id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+        id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1', invoice_post_version: 'v1:inv-1',
         status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
         due_date: null, total_amount_cents: 25000, balance_cents: 25000,
       },
       {
-        id: 'inv-2', invoice_number: 'INV-2', invoice_group_id: 'group-1',
+        id: 'inv-2', invoice_number: 'INV-2', invoice_group_id: 'group-1', invoice_post_version: 'v1:inv-2',
         status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
         due_date: null, total_amount_cents: 25000, balance_cents: 25000,
       },
@@ -336,6 +337,8 @@ describe('OrderDetail', () => {
       expect.objectContaining({
         p_invoice_group_id: 'group-1',
         p_performed_by: 'user-1',
+        // Every member the page loaded, with the version it loaded.
+        p_expected_versions: { 'inv-1': 'v1:inv-1', 'inv-2': 'v1:inv-2' },
       }),
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice')).toBe(false);
@@ -349,7 +352,7 @@ describe('OrderDetail', () => {
       created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
     };
     const splitDrafts = [{
-      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1', invoice_post_version: 'v1:inv-1',
       status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
       due_date: null, total_amount_cents: 25000, balance_cents: 25000,
     }];

@@ -17,7 +17,8 @@ const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), 
 
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
-  return { ...actual, supabase: { from: mockFrom, rpc: mockRpc } };
+  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  return { ...actual, supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc } };
 });
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../contexts/AuthContext', () => ({
@@ -30,6 +31,8 @@ import Invoices from './Invoices';
 function invoice(overrides: Record<string, unknown>) {
   return {
     id: overrides.invoice_number,
+    // The list reads the posting version with every row (migration 20261021200000).
+    invoice_post_version: `v1:${String(overrides.invoice_number)}`,
     invoice_type: 'chemical_sale',
     customer_id: 'cust-1',
     customer: { farm_name: 'Test Farm' },
@@ -130,7 +133,7 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(within(dialog).queryByText(/not from this season/)).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'NEW-DRAFT' });
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'NEW-DRAFT', p_expected_version: 'v1:NEW-DRAFT' });
   });
 
   // Regression (2026-10-09 final review): the toggle compared HOW MANY rows were

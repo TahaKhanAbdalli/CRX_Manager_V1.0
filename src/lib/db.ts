@@ -164,6 +164,11 @@ export const RpcErrorCodes = {
   // delivery is completed — the same click that corrects it to what actually went out.
   DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
   DELIVERY_MISSING: 'DELIVERY_MISSING',
+  // post_invoice / post_invoice_group / batch_post_invoices reviewed-version binding (Goal 3,
+  // migration 20261021200000): the saved invoice changed after the screen loaded it, or the
+  // screen sent no version.
+  INVOICE_CHANGED_SINCE_LOADED: 'INVOICE_CHANGED_SINCE_LOADED',
+  INVOICE_VERSION_REQUIRED: 'INVOICE_VERSION_REQUIRED',
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
@@ -483,6 +488,11 @@ export function describePostInvoiceBlock(err: unknown): string | null {
 
   const missing = rpcCodeDetail(err, RpcErrorCodes.DELIVERY_MISSING);
   if (missing !== null) return missing || 'its delivery record is missing — void this draft';
+
+  const changed = rpcCodeDetail(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED);
+  if (changed !== null) return changed || 'changed after this screen loaded it — reload, check it, then post again';
+
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_VERSION_REQUIRED)) return 'this screen is out of date — reload the page, then post again';
 
   return null;
 }

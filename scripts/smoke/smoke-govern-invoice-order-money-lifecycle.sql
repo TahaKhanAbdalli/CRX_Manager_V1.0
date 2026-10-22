@@ -33,6 +33,7 @@ DECLARE
   v_bound_order uuid;
   v_bound_item uuid;
   v_bound_invoice uuid;
+  v_bound_version text;  -- the version "loaded" before the post; its retry must send the same one
   v_bound_replay_invoice uuid;
   v_bound_other_invoice uuid;
   v_invoiced_order uuid;
@@ -511,10 +512,11 @@ BEGIN
     v_today, v_today + 30, 0, v_admin
   ) RETURNING id INTO v_bound_other_invoice;
 
-  PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
-  PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
+  v_bound_version := public._invoice_post_version(v_bound_invoice);
+  PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
+  PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
   BEGIN
-    PERFORM public.post_invoice(v_bound_other_invoice, 'e2e-life-post-bound-' || v_suffix);
+    PERFORM public.post_invoice(v_bound_other_invoice, public._invoice_post_version(v_bound_other_invoice), 'e2e-life-post-bound-' || v_suffix);
     RAISE EXCEPTION 'SMOKE_FAIL: post_invoice retry key accepted a different invoice';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -1153,6 +1155,7 @@ BEGIN
     PERFORM set_config('session_replication_role', 'origin', true);
     PERFORM public.post_invoice(
       v_deleted_recovery_invoice,
+      public._invoice_post_version(v_deleted_recovery_invoice),
       'e2e-life-post-customer-drift-' || v_suffix
     );
     RAISE EXCEPTION 'SMOKE_FAIL: recovery poster accepted order/customer drift';
@@ -1176,6 +1179,7 @@ BEGIN
     PERFORM set_config('session_replication_role', 'origin', true);
     PERFORM public.post_invoice(
       v_deleted_recovery_invoice,
+      public._invoice_post_version(v_deleted_recovery_invoice),
       'e2e-life-post-corrupt-deleted-recovery-' || v_suffix
     );
     RAISE EXCEPTION 'SMOKE_FAIL: recovery poster accepted over-delivered history';
@@ -1196,6 +1200,7 @@ BEGIN
     );
     PERFORM public.post_invoice(
       v_deleted_recovery_invoice,
+      public._invoice_post_version(v_deleted_recovery_invoice),
       'e2e-life-post-deleted-draft-' || v_suffix
     );
     RAISE EXCEPTION 'SMOKE_FAIL: soft-deleted recovery draft was posted';
@@ -1214,6 +1219,7 @@ BEGIN
 
   PERFORM public.post_invoice(
     v_deleted_recovery_invoice,
+    public._invoice_post_version(v_deleted_recovery_invoice),
     'e2e-life-post-deleted-recovery-' || v_suffix
   );
   IF (SELECT status FROM public.invoices WHERE id = v_deleted_recovery_invoice)

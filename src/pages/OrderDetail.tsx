@@ -35,13 +35,14 @@ import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
+import { postInvoiceTarget } from '../lib/invoicePostVersion';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { activeInvoiceCoversOrder } from '../lib/deliveryInvoiceCoverage';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
-import { INVOICE_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -285,8 +286,9 @@ export default function OrderDetail() {
 
       // Load linked invoices (AR single source of truth)
       const { data: invoiceData } = await supabase
-        .from('invoices')
-        .select(INVOICE_COLUMNS)
+        .from(INVOICES_POSTABLE)
+        // invoice_post_version: "Post all drafts" refuses an invoice changed since this page loaded.
+        .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
         .eq('order_id', id!)
         .not('status', 'in', '("voided","cancelled")')
         .order('invoice_number');
@@ -1105,7 +1107,7 @@ export default function OrderDetail() {
     if (!profile) { toast('error', 'You must be signed in to post invoices.'); return; }
     const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
     if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
-    const targets = buildInvoicePostTargets(drafts);
+    const targets = buildInvoicePostTargets(drafts, invoices);
     setPostingAll(true);
     let posted = 0;
     let alreadyPosted = 0;
@@ -1135,20 +1137,8 @@ export default function OrderDetail() {
             `${profile.id}:${target.scopeId}`,
           );
         }
-        if (target.operation === 'post_invoice_group') {
-          const { data, error } = await supabase.rpc('post_invoice_group', {
-            p_invoice_group_id: target.invoiceGroupId!,
-            p_performed_by: profile.id,
-            p_idempotency_key: postDraftKeysRef.current[target.key],
-          });
-          if (error) throw error;
-          assertRpcResult(data, 'post_invoice_group');
-        } else {
-          await supabase.rpc('post_invoice', {
-            p_invoice_id: target.invoiceId!,
-            p_idempotency_key: postDraftKeysRef.current[target.key],
-          }).throwOnError();
-        }
+        // Posts with the versions this page loaded; a changed invoice is refused with a reload message.
+        await postInvoiceTarget(target, profile.id, postDraftKeysRef.current[target.key]);
         posted += target.selectedIds.length;
         delete postDraftKeysRef.current[target.key];
       } catch (err) {

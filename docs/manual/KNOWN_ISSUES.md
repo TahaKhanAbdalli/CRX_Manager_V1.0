@@ -765,9 +765,19 @@ fix was taken out of PR #892, so the editor's Post behaves exactly as before. Th
 (`src/lib/invoicePostRecheck.ts`, the `InvoiceDetail.tsx` changes and two tests) is recoverable at
 `3507b92c5^` on PR #892's kept branch `claude/invoice-screen-safety-20261009`; it is absent from `main`.
 
-**Planned fix (not built).** It was to be built in the "invoicing admin-only" change, but that change
-(PR #902) was closed unmerged on 2026-10-13, so the fix has no home yet. It needs two parts, both
-required, because neither alone covers the bug:
+**Fix built 2026-10-21, not live yet (Goal 3, migration `20261021200000`).** Both parts below are
+built: posting takes the `invoice_post_version` the screen loaded and refuses
+`INVOICE_CHANGED_SINCE_LOADED` inside the posting transaction; the editor greys out Post while
+there are unsaved edits, runs the credit and RUP warnings on the saved invoice, and warns before
+leaving. Every list and editor that posts sends its loaded version. This entry closes when the
+migration is applied and the app is live. **Precondition for Goal 1 step 3 (cost-column lock):**
+`invoice_post_version` is a computed field, which receives the whole `invoices` row; revoking any
+`invoices` column from `authenticated` makes every select of it fail, so posting would stop (it
+cannot mis-post). Step 3 must move the version to a column-safe form in the same change (Codex Sol
+advisory review, 2026-10-21). **Done in `20261022025000` (written 2026-10-22, not applied):** the version
+is a computed field on the `invoices_postable` view (every column but `total_cost_cents`), the seven
+screens read it there, and the cost lock then drops the `invoices` overload. The original plan (PR #902, closed unmerged on
+2026-10-13) needed two parts, both required, because neither alone covers the bug:
 1. **In the editor:** Post stays disabled while the form has unsaved edits (the version check below
    cannot see edits that exist only in the browser), and the credit-limit and restricted-use
    warnings are computed from the saved invoice, not the on-screen copy.
