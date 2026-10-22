@@ -56,7 +56,7 @@ describe('postInvoiceTarget', () => {
 });
 
 describe('the posting version carries no cost (migration 20261021200000)', () => {
-  // The version is an md5 a rep can read, over rows whose other fields the rep can also read, so a
+  // The version is a SHA-256 a rep can read, over rows whose other fields the rep can also read, so a
   // single cost value inside it could be guessed. Every cost column registered for a table the
   // hash reads must be left out of it, and the other tables it reads must have no cost columns.
   it('excludes every registered cost column of the tables it hashes', async () => {

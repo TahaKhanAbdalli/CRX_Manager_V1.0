@@ -20,8 +20,8 @@
 - Proof: `scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs` builds the
   production schema plus every migration in a throwaway database and shows the bug before the
   migration, then after it: a second tab and a second user saving before Post, groups, batch,
-  retries, rep scope, three two-connection races, and two mutations (removing the line lock or the
-  post-check reopens the gap).
+  retries, rep scope, four two-connection races, a committed cost-only edit, and three mutations (removing the line lock, the
+  post-check or the group-write trigger reopens the gap).
 - Codex Sol advisory plan review (Mason's request, 2026-10-21) led to: a trigger so a direct write
   adding a group member or a group-level field location waits for an in-flight group post; the
   version map normalized and checked for duplicate ids before the retry check; the rep's

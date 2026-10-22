@@ -322,10 +322,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   }, [loadVersion]);
   const hasUnsavedChanges = !isNew && savedEditSnapshot !== null && editSnapshot !== savedEditSnapshot;
   const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
-  // Leaving with unsaved edits asks first; a new invoice counts once it has a line. A navigation
-  // straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
+  // Leaving with unsaved edits asks first. A new invoice counts once anything was entered (a line,
+  // a customer, a PO, notes or terms); its defaults (today's date, the signed-in salesperson) do
+  // not. A navigation straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
+  const newInvoiceHasInput = isNew && (
+    items.length > 0
+    || Boolean(invoice.customer_id)
+    || Boolean(invoice.purchase_order_ref)
+    || Boolean(invoice.header_notes)
+    || Boolean(invoice.footer_notes)
+    || paymentTerms !== 'Customer default'
+  );
   const skipUnsavedPromptRef = useRef(false);
-  const unsavedBlocker = useUnsavedChanges(isNew ? items.length > 0 : hasUnsavedChanges, skipUnsavedPromptRef);
+  const unsavedBlocker = useUnsavedChanges(isNew ? newInvoiceHasInput : hasUnsavedChanges, skipUnsavedPromptRef);
 
   const openPostConfirm = async () => {
     if (hasUnsavedChanges) {

@@ -1113,6 +1113,22 @@ describe('InvoiceDetail — new-invoice date default follows the Chicago busines
     expect(dateInput.value).toBe('2026-09-30');
     expect(dateInput.value).not.toBe('2026-03-16');
   });
+
+  it('guards leaving a new invoice once a header field is typed, even with no line yet', async () => {
+    unsavedGuardCalls.length = 0;
+    render(
+      <MemoryRouter initialEntries={['/invoices/new']}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const po = await screen.findByPlaceholderText('Customer PO #');
+    // The defaults (today's date, the signed-in salesperson) are not unsaved input.
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(false);
+    fireEvent.change(po, { target: { value: 'PO-9' } });
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(true);
+  });
 });
 
 describe('InvoiceDetail — a product added on this screen is priced at the customer tier', () => {
