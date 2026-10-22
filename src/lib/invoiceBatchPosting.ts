@@ -41,7 +41,7 @@ export function describeInvoicePostScope(invoices: BatchPostInvoice[]): {
 } {
   if (invoices.some((invoice) => Boolean(invoice.invoice_group_id))) {
     return {
-      message: `Post ${invoices.length} selected invoice(s)? Selecting any split invoice posts every current invoice in that split group, including members outside current filters. If any invoice changed since this list loaded, that one is not posted: reload and check it. The full posting scope will be locked into AR.`,
+      message: `Post ${invoices.length} selected invoice(s)? Selecting any split invoice posts every current invoice in that split group, including members outside current filters. If any invoice changed since this list loaded, it is not posted, and neither is any invoice in its split group; the others still post. Reload and check those before posting them. The full posting scope will be locked into AR.`,
       confirmLabel: 'Post selected + full split groups',
     };
   }

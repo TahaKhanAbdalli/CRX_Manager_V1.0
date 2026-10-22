@@ -2249,6 +2249,11 @@ export default function FieldApplicationInvoice() {
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
       toast('error', `Post failed: ${fieldAppError(err)}`);
+      // Refused because the saved invoice or its group changed: reload the form and the versions
+      // (Post needs a clean form, so no unsaved edit is lost), so the next Post sends what is shown.
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) {
+        await fetchInvoice().catch(() => undefined);
+      }
     } finally {
       setPosting(false);
     }

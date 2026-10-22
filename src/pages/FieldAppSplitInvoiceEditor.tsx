@@ -8,7 +8,7 @@ import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
@@ -828,6 +828,11 @@ export default function FieldAppSplitInvoiceEditor() {
       }
     } catch (err) {
       toast('error', splitBackendError(err));
+      // A refusal because the group changed: re-read the results and versions, so the next Post is
+      // bound to what is then on screen. Best-effort; the toast above already reported the refusal.
+      if (billingSetId && hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) {
+        await loadResults(billingSetId).catch(() => undefined);
+      }
     } finally {
       setPosting(false);
     }

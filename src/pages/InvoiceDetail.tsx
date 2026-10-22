@@ -325,11 +325,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Leaving with unsaved edits asks first. A new invoice counts once anything was entered (a line,
   // a customer, a PO, notes or terms) or a default (today's date, the signed-in salesperson) was
   // changed. A navigation straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
-  const newInvoiceDefaultsRef = useRef({ invoice_date: invoice.invoice_date, salesman_id: invoice.salesman_id });
+  const [newInvoiceDefaults] = useState(() => ({ invoice_date: invoice.invoice_date, salesman_id: invoice.salesman_id }));
   const newInvoiceHasInput = isNew && (
     items.length > 0
-    || invoice.invoice_date !== newInvoiceDefaultsRef.current.invoice_date
-    || (invoice.salesman_id || '') !== (newInvoiceDefaultsRef.current.salesman_id || '')
+    || invoice.invoice_date !== newInvoiceDefaults.invoice_date
+    || (invoice.salesman_id || '') !== (newInvoiceDefaults.salesman_id || '')
     || Boolean(invoice.customer_id)
     || Boolean(invoice.purchase_order_ref)
     || Boolean(invoice.header_notes)
@@ -666,13 +666,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
     // A split invoice posts its whole group: keep every member's version as this load saw it.
     const groupVersions: Record<string, string | null> = { [invoiceId]: data.invoice_post_version ?? null };
+    let membersError: unknown = null;
     if (data.invoice_group_id) {
-      const { data: members } = await supabase
+      const { data: members, error } = await supabase
         .from('invoices')
         .select(`id, ${INVOICE_POST_VERSION_COLUMNS}`)
         .eq('invoice_group_id', data.invoice_group_id)
         .is('deleted_at', null);
       if (isStale()) return;
+      membersError = error;
       for (const m of members ?? []) if (m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
     }
 
@@ -685,8 +687,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
     if (isStale()) return;
     // What Post posts and checks: the saved header and lines from this load. A failed line read
-    // leaves nothing to post, so the credit and RUP warnings never run on a partial invoice.
-    savedPostRef.current = itemError ? null : {
+    // leaves nothing to post, so the credit and RUP warnings never run on a partial invoice. A
+    // failed group-member read does the same, so a read error is not reported as a group change.
+    savedPostRef.current = itemError || membersError ? null : {
       version: data.invoice_post_version ?? null,
       customerId: data.customer_id ?? null,
       totalCents: Number(data.total_amount_cents ?? 0),

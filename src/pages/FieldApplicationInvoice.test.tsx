@@ -795,6 +795,9 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
       expect(calls).toContain('post_invoice');
       expect(calls).not.toContain('post_invoice_group');
     });
+    // The post is bound to the version this page loaded.
+    const postCall = mockRpc.mock.calls.find((c) => c[0] === 'post_invoice')!;
+    expect(postCall[1]).toMatchObject({ p_invoice_id: 'inv-solo', p_expected_version: 'v1:inv-solo' });
   });
 
   it('does not render the sibling banner on a single (ungrouped) invoice', async () => {
