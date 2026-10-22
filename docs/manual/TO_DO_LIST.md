@@ -339,6 +339,8 @@ Kept here so it isn't lost; it doesn't take app build time. Keep the pricing bra
 
 Removed for good. Don't re-add without asking Mason: bank reconciliation, 1099s, reading vendor bills automatically, and profit per field.
 
+**Also settled earlier** (carried over from the old `TODO.md` "Not building" list; don't re-add without new evidence): native apps; multi-tenancy for now; machine-learning forecasting; AI acting on its own on financial records; QuickBooks two-way sync (the planned sync is one-way, section 14); grain, energy and feed modules; a big-bang screen redesign; reorganizing screens by role before there's portal and phone usage data; re-enabling prepay bulk-apply; applying the shelved earmark migrations as they are; and offline money changes in general.
+
 ## What Mason needs to decide
 
 **Answered 2026-10-22:** item 1 (approved) and item 7 (yes, the small part). Items 2, 5 and 6 are "not chosen yet". Items 3 and 4 wait for the 2026-12-15 checkpoint, after the contingencies are written and rehearsed.
