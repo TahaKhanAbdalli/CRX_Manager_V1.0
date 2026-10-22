@@ -243,12 +243,13 @@ BEGIN
   END IF;
   SELECT prosrc INTO v_post_group_source
   FROM pg_proc
-  WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
+  WHERE oid = 'public.post_invoice_group(uuid,uuid,jsonb,text)'::regprocedure;  -- versioned since 20261021200000
   IF v_post_group_source NOT LIKE '%pg_advisory_xact_lock%'
      OR v_post_group_source NOT LIKE '%ORDER BY id%'
      OR v_post_group_source NOT LIKE '%FOR UPDATE%'
      OR v_post_group_source NOT LIKE '%check_idempotency%'
-     OR v_post_group_source NOT LIKE '%IDEMPOTENCY_PAYLOAD_CONFLICT%'
+     OR v_post_group_source NOT LIKE '%IDEMPOTENCY_ARGUMENT_MISMATCH%'
+     OR v_post_group_source NOT LIKE '%INVOICE_CHANGED_SINCE_LOADED%'
      OR v_post_group_source NOT LIKE '%_post_invoice_group_customer_scope_impl%' THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): public group post lost serialized scope/idempotency wrapper';
   END IF;
@@ -271,7 +272,7 @@ BEGIN
   END IF;
 
   BEGIN
-    PERFORM post_invoice(v_ids[1], 'smoke-split-direct-post-' || v_sfx);
+    PERFORM post_invoice(v_ids[1], public._invoice_post_version(v_ids[1]), 'smoke-split-direct-post-' || v_sfx);
     RAISE EXCEPTION 'SMOKE_FAIL(P6): one split-group member posted directly';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -281,7 +282,11 @@ BEGIN
     END IF;
   END;
 
-  PERFORM post_invoice_group(v_group, v_admin, 'smoke-split-post-' || v_sfx);
+  PERFORM post_invoice_group(
+    v_group, v_admin,
+    (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id))
+       FROM invoices i WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL),
+    'smoke-split-post-' || v_sfx);
   SELECT count(*) INTO v_item_count
   FROM invoice_items
   WHERE invoice_id = ANY(v_ids);

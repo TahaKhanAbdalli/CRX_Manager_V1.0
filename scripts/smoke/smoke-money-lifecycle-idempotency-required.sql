@@ -37,27 +37,27 @@ BEGIN
   END;
 
   BEGIN
-    PERFORM public.batch_post_invoices(ARRAY[v_missing_invoice], NULL);
+    PERFORM public.batch_post_invoices(jsonb_build_array(jsonb_build_object('invoice_id', v_missing_invoice, 'expected_version', 'v1:smoke')), NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: batch_post_invoices accepted a NULL key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
     IF v_message <> 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices' THEN RAISE; END IF;
   END;
   BEGIN
-    PERFORM public.batch_post_invoices(ARRAY[v_missing_invoice], E'\t\n ');
+    PERFORM public.batch_post_invoices(jsonb_build_array(jsonb_build_object('invoice_id', v_missing_invoice, 'expected_version', 'v1:smoke')), E'\t\n ');
     RAISE EXCEPTION 'SMOKE_FAIL: batch_post_invoices accepted an all-whitespace key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
     IF v_message <> 'IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices' THEN RAISE; END IF;
   END;
 
-  v_result := public.batch_post_invoices(ARRAY[v_missing_invoice], v_batch_key);
+  v_result := public.batch_post_invoices(jsonb_build_array(jsonb_build_object('invoice_id', v_missing_invoice, 'expected_version', 'v1:smoke')), v_batch_key);
   IF (v_result->>'count')::int <> 0
      OR jsonb_array_length(v_result->'failed') <> 1
      OR (v_result->'failed'->0->>'error') LIKE 'IDEMPOTENCY_KEY_REQUIRED:%' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: batch child call did not receive its derived key: %', v_result;
   END IF;
-  v_replay := public.batch_post_invoices(ARRAY[v_missing_invoice], v_batch_key);
+  v_replay := public.batch_post_invoices(jsonb_build_array(jsonb_build_object('invoice_id', v_missing_invoice, 'expected_version', 'v1:smoke')), v_batch_key);
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL: batch valid-key replay changed its response';
   END IF;
@@ -66,7 +66,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: batch replay key was not claimed exactly once';
   END IF;
   BEGIN
-    PERFORM public.batch_post_invoices(ARRAY[gen_random_uuid()], v_batch_key);
+    PERFORM public.batch_post_invoices(jsonb_build_array(jsonb_build_object('invoice_id', gen_random_uuid(), 'expected_version', 'v1:smoke')), v_batch_key);
     RAISE EXCEPTION 'SMOKE_FAIL: batch key accepted a changed invoice array';
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
@@ -96,14 +96,14 @@ BEGIN
   END;
 
   BEGIN
-    PERFORM public.post_invoice(gen_random_uuid(), NULL);
+    PERFORM public.post_invoice(gen_random_uuid(), 'v1:smoke', NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: post_invoice accepted a NULL key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
     IF v_message <> 'IDEMPOTENCY_KEY_REQUIRED: post_invoice' THEN RAISE; END IF;
   END;
   BEGIN
-    PERFORM public.post_invoice(gen_random_uuid(), E'\n');
+    PERFORM public.post_invoice(gen_random_uuid(), 'v1:smoke', E'\n');
     RAISE EXCEPTION 'SMOKE_FAIL: post_invoice accepted a blank key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
