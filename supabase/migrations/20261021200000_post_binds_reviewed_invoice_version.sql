@@ -311,6 +311,16 @@ BEGIN
     IF v_invoice IS NOT NULL THEN
       IF TG_OP = 'INSERT' THEN
         PERFORM 1 FROM public.invoices WHERE id = v_invoice FOR SHARE;
+      ELSIF TG_OP = 'UPDATE' AND v_invoice IS DISTINCT FROM (to_jsonb(OLD) ->> 'invoice_id')::uuid THEN
+        -- A row moved onto another invoice: the post may not hold this row (it belonged elsewhere),
+        -- and waiting for the destination while holding this row could deadlock, so refuse at
+        -- once if the destination is locked (for example, being posted).
+        BEGIN
+          PERFORM 1 FROM public.invoices WHERE id = v_invoice FOR SHARE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+          RAISE EXCEPTION 'INVOICE_GROUP_BUSY: the invoice this % is moving to is being posted or saved right now; try again', replace(TG_TABLE_NAME, '_', ' ')
+            USING ERRCODE = '55P03';
+        END;
       END IF;
       IF TG_TABLE_NAME = 'invoice_items' AND TG_OP = 'INSERT'
          AND current_setting('app.crx_return_credit_lineage', true) = '1'

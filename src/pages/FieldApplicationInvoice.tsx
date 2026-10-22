@@ -1283,7 +1283,8 @@ export default function FieldApplicationInvoice() {
         },
       });
     }
-    postVersionsRef.current = loadedVersions;
+    // Post is authorized only once every read the version covers (locations, lines, shares) has
+    // succeeded below; until then the versions stay empty and Post asks for a reload.
 
     // Locations: when grouped, locations are keyed by invoice_group_id;
     // otherwise by invoice_id.
@@ -1291,7 +1292,7 @@ export default function FieldApplicationInvoice() {
       .from('field_app_locations')
       .select('*, field:fields!field_app_locations_field_id_fkey(field_name, crop_type, total_acres, measured_acres, override_acres, customer:customers!fields_customer_id_fkey(farm_name))')
       .order('sort_order');
-    const { data: locs } = groupId
+    const { data: locs, error: locsError } = groupId
       ? await locQuery.eq('invoice_group_id', groupId)
       : await locQuery.eq('invoice_id', id);
 
@@ -1318,7 +1319,7 @@ export default function FieldApplicationInvoice() {
       );
     }
 
-    const { data: rawItems } = await supabase
+    const { data: rawItems, error: itemsError } = await supabase
       .from('invoice_items')
       .select(INVOICE_ITEM_COLUMNS)
       .eq('invoice_id', id)
@@ -1402,7 +1403,7 @@ export default function FieldApplicationInvoice() {
       );
     }
 
-    const { data: shareData } = await supabase
+    const { data: shareData, error: sharesError } = await supabase
       .from('invoice_shares')
       .select('customer_id, customer_name, split_percentage, acres, amount_cents, is_primary')
       .eq('invoice_id', id)
@@ -1456,6 +1457,12 @@ export default function FieldApplicationInvoice() {
     } else {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
+    }
+    if (locsError || itemsError || sharesError) {
+      Sentry.captureException(locsError || itemsError || sharesError, { tags: { context: 'field_app_invoice_load' } });
+      toast('error', 'Some invoice details did not load. Reload the page before posting.');
+    } else {
+      postVersionsRef.current = loadedVersions;
     }
     setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
   }, [id, toast, navigate, isAdmin]);

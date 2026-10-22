@@ -748,12 +748,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
 
     // Fetch shares
-    const { data: shareData } = await supabase
+    const { data: shareData, error: shareError } = await supabase
       .from('invoice_shares')
       .select('*')
       .eq('invoice_id', invoiceId)
       .order('sort_order');
+    if (isStale()) return;
     setShares((shareData || []) as InvoiceShare[]);
+    // The version also covers the billing shares: if they did not load, the screen did not show
+    // them, so nothing may be posted from this load.
+    if (shareError) savedPostRef.current = null;
 
     // Fetch write-offs
     const { data: woData } = await supabase

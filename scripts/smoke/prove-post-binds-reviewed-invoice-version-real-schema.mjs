@@ -776,11 +776,20 @@ async function races() {
   w = await heldPostRace(inv, 'r6s', `INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents) VALUES ('${inv}', '${CUST}', 'Prover', 100, 2500);`);
   assert.match(w.out, /INVOICE_POSTED_LOCKED/, `race 6 share insert was not refused:\n${w.out}`);
   assert.equal(scalar(`SELECT count(*) FROM public.invoice_shares WHERE invoice_id = '${inv}';`), '0');
+  // A share MOVED onto an invoice that is being posted (the post never held it) is refused at once.
+  const other = created();
+  const movedShare = scalar(`INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents) VALUES ('${other}', '${CUST}', 'Prover', 100, 2500) RETURNING id;`);
+  const target = created();
+  const startedMove = Date.now();
+  w = await heldPostRace(target, 'r6v', `UPDATE public.invoice_shares SET invoice_id = '${target}' WHERE id = '${movedShare}';`);
+  assert.match(w.out, /INVOICE_GROUP_BUSY/, `race 6 share move onto a posting invoice was not refused:\n${w.out}`);
+  assert.ok(Date.now() - startedMove < 6000 + 2000, 'race 6 share move should not wait for the post');
+  assert.equal(scalar(`SELECT invoice_id FROM public.invoice_shares WHERE id = '${movedShare}';`), other);
   // A charge line must keep cost 0 (invoice_items_charge_line_shape_chk), so the allowed-column
   // path is shown with tote_number, which is on the same allowed list as the cost columns.
   psql(`UPDATE public.invoice_items SET tote_number = 'T-77' WHERE invoice_id = '${inv}';`);
   assert.equal(scalar(`SELECT tote_number FROM public.invoice_items WHERE invoice_id = '${inv}';`), 'T-77', 'an allowed-column update on a posted invoice was refused');
-  console.log('[prover] RACE 6: a direct line update, line insert or billing-share insert started while Post holds its locks waits, then is refused (INVOICE_POSTED_LOCKED); an allowed-column (tote number) update on the posted invoice still works');
+  console.log('[prover] RACE 6: a direct line update, line insert or billing-share insert started while Post holds its locks waits, then is refused (INVOICE_POSTED_LOCKED); a share moved onto the posting invoice is refused at once (INVOICE_GROUP_BUSY); an allowed-column (tote number) update on the posted invoice still works');
   psql('DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_items;');
   try {
     inv = created();
