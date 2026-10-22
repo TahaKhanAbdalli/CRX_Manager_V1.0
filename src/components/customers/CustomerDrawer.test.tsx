@@ -14,7 +14,10 @@ import CustomerDrawer from './CustomerDrawer';
 let authValue: { role: 'admin' | 'sales_rep' | 'driver' | null; deniedPages: string[] };
 
 vi.mock('../../contexts/AuthContext', () => ({ useAuth: () => authValue }));
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
+}));
 vi.mock('./CustomerSummaryBar', () => ({ default: () => <div data-testid="customer-summary" /> }));
 
 afterEach(cleanup);

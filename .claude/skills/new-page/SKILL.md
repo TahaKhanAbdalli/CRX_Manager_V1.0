@@ -1,16 +1,17 @@
 ---
 name: new-page
-description: Scaffold a new page in CRX Manager with lazy import, route object, permission-registry entry, sidebar nav link, and documentation updates. Use when the user wants to add a new page or screen to the app.
+description: Scaffold a new page in CRX Manager with its lazy import and entry in the shared page list (which drives the route and the permission registry), sidebar nav link, and documentation updates. Use when the user wants to add a new page or screen to the app.
 ---
 
 # Add New Page
 
 Scaffold a complete new page with all the wiring CRX Manager requires — component file,
-lazy import, route object, **permission-registry entry**, sidebar nav link, and doc updates.
+lazy import, **one entry in the shared page list `src/appPages.tsx`** (the router and the
+permission registry both read it), sidebar nav link, and doc updates.
 
-The permission entry is not optional: `ProtectedRoute` is **fail-closed**. A protected route
-with no `PAGE_PERMISSIONS` entry is redirected away, and `src/lib/pagePermissions.test.ts`
-fails CI. Skipping it produces a page nobody can open.
+The page entry is not optional: `ProtectedRoute` is **fail-closed**. A route with no
+permission entry is redirected away. Because the router and `PAGE_PERMISSIONS` are both
+built from the same entry, they cannot disagree.
 
 ## Step 1: Gather Requirements
 
@@ -55,45 +56,49 @@ Key rules:
 
 ## Step 3: Wire Up the Route
 
-### 3a. Add the lazy import to `src/App.tsx`
+Every signed-in page lives in **one shared list, `src/appPages.tsx`**. The router
+(`App.tsx`) builds its routes from it, the permission registry (`PAGE_PERMISSIONS` in
+`src/lib/pagePermissions.ts`) is derived from it, and the sidebar takes each link's role
+gate from it. Do **not** add routes to `App.tsx` or entries to `PAGE_PERMISSIONS` by hand.
+
+### 3a. Add the lazy import to `src/appPages.tsx`
 
 Find the lazy import block and add:
 
 ```typescript
 const PageName = lazy(() => import('./pages/PageName'));
+// Only if the page has a separate detail screen:
+const PageNameDetail = lazy(() => import('./pages/PageNameDetail'));
 ```
 
-### 3b. Add the route object
+### 3b. Add the page entry to `APP_PAGES` (REQUIRED)
 
-`App.tsx` uses **`createBrowserRouter` route objects, not `<Routes>`/`<Route>` JSX**, and
-suspense is centralized in `RouteShell`. **Do not add a per-route `<Suspense>` wrapper.**
-
-Add an entry to the `RouteShell` children array, in the matching role section. Note the
-paths there are relative (no leading slash):
+Add one entry, under the matching category comment. The entry's position is the order the
+Settings permission screen and the command palette show it in:
 
 ```tsx
-{ path: 'route-path', element: <PageName /> },
+{
+  key: 'route-path', label: 'Page Title', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'],
+  routes: [
+    { path: 'route-path', element: <PageName /> },
+    { path: 'route-path/:id', element: <PageNameDetail /> },
+  ],
+},
 ```
 
-Role-restricted pages wrap the element in `ProtectedRoute`, matching the neighbours:
+- `key` is the permission and deny-list key, and must be the first segment of the address.
+- `roles` is who may open it; the router wraps every route in `ProtectedRoute` with it.
+- `label` and `category` name and group it on the Settings permission screen and in the
+  command palette. Leave both out only for a page every listed role always sees and that can
+  never be denied (like Team Board); it is then exempt from the deny list.
+- `routes` paths are relative (no leading slash). The **first** route is the page's own
+  address, where Settings, the command palette and the sidebar link. A route that fewer roles
+  may open sets its own `roles` (see `deliveries/new`).
+- Suspense is centralized in `RouteShell`. **Do not add a per-route `<Suspense>` wrapper.**
 
-```tsx
-{ path: 'route-path', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PageName /></ProtectedRoute> },
-```
+`src/lib/pagePermissions.test.ts` fails if a route's address does not map to its page's key.
 
-### 3c. Add the permission-registry entry (REQUIRED)
-
-Edit `src/lib/pagePermissions.ts` and add an entry to `PAGE_PERMISSIONS` under the right
-category. `path` here **does** carry the leading slash, matching the browser URL:
-
-```typescript
-{ key: 'route-path', path: '/route-path', label: 'Page Title', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
-```
-
-Without this the deny-list (`profile.denied_pages`) silently does nothing for the route,
-`ProtectedRoute` redirects users away, and `pagePermissions.test.ts` fails.
-
-### 3d. Add the sidebar nav link
+### 3c. Add the sidebar nav link
 
 Navigation lives in `src/components/layout/Sidebar.tsx` (there is **no**
 `src/components/AppLayout.tsx` nav list). Each role has its own tree —
@@ -101,12 +106,28 @@ Navigation lives in `src/components/layout/Sidebar.tsx` (there is **no**
 `getNavigationForRole`. Add the item to the correct category's `items` array:
 
 ```tsx
-{ path: '/route-path', label: 'Page Title', icon: <IconName className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+{ path: '/route-path', label: 'Page Title', icon: <IconName className="w-4 h-4" /> },
 ```
 
+`path` must be a page's own address from `src/appPages.tsx` — anything else fails
+`npm run typecheck`. Which roles see the link comes from that page's `roles`; there is no
+`roles` field on sidebar items. The sidebar label may differ from the Settings label.
 Use `w-4 h-4` for category sub-items and `w-5 h-5` for standalone top-level links, matching
-the surrounding entries. Omit `roles` only when every role in that tree may see the page.
-Choose a Lucide icon that matches the page's purpose.
+the surrounding entries. Choose a Lucide icon that matches the page's purpose.
+
+### 3d. Update the route baseline
+
+`src/routeBaseline.test.tsx` records, for every route and role, who can open it, and every
+role's sidebar. A new page changes that recording on purpose, so re-record it:
+
+```bash
+UPDATE_ROUTE_BASELINE=1 npx vitest run src/routeBaseline.test.tsx
+```
+
+Then read the diff of `src/routeBaseline.json`: it must show only the new page's own rows — its
+routes, its sidebar link, and (for a page with a Settings label) its entry in `permissions.pages`
+plus its key in `permissions.byRole` for each role that may open it. Nothing about any other page
+may change. Say in the PR which rows changed and why.
 
 ## Step 4: Update Documentation
 
@@ -125,7 +146,7 @@ update it there.
 ## Step 5: Verify
 
 ```bash
-npm run lint && npm run typecheck && npm run test -- src/lib/pagePermissions.test.ts && npm run build
+npm run lint && npm run typecheck && npm run test -- src/lib/pagePermissions.test.ts src/routeBaseline.test.tsx && npm run build
 ```
 
 Then actually open the page — done means the changed behavior ran and was observed:
@@ -139,17 +160,18 @@ page is field-facing. Fix any errors before reporting done.
 === New Page Created ===
 
 Component: src/pages/PageName.tsx
-Route:     /route-path (route object in App.tsx, RouteShell handles suspense)
-Permission: PAGE_PERMISSIONS entry 'route-path' (roles: ...)
+Page entry: src/appPages.tsx 'route-path' (roles: ..., Settings: [category] / [label])
+Routes:    /route-path, ... (App.tsx builds them; RouteShell handles suspense)
 Nav:       Sidebar.tsx → [category] in [officeNavigation|applicatorNavigation|driverNavigation]
 Icon:      [IconName] from lucide-react
 
 Docs updated:
   - docs/reference/pages-routes.md (new entry)
+  - src/routeBaseline.json (re-recorded; only the new page's rows changed)
 
 Lint: PASS
 Typecheck: PASS
-pagePermissions test: PASS
+pagePermissions + routeBaseline tests: PASS
 Build: PASS
 Rendered: /route-path opened, renders, console clean
 ```
@@ -157,7 +179,10 @@ Rendered: /route-path opened, renders, console clean
 ## Safety Rules
 
 - NEVER skip the lazy import — all pages must be lazy-loaded
-- NEVER skip the `PAGE_PERMISSIONS` entry — the route is fail-closed without it
+- NEVER add a route to `App.tsx` or an entry to `PAGE_PERMISSIONS` by hand — add the page
+  to `src/appPages.tsx`, which both read
+- NEVER re-record `src/routeBaseline.json` without reading its diff — it is the proof that
+  nobody else's access changed
 - NEVER skip the nav link — pages must be discoverable
 - NEVER add a per-route `<Suspense>`; `RouteShell` already provides it
 - NEVER add a page/route count to `CLAUDE.md` or `AGENTS.md`

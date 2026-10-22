@@ -9,24 +9,33 @@ Reference for how the CRX Manager frontend is built. Follow these patterns for c
 Follow `.claude/skills/new-page/SKILL.md` — it is the maintained step-by-step source. In short:
 
 1. **Create the page component** in `src/pages/` as a `default` export (required for lazy loading).
-2. **Add the lazy import** in `src/App.tsx`:
+2. **Add the lazy import** in `src/appPages.tsx`, the shared page list:
 
    ```typescript
    const MyNewPage = lazy(() => import('./pages/MyNewPage'));
    ```
 
-3. **Add a route object** to the `RouteShell` children array in `src/App.tsx`. The app uses
-   `createBrowserRouter` route objects, not `<Route>` JSX, and suspense is centralized in
-   `RouteShell` (do not add a per-route `<Suspense>`). Paths there are relative:
+3. **Add one page entry to `APP_PAGES`** in `src/appPages.tsx` (REQUIRED). The router
+   (`src/App.tsx`) builds its `createBrowserRouter` routes from it, each behind
+   `ProtectedRoute` with the page's roles, and `PAGE_PERMISSIONS` in
+   `src/lib/pagePermissions.ts` is derived from it, so never add either by hand. Suspense is
+   centralized in `RouteShell` (do not add a per-route `<Suspense>`). Paths are relative, and
+   the first route is the page's own address:
 
    ```tsx
-   { path: 'my-new-page', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><MyNewPage /></ProtectedRoute> },
+   {
+     key: 'my-new-page', label: 'My New Page', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'],
+     routes: [{ path: 'my-new-page', element: <MyNewPage /> }],
+   },
    ```
 
-4. **Add the `PAGE_PERMISSIONS` entry (REQUIRED)** in `src/lib/pagePermissions.ts`. Without it
-   `ProtectedRoute` redirects users away and `pagePermissions.test.ts` fails.
-5. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
-   (`officeNavigation`, `applicatorNavigation`, or `driverNavigation`).
+4. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
+   (`officeNavigation`, `applicatorNavigation`, or `driverNavigation`). Its `path` must be a
+   page address from `src/appPages.tsx` (a type error otherwise), and which roles see it comes
+   from that page's `roles`.
+5. **Re-record the route baseline** (`UPDATE_ROUTE_BASELINE=1 npx vitest run src/routeBaseline.test.tsx`)
+   and check that the diff of `src/routeBaseline.json` shows only the new page's own rows (routes,
+   sidebar link, permission entry), and nothing about any other page.
 6. **Document it** in `docs/reference/pages-routes.md`, then open the page and verify it.
 
 ---

@@ -13,6 +13,7 @@ import {
   getCategories,
   isExemptRoute,
 } from './pagePermissions';
+import { APP_PAGES, type AppPage } from '../appPages';
 
 // ── getPageKeyFromPath ──────────────────────────────────────────────────
 
@@ -208,42 +209,61 @@ describe('getCategories', () => {
 });
 
 // ── PR-11: Fail-closed coverage of every protected route ──────────────────
-
-function extractRouteFirstSegmentsFromAppTsx(): Set<string> {
-  const appTsxPath = resolve(__dirname, '../App.tsx');
-  const source = readFileSync(appTsxPath, 'utf-8');
-
-  const segments = new Set<string>();
-  // Match `path: 'foo'` or `path: 'foo/bar'` — captures the first segment.
-  // Restricted to lowercase alphanumeric + dash so wildcard ('*') and
-  // route params (':id') don't get captured as page keys.
-  const matches = source.matchAll(/path:\s*['"]([a-z][a-z0-9-]*)/g);
-  for (const m of matches) {
-    const seg = m[1].trim();
-    if (seg) segments.add(seg);
-  }
-  return segments;
-}
+// Every signed-in route comes from the shared page list (src/appPages.tsx), so
+// walking that list covers every route the router mounts.
 
 describe('PAGE_PERMISSIONS coverage (PR-11 fail-closed)', () => {
-  it('every protected route in App.tsx has a PAGE_PERMISSIONS entry or is exempt', () => {
-    const routeSegments = extractRouteFirstSegmentsFromAppTsx();
-    const missing: string[] = [];
-    for (const seg of routeSegments) {
-      if (EXEMPT_ROUTE_SEGMENTS.has(seg)) continue;
-      if (getPageKeyFromPath(`/${seg}`) === null) missing.push(seg);
-    }
+  const pages: readonly AppPage[] = APP_PAGES;
+  const sampleUrl = (path: string) => `/${path.replace(/:[a-z]+/gi, 'id-123')}`;
 
-    // Surface the diff explicitly so a failing test names the missing route(s).
-    expect(missing, `Routes in App.tsx missing from PAGE_PERMISSIONS: ${missing.join(', ')}`).toEqual([]);
+  it('every route resolves to its own page key, or its page is exempt', () => {
+    const wrong: string[] = [];
+    for (const page of pages) {
+      for (const route of page.routes) {
+        const url = sampleUrl(route.path);
+        const exempt = !(page.label && page.category);
+        const ok = exempt ? isExemptRoute(url) && getPageKeyFromPath(url) === null : getPageKeyFromPath(url) === page.key;
+        if (!ok) wrong.push(`${url} (page ${page.key})`);
+      }
+    }
+    // Surface the diff explicitly so a failing test names the wrong route(s).
+    expect(wrong, `Routes whose permission key is not their page's: ${wrong.join(', ')}`).toEqual([]);
   });
 
-  it('finds the routes Mason added in PR-11', () => {
-    // Sanity check on the route extractor itself — confirm it picks up the
-    // five routes that PR-11 specifically patched.
-    const segments = extractRouteFirstSegmentsFromAppTsx();
+  it("App.tsx hand-writes only the two pinned field-app routes, with their page's roles", () => {
+    // Every other signed-in route comes from the shared list. These two stay in App.tsx
+    // only because src/pages/FieldApplicationInvoice.test.tsx pins their text there.
+    const app = readFileSync(resolve(__dirname, '../App.tsx'), 'utf-8');
+    const outsideTheApp = new Set(['/design-preview', 'login', 'forgot-password', 'reset-password', '*']);
+    // Routes are route objects only; JSX routes would escape the scan below.
+    expect(app, 'App.tsx must not declare JSX routes').not.toMatch(/<Routes?\b|\bpath=/);
+    // Every `path:` anywhere in the file, in any quotes, on any line layout.
+    const handWritten = [...app.matchAll(/\bpath:\s*(['"`])([^'"`]+)\1/g)]
+      .map((m) => m[2])
+      .filter((path) => !outsideTheApp.has(path));
+    expect(handWritten).toEqual(['invoices/field-app/new', 'invoices/field-app/:id']);
+    for (const path of handWritten) {
+      // Each must stay a one-line route whose role gate matches the page's roles.
+      const line = app.split(/\r?\n/).find((l) => l.includes(`path: '${path}'`)) ?? '';
+      const page = pages.find((p) => p.key === getPageKeyFromPath(sampleUrl(path)));
+      const roles = /allowedRoles=\{(\[[^\]]*\])\}/.exec(line)?.[1];
+      expect(page?.key, path).toBe('field-invoices');
+      expect(roles && JSON.parse(roles.replace(/'/g, '"')), path).toEqual([...(page?.roles ?? [])]);
+    }
+  });
+
+  it("each page's own address starts with its key, and keys are unique", () => {
+    for (const page of pages) {
+      expect(page.routes[0].path.split('/')[0], page.key).toBe(page.key);
+    }
+    const keys = pages.map((p) => p.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('includes the routes Mason added in PR-11', () => {
+    const paths = pages.flatMap((page) => page.routes.map((r) => r.path));
     for (const expected of ['dispatch', 'program-tracker', 'application-services', 'prepay-workspace', 'getting-started']) {
-      expect(segments, `extractor should find /${expected}`).toContain(expected);
+      expect(paths, `shared list should have /${expected}`).toContain(expected);
     }
   });
 

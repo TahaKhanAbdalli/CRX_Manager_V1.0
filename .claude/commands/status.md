@@ -7,7 +7,7 @@ effort: low
 Show a quick project status dashboard for CRX Manager. Gather this info and present it cleanly:
 
 1. **Git status**: current branch, uncommitted changes, last 3 commits (one-line each)
-2. **Codebase counts**: pages (grep lazy in App.tsx), migrations (ls count), edge functions (ls count)
+2. **Codebase counts**: pages (grep lazy in src/appPages.tsx + src/App.tsx), migrations (ls count), edge functions (ls count)
 3. **Health**: run `npm run build` silently — just report PASS or FAIL
 4. **Recent activity**: `git log --oneline --since="24 hours ago"` — what changed today?
 

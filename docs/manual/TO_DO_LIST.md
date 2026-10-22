@@ -333,7 +333,7 @@ These were open in the old `TODO.md` (last updated 2026-09-27), aren't needed fo
 
 ### Agent and tooling work (not app work)
 
-Kept here so it isn't lost; it doesn't take app build time. Keep the pricing branches (PRs #397, #350, #892) until the pricing work ships. Decide whether to keep or drop 159 unused database indexes. Set up workstation `psql` access for agent database checks. Re-run gauntlet sections 5–8. Retire the unused `setup-blend-tickets-storage` function (a deploy change, so Mason's OK). Combine the old migration files into one baseline. The guard-system hardening backlog (frozen during Goal 8). One shared route list. Put `require_admin()` into a migration (it exists only live). Engineering hygiene (lint rules, big files, tests). Re-check three removed audits.
+Kept here so it isn't lost; it doesn't take app build time. Keep the pricing branches (PRs #397, #350, #892) until the pricing work ships. Decide whether to keep or drop 159 unused database indexes. Set up workstation `psql` access for agent database checks. Re-run gauntlet sections 5–8. Retire the unused `setup-blend-tickets-storage` function (a deploy change, so Mason's OK). Combine the old migration files into one baseline. The guard-system hardening backlog (frozen during Goal 8). Move the last two routes into the shared page list `src/appPages.tsx` (`invoices/field-app/new` and `/:id`, still written out in `src/App.tsx`), in the next money PR that touches `src/pages/FieldApplicationInvoice.test.tsx`, which pins them there. Put `require_admin()` into a migration (it exists only live). Engineering hygiene (lint rules, big files, tests). Re-check three removed audits.
 
 ### Not doing (Mason, 2026-10-22)
 
