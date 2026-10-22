@@ -147,6 +147,10 @@ Two modes, auto-selected:
   runs in MCP adjudication and linked-psql execution, and every exception is bound to the predicate
   it was reviewed under as well as to its key. Captured JSON is not proof of freshness: actual
   read-only execution must still occur in the current session.
+  An `execute_sql` result of `{"status":"declined"}` with no prompt comes from the Supabase MCP
+  server, not a repo hook: its destructive-SQL heuristic flagged the text and asked for a
+  confirmation this app cannot show. `mcp-destructive-sql.test.mjs` runs a port of that heuristic
+  over every printed query, so a predicate that would be declined fails the guard suite instead.
 
   Send each wrapped query **exactly as printed**. The live-data guard
   (`.claude/hooks/live-testdata-lib.mjs`) allows it only by rebuilding the runner's envelope from a

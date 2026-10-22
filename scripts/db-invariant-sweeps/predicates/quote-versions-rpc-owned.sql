@@ -209,8 +209,12 @@ UNION ALL
 -- routine that had just inherited a default EXECUTE grant. Unresolvable means
 -- unverifiable; unverifiable reports as drift. Duplicate noise on a genuine drop
 -- is the correct trade against a silent pass.
+-- Reason strings here say "be able to call", never the privilege name followed
+-- by a space: the Supabase MCP server reads that word plus a later quoted
+-- 'DELETE' as dynamic destructive SQL and declines the whole sweep
+-- (mcp-destructive-sql.test.mjs).
 SELECT '_create_quote_version_owner_impl:external-execute' AS violation_key,
-       'anon/authenticated must not hold EXECUTE on the owner-side version writer — it is the sole author of the snapshot_data the restore path trusts as a cost basis' AS reason
+       'anon/authenticated must not be able to call the owner-side version writer — it is the sole author of the snapshot_data the restore path trusts as a cost basis' AS reason
  WHERE CASE
          WHEN to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)') IS NULL
            THEN true
@@ -340,7 +344,7 @@ UNION ALL
 -- So: not unwatched by every predicate in the sweep, but unwatched on the
 -- privilege question by both of the ones that look at it.
 SELECT '_restore_quote_version_owner_impl:external-execute' AS violation_key,
-       'anon/authenticated must not hold EXECUTE on the owner-side restore implementation — calling it directly stamps a stored snapshot back onto a quote as its cost basis, bypassing restore_quote_version entirely' AS reason
+       'anon/authenticated must not be able to call the owner-side restore implementation — calling it directly stamps a stored snapshot back onto a quote as its cost basis, bypassing restore_quote_version entirely' AS reason
  WHERE CASE
          WHEN to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)') IS NULL
            -- Unresolvable means unverifiable; unverifiable reports as drift.
@@ -387,7 +391,7 @@ UNION ALL
 -- anon, authenticated and service_role and grants only postgres — this branch
 -- makes that standing instead of one-shot.
 SELECT '_restore_quote_version_below_cost_impl_20260810:external-execute' AS violation_key,
-       'anon/authenticated must not hold EXECUTE on the renamed below-cost restore implementation — it is the layer BELOW the approval gate, so calling it directly restores a stored cost basis without the below-cost check the public wrapper performs' AS reason
+       'anon/authenticated must not be able to call the renamed below-cost restore implementation — it is the layer BELOW the approval gate, so calling it directly restores a stored cost basis without the below-cost check the public wrapper performs' AS reason
  WHERE CASE
          WHEN to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)') IS NULL
            -- Unresolvable means unverifiable; unverifiable reports as drift.

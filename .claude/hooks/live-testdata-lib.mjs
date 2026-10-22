@@ -495,7 +495,7 @@ export const KNOWN_SWEEP_PREDICATES = new Map([
   ["1a9179b05963dc315c90e54b2fd18445e21d58cae9bdb743111607b9de7e8e86", "plpgsql-check.sql"],
   ["071d89aae1ef714720386c43c9ac6a4c11cc03edb0f00bdcd152ba52079db216", "product-name-vs-return-policy.sql"],
   ["5ea47dde9df5671b8b4acce4e274f242467e3eb71eeb0b3487c8940316a3019d", "profile-role-lock-insert-arm.sql"],
-  ["116ec46dbd26a3c3c5197363b66169d133db49414a2b324e298baa31b0dcb3db", "quote-versions-rpc-owned.sql"],
+  ["995aa5e0e757aea9be90be9d7d49db6c1220ba3d593ee3998137615193738c02", "quote-versions-rpc-owned.sql"],
   ["7c6edab973d810b5c6e7abc34b4121376609fd82cb82f3905075e01975e29e17", "return-credit-intent-binding.sql"],
   ["e86e0b0d2f61073fce6110913bf9260a9332f92d29c295a61d1a7810345dda49", "returns-lifecycle-rpc-owned.sql"],
   ["c1d531420c58198a15ab94eb3e805b1778c3c3a4100633f591240a58e1492f94", "save-field-actor-binding.sql"],
