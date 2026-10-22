@@ -574,7 +574,11 @@ as a draft, bring the branch current and green, freeze the release-candidate com
 ready. If CodeRabbit's review arrives before the merge, fix or refute with evidence every comment,
 in one push on the SAME PR — no replacement PR. Do not wait for it if it has not reviewed by the
 time checks are green and Sol is clean, never post `@coderabbitai review` to buy a re-review, and
-never use `@coderabbitai resume`. A failed CodeRabbit pre-merge "error" check is a finding to fix
+never use `@coderabbitai resume`. Exception (Mason, 2026-10-21): a PR that touches money, invoices,
+payments, inventory, or costs, or one Mason asks to have reviewed, needs a clean CodeRabbit review
+of its current head plus a clean Sol; the agent posts `@coderabbitai full review` once for its
+frozen, green head if CodeRabbit has not reviewed it, and any fix commit it prompts needs a new Sol
+and one new full review (rules: `docs/reference/coderabbit-native-review.md`). A failed CodeRabbit pre-merge "error" check is a finding to fix
 or refute, not a blocker. (`docs/reference/coderabbit-native-review.md` has the history.) Both agent
 merge gates enforce the rule: the newest run of every reported check green with `mergeStateStatus`
 CLEAN, the head containing GitHub's real base, and the Step 3B Sol proof bound to that head and

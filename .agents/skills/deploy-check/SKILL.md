@@ -138,7 +138,11 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    wait for it if it has not reviewed by the time checks are green and Sol is clean, and never post
    `@coderabbitai review` to buy a re-review. A failed CodeRabbit pre-merge "error" check is a
    finding to fix or refute, not a blocker. **A fix goes on the SAME PR** — no replacement PR. Never
-   use `@coderabbitai resume` or any other `@coderabbitai` command. The legacy `ready-for-coderabbit`
+   use `@coderabbitai resume` or any other `@coderabbitai` command, except this one (Mason,
+   2026-10-21): a PR that touches money, invoices, payments, inventory, or costs in any way, or one Mason asks
+   to have reviewed, needs a clean CodeRabbit review of its current head plus a clean Sol, so post
+   `@coderabbitai full review` once for its frozen, green head if CodeRabbit has not reviewed it
+   (rules: `docs/reference/coderabbit-native-review.md`). The legacy `ready-for-coderabbit`
    label route no longer triggers a review; `docs/reference/coderabbit-native-review.md` describes it.
 5. Run the exact-SHA `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26, except a documentation-only
    change as defined in `docs/reference/sol-exempt-paths.md`, which the merge gates accept without

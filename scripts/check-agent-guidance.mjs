@@ -132,9 +132,27 @@ record(/Codex and Claude both proceed after a short plan without waiting for app
 record(
   /CodeRabbit is advisory/i.test(protectedDelivery)
     && /fix or refute every comment/i.test(protectedDelivery)
-    && /Never post `@coderabbitai review` to buy a re-review/i.test(protectedDelivery)
+    // One sentence must carry both triggers and the requirement, so dropping a trigger fails.
+    && /A PR that touches money, invoices, payments, inventory, or costs in any way, or one Mason asks to have reviewed, needs a clean CodeRabbit review of its current head plus a clean Sol/i.test(protectedDelivery)
+    && /if its frozen, green head has none, post `@coderabbitai full review` once/i.test(protectedDelivery)
+    && /On any other PR[^.]*never post `@coderabbitai` commands/i.test(protectedDelivery)
     && /never ask Mason to comment, label, or click for CodeRabbit/i.test(protectedDelivery),
-  "CodeRabbit is advisory (Mason, 2026-10-19): agents handle its comments, never buy re-reviews, and never ask Mason to",
+  "CodeRabbit is advisory (Mason, 2026-10-19) except on money or Mason-named PRs, which need one clean full review of the current head (Mason, 2026-10-21); never ask Mason to",
+);
+// The detailed request rules AGENTS.md points to: timing and the one-retry cap.
+const coderabbitRules = readChecked("docs/reference/coderabbit-native-review.md");
+record(
+  /after the head is frozen and every required check is green/i.test(coderabbitRules)
+    && /touches money, invoices, payments, inventory, or costs in any way \(code,\s*(?:>\s*)?database, or workflow; when unsure, it qualifies\)/i.test(coderabbitRules)
+    && /review still in progress, wait up to 15 minutes/i.test(coderabbitRules)
+    && /remove that from a qualifying PR's\s*(?:>\s*)?title before marking it ready/i.test(coderabbitRules)
+    && /rate-limited, wait the time it states/i.test(coderabbitRules)
+    && /Post once\s*(?:>\s*)?more only if that head still has no review/i.test(coderabbitRules)
+    && /This one retry is part of the same single request/i.test(coderabbitRules)
+    && /fresh Sol review[^.]*and one new full review/i.test(coderabbitRules)
+    && /If that second try also\s*(?:>\s*)?gets no review, stop and report the PR stuck/i.test(coderabbitRules)
+    && /never keep re-posting/i.test(coderabbitRules),
+  "CodeRabbit full-review requests wait for a frozen, green head and stop after one retry (Mason, 2026-10-21)",
 );
 record(
   /Post it to Mason, then proceed without waiting for his confirmation/i.test(shipWorkflow)

@@ -1590,7 +1590,17 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   };
   const crThread = (resolved) => ({ isResolved: resolved, isOutdated: true,
     comments: { totalCount: resolved ? 2 : 1, nodes: [{ author: { login: "coderabbitai" }, originalCommit: { oid: "c".repeat(40) } }] } });
-  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH, threads = [], threadsError = null, threadsMore = false, threadsHead = HEAD_SHA } = {}) => evaluateLandingGate({
+  // The money-PR CodeRabbit requirement read (Mason, 2026-10-21). A migration PR
+  // always qualifies, so the default answer is a completed CodeRabbit review.
+  const crDone = [{ context: "CodeRabbit", state: "SUCCESS", description: "Review completed", creator: { login: "coderabbitai" } }];
+  const requirementAnswer = (statuses, head) => JSON.stringify({ data: { repository: { pullRequest: {
+    headRefOid: head,
+    labels: { totalCount: 0, nodes: [] },
+    files: { totalCount: 1, nodes: [{ path: `supabase/migrations/${MIG}.sql` }] },
+    commits: { totalCount: 1, nodes: [{ commit: { oid: head, parents: { totalCount: 1 }, status: { contexts: statuses } } }] },
+  } } } });
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH, threads = [], threadsError = null, threadsMore = false, threadsHead = HEAD_SHA,
+    crStatuses = crDone, crError = null, crHead = HEAD_SHA } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1602,6 +1612,16 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       throw new Error(`unexpected git ${key}`);
     },
     runGh: (args) => {
+      // The REST file list the requirement read always makes (rename sources).
+      if (args[0] === "api" && String(args[1]).includes("/files?per_page")) {
+        assert.ok(String(args[1]).startsWith(`repos/{owner}/{repo}/pulls/${pr.number ?? 900}/files`));
+        return `supabase/migrations/${MIG}.sql\t\n`;
+      }
+      if (args[0] === "api" && args[1] === "graphql" && args.some((a) => /status \{ contexts/.test(String(a)))) {
+        if (crError) throw crError;
+        assert.ok(args.includes("owner={owner}") && args.includes("name={repo}") && args.includes(`number=${pr.number ?? 900}`));
+        return requirementAnswer(crStatuses, crHead);
+      }
       if (args[0] === "api" && args[1] === "graphql") {
         if (threadsError) throw threadsError;
         assert.ok(args.includes("owner={owner}") && args.includes("name={repo}") && args.includes(`number=${pr.number ?? 900}`));
@@ -1669,7 +1689,18 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   refused(gate({ pr: { headRefOid: "c".repeat(40) } }), "is not this checkout's HEAD", "a checkout behind or ahead of the PR head is refused");
   refused(gate({ pr: { reviewDecision: "CHANGES_REQUESTED" } }), "CHANGES_REQUESTED", "an open objection is refused");
   // CodeRabbit is advisory since 2026-10-19 (Mason): its approval is not a landing condition.
-  ok(gate({ pr: { reviews: [], reviewDecision: null } }).ok === true, "a ready PR with no CodeRabbit review passes");
+  ok(gate({ pr: { reviews: [], reviewDecision: null } }).ok === true, "a ready PR with no CodeRabbit approval passes");
+  // A migration PR is a money PR (Mason, 2026-10-21): it needs a completed
+  // CodeRabbit review of its head before its migration applies, read fail-closed.
+  refused(gate({ crStatuses: [] }), "needs a clean CodeRabbit review of its current head",
+    "a migration PR CodeRabbit never reviewed is refused");
+  refused(gate({ crStatuses: [{ ...crDone[0], description: "Review rate limited" }] }), "needs a clean CodeRabbit review",
+    "a rate-limited CodeRabbit status is not a review");
+  refused(gate({ crStatuses: [{ ...crDone[0], creator: { login: "masonwells1" } }] }), "needs a clean CodeRabbit review",
+    "a completed status posted by anyone but CodeRabbit does not count");
+  refused(gate({ crError: new Error("HTTP 502") }), "fail closed", "an unreadable requirement answer refuses the apply");
+  refused(gate({ crHead: "d".repeat(40) }), "could not be read for this exact head",
+    "a requirement answer for a different head refuses the apply");
   // …but its unanswered threads block an apply exactly as they block the merge (Luna round 2, HIGH),
   // and an apply fails CLOSED when the threads cannot be read.
   refused(gate({ threads: [crThread(false)] }), "unresolved CodeRabbit comment thread", "an unresolved CodeRabbit thread on an older commit is refused");

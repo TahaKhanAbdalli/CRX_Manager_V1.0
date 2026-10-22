@@ -61,10 +61,13 @@ import {
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
   coderabbitFindingsDenial,
+  coderabbitRequirementUnreadableDenial,
+  coderabbitReviewMissingDenial,
   coderabbitThreadCount,
   coderabbitUnreadableDenial,
   collectCodexThreads,
   evaluateCodexBotReview,
+  readCodeRabbitRequirement,
 } from "./codex-bot-review-lib.mjs";
 import { solExemptionOnGitHub } from "./sol-exempt-lib.mjs";
 
@@ -286,15 +289,20 @@ const hardGateBudget = createHardGateBudget({
   callTimeoutMs: GH_CALL_TIMEOUT_MS,
 });
 
-function gh(args) {
+function gh(args, timeout = GH_CALL_TIMEOUT_MS) {
   return execFileSync("gh", args, {
     cwd: projectDir,
     encoding: "utf8",
-    timeout: GH_CALL_TIMEOUT_MS,
+    timeout,
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 16 * 1024 * 1024,
   });
 }
+
+// The money-PR CodeRabbit requirement read makes up to three calls inside the
+// advisory budget, so each gets a shorter cap: a call is only started if it can
+// finish before the budget ends (readCodeRabbitRequirement).
+const REQUIREMENT_CALL_TIMEOUT_MS = 5_000;
 
 // Every gh call a HARD gate makes goes through here. deny() exits, so a refused
 // call can never be caught and reinterpreted by the gate that made it.
@@ -354,6 +362,7 @@ const CODEX_ADVISORY_BUDGET_MS = 12_000;
 function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS) {
   let codexVerdict = null;
   let coderabbitOpen = null; // null = not read completely → fail closed below
+  let coderabbitReview = null; // null = not read → fail closed below
   try {
     const metaArgs = ["pr", "view"];
     if (request.selector) metaArgs.push(String(request.selector));
@@ -362,6 +371,14 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
     const meta = JSON.parse(gh(metaArgs));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
+      // Money PRs need a completed CodeRabbit review of the head (Mason,
+      // 2026-10-21). Read the completion status BEFORE the threads (Codex App
+      // P1 on #1009): read the other way round, a review finishing between the
+      // two reads would pair "Review completed" with the empty thread list from
+      // before it. A throw leaves it null → refuse.
+      const verdict = readCodeRabbitRequirement((args) => gh(args, REQUIREMENT_CALL_TIMEOUT_MS), {
+        owner: slug[1], name: slug[2], number: meta.number, deadlineMs, callTimeoutMs: REQUIREMENT_CALL_TIMEOUT_MS,
+      });
       const node = collectCodexThreads((cursor) => {
         const args = [
           "api", "graphql",
@@ -374,10 +391,18 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
         // Omit `after` entirely on the first page: -F after= would send the
         // empty string, which GraphQL treats as a cursor rather than as null.
         if (cursor) args.push("-F", `after=${cursor}`);
-        return JSON.parse(gh(args))?.data?.repository?.pullRequest;
-      }, { deadlineMs });
+        // Same short cap as the requirement read (Codex App P1 on #1009). A page
+        // is only STARTED if its capped call can finish before the advisory
+        // deadline: the walk throws once fewer than REQUIREMENT_CALL_TIMEOUT_MS
+        // remain, and that throw leaves the counts null, which denies below.
+        return JSON.parse(gh(args, REQUIREMENT_CALL_TIMEOUT_MS))?.data?.repository?.pullRequest;
+      }, { deadlineMs: deadlineMs - REQUIREMENT_CALL_TIMEOUT_MS });
       if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
       coderabbitOpen = coderabbitThreadCount(node);
+      // Both reads must describe the same head, or neither is trusted.
+      if (verdict.headOid && verdict.headOid === String(node.headRefOid || "").trim().toLowerCase()) {
+        coderabbitReview = verdict;
+      }
     }
   } catch {
     codexVerdict = null; // notice below; never a deny
@@ -392,6 +417,14 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
   }
   if (coderabbitOpen > 0) {
     deny(coderabbitFindingsDenial("PR MERGE GATE", request.selector, coderabbitOpen));
+  }
+  // A money PR (or one carrying the needs-coderabbit label) needs a completed
+  // CodeRabbit review of its head; an unreadable answer refuses.
+  if (!coderabbitReview || coderabbitReview.status === "unreadable") {
+    deny(coderabbitRequirementUnreadableDenial("PR MERGE GATE", request.selector));
+  }
+  if (coderabbitReview.status === "missing") {
+    deny(coderabbitReviewMissingDenial("PR MERGE GATE", request.selector, coderabbitReview.why, coderabbitReview.headOid));
   }
 
   // The one blocking case: it flagged THIS commit and nobody answered. Not

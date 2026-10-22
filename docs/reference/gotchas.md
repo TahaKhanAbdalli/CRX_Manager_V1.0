@@ -320,7 +320,9 @@ CodeRabbit review was submitted. Say so rather than treating green as clean. Cur
 2026-10-19): CodeRabbit reviews each PR once, when marked ready or opened non-draft, and only
 comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
 review has arrived by the time checks are green and Sol is clean, merge without it — never post
-`@coderabbitai review` to buy one. (From 2026-09-26 to 2026-10-19 the merge gates required
+`@coderabbitai review` to buy one. Exception (Mason, 2026-10-21): a money or Mason-named PR needs a
+clean CodeRabbit review of its current head, and the agent posts `@coderabbitai full review` once
+for it (`docs/reference/coderabbit-native-review.md`). (From 2026-09-26 to 2026-10-19 the merge gates required
 CodeRabbit's APPROVED verdict on the exact head, the ruleset required one approving review, and
 agents posted `@coderabbitai review` once for a skipped or rate-limited head.) The
 `ready-for-coderabbit` label no longer triggers a review — the rest of this paragraph describes that
