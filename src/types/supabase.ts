@@ -442,6 +442,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "application_records_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "application_records_vehicle_id_fkey"
             columns: ["vehicle_id"]
             isOneToOne: false
@@ -1685,6 +1692,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "commissions_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "commissions_job_id_fkey"
             columns: ["job_id"]
             isOneToOne: false
@@ -1867,6 +1881,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "credit_memo_applications_credit_memo_id_fkey"
+            columns: ["credit_memo_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "credit_memo_applications_reversed_by_fkey"
             columns: ["reversed_by"]
             isOneToOne: false
@@ -1878,6 +1899,13 @@ export type Database = {
             columns: ["target_invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "credit_memo_applications_target_invoice_id_fkey"
+            columns: ["target_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
         ]
@@ -3377,6 +3405,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "field_app_locations_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "field_app_locations_job_id_fkey"
             columns: ["job_id"]
             isOneToOne: false
@@ -3721,6 +3756,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "finance_charges_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
         ]
@@ -4428,6 +4470,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "invoice_items_order_item_id_fkey"
             columns: ["order_item_id"]
             isOneToOne: false
@@ -4514,6 +4563,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "invoice_line_allocations_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "invoice_line_allocations_invoice_item_id_fkey"
             columns: ["invoice_item_id"]
             isOneToOne: false
@@ -4525,6 +4581,13 @@ export type Database = {
             columns: ["split_invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_allocations_split_invoice_id_fkey"
+            columns: ["split_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
         ]
@@ -4621,6 +4684,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_share_snapshots_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
         ]
@@ -4776,6 +4846,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_shares_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
         ]
@@ -5038,6 +5115,13 @@ export type Database = {
             columns: ["parent_invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_parent_invoice_id_fkey"
+            columns: ["parent_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
           {
@@ -6141,6 +6225,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "jobs_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "jobs_last_printed_by_fkey"
             columns: ["last_printed_by"]
             isOneToOne: false
@@ -6980,6 +7071,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prepay_applications_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
           {
@@ -9433,6 +9531,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "returns_credit_invoice_id_fkey"
+            columns: ["credit_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "returns_customer_id_fkey"
             columns: ["customer_id"]
             isOneToOne: false
@@ -9553,6 +9658,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "rup_sales_records_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "rup_sales_records_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
@@ -9638,6 +9750,13 @@ export type Database = {
             referencedRelation: "invoices"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "split_invoice_mutation_claims_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
         ]
       }
       split_invoice_provenance: {
@@ -9696,6 +9815,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: true
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "split_invoice_provenance_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: true
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
           {
@@ -10947,6 +11073,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "write_offs_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "write_offs_reversed_by_fkey"
             columns: ["reversed_by"]
             isOneToOne: false
@@ -10957,6 +11090,272 @@ export type Database = {
       }
     }
     Views: {
+      invoices_postable: {
+        Row: {
+          application_date: string | null
+          application_service_id: string | null
+          applicator_name: string | null
+          balance_cents: number | null
+          blend_ticket_id: string | null
+          created_at: string
+          created_by: string
+          credit_applied_cents: number
+          crop_type: string | null
+          customer_id: string
+          deleted_at: string | null
+          delivery_id: string | null
+          diluent_rate_gpa: number | null
+          discount_date: string | null
+          discount_earned_cents: number
+          due_date: string | null
+          end_humidity_pct: number | null
+          end_temp_f: number | null
+          end_weather_source: string | null
+          end_weather_time: string | null
+          end_wind_direction: string | null
+          end_wind_mph: number | null
+          field_app_billing_set_id: string | null
+          field_names: string[] | null
+          footer_notes: string | null
+          header_notes: string | null
+          id: string
+          internal_notes: string | null
+          invoice_date: string
+          invoice_group_id: string | null
+          invoice_number: string
+          invoice_post_version: string | null
+          invoice_type: string
+          is_quick_delivery: boolean | null
+          job_id: string | null
+          order_id: string | null
+          paid_amount_cents: number
+          parent_invoice_id: string | null
+          payment_terms: string | null
+          posted_at: string | null
+          posted_by: string | null
+          prepay_applied_cents: number
+          pricing_pending: boolean
+          purchase_order_ref: string | null
+          salesman_id: string | null
+          season: number
+          send_disposition: string
+          start_humidity_pct: number | null
+          start_temp_f: number | null
+          start_weather_source: string | null
+          start_weather_time: string | null
+          start_wind_direction: string | null
+          start_wind_mph: number | null
+          status: string
+          temperature_text: string | null
+          total_acres: number | null
+          total_amount_cents: number
+          updated_at: string
+          vehicle_name: string | null
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
+          weather_manual_override: boolean | null
+          wind_direction: string | null
+          write_off_cents: number
+        }
+        Insert: {
+          application_date?: string | null
+          application_service_id?: string | null
+          applicator_name?: string | null
+          balance_cents?: number | null
+          blend_ticket_id?: string | null
+          created_at?: string
+          created_by?: string
+          credit_applied_cents?: number
+          crop_type?: string | null
+          customer_id: string
+          deleted_at?: string | null
+          delivery_id?: string | null
+          diluent_rate_gpa?: number | null
+          discount_date?: string | null
+          discount_earned_cents?: number
+          due_date?: string | null
+          end_humidity_pct?: number | null
+          end_temp_f?: number | null
+          end_weather_source?: string | null
+          end_weather_time?: string | null
+          end_wind_direction?: string | null
+          end_wind_mph?: number | null
+          field_app_billing_set_id?: string | null
+          field_names?: string[] | null
+          footer_notes?: string | null
+          header_notes?: string | null
+          id?: string
+          internal_notes?: string | null
+          invoice_date?: string
+          invoice_group_id?: string | null
+          invoice_number?: string
+          invoice_type?: string
+          is_quick_delivery?: boolean | null
+          job_id?: string | null
+          order_id?: string | null
+          paid_amount_cents?: number
+          parent_invoice_id?: string | null
+          payment_terms?: string | null
+          posted_at?: string | null
+          posted_by?: string | null
+          prepay_applied_cents?: number
+          pricing_pending?: boolean
+          purchase_order_ref?: string | null
+          salesman_id?: string | null
+          season?: number
+          send_disposition?: string
+          start_humidity_pct?: number | null
+          start_temp_f?: number | null
+          start_weather_source?: string | null
+          start_weather_time?: string | null
+          start_wind_direction?: string | null
+          start_wind_mph?: number | null
+          status?: string
+          temperature_text?: string | null
+          total_acres?: number | null
+          total_amount_cents?: number
+          updated_at?: string
+          vehicle_name?: string | null
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+          weather_manual_override?: boolean | null
+          wind_direction?: string | null
+          write_off_cents?: number
+        }
+        Update: {
+          application_date?: string | null
+          application_service_id?: string | null
+          applicator_name?: string | null
+          balance_cents?: number | null
+          blend_ticket_id?: string | null
+          created_at?: string
+          created_by?: string
+          credit_applied_cents?: number
+          crop_type?: string | null
+          customer_id?: string
+          deleted_at?: string | null
+          delivery_id?: string | null
+          diluent_rate_gpa?: number | null
+          discount_date?: string | null
+          discount_earned_cents?: number
+          due_date?: string | null
+          end_humidity_pct?: number | null
+          end_temp_f?: number | null
+          end_weather_source?: string | null
+          end_weather_time?: string | null
+          end_wind_direction?: string | null
+          end_wind_mph?: number | null
+          field_app_billing_set_id?: string | null
+          field_names?: string[] | null
+          footer_notes?: string | null
+          header_notes?: string | null
+          id?: string
+          internal_notes?: string | null
+          invoice_date?: string
+          invoice_group_id?: string | null
+          invoice_number?: string
+          invoice_type?: string
+          is_quick_delivery?: boolean | null
+          job_id?: string | null
+          order_id?: string | null
+          paid_amount_cents?: number
+          parent_invoice_id?: string | null
+          payment_terms?: string | null
+          posted_at?: string | null
+          posted_by?: string | null
+          prepay_applied_cents?: number
+          pricing_pending?: boolean
+          purchase_order_ref?: string | null
+          salesman_id?: string | null
+          season?: number
+          send_disposition?: string
+          start_humidity_pct?: number | null
+          start_temp_f?: number | null
+          start_weather_source?: string | null
+          start_weather_time?: string | null
+          start_wind_direction?: string | null
+          start_wind_mph?: number | null
+          status?: string
+          temperature_text?: string | null
+          total_acres?: number | null
+          total_amount_cents?: number
+          updated_at?: string
+          vehicle_name?: string | null
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+          weather_manual_override?: boolean | null
+          wind_direction?: string | null
+          write_off_cents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoices_application_service_id_fkey"
+            columns: ["application_service_id"]
+            isOneToOne: false
+            referencedRelation: "application_services"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_blend_ticket_id_fkey"
+            columns: ["blend_ticket_id"]
+            isOneToOne: false
+            referencedRelation: "blend_tickets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: false
+            referencedRelation: "deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_field_app_billing_set_id_fkey"
+            columns: ["field_app_billing_set_id"]
+            isOneToOne: false
+            referencedRelation: "field_app_billing_sets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_parent_invoice_id_fkey"
+            columns: ["parent_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_salesman_id_fkey"
+            columns: ["salesman_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profile_public_view: {
         Row: {
           full_name: string | null
@@ -13861,10 +14260,15 @@ export type Database = {
         }
         Returns: undefined
       }
-      invoice_post_version: {
-        Args: { "": Database["public"]["Tables"]["invoices"]["Row"] }
-        Returns: string
-      }
+      invoice_post_version:
+        | {
+            Args: { "": Database["public"]["Tables"]["invoices"]["Row"] }
+            Returns: string
+          }
+        | {
+            Args: { "": Database["public"]["Views"]["invoices_postable"]["Row"] }
+            Returns: string
+          }
       is_active_profile: { Args: never; Returns: boolean }
       is_admin: { Args: never; Returns: boolean }
       is_applicator: { Args: never; Returns: boolean }

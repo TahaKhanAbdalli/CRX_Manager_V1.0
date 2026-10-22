@@ -13,6 +13,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
 import { Sentry } from '../lib/sentry';
+import { INVOICES_POSTABLE } from '../lib/costFields';
 import { formatCents } from '../lib/money';
 import { pctsToMicro } from '../lib/splitVectorMath';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
@@ -621,7 +622,7 @@ export default function FieldAppSplitInvoiceEditor() {
     const stale = () => activeLoadSetIdRef.current !== setId;
     // 1) Child invoices for this billing set (authoritative totals + send disposition).
     const { data: invRows, error: invErr } = await supabaseUntyped
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       // invoice_post_version: Post sends these, read with the rows the review card shows, and the
       // server refuses if any member or the group's membership changed since.
       .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status, invoice_group_id, invoice_post_version')

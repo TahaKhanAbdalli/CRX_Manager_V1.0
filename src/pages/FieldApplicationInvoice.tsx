@@ -74,7 +74,7 @@ import {
   type ProofDraft,
 } from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE, withAdminCost, withAdminCosts } from '../lib/costFields';
 import { requireGroupVersions, requirePostVersion } from '../lib/invoicePostVersion';
 import {
   carryoverRowsFromRecords,
@@ -1025,7 +1025,7 @@ export default function FieldApplicationInvoice() {
     // Post binds what this load showed (a save landing mid-load makes the post refuse).
     postVersionsRef.current = {};
     const { data: rawInv, error } = await supabase
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
       .eq('id', id)
       .single();
@@ -1237,7 +1237,7 @@ export default function FieldApplicationInvoice() {
     // If grouped, load sibling invoices for the banner
     if (groupId) {
       const { data: sibs } = await supabase
-        .from('invoices')
+        .from(INVOICES_POSTABLE)
         .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner

@@ -1,9 +1,11 @@
 /**
  * Posting binds the invoice version a screen loaded (Goal 3, migration 20261021200000).
  *
- * `invoice_post_version` (INVOICE_POST_VERSION_COLUMNS in costFields.ts) is a computed field on
- * `invoices`: select it in the SAME query as the
- * invoice row the screen shows, so the version and the row come from one database snapshot. Read
+ * `invoice_post_version` (INVOICE_POST_VERSION_COLUMNS in costFields.ts) is a computed field on the
+ * `invoices_postable` view (INVOICES_POSTABLE; migration 20261022025000), never on `invoices`: it
+ * receives the whole row, and the cost column lock makes a whole `invoices` row unreadable. Select it
+ * in the SAME query as the invoice rows the screen shows, so the version and the rows come from one
+ * database snapshot. Read
  * the lines after it, never before, so a save landing in between makes the post refuse rather
  * than slip through. post_invoice takes that version and post_invoice_group takes one per member
  * the screen loaded; both refuse INVOICE_CHANGED_SINCE_LOADED when the saved invoice changed, or
