@@ -3135,14 +3135,27 @@ makes the first one reachable more often by emitting several order lines per pro
    Matching the exact quoted line automatically (and splitting a ticket quantity across tiers)
    stays open. A job pointed at another customer's (or a deleted) quote no longer supplies a quoted
    price; the line bills its tier price.
-   **Follow-ups, 2026-10-21 (migration `20261021070000_blend_invoice_approval_binding`, not yet
-   applied when written; live state in `docs/reference/migration-history.md` row 961):** a ticket
+   **Follow-ups, 2026-10-21 (migration `20261021070000_blend_invoice_approval_binding`, applied
+   live 2026-10-21 20:41 UTC, ledger `20261021204100`, PR #995 merged as `a254cbfcf`; see
+   `docs/reference/migration-history.md` row 961):** a ticket
    line with no product is refused instead of billing $0; a grower-share override ticket's $0
    "included in grower share" chemical takes the same admin approval instead of blocking the
    invoice; and the approval names the exact $0 lines it was shown, so a re-pick in between is
    refused ("the $0 lines changed") instead of billing lines the admin never saw; an approval
    that arrives after every $0 line got a real price is refused the same way. A retry key is now
    required (`IDEMPOTENCY_KEY_REQUIRED`), so a lost reply can always be replayed.
+   **Four LOW leftovers of that migration (Sol round 5 and review notes), fixed by migration
+   `20261022020000_blend_invoice_binding_lows` (not applied when written; live state in
+   `docs/reference/migration-history.md` row 966):** (1) a line stored its quantity rounded to 4
+   places but its amount and its share of the invoice cost used the unrounded quantity, so they could
+   differ by cents; the per-unit line's amount and cost, and the "included in grower share" line's
+   cost (its price stays $0), now use the stored quantity; a positive quantity that would store as 0
+   (below 0.00005) is refused (`BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO`) instead of billed as a
+   0-quantity line, before any invoice number is drawn. (2) An approved $0 quoted line recorded the ticket line's editable cost copy instead of
+   the catalog cost the approval showed; it now records the catalog cost (margin reporting only).
+   (3) The tier-price helper the invoice calls was not pinned by the migration's safety check; it is
+   now, with the quote-pick and cents helpers. (4) A leftover "if a retry key was sent" test that could
+   never be false is removed; behaviour is unchanged.
 
 ## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
 

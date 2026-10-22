@@ -300,6 +300,19 @@
         "security"
       ]
     },
+    "blend_invoice_binding_lows": {
+      "chain": "smoke-blend-invoice-binding-lows.sql",
+      "container_only": true,
+      "container_prover": "prove-blend-invoice-binding-lows-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-blend-invoice-binding-lows-real-schema.mjs, never through run-smoke.mjs against the live database: the chain creates invoices, which draw customer-visible invoice numbers from a non-transactional sequence that a rollback does not return. 20261022020000 (the four LOW leftovers of 20261021070000): a per-unit blend line at a fractional quantity (0.123456 gal/ac on 10 acres of a $900.00-cost, $1,400.00 tier-2 product) stores 1.2346 and bills 172844 cents with 111114 cents of cost (quantity x price and x cost from the stored quantity; the unrounded quantity gave 172838 and 111110); the same line inside a grower-share override adds 111114 cents of cost to its invoice; an approved $0 quoted line records the 90000-cent catalog cost the approval showed and below_cost_approvals records, not the ticket line's 100-cent cost copy, while a 6.00 quoted line on the same ticket keeps its copy (invoice cost 1802000); the same retry key replays the same invoices and writes nothing, the key reused on another ticket is refused with IDEMPOTENCY_INTENT_MISMATCH and a blank key with IDEMPOTENCY_KEY_REQUIRED; a positive quantity that rounds to 0 at 4 places (0.000004 gal/ac on 10 acres), per-unit and approved grower-share, is refused with BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO, leaving no invoice, the ticket unbilled and invoice_number_seq unchanged. Fail-first: step 1 fails before the change (172838). Uses an active admin; prices its own [E2E] products through the governed pricing RPCs; terminal rollback.",
+      "covers": [
+        "create_invoice_from_blend_ticket"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
+    },
     "cost_margin_admin_only_rpc_leaks": {
       "chain": "smoke-cost_margin_admin_only_rpc_leaks.sql",
       "container_prover": "prove-cost-margin-admin-only-rpc-leaks-real-schema.mjs",
