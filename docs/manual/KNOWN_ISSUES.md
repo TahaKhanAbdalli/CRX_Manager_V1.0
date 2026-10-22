@@ -89,7 +89,18 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 of 3 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 open) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
+## FIXED 2026-10-22 (Goal 1 part 3 complete: step 1 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 = migration `20261022030000_cost_columns_admin_only`, applied live before its PR merged; two residuals below stay for Mason) — product cost and margin were readable by sales reps, drivers and applicators through table columns
+
+**Step 3 (2026-10-22, `20261022030000`).** The column lock now covers the remaining cost tables: `products`,
+`quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`, `order_items`, `invoices`, `invoice_items`,
+`jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`. No API role (admins included) can read a cost,
+profit or margin column through the Data API; admins read them through `get_admin_cost_fields` and quote history
+through `get_quote_versions`. Where `authenticated` held direct `INSERT`/`UPDATE` (`quotes`, `orders`, `jobs`,
+`job_chemicals`, `blend_ticket_products`, `commissions`), the cost columns are now unwritable too. A read-only
+inventory before the change found no screen, Edge Function, function or trigger that would break (details in the
+PR and `docs/reference/migration-history.md` row 969). **Correction to the text below:** reps could NOT write
+`invoice_items` rows directly (`authenticated` held no table `INSERT`/`UPDATE` on it, live read 2026-10-22); the
+tables with direct writes were the six named above. The original entry follows.
 
 Mason decided on 2026-10-15 that cost and margin are admin-only, including on a rep's own quotes and invoices
 (`docs/plans/2026-10-13-direction-and-goals.md`, Goal 1). A read-only live inventory on 2026-10-18 found three kinds of

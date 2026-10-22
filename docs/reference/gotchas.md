@@ -264,7 +264,15 @@ is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carv
 `GRANT` for the new column in the same migration.** Tables in this state today:
 `public.application_services` **and `public.products`**, and (since `20261021141000` went live on 2026-10-22, ledger `20261022002748`)
 **`public.purchase_orders` and `public.purchase_order_items`**, whose `SELECT`/`REFERENCES` grants for
-`authenticated` and `SELECT` for `anon` list every column except the purchase cost ones.
+`authenticated` and `SELECT` for `anon` list every column except the purchase cost ones. Since
+`20261022030000_cost_columns_admin_only` (Goal 1 step 3, applied before its PR merged) the same holds
+for **`products`, `quotes`, `quote_items`, `quote_versions`, `orders`, `order_items`, `invoices`,
+`invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`**: every column
+except cost, profit and margin (the `COST_COLUMNS` of `src/lib/costFields.ts`, plus
+`quote_versions.snapshot_data`), and on `quotes`, `orders`, `jobs`, `job_chemicals`,
+`blend_ticket_products` and `commissions` the `INSERT`/`UPDATE` grants of `authenticated` too. A new
+column on any of them needs its `SELECT` (and `REFERENCES`, and `INSERT`/`UPDATE` where the table has
+them) grants in the same migration, unless it is another cost field.
 
 **`public.products` (verified live 2026-08-18).** `authenticated` has **no** table-level
 `INSERT` or `UPDATE` — `has_table_privilege('authenticated','public.products','UPDATE')` is

@@ -1,0 +1,24 @@
+## 2026-10-22 — Goal 1 step 3: cost, profit and margin columns locked on the remaining cost tables
+
+**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 969) takes the cost,
+profit and margin columns of `products`, `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`,
+`order_items`, `invoices`, `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions` out of
+the Data API grants of `authenticated` and `anon`. Every other column keeps exactly the privileges it had. Where
+`authenticated` could write a table directly (`quotes`, `orders`, `jobs`, `job_chemicals`, `blend_ticket_products`,
+`commissions`), its `INSERT`/`UPDATE` grants now list every column except cost, so a rep can no longer type a cost
+straight into those rows. Admins keep seeing cost through `get_admin_cost_fields`, and quote history through
+`get_quote_versions`, both admin-checked server functions; no screen changes. This finishes Goal 1 part 3 (cost and
+margin are admin-only, Mason 2026-10-15). Purchase-order cost was locked earlier (`20261021141000`, PR #980).
+
+**Why it was safe.** A read-only inventory on 2026-10-22 checked every one of the 201 places the app reads these
+tables and the 20 places it writes them: none asks for a cost column or a whole row (`*`), and none writes cost. Edge
+Functions read them only with the service role. Every function or trigger that reads cost runs with its owner's
+rights (SECURITY DEFINER) or is a helper only those call; the triggers that run as the caller only touch the row being
+written, which needs no column privilege. None of the tables feeds a realtime subscription.
+
+**Docs.** `KNOWN_ISSUES.md` entry closed (two residuals stay for Mason: commission amount and rate imply profit; a
+below-cost refusal lets a rep narrow a cost by trial and error) and corrected: reps could not write `invoice_items`
+directly. `gotchas.md`: the column-carved table list now names all twelve tables. Goals doc: Goal 1 status.
+
+**Proof.** `node scripts/smoke/prove-cost-columns-admin-only-real-schema.mjs` builds the production schema in a
+throwaway database, replays every migration, and checks the lock role by role before and after.
