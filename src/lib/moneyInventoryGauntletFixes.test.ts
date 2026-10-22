@@ -374,10 +374,10 @@ describe('money and inventory gauntlet fixes', () => {
     const purchaseOrderDetail = source('src/pages/PurchaseOrderDetail.tsx');
     const purchaseOrderEditPayload = source('src/lib/purchaseOrderEditPayload.ts');
     expect(purchaseOrderDetail).toContain(
-      'const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems)',
+      'const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems, { includeCost })',
     );
     expect(purchaseOrderEditPayload).toContain(
-      'const unitCostCents = purchaseOrderUnitCostCents(',
+      'const unitCostCents = parseDollarsToCents(text);',
     );
     expect(purchaseOrderEditPayload).toContain(
       'unit_cost: purchaseOrderCentsToDollars(unitCostCents)',

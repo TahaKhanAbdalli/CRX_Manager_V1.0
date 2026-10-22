@@ -116,14 +116,21 @@ purchase-order screens now lists the non-cost columns it reads (`src/lib/costFie
 admins add cost through `get_admin_cost_fields`, quote history comes through `get_quote_versions`, the three saves derive a
 non-admin's cost, and chemical history and Quick Receive no longer show purchase cost to reps. **Purchase orders are NOT part of
 step 2 (Mason, 2026-10-20, option 1 "for now"):** the purchase order screens and `save_purchase_order` are unchanged, so reps still
-see and enter purchase cost there. Until step 3, the columns themselves are still readable through the Data API. Step 3: the column
+see and enter purchase cost there until PR #980 lands (below). Until step 3, the columns themselves are still readable through the Data API. Step 3: the column
 lock, applied only after step 2's screens are live, then live per-role refusal checks; it must also revoke INSERT/UPDATE of the
 cost columns, because reps can still write `job_chemicals` and `invoice_items` rows directly. Step 3 must leave the columns the purchase order screens read (product `current_cost`, purchase order and line cost) unlocked
 until the purchase order project lands (`costFields.test.ts` names those four screens as its only exemption). **TOP-PRIORITY
 FOLLOW-UP / OPEN COST QUESTION (Mason, 2026-10-20, "dig deeper in future"): purchase orders as their own project.** Three Sol rounds
 on PR #965 showed any cost a rep's purchase order line is given (the catalog cost, or $0) can be wrong and then locked at receipt
 (the supplier-cost-basis snapshot trigger, and the writer's received-line rule), with no governed way to correct it. The project
-needs a governed way to correct, or at least track, a received line's cost, then can hide purchase cost from reps. Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
+needs a governed way to correct, or at least track, a received line's cost, then can hide purchase cost from reps.
+**Being closed by PR #980 (Mason, 2026-10-20, Option B; migrations `20261021140000` and `20261021141000`, NOT applied yet,
+both applied before the PR merges):** the four purchase-order screens show and send unit cost only to admins; `save_purchase_order`
+ignores a non-admin's cost, gives a rep's new line the catalog cost and flags it (`cost_needs_review`, the admin "Costs to confirm"
+filter); `set_purchase_order_item_costs` is the governed, admin-only correction (received lines included, a reason required once
+a line has been received), and every cost change is kept in the admin-only, append-only `purchase_order_item_cost_changes`;
+`20261021141000` then locks the purchase-order cost columns from every API role. This entry moves to resolved once both are live
+and the PR is merged. Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
 profit to the rep who earns it; and a rep can still find a product's cost by trial and error, because a price below cost is
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
 logged or limited).

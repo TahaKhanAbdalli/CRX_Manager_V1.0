@@ -1294,8 +1294,8 @@ export interface PurchaseOrder {
   status: POStatus;
   submitted_date: string | null;
   expected_delivery_date: string | null;
-  total_cost: number;
-  total_cost_cents: number;
+  total_cost?: number | null;
+  total_cost_cents?: number | null;
   notes: string | null;
   created_by: string;
   created_at: string;
@@ -1311,8 +1311,8 @@ export interface PurchaseOrderItem {
   product_id: string;
   product_name?: string;
   quantity_ordered: number;
-  unit_cost: number;
-  unit_cost_cents: number;
+  unit_cost?: number | null;
+  unit_cost_cents?: number | null;
   quantity_received: number;
   unit_size: string | null;
   notes: string | null;
@@ -1321,7 +1321,26 @@ export interface PurchaseOrderItem {
   inventory_units_per_supplier_unit_snapshot?: number | null;
   cost_provenance?: 'manual' | 'supplier_observation' | 'legacy' | null;
   cost_snapshot_at?: string | null;
+  /** A non-admin's line: its cost is the catalog cost until an admin confirms or changes it. */
+  cost_needs_review?: boolean;
   product?: Product;
+}
+
+/** One row of the admin-only, append-only purchase-order cost history (20261021140000). */
+export type PurchaseOrderCostChangeSource = 'entered' | 'edited' | 'catalog_default' | 'set_by_admin' | 'confirmed';
+
+export interface PurchaseOrderItemCostChange {
+  id: string;
+  purchase_order_id: string;
+  purchase_order_item_id: string;
+  product_id: string | null;
+  old_unit_cost_cents: number | null;
+  new_unit_cost_cents: number;
+  quantity_received_at_change: number;
+  source: PurchaseOrderCostChangeSource;
+  reason: string | null;
+  changed_by: string | null;
+  created_at: string;
 }
 
 // ── Receiving ─────────────────────────────────────────────────

@@ -51,3 +51,14 @@ export function purchaseOrderLineTotalCents(
 export function purchaseOrderCentsToDollars(cents: number): number {
   return cents / 100;
 }
+
+/**
+ * True when a typed unit cost is a non-negative amount in whole cents, so
+ * `purchaseOrderUnitCostCents` would store it exactly. More than two decimals
+ * is refused, never rounded (Mason, 2026-09-03; MONEY_PRECISION_MESSAGE).
+ */
+export function isWholeCentPurchaseOrderCost(unitCostDollars: number): boolean {
+  if (!Number.isFinite(unitCostDollars) || unitCostDollars < 0) return false;
+  const cents = purchaseOrderUnitCostCents(unitCostDollars);
+  return Number.isSafeInteger(cents) && purchaseOrderCentsToDollars(cents) === unitCostDollars;
+}

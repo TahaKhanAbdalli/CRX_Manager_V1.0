@@ -262,7 +262,9 @@ invisible and unwritable to `authenticated` until someone adds it to that list. 
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
 is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
 `GRANT` for the new column in the same migration.** Tables in this state today:
-`public.application_services` **and `public.products`**.
+`public.application_services` **and `public.products`**, and (once `20261021141000` is live)
+**`public.purchase_orders` and `public.purchase_order_items`**, whose `SELECT`/`REFERENCES` grants for
+`authenticated` and `SELECT` for `anon` list every column except the purchase cost ones.
 
 **`public.products` (verified live 2026-08-18).** `authenticated` has **no** table-level
 `INSERT` or `UPDATE` — `has_table_privilege('authenticated','public.products','UPDATE')` is

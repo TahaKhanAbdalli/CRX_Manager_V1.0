@@ -8219,8 +8219,51 @@ export type Database = {
           },
         ]
       }
+      purchase_order_item_cost_changes: {
+        Row: {
+          changed_by: string | null
+          created_at: string
+          id: string
+          new_unit_cost_cents: number
+          old_unit_cost_cents: number | null
+          product_id: string | null
+          purchase_order_id: string
+          purchase_order_item_id: string
+          quantity_received_at_change: number
+          reason: string | null
+          source: string
+        }
+        Insert: {
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_unit_cost_cents: number
+          old_unit_cost_cents?: number | null
+          product_id?: string | null
+          purchase_order_id: string
+          purchase_order_item_id: string
+          quantity_received_at_change?: number
+          reason?: string | null
+          source: string
+        }
+        Update: {
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_unit_cost_cents?: number
+          old_unit_cost_cents?: number | null
+          product_id?: string | null
+          purchase_order_id?: string
+          purchase_order_item_id?: string
+          quantity_received_at_change?: number
+          reason?: string | null
+          source?: string
+        }
+        Relationships: []
+      }
       purchase_order_items: {
         Row: {
+          cost_needs_review: boolean
           cost_provenance: string | null
           cost_snapshot_at: string | null
           id: string
@@ -8239,6 +8282,7 @@ export type Database = {
           unit_size: string | null
         }
         Insert: {
+          cost_needs_review?: boolean
           cost_provenance?: string | null
           cost_snapshot_at?: string | null
           id?: string
@@ -8257,6 +8301,7 @@ export type Database = {
           unit_size?: string | null
         }
         Update: {
+          cost_needs_review?: boolean
           cost_provenance?: string | null
           cost_snapshot_at?: string | null
           id?: string
@@ -14837,6 +14882,16 @@ export type Database = {
           p_idempotency_key?: string
           p_override_acres: number
           p_performed_by?: string
+        }
+        Returns: Json
+      }
+      set_purchase_order_item_costs: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by?: string
+          p_po_id: string
+          p_reason?: string
         }
         Returns: Json
       }

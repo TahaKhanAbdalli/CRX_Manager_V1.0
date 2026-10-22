@@ -71,7 +71,7 @@ const poItems = [
 
 function query(data: unknown) {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'order', 'in', 'ilike', 'limit']) {
+  for (const method of ['select', 'eq', 'order', 'in', 'ilike', 'limit', 'range']) {
     builder[method] = vi.fn(() => builder);
   }
   builder.maybeSingle = vi.fn(() => Promise.resolve({ data, error: null }));

@@ -195,7 +195,16 @@ The normal path is `draft` → `submitted` → `fully_received`, passing through
 
 ### Tables
 - `purchase_orders` — PO header (po_number format: PO-YYYY-NNNN via `next_po_number()`)
-- `purchase_order_items` — line items with quantity_ordered, quantity_received, unit_cost
+- `purchase_order_items` — line items with quantity_ordered, quantity_received, unit_cost, cost_needs_review
+- `purchase_order_item_cost_changes` — admin-only, append-only history of every line cost change (who, when, old/new, reason)
+
+### Purchase cost (admin-only; `20261021140000`, Mason 2026-10-20)
+- A line a sales rep adds (or switches to another product) takes the product's catalog cost and is flagged
+  `cost_needs_review`; a rep never changes a stored cost.
+- Admins set, correct or confirm cost with `set_purchase_order_item_costs`, received lines included (a received
+  line needs a reason). It changes only the line cost and the PO total — never inventory quantities, receiving
+  records, or the product's catalog cost. Inventory value uses catalog cost, so a correction moves no inventory value.
+- Do not reverse a receipt just to fix its cost.
 
 ### Source files
 - `src/pages/PurchaseOrders.tsx` — PO list

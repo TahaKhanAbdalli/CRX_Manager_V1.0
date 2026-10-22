@@ -79,20 +79,6 @@ function costEmbeds(text: string): Array<{ table: CostTable; columns: string }> 
 
 interface Offence { file: string; line: number; problem: string }
 
-/**
- * Purchase orders are deliberately NOT part of step 2 (Mason, 2026-10-20, option 1 "for now"):
- * these screens keep reading product and purchase cost exactly as before, until purchase orders
- * get their own project with a governed way to correct a received cost (KNOWN_ISSUES). Step 3's
- * column lock must not cover the columns these screens read until then. Named file by file so a
- * new screen is never exempt by accident.
- */
-const PURCHASE_ORDER_SCREENS = new Set([
-  'components/purchase-orders/BulkPOImport.tsx',
-  'pages/NewPurchaseOrder.tsx',
-  'pages/PurchaseOrderDetail.tsx',
-  'pages/PurchaseOrders.tsx',
-]);
-
 /** The text of `const NAME = '...'` (or a template) declared in the same file, if any. */
 function sameFileStringConstant(src: string, name: string): string | undefined {
   const m = new RegExp(`const\\s+${name}\\s*=\\s*(['"\`])([\\s\\S]*?)\\1`).exec(src);
@@ -106,7 +92,6 @@ function scan(): Offence[] {
   for (const file of sourceFiles(SRC)) {
     const src = readFileSync(file, 'utf8');
     const rel = relative(SRC, file).replace(/\\/g, '/');
-    if (PURCHASE_ORDER_SCREENS.has(rel)) continue;
     const lineOf = (index: number) => src.slice(0, index).split('\n').length;
 
     // 1. The first select of every chain on a cost table.

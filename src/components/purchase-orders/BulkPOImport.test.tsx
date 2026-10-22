@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   processDocumentWithOCR: vi.fn(),
   toast: vi.fn(),
+  role: 'admin',
 }));
 
 // Fully chainable Supabase query-builder mock
@@ -30,6 +31,14 @@ function chainable(resolveWith: unknown = { data: [], error: null }) {
   return builder;
 }
 
+// Fixtures already carry cost; the admin cost read (get_admin_cost_fields) passes rows through.
+vi.mock('../../lib/costFields', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/costFields')>()),
+  withAdminCost: async (_table: string, row: unknown) => row,
+  withAdminCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+  withAdminNestedCosts: async (_table: string, rows: readonly unknown[]) => [...rows],
+}));
+
 vi.mock('../../lib/db', () => ({
   supabase: { from: mocks.from, rpc: mocks.rpc },
   assertRpcResult: (value: unknown) => value,
@@ -37,7 +46,7 @@ vi.mock('../../lib/db', () => ({
 
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({
-    profile: { id: 'user-1', full_name: 'Test User' },
+    profile: { id: 'user-1', full_name: 'Test User', role: mocks.role },
   }),
 }));
 
@@ -76,6 +85,7 @@ describe('BulkPOImport', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.role = 'admin';
     localStorage.clear();
     mocks.from.mockReturnValue(chainable({ data: [product], error: null }));
     mocks.processDocumentWithOCR.mockImplementation(async (file: File) => ({
@@ -394,6 +404,28 @@ describe('BulkPOImport', () => {
         })],
       }),
     ));
+  });
+
+  it('a sales rep import sends no cost and shows no cost columns (purchase cost is admin-only)', async () => {
+    mocks.role = 'sales_rep';
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-REP.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    // Wait for the review table before checking that it has no cost column.
+    const importButton = await screen.findByRole('button', { name: /import 1 po/i });
+    expect(screen.queryByText('Unit Cost')).not.toBeInTheDocument();
+    fireEvent.click(importButton);
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('save_purchase_order', expect.anything()));
+    const call = mocks.rpc.mock.calls.find(([name]) => name === 'save_purchase_order')!;
+    const items = (call[1] as { p_items: Array<Record<string, unknown>> }).p_items;
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item).not.toHaveProperty('unit_cost');
+      expect(item).not.toHaveProperty('unit_cost_cents');
+    }
   });
 
   it('canonicalizes identity boundary whitespace before saving', async () => {

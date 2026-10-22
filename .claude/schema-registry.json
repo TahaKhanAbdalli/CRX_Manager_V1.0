@@ -1405,6 +1405,7 @@
     "product_info_change_set_rows",
     "profile_public_directory",
     "purchase_order_import_intents",
+    "purchase_order_item_cost_changes",
     "purchase_order_items",
     "quote_items",
     "quote_sections",
@@ -2502,6 +2503,18 @@
       ],
       "constraints": [
         "profiles_role_check"
+      ]
+    },
+    "purchase_order_item_cost_changes.source": {
+      "values": [
+        "entered",
+        "edited",
+        "catalog_default",
+        "set_by_admin",
+        "confirmed"
+      ],
+      "constraints": [
+        "po_item_cost_changes_source_check"
       ]
     },
     "purchase_order_items.cost_provenance": {
@@ -5768,6 +5781,19 @@
         "created_at"
       ]
     },
+    "purchase_order_item_cost_changes": {
+      "no_default": [
+        "purchase_order_id",
+        "purchase_order_item_id",
+        "new_unit_cost_cents",
+        "source"
+      ],
+      "with_default": [
+        "id",
+        "quantity_received_at_change",
+        "created_at"
+      ]
+    },
     "purchase_order_items": {
       "no_default": [
         "purchase_order_id",
@@ -5777,7 +5803,8 @@
         "id",
         "quantity_ordered",
         "unit_cost",
-        "quantity_received"
+        "quantity_received",
+        "cost_needs_review"
       ]
     },
     "purchase_orders": {
@@ -8138,6 +8165,19 @@
       "created_at",
       "content_fingerprint"
     ],
+    "purchase_order_item_cost_changes": [
+      "id",
+      "purchase_order_id",
+      "purchase_order_item_id",
+      "product_id",
+      "old_unit_cost_cents",
+      "new_unit_cost_cents",
+      "quantity_received_at_change",
+      "source",
+      "reason",
+      "changed_by",
+      "created_at"
+    ],
     "purchase_order_items": [
       "id",
       "purchase_order_id",
@@ -8154,7 +8194,8 @@
       "inventory_units_per_supplier_unit_snapshot",
       "cost_provenance",
       "cost_snapshot_at",
-      "inventory_unit_snapshot"
+      "inventory_unit_snapshot",
+      "cost_needs_review"
     ],
     "purchase_orders": [
       "id",
