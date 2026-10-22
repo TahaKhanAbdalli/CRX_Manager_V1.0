@@ -55,6 +55,10 @@
 --   DROP TRIGGER trg_serialize_invoice_group_writes ON public.invoices;
 --   DROP TRIGGER trg_serialize_invoice_group_writes ON public.field_app_locations;
 --   DROP FUNCTION public._serialize_invoice_group_writes();
+--   DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_items;
+--   DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_shares;
+--   DROP TRIGGER trg_zz_refuse_posted_invoice_child_write ON public.field_app_locations;
+--   DROP FUNCTION public._refuse_posted_invoice_child_write();
 --   DROP FUNCTION public._lock_invoice_post_inputs(uuid[]);
 --   DROP FUNCTION public.invoice_post_version(public.invoices);
 --   DROP FUNCTION public._invoice_post_version(uuid);
@@ -92,7 +96,7 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
          AND p.proname IN ('post_invoice', 'post_invoice_group', 'batch_post_invoices',
-                           'invoice_post_version', '_invoice_post_version', '_invoice_post_content_version', '_lock_invoice_post_inputs', '_serialize_invoice_group_writes')) <> 3 THEN
+                           'invoice_post_version', '_invoice_post_version', '_invoice_post_content_version', '_lock_invoice_post_inputs', '_serialize_invoice_group_writes', '_refuse_posted_invoice_child_write')) <> 3 THEN
     RAISE EXCEPTION 'PREFLIGHT: unexpected overloads of the posting functions or the version helpers already exist';
   END IF;
 END
@@ -240,6 +244,22 @@ BEGIN
         USING ERRCODE = '55P03';
     END IF;
   END LOOP;
+  -- A draft that joins a group (inserted into it, moved into it, or restored into it) after
+  -- waiting for the group lock must not join a group that has meanwhile been posted: that member
+  -- was never part of the posted, reviewed group. (Group-level field locations are refused by
+  -- trg_zz_refuse_posted_invoice_child_write.)
+  -- Nested, not AND-ed: PL/pgSQL does not short-circuit, and field_app_locations has no deleted_at.
+  IF TG_TABLE_NAME = 'invoices' THEN
+    IF NEW.invoice_group_id IS NOT NULL AND NEW.deleted_at IS NULL
+       AND NEW.status IN ('draft', 'unposted')
+       AND (TG_OP = 'INSERT' OR OLD.invoice_group_id IS DISTINCT FROM NEW.invoice_group_id OR OLD.deleted_at IS NOT NULL)
+       AND EXISTS (SELECT 1 FROM public.invoices i
+                    WHERE i.invoice_group_id = NEW.invoice_group_id AND i.id <> NEW.id
+                      AND i.deleted_at IS NULL AND i.status IN ('posted', 'paid', 'overdue')) THEN
+      RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this split invoice group was posted, so a draft cannot join it; unpost the group first'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
 $fn$;
@@ -251,6 +271,80 @@ CREATE TRIGGER trg_serialize_invoice_group_writes
   BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
   FOR EACH ROW EXECUTE FUNCTION public._serialize_invoice_group_writes();
 
+-- A write to an invoice's lines, billing shares or field locations that waited behind a post
+-- (on the row lock the post holds) would otherwise commit right after it, changing a posted
+-- invoice that nobody reviewed. This trigger refuses such writes once the invoice is posted, paid
+-- or overdue (the same test as prevent_invoice_line_shares_edit_after_post). It reads the status
+-- AFTER the wait: an UPDATE or DELETE runs it only once it holds its row; an INSERT first takes a
+-- share lock on the parent invoice, which waits for an in-flight post. Group-keyed field
+-- locations (invoice_id NULL) check every live member; trg_serialize_invoice_group_writes has
+-- already taken the group lock. Draft, unposted, voided, cancelled, soft-deleted and missing
+-- parents pass. Two writes stay allowed on a posted invoice: return-credit lines inserted into
+-- the credit memo they post with (app.crx_return_credit_lineage), and line updates that change
+-- only cost_cents, return_credit_cogs_cents, tote_number or updated_at. No admin override: a
+-- delivery completion runs with app.admin_override on and must not slip past this.
+CREATE FUNCTION public._refuse_posted_invoice_child_write()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_row jsonb;
+  v_invoice uuid;
+  v_group uuid;
+BEGIN
+  IF TG_TABLE_NAME = 'invoice_items' AND TG_OP = 'UPDATE'
+     AND (to_jsonb(NEW) - ARRAY['cost_cents', 'return_credit_cogs_cents', 'tote_number', 'updated_at'])
+         = (to_jsonb(OLD) - ARRAY['cost_cents', 'return_credit_cogs_cents', 'tote_number', 'updated_at']) THEN
+    RETURN NEW;
+  END IF;
+  FOR v_row IN
+    SELECT r FROM unnest(ARRAY[
+      CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END,
+      CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END]) r
+     WHERE r IS NOT NULL
+  LOOP
+    v_invoice := (v_row ->> 'invoice_id')::uuid;
+    v_group := CASE WHEN TG_TABLE_NAME = 'field_app_locations' AND v_invoice IS NULL
+                    THEN (v_row ->> 'invoice_group_id')::uuid END;
+    IF v_invoice IS NOT NULL THEN
+      IF TG_OP = 'INSERT' THEN
+        PERFORM 1 FROM public.invoices WHERE id = v_invoice FOR SHARE;
+      END IF;
+      IF TG_TABLE_NAME = 'invoice_items' AND TG_OP = 'INSERT'
+         AND current_setting('app.crx_return_credit_lineage', true) = '1'
+         AND EXISTS (SELECT 1 FROM public.invoices WHERE id = v_invoice AND invoice_type = 'credit_memo') THEN
+        CONTINUE;
+      END IF;
+      IF EXISTS (SELECT 1 FROM public.invoices
+                  WHERE id = v_invoice AND deleted_at IS NULL AND status IN ('posted', 'paid', 'overdue')) THEN
+        RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this invoice was posted, so its % cannot change; unpost it first', replace(TG_TABLE_NAME, '_', ' ')
+          USING ERRCODE = 'check_violation';
+      END IF;
+    ELSIF v_group IS NOT NULL THEN
+      IF EXISTS (SELECT 1 FROM public.invoices
+                  WHERE invoice_group_id = v_group AND deleted_at IS NULL AND status IN ('posted', 'paid', 'overdue')) THEN
+        RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this split invoice group was posted, so its field locations cannot change; unpost it first'
+          USING ERRCODE = 'check_violation';
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$fn$;
+
+CREATE TRIGGER trg_refuse_posted_invoice_child_write
+  BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_items
+  FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
+CREATE TRIGGER trg_refuse_posted_invoice_child_write
+  BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_shares
+  FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
+CREATE TRIGGER trg_zz_refuse_posted_invoice_child_write
+  BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
+  FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();
+
+REVOKE ALL ON FUNCTION public._refuse_posted_invoice_child_write() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._serialize_invoice_group_writes() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._lock_invoice_post_inputs(uuid[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._invoice_post_content_version(uuid) FROM PUBLIC, anon, authenticated;
@@ -659,6 +753,7 @@ BEGIN
          FROM unnest(ARRAY[
                 'public._invoice_post_version(uuid)', 'public._invoice_post_content_version(uuid)',
                 'public._lock_invoice_post_inputs(uuid[])', 'public._serialize_invoice_group_writes()',
+                'public._refuse_posted_invoice_child_write()',
                 'public._post_invoice_idem_impl_20260721(uuid,text)', 'public._post_invoice_public_impl_20260718(uuid,text)',
                 'public._post_invoice_customer_scope_impl(uuid,text)', 'public._post_invoice_impl_20260714(uuid,text)',
                 'public._post_invoice_group_customer_scope_impl(uuid,uuid,text)',

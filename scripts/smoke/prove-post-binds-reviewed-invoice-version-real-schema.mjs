@@ -555,9 +555,11 @@ const AFTER = [
   ['B1 states', /^ok\|posted:1100,draft:2300$/],
   ['B1 batch without versions', /^22023\|INVOICE_VERSION_REQUIRED: /],
   ['B1 batch same invoice twice', /^22023\|INVOICE_VERSION_REQUIRED: batch_post_invoices was sent the same invoice twice/],
-  ['C1 admin posts while a line changes', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice .* was changed while it was being posted/],
+  // trg_refuse_posted_invoice_child_write refuses the write first; the post-check is the second
+  // line of defense (MUTATION 2 proves it on its own).
+  ['C1 admin posts while a line changes', /^23514\|INVOICE_POSTED_LOCKED: this invoice was posted/],
   ['C1 state', /^ok\|draft:2500$/],
-  ['C1g admin posts while a line changes', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice PROVER-G-. in this split group was changed while it was being posted/],
+  ['C1g admin posts while a line changes', /^23514\|INVOICE_POSTED_LOCKED: this invoice was posted/],
   ['C1g state', /^ok\|PROVER-G-A:draft,PROVER-G-B:draft$/],
 ];
 
@@ -682,17 +684,20 @@ async function races() {
     const waited = Date.now() - started;
     const postDone = await post;
     assert.equal(postDone.status, 0, `race 4 group post failed:\n${postDone.out}`);
-    assert.equal(write.status, 0, `race 4 location write failed:\n${write.out}`);
-    return waited;
+    return { waited, write };
   };
-  const waited = await groupRace('a');
-  assert.ok(waited >= 2000, `race 4: the group-keyed location write did not wait for the group post (${waited} ms)`);
-  console.log(`[prover] RACE 4: a direct group-keyed location write during a group post waits for it (${waited} ms), so it cannot slip in before the post commits`);
+  const r4 = await groupRace('a');
+  assert.ok(r4.waited >= 2000, `race 4: the group-keyed location write did not wait for the group post (${r4.waited} ms)`);
+  // Once the post commits the group is posted, so the write that waited is refused.
+  assert.match(r4.write.out, /INVOICE_POSTED_LOCKED/, `race 4: the waiting location write landed on the posted group:\n${r4.write.out}`);
+  assert.equal(scalar(`SELECT count(*) FROM public.field_app_locations WHERE invoice_group_id = '${gid('a')}';`), '0');
+  console.log(`[prover] RACE 4: a direct group-keyed location write during a group post waits for it (${r4.waited} ms), then is refused because the group is now posted (INVOICE_POSTED_LOCKED)`);
   psql('DROP TRIGGER trg_serialize_invoice_group_writes ON public.field_app_locations;');
   try {
     const unguarded = await groupRace('b');
-    assert.ok(unguarded < 1500, `MUTATION 3: without the trigger the write should not wait (${unguarded} ms)`);
-    console.log(`[prover] MUTATION 3: without trg_serialize_invoice_group_writes the same write does not wait (${unguarded} ms), so the trigger is what serializes it`);
+    assert.ok(unguarded.waited < 1500, `MUTATION 3: without the trigger the write should not wait (${unguarded.waited} ms)`);
+    assert.doesNotMatch(unguarded.write.out, /ERROR/, `MUTATION 3: without the trigger the write should land:\n${unguarded.write.out}`);
+    console.log(`[prover] MUTATION 3: without trg_serialize_invoice_group_writes the same write does not wait (${unguarded.waited} ms) and lands in the group mid-post, so the trigger is what serializes it`);
   } finally {
     psql(`CREATE TRIGGER trg_serialize_invoice_group_writes BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
       FOR EACH ROW EXECUTE FUNCTION public._serialize_invoice_group_writes();`);
@@ -746,6 +751,62 @@ async function races() {
     psql(SERIALIZE_SQL);
   }
 
+  // R6: a direct write to a line or a billing share that starts while Post holds its locks waits
+  // for the post, then is refused because the invoice is now posted (INVOICE_POSTED_LOCKED), so
+  // nothing changes under a posted invoice. A cost-only line update stays allowed.
+  // MUTATION 5: without trg_refuse_posted_invoice_child_write the waiting line update lands.
+  const heldPostRace = async (inv, key, writeSql) => {
+    const ver = version(inv);
+    const post = psqlAsync(`BEGIN; ${postSql(inv, ver, key)} SELECT pg_sleep(4); COMMIT;`);
+    await holdingSleep();
+    const write = await psqlAsync(writeSql);
+    const postDone = await post;
+    assert.equal(postDone.status, 0, `${key}: the post failed:\n${postDone.out}`);
+    return write;
+  };
+  inv = created();
+  let w = await heldPostRace(inv, 'r6u', `UPDATE public.invoice_items SET description = 'Freight (after post)' WHERE invoice_id = '${inv}';`);
+  assert.match(w.out, /INVOICE_POSTED_LOCKED/, `race 6 line update was not refused:\n${w.out}`);
+  assert.equal(state(inv), 'posted:2500:Freight to farm');
+  inv = created();
+  w = await heldPostRace(inv, 'r6i', `INSERT INTO public.invoice_items (invoice_id, charge_type, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order) VALUES ('${inv}', 'freight', 'Extra freight', 1, 700, 700, 0, 9);`);
+  assert.match(w.out, /INVOICE_POSTED_LOCKED/, `race 6 line insert was not refused:\n${w.out}`);
+  assert.equal(state(inv), 'posted:2500:Freight to farm');
+  inv = created();
+  w = await heldPostRace(inv, 'r6s', `INSERT INTO public.invoice_shares (invoice_id, customer_id, customer_name, split_percentage, amount_cents) VALUES ('${inv}', '${CUST}', 'Prover', 100, 2500);`);
+  assert.match(w.out, /INVOICE_POSTED_LOCKED/, `race 6 share insert was not refused:\n${w.out}`);
+  assert.equal(scalar(`SELECT count(*) FROM public.invoice_shares WHERE invoice_id = '${inv}';`), '0');
+  // A charge line must keep cost 0 (invoice_items_charge_line_shape_chk), so the allowed-column
+  // path is shown with tote_number, which is on the same allowed list as the cost columns.
+  psql(`UPDATE public.invoice_items SET tote_number = 'T-77' WHERE invoice_id = '${inv}';`);
+  assert.equal(scalar(`SELECT tote_number FROM public.invoice_items WHERE invoice_id = '${inv}';`), 'T-77', 'an allowed-column update on a posted invoice was refused');
+  console.log('[prover] RACE 6: a direct line update, line insert or billing-share insert started while Post holds its locks waits, then is refused (INVOICE_POSTED_LOCKED); an allowed-column (tote number) update on the posted invoice still works');
+  psql('DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_items;');
+  try {
+    inv = created();
+    w = await heldPostRace(inv, 'r6m', `UPDATE public.invoice_items SET description = 'Freight (after post)' WHERE invoice_id = '${inv}';`);
+    assert.doesNotMatch(w.out, /ERROR/, `MUTATION 5: without the trigger the waiting update should land:\n${w.out}`);
+    assert.equal(state(inv), 'posted:2500:Freight (after post)');
+    console.log('[prover] MUTATION 5: without trg_refuse_posted_invoice_child_write the waiting line update lands on the posted invoice, so the trigger is what refuses it');
+  } finally {
+    psql(`CREATE TRIGGER trg_refuse_posted_invoice_child_write BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_items
+      FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();`);
+  }
+
+  // R7: a draft inserted into a split group while the group post holds the group lock waits, then
+  // is refused because the group is now posted, so no unreviewed member joins a posted group.
+  seedGroup('7');
+  const r7map = scalar(`SELECT jsonb_object_agg(id, public._invoice_post_version(id)) FROM public.invoices WHERE invoice_group_id = '${gid('7')}';`);
+  const r7post = psqlAsync(`${as(U.ADMIN)} BEGIN; SELECT public.post_invoice_group('${gid('7')}', '${U.ADMIN}', '${r7map}'::jsonb, 'r7-${sfx}'); SELECT pg_sleep(4); COMMIT;`);
+  await holdingSleep();
+  const r7write = await psqlAsync(`INSERT INTO public.invoices (id, invoice_number, customer_id, invoice_type, status, invoice_date, created_by, salesman_id, invoice_group_id, total_amount_cents) VALUES
+      ('${gid('73')}', 'PROVER-RG-${sfx}-73', '${CUST}', 'misc_charge', 'draft', CURRENT_DATE, '${U.ADMIN}', '${U.ADMIN}', '${gid('7')}', 500);`);
+  const r7done = await r7post;
+  assert.equal(r7done.status, 0, `race 7 group post failed:\n${r7done.out}`);
+  assert.match(r7write.out, /INVOICE_POSTED_LOCKED/, `race 7: a draft joined the posted group:\n${r7write.out}`);
+  assert.equal(posted('7'), 'posted,posted');
+  console.log('[prover] RACE 7: a draft inserted into a split group during its post waits, then is refused because the group is now posted (INVOICE_POSTED_LOCKED)');
+
   // MUTATION 1: without the line lock, race 2 posts and the line changes under a posted invoice.
   try {
     psql(POST_INVOICE_SQL.replace(/\n\s*PERFORM 1 FROM public\.invoice_items WHERE invoice_id = p_invoice_id ORDER BY id FOR UPDATE;/, ''));
@@ -760,7 +821,18 @@ async function races() {
     assert.equal(state(inv), 'posted:2500:Freight (raced)');
     console.log('[prover] MUTATION 1: without the line lock the same race posts and the line changes under the posted invoice, so the lock is what closes it');
 
-    // MUTATION 2: without the post-check, C1 (a line written while posting) posts.
+    // MUTATION 2: trg_refuse_posted_invoice_child_write now refuses C1's write first, so it is
+    // dropped here. With the post-check alone C1 is still refused; without it as well, C1 posts.
+    psql('DROP TRIGGER trg_refuse_posted_invoice_child_write ON public.invoice_items;');
+    const m2a = scenario([
+      { key: 'M2a admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'm2as')) },
+      { key: 'M2a admin reads version', as: U.ADMIN, stmt: READ_VERSION() },
+      { key: 'M2a admin posts while a line changes', as: U.ADMIN, stmt: post('m2ap') },
+    ], `CREATE FUNCTION pg_temp.prover_racing_line() RETURNS trigger LANGUAGE plpgsql AS $t$
+    BEGIN UPDATE public.invoice_items SET description = description || ' (raced)' WHERE invoice_id = NEW.id; RETURN NEW; END $t$;
+    CREATE TRIGGER zz_prover_racing_line AFTER UPDATE OF status ON public.invoices
+      FOR EACH ROW WHEN (NEW.status = 'posted' AND OLD.status IS DISTINCT FROM 'posted') EXECUTE FUNCTION pg_temp.prover_racing_line();`);
+    assert.match(m2a['M2a admin posts while a line changes'], /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice .* was changed while it was being posted/, `the post-check alone did not refuse C1: ${m2a['M2a admin posts while a line changes']}`);
     psql(POST_INVOICE_SQL.replace(/\n\s*-- A line write that does not lock[\s\S]*?END IF;\n/, '\n'));
     const m2 = scenario([
       { key: 'M2 admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'm2s')) },
@@ -774,6 +846,9 @@ async function races() {
     console.log('[prover] MUTATION 2: without the post-check a line written while posting is posted, so the post-check is what refuses it');
   } finally {
     psql(POST_INVOICE_SQL);
+    psql(`DROP TRIGGER IF EXISTS trg_refuse_posted_invoice_child_write ON public.invoice_items;
+      CREATE TRIGGER trg_refuse_posted_invoice_child_write BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_items
+      FOR EACH ROW EXECUTE FUNCTION public._refuse_posted_invoice_child_write();`);
   }
   assert.equal(scalar("SELECT md5(prosrc) = md5(prosrc) AND position('while it was being posted' in prosrc) > 0 AND position('invoice_items WHERE invoice_id = p_invoice_id ORDER BY id FOR UPDATE' in prosrc) > 0 FROM pg_proc WHERE oid = 'public.post_invoice(uuid,text,text)'::regprocedure;"), 't');
 }

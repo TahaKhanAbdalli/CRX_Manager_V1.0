@@ -325,9 +325,15 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
     await login(page);
     const userId = await getUserId(page);
 
+    // Post binds to the versions this caller read (migration 20261021200000).
+    const loaded = asArray<{ id: string; invoice_post_version: string }>(
+      await supabaseRest(page, 'GET', `invoices?invoice_group_id=eq.${createdGroupId}&deleted_at=is.null&select=id,invoice_post_version`),
+      'fetch group versions',
+    );
     const postResult = await supabaseRpc(page, 'post_invoice_group', {
       p_invoice_group_id: createdGroupId,
       p_performed_by: userId,
+      p_expected_versions: Object.fromEntries(loaded.map((m) => [m.id, m.invoice_post_version])),
       p_idempotency_key: `${RUN}-post-1`,
     }) as { posted_invoice_ids: string[]; member_count: number; total_posted_cents: number };
 

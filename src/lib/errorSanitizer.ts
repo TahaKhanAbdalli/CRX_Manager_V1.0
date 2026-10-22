@@ -249,6 +249,9 @@ export function sanitizeError(error: unknown): string {
   if (/^INVOICE_CHANGED_SINCE_LOADED$/.test(message)) {
     return 'Nothing was posted. This invoice was changed after this screen loaded it. Reload it, check it, then post again.';
   }
+  if (/^INVOICE_POSTED_LOCKED(?::|$)/.test(message)) {
+    return 'This invoice was posted, so its lines, billing shares and field locations cannot change. Unpost it first, then edit.';
+  }
   if (/^INVOICE_GROUP_BUSY(?::|$)/.test(message)) {
     return 'This split invoice group is being posted or saved right now. Nothing was changed. Try again in a moment.';
   }

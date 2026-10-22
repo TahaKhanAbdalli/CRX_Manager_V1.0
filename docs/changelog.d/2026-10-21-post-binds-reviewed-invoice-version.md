@@ -26,6 +26,14 @@
 - A direct update or delete of a split group's member or field location while that group is
   being posted or saved is refused at once with `INVOICE_GROUP_BUSY` ("try again") instead of
   risking a database deadlock; a batch post sent the same invoice twice is refused.
+- New trigger `trg_refuse_posted_invoice_child_write` (Codex GitHub App P1 on PR #1018): a write to
+  an invoice's lines, billing shares or field locations that waited behind a post would otherwise
+  land right after it. Such writes are now refused with `INVOICE_POSTED_LOCKED` once the invoice
+  (or, for a group-level field location, any member) is posted, paid or overdue. Allowed on a
+  posted invoice: return-credit lines going into their credit memo, and line updates that change
+  only cost, return-credit cost, tote number or updated_at. Payment allocations are not covered
+  (payments and voids write them on posted invoices). Prover races R4 (now refused after waiting)
+  and R6-R7, mutation 5; a draft cannot join a split group that was posted while it waited.
 - Codex Sol advisory plan review (Mason's request, 2026-10-21) led to: a trigger so a direct write
   adding a group member or a group-level field location waits for an in-flight group post; the
   version map normalized and checked for duplicate ids before the retry check; the rep's

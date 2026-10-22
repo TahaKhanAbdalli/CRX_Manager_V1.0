@@ -830,8 +830,11 @@ export default function FieldAppSplitInvoiceEditor() {
       toast('error', splitBackendError(err));
       // A refusal because the group changed: re-read the results and versions, so the next Post is
       // bound to what is then on screen. Best-effort; the toast above already reported the refusal.
+      // If that re-read does not finish, the versions are cleared so Post refuses ("reload")
+      // rather than posting fresh versions whose lines were never fully shown.
       if (billingSetId && hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) {
-        await loadResults(billingSetId).catch(() => undefined);
+        const reloaded = await loadResults(billingSetId).catch(() => false);
+        if (!reloaded) postVersionsRef.current = [];
       }
     } finally {
       setPosting(false);
