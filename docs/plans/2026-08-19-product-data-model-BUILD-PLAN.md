@@ -1,5 +1,12 @@
 # Product Data Model — Build Plan and Handoff Contract
 
+> **UPDATE 2026-10-22 — WP-3 is replaced.** Mason chose to build delivery-time brand capture first
+> (`docs/manual/DECISION_LOG.md`, 2026-10-22 generic-products entry). WP-3 below, and its row on the loop
+> ledger (`docs/loops/product-data-model-ledger.md`), are replaced by
+> `docs/plans/2026-10-22-product-brands-step1-PLAN.md`; its section 9 lists every difference. The package
+> order "WP-1 → WP-5, no reordering" no longer applies to WP-3. Do not build WP-3 from this file. Update the
+> ledger the next time the loop runs.
+
 > **STATUS 2026-09-26 — ACTIVE plan, build not started.** Every work package on the ledger
 > (`docs/loops/product-data-model-ledger.md`) is still ⬜ not started, and no product-data migration exists.
 > This plan is on `main` (PRs #429, #435 and #498 merged 2026-08-19 → 2026-08-27). The header's

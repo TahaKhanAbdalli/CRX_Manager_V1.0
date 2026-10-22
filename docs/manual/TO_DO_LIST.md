@@ -45,7 +45,7 @@ Mason's priority is everything that happens **before delivery**: quoting, produc
    - quoting and orders: 1.1, 1.4, then the SHOULD quote fixes 1.6–1.12;
    - invoicing: 3.1–3.5 and 3.8;
    - Chicago dates at the year boundary: quote and order numbers 12.1, payment dates 6.7.
-2. **Delivering and billing it:** deliveries and retry safety 2.1–2.3 and 2.6, split billing 4.1–4.3, payments and prepay 6.1–6.9, commissions 8.1, 8.3 and 8.4, documents and emails 9.1–9.9.
+2. **Delivering and billing it:** deliveries and retry safety 2.1–2.3 and 2.6, then the SHOULD item 2.8 (the delivered brand and its EPA number), split billing 4.1–4.3, payments and prepay 6.1–6.9, commissions 8.1, 8.3 and 8.4, documents and emails 9.1–9.9.
 3. **Complete numbers at volume:** 10.1–10.4.
 4. **Last:** everything marked CAN-WAIT (section 17).
 
@@ -58,7 +58,7 @@ The non-code MUST items (backups and recovery in section 13, QuickBooks and paym
 | MUST, built and live (still needs its December proof) | 20 |
 | MUST, code not built or only partly built (7 of them are the new pricing and cost-tracking rows 0.1–0.7) | 29 |
 | MUST, a business process, drill, review or Mason action (not code) | 25 |
-| SHOULD (28 of them folded in from the old `TODO.md` on 2026-10-22) | 32 |
+| SHOULD (28 of them folded in from the old `TODO.md` on 2026-10-22; 2.8 added the same day) | 33 |
 | CAN-WAIT | 19, plus the parked items in section 17 |
 
 Rows that only point to another row ("See 4.4") aren't counted twice. A row split between two ranks (for example 8.3) counts under its MUST part.
@@ -124,6 +124,7 @@ Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (sli
 | 2.5 | A counter sale through quick delivery in a few taps, including amounts under 1 unit | **Not built** (goals doc, Goal 3: today 9–12 actions across 3 screens). Counter sales still work, just slowly. | Goal 3 | SHOULD |
 | 2.6 | A stock shortage warns but never blocks a delivery | **Built.** Mason's permanent decision (2026-10-15, 6b). | Done | MUST |
 | 2.7 | A driver's shortage or damage report tells the office what happened, not just a generic notice | **Open** (old `TODO.md` (2026-09-27), §5). The office may bill the wrong amount. | Fix | SHOULD |
+| 2.8 | **The delivered brand and its EPA number are on the record.** A generic product ("Roundup 5.4# Generic") lists its acceptable brands, each with its own EPA number. Whoever loads the truck picks the brand, or several with amounts, and it's required; an unlisted brand is typed in from the label and never stops the truck. The delivery receipt, the invoices made from a delivery or its order, the statement and those invoices' restricted-use (RUP) register records print the delivered brand's number. Quotes, prices and cost stay on the generic. Field-application, job and blend-ticket invoices aren't covered (section 5 comes last) | **Not built** (checked against `main` at `6ff53669a`, 2026-10-22). Designed in August (product data model, never started) and refreshed as step 1 on 2026-10-22: `docs/plans/2026-10-22-product-brands-step1-PLAN.md`. Today a delivery receipt shows no EPA number, delivery invoices store none, and the RUP register records the generic product's number, not the jug's. Step 2 (brand at receiving, stock by brand) is a later plan | Step 1 plan, two PRs | SHOULD (Mason, 2026-10-22: "rank 2.8 as SHOULD for now") |
 
 ## 3. Billing: invoices
 
@@ -343,7 +344,7 @@ Removed for good. Don't re-add without asking Mason: bank reconciliation, 1099s,
 
 ## What Mason needs to decide
 
-**Answered 2026-10-22:** item 1 (approved) and item 7 (yes, the small part). Items 2, 5 and 6 are "not chosen yet". Items 3 and 4 wait for the 2026-12-15 checkpoint, after the contingencies are written and rehearsed.
+**Answered 2026-10-22:** item 1 (approved), item 7 (yes, the small part) and item 13 (SHOULD, for now). Items 2, 5 and 6 are "not chosen yet". Items 3 and 4 wait for the 2026-12-15 checkpoint, after the contingencies are written and rehearsed.
 
 Recommended answers first. Reply with the number and "yes", or say what to change.
 
@@ -360,6 +361,7 @@ Recommended answers first. Reply with the number and "yes", or say what to chang
 10. **How do quote discounts and fees work?** Sales tax is already settled: none. (old `TODO.md`, §5)
 11. **Finance charges and month-end:** automate finance charges, warn before reopening a closed period, and save the month-end checkboxes? Decide before January 31. (old `TODO.md`, §5)
 12. **True average purchase cost for inventory?** Recommend later. (old `TODO.md`, §3)
+13. **ANSWERED: SHOULD, for now** (Mason, 2026-10-22: "rank 2.8 as SHOULD for now"). **Rank 2.8 (the delivered brand and its EPA number) as MUST?** The recommendation was **yes**: without it, a restricted-use generic delivered on January 1 goes into the RUP register with the generic's EPA number instead of the jug's, a wrong regulated record, which is the MUST test. If yes, it joins the "code not built" MUST count.
 
 **Actions already decided, still waiting on Mason** (not new decisions):
 - **Upgrade Supabase to Pro and turn on point-in-time recovery** (decided 2026-10-13). Due this week, because the rewind-to-a-time drill (13.2) can't run without it. The first database-only restore of the existing weekly dump doesn't wait on it and can run now (`docs/plans/2026-10-18-goal-6-safety-net-findings.md`).
