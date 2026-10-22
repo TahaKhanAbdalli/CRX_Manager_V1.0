@@ -25,3 +25,9 @@ directly. `gotchas.md`: the column-carved table list now names all twelve tables
 
 **Proof.** `node scripts/smoke/prove-cost-columns-admin-only-real-schema.mjs` builds the production schema in a
 throwaway database, replays every migration, and checks the lock role by role before and after.
+
+**Invoice posting version (2026-10-22).** The lock first removes the old `invoice_post_version` on
+`invoices` (PR #1018), which reads a whole invoice row and would fail for everyone once cost is hidden.
+Screens read the version from `invoices_postable` (migration 20261022025000) since that change, and
+the lock refuses to run unless that view and its function are in place. The proof replays both first,
+then shows an admin and a rep still get the version from the view after the lock.

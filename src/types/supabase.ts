@@ -4890,7 +4890,6 @@ export type Database = {
           invoice_date: string
           invoice_group_id: string | null
           invoice_number: string
-          invoice_post_version: string | null
           invoice_type: string
           is_quick_delivery: boolean | null
           job_id: string | null
@@ -14141,15 +14140,10 @@ export type Database = {
         }
         Returns: undefined
       }
-      invoice_post_version:
-        | {
-            Args: { "": Database["public"]["Tables"]["invoices"]["Row"] }
-            Returns: string
-          }
-        | {
-            Args: { "": Database["public"]["Views"]["invoices_postable"]["Row"] }
-            Returns: string
-          }
+      invoice_post_version: {
+        Args: { "": Database["public"]["Views"]["invoices_postable"]["Row"] }
+        Returns: string
+      }
       is_active_profile: { Args: never; Returns: boolean }
       is_admin: { Args: never; Returns: boolean }
       is_applicator: { Args: never; Returns: boolean }

@@ -603,7 +603,16 @@ function privilegeDiff(before, after) {
 function preflightRefusesDrift() {
   stageText('cand.sql', lf(CANDIDATE));
   const cases = [
-    ...LOCKED_TABLES.map((t) => [`ALTER TABLE public.${t} ADD COLUMN zz_prover_new text;`, new RegExp(`COST_LOCK_PREFLIGHT: ${t} columns are not the ones this grant list covers`)]),
+    // A new invoices column also leaves invoices_postable short of it, which the earlier block catches.
+    ...LOCKED_TABLES.map((t) => [`ALTER TABLE public.${t} ADD COLUMN zz_prover_new text;`, t === 'invoices'
+      ? /COST_LOCK_PREFLIGHT: 20261022025000 \(invoices_postable\) is not applied, or the view drifted/
+      : new RegExp(`COST_LOCK_PREFLIGHT: ${t} columns are not the ones this grant list covers`)]),
+    // The invoice-version swap (20261022025000) must be in place before the old overload is dropped.
+    ['ALTER VIEW public.invoices_postable RESET (security_invoker);', /COST_LOCK_PREFLIGHT: 20261022025000 \(invoices_postable\) is not applied, or the view drifted/],
+    ['DROP FUNCTION public.invoice_post_version(public.invoices_postable);', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
+    ['GRANT EXECUTE ON FUNCTION public.invoice_post_version(public.invoices_postable) TO anon;', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
+    [`DO $b$ BEGIN EXECUTE format('CREATE OR REPLACE FUNCTION public.invoice_post_version(p_invoice public.invoices) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS %L', (SELECT prosrc FROM pg_proc WHERE oid = 'public.invoice_post_version(public.invoices)'::regprocedure) || E'\\n-- prover: any body edit\\n'); END $b$;`,
+      /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices\) drifted from 20261021200000/],
     ['ALTER TABLE public.products DROP COLUMN tier3_gross_margin;', /COST_LOCK_PREFLIGHT: products columns are not the ones/],
     ['DROP FUNCTION public.get_admin_cost_fields(text, uuid[]);', /COST_LOCK_PREFLIGHT: get_admin_cost_fields\(text, uuid\[\]\) is missing/],
     ['DROP FUNCTION public.get_quote_versions(uuid);', /COST_LOCK_PREFLIGHT: get_quote_versions\(uuid\) is missing/],
@@ -685,6 +694,23 @@ function unapply() {
   console.log('[prover] (reuse) un-applied the candidate with its ROLLBACK recipe');
 }
 
+/** After the lock: the old whole-row overload is gone and the view's computed field still answers. */
+function postableAfterLock() {
+  assert.equal(scalar("SELECT to_regprocedure('public.invoice_post_version(public.invoices)') IS NULL;"), 't', 'invoice_post_version(invoices) survived the lock');
+  const read = (uid, sql) => docker([...psqlArgs(), '-A', '-t'], {
+    input: `BEGIN;\n${claims(uid)}\nSET LOCAL ROLE authenticated;\n${sql}\nROLLBACK;`, allowFailure: true });
+  for (const uid of [U.ADMIN, U.REP]) {
+    const r = read(uid, `SELECT public.invoice_post_version(i) FROM public.invoices_postable i WHERE i.id = '${INV}';`);
+    assert.equal(r.status, 0, `the view's version failed after the lock:\n${r.stderr}`);
+    assert.match(r.stdout, /v1:[0-9a-f]{64}/, `no version from invoices_postable after the lock for ${uid}`);
+  }
+  // Why the swap was needed: a whole invoices row is now refused to the same admin.
+  const whole = read(U.ADMIN, `SELECT i FROM public.invoices i WHERE i.id = '${INV}';`);
+  assert.notEqual(whole.status, 0, 'a whole invoices row was readable after the lock');
+  assert.match(whole.stderr, /permission denied/, `wrong refusal for a whole invoices row:\n${whole.stderr}`);
+  console.log('[prover] SWAP: invoice_post_version(invoices) dropped; admin and rep still read the version from invoices_postable; a whole invoices row is refused');
+}
+
 function main() {
   const started = Date.now();
   if (!REUSE) buildContainer();
@@ -709,6 +735,7 @@ function main() {
   check('after', after, before);
   const privAfter = privileges();
   privilegeDiff(privBefore, privAfter);
+  postableAfterLock();
 
   // A second apply: the preflight still matches (no column changed), the grants are idempotent.
   const again = apply('candidate.sql');
