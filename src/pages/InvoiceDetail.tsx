@@ -323,10 +323,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const hasUnsavedChanges = !isNew && savedEditSnapshot !== null && editSnapshot !== savedEditSnapshot;
   const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
   // Leaving with unsaved edits asks first. A new invoice counts once anything was entered (a line,
-  // a customer, a PO, notes or terms); its defaults (today's date, the signed-in salesperson) do
-  // not. A navigation straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
+  // a customer, a PO, notes or terms) or a default (today's date, the signed-in salesperson) was
+  // changed. A navigation straight after a successful save sets skipUnsavedPromptRef so it is not stopped.
+  const newInvoiceDefaultsRef = useRef({ invoice_date: invoice.invoice_date, salesman_id: invoice.salesman_id });
   const newInvoiceHasInput = isNew && (
     items.length > 0
+    || invoice.invoice_date !== newInvoiceDefaultsRef.current.invoice_date
+    || (invoice.salesman_id || '') !== (newInvoiceDefaultsRef.current.salesman_id || '')
     || Boolean(invoice.customer_id)
     || Boolean(invoice.purchase_order_ref)
     || Boolean(invoice.header_notes)

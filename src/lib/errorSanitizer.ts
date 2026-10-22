@@ -240,6 +240,9 @@ export function sanitizeError(error: unknown): string {
   if (/^INVOICE_CHANGED_SINCE_LOADED$/.test(message)) {
     return 'Nothing was posted. This invoice was changed after this screen loaded it. Reload it, check it, then post again.';
   }
+  if (/^INVOICE_GROUP_BUSY(?::|$)/.test(message)) {
+    return 'This split invoice group is being posted or saved right now. Nothing was changed. Try again in a moment.';
+  }
   if (/^INVOICE_VERSION_REQUIRED(?::|$)/.test(message)) {
     return 'Nothing was posted. This screen is out of date. Reload the page, then post again.';
   }

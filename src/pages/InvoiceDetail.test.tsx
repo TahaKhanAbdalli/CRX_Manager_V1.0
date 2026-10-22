@@ -1129,6 +1129,25 @@ describe('InvoiceDetail — new-invoice date default follows the Chicago busines
     fireEvent.change(po, { target: { value: 'PO-9' } });
     expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(true);
   });
+
+  it('guards leaving a new invoice once only its date is changed from the default', async () => {
+    unsavedGuardCalls.length = 0;
+    render(
+      <MemoryRouter initialEntries={['/invoices/new']}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const dateInput = await waitFor(() => {
+      const found = document.querySelector('input[type="date"]') as HTMLInputElement | null;
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(false);
+    fireEvent.change(dateInput, { target: { value: '2026-10-01' } });
+    expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(true);
+  });
 });
 
 describe('InvoiceDetail — a product added on this screen is priced at the customer tier', () => {

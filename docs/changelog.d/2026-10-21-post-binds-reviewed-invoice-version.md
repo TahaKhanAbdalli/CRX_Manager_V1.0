@@ -20,8 +20,12 @@
 - Proof: `scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs` builds the
   production schema plus every migration in a throwaway database and shows the bug before the
   migration, then after it: a second tab and a second user saving before Post, groups, batch,
-  retries, rep scope, four two-connection races, a committed cost-only edit, and three mutations (removing the line lock, the
-  post-check or the group-write trigger reopens the gap).
+  retries, rep scope, five two-connection races, a committed cost-only edit, and four mutations
+  (removing the line lock, the post-check or the group-write trigger reopens the gap; a trigger
+  that waits instead of refusing deadlocks).
+- A direct update or delete of a split group's member or field location while that group is
+  being posted or saved is refused at once with `INVOICE_GROUP_BUSY` ("try again") instead of
+  risking a database deadlock; a batch post sent the same invoice twice is refused.
 - Codex Sol advisory plan review (Mason's request, 2026-10-21) led to: a trigger so a direct write
   adding a group member or a group-level field location waits for an in-flight group post; the
   version map normalized and checked for duplicate ids before the retry check; the rep's

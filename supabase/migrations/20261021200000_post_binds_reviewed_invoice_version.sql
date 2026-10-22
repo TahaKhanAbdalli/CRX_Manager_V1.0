@@ -221,6 +221,11 @@ DECLARE
 BEGIN
   -- Both the old and the new group are locked, always in uuid order, so two writers moving rows
   -- between the same two groups cannot deadlock on each other's group lock.
+  -- An UPDATE or DELETE already holds this row's lock when the trigger runs, and a group post
+  -- takes the group lock before it locks the rows, so waiting here could deadlock with it: those
+  -- writes refuse at once with a retryable error instead. An INSERT holds no row a post waits on,
+  -- so it waits. The posting and group save RPCs take the group lock first, so this is a re-entry
+  -- for them and never refuses.
   FOR v_group IN
     SELECT DISTINCT g FROM unnest(ARRAY[
       CASE WHEN TG_OP <> 'DELETE' THEN NEW.invoice_group_id END,
@@ -228,7 +233,12 @@ BEGIN
      WHERE g IS NOT NULL
      ORDER BY g
   LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended(v_group::text, 0));
+    IF TG_OP = 'INSERT' THEN
+      PERFORM pg_advisory_xact_lock(hashtextextended(v_group::text, 0));
+    ELSIF NOT pg_try_advisory_xact_lock(hashtextextended(v_group::text, 0)) THEN
+      RAISE EXCEPTION 'INVOICE_GROUP_BUSY: this split invoice group is being posted or saved right now; try again'
+        USING ERRCODE = '55P03';
+    END IF;
   END LOOP;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
@@ -559,6 +569,10 @@ BEGIN
         OR (e ->> 'expected_version') !~ '[^[:space:]]'
   ) THEN
     RAISE EXCEPTION 'INVOICE_VERSION_REQUIRED: batch_post_invoices takes [{invoice_id, expected_version}]'
+      USING ERRCODE = '22023';
+  END IF;
+  IF (SELECT count(DISTINCT (e ->> 'invoice_id')::uuid) <> count(*) FROM jsonb_array_elements(p_invoices) e) THEN
+    RAISE EXCEPTION 'INVOICE_VERSION_REQUIRED: batch_post_invoices was sent the same invoice twice'
       USING ERRCODE = '22023';
   END IF;
   v_request := jsonb_build_object(

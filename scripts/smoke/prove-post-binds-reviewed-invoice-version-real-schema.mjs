@@ -462,6 +462,9 @@ function runAfter() {
         jsonb_build_object('invoice_id', current_setting('prover.y'), 'expected_version', current_setting('prover.vy'))), 'b1')` },
     { key: 'B1 states', as: 'owner', call: `${STATE("current_setting('prover.x')::uuid")} || ',' || ${STATE("current_setting('prover.y')::uuid")}` },
     { key: 'B1 batch without versions', as: U.ADMIN, call: `public.batch_post_invoices(jsonb_build_array(jsonb_build_object('expected_version', 'v1:x')), 'b1b')` },
+    { key: 'B1 batch same invoice twice', as: U.ADMIN, call: `public.batch_post_invoices(jsonb_build_array(
+        jsonb_build_object('invoice_id', current_setting('prover.y'), 'expected_version', 'v1:x'),
+        jsonb_build_object('invoice_id', upper(current_setting('prover.y')), 'expected_version', 'v1:x')), 'b1c')` },
   ]));
 
   // C1: a line write that happens while posting (a trigger stands in for a racing writer).
@@ -551,6 +554,7 @@ const AFTER = [
   ['B1 batch', /^ok\|\{.*"count": 1.*"failed": \[\{.*INVOICE_CHANGED_SINCE_LOADED/],
   ['B1 states', /^ok\|posted:1100,draft:2300$/],
   ['B1 batch without versions', /^22023\|INVOICE_VERSION_REQUIRED: /],
+  ['B1 batch same invoice twice', /^22023\|INVOICE_VERSION_REQUIRED: batch_post_invoices was sent the same invoice twice/],
   ['C1 admin posts while a line changes', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice .* was changed while it was being posted/],
   ['C1 state', /^ok\|draft:2500$/],
   ['C1g admin posts while a line changes', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice PROVER-G-. in this split group was changed while it was being posted/],
@@ -692,6 +696,54 @@ async function races() {
   } finally {
     psql(`CREATE TRIGGER trg_serialize_invoice_group_writes BEFORE INSERT OR UPDATE OR DELETE ON public.field_app_locations
       FOR EACH ROW EXECUTE FUNCTION public._serialize_invoice_group_writes();`);
+  }
+
+  // R5: an UPDATE of a group member or a DELETE of a group location already holds that row's lock
+  // when the trigger runs, while a group post holds the group lock and waits for the row. The
+  // trigger refuses such a write at once (INVOICE_GROUP_BUSY), so the post goes ahead instead of
+  // the two deadlocking. MUTATION 4: a trigger that waits instead deadlocks.
+  const posted = (g) => scalar(`SELECT string_agg(status, ',' ORDER BY id) FROM public.invoices WHERE invoice_group_id = '${gid(g)}';`);
+  const heldWriteRace = async (g, lockSql, writeSql) => {
+    const map = scalar(`SELECT jsonb_object_agg(id, public._invoice_post_version(id)) FROM public.invoices WHERE invoice_group_id = '${gid(g)}';`);
+    const write = psqlAsync(`BEGIN; ${lockSql} SELECT pg_sleep(4); ${writeSql} COMMIT;`);
+    await holdingSleep();
+    const post = await psqlAsync(`${as(U.ADMIN)} SELECT public.post_invoice_group('${gid(g)}', '${U.ADMIN}', '${map}'::jsonb, 'r5-${sfx}-${g}');`);
+    return { write: await write, post };
+  };
+  const memberUpdate = (g) => [
+    `SELECT 1 FROM public.invoices WHERE id = '${gid(g + '1')}' FOR UPDATE;`,
+    `UPDATE public.invoices SET deleted_at = NULL WHERE id = '${gid(g + '1')}';`];
+  seedGroup('c');
+  let r5 = await heldWriteRace('c', ...memberUpdate('c'));
+  assert.match(r5.write.out, /INVOICE_GROUP_BUSY/, `race 5 member update was not refused:\n${r5.write.out}`);
+  assert.doesNotMatch(r5.post.out, /ERROR/, `race 5 group post failed:\n${r5.post.out}`);
+  assert.equal(posted('c'), 'posted,posted');
+  seedGroup('d');
+  const loc = scalar(`INSERT INTO public.field_app_locations (invoice_id, invoice_group_id, field_id, applied_acres, sort_order) VALUES (NULL, '${gid('d')}', '${gid('f')}', 40, 0) RETURNING id;`);
+  r5 = await heldWriteRace('d', `SELECT 1 FROM public.field_app_locations WHERE id = '${loc}' FOR UPDATE;`,
+    `DELETE FROM public.field_app_locations WHERE id = '${loc}';`);
+  assert.match(r5.write.out, /INVOICE_GROUP_BUSY/, `race 5 location delete was not refused:\n${r5.write.out}`);
+  assert.doesNotMatch(r5.post.out, /ERROR/, `race 5 group post (location) failed:\n${r5.post.out}`);
+  assert.equal(posted('d'), 'posted,posted');
+  assert.equal(scalar(`SELECT count(*) FROM public.field_app_locations WHERE id = '${loc}';`), '1');
+  console.log('[prover] RACE 5: a member update or a group-location delete that already holds its row when a group post starts is refused at once (INVOICE_GROUP_BUSY); the post goes ahead, no deadlock');
+  const SERIALIZE_SQL = (() => {
+    const text = lf(CANDIDATE);
+    const start = text.indexOf('CREATE FUNCTION public._serialize_invoice_group_writes()');
+    const end = text.indexOf('$fn$;', start) + '$fn$;'.length;
+    assert.ok(start > 0 && end > start, 'could not find _serialize_invoice_group_writes in the candidate');
+    return text.slice(start, end).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION');
+  })();
+  try {
+    const waiting = SERIALIZE_SQL.replace(/IF TG_OP = 'INSERT' THEN[\s\S]*?END IF;/, 'PERFORM pg_advisory_xact_lock(hashtextextended(v_group::text, 0));');
+    assert.notEqual(waiting, SERIALIZE_SQL, 'MUTATION 4 did not change the trigger');
+    psql(waiting);
+    seedGroup('e');
+    r5 = await heldWriteRace('e', ...memberUpdate('e'));
+    assert.match(r5.write.out + r5.post.out, /deadlock detected/, `MUTATION 4: a waiting trigger should deadlock:\n${r5.write.out}\n${r5.post.out}`);
+    console.log('[prover] MUTATION 4: with a trigger that waits instead, the same race deadlocks, so the fail-fast refusal is what prevents it');
+  } finally {
+    psql(SERIALIZE_SQL);
   }
 
   // MUTATION 1: without the line lock, race 2 posts and the line changes under a posted invoice.
