@@ -520,8 +520,9 @@ PR #875) and was verified on the live site 2026-10-04.
   automatically — there is no separate deploy step. Since the `protect-main`
   ruleset landed (2026-07-14) nobody can push to `main` directly. Landing
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
-  branch, PR (opened as a draft, marked ready once frozen so CodeRabbit gives
-  its one advisory review), Luna review rounds, required checks (CodeRabbit
+  branch, PR (opened as a draft, marked ready once frozen; since 2026-10-21
+  CodeRabbit reviews only when an agent requests it, on money or Mason-named
+  PRs), Luna review rounds, required checks (CodeRabbit
   approval no longer required since 2026-10-19), a fresh exact-SHA Sol review run last (every merge, since
   2026-09-26, except a documentation-only change as defined in
   `docs/reference/sol-exempt-paths.md`, since 2026-10-07), then an exact-head merge. The merge is the deploy; a

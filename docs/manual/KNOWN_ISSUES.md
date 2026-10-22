@@ -2548,9 +2548,12 @@ three careful passes.
 
 - **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
   above): the exact-SHA `gpt-6-sol` proof on migration diffs is the control that always applies.
-  (**Since 2026-10-19 the CodeRabbit review is advisory and not guaranteed:** it reviews a PR once when
-  marked ready, skips `docs(` titles, and the merge does not wait for it, so "the CodeRabbit review" in
-  the rows below is a best-effort extra layer, not a guaranteed one.) The post-apply sweep predicates are a **partial, conditional** control here,
+  (**Since 2026-10-21 CodeRabbit makes no automatic reviews:** marking a PR ready no longer starts one.
+  Every `supabase/migrations/` change counts as a money PR for the merge gates, so the agent posts
+  `@coderabbitai full review` once on its frozen, green head, and the merge and migration landing gates
+  refuse it until CodeRabbit's "Review completed" status is on that head (rules:
+  `docs/reference/coderabbit-native-review.md`). CodeRabbit is still advisory, so "the CodeRabbit review"
+  in the rows below is a required extra layer, not a security control.) The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
   routine at all only because it carries no `ACTOR_MISMATCH` token — but they then fire only on their own
   sinks: the actor parameter near COALESCE/`auth.uid()`/role text, or a `financial_audit_log` write in the

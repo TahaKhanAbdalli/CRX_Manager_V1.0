@@ -2,15 +2,21 @@
 
 > **Current rule: CodeRabbit is advisory (Mason, 2026-10-19, "cut coderabbit volume").**
 > `.coderabbit.yaml` sets `request_changes_workflow: false` (CodeRabbit never submits `APPROVED`
-> or `CHANGES_REQUESTED`; it only comments), `auto_incremental_review: false` (it reviews a PR
-> ONCE, when the PR is opened non-draft or marked ready, not on later pushes) and
-> `ignore_title_keywords: ["docs("]` (a PR whose title contains `docs(` is not reviewed at all).
+> or `CHANGES_REQUESTED`; it only comments) and, **since 2026-10-21, `auto_review.enabled: false`**
+> (Mason: "Yes turn off auto review"): CodeRabbit reviews a PR only when an agent posts
+> `@coderabbitai full review`, which happens only on the money and Mason-named PRs below. We get
+> about one review an hour, and the automatic review on every PR marked ready spent those slots on
+> documentation and tooling PRs. CodeRabbit's documentation confirms the manual request still works:
+> "Regardless of any auto-review configuration, you can always trigger a review manually"
+> ([automatic review controls](https://docs.coderabbit.ai/configuration/auto-review), checked
+> 2026-10-21). (From 2026-10-19 to 2026-10-21 it reviewed a PR once, when it was opened non-draft
+> or marked ready, skipping titles containing `docs(`.)
 > GitHub's `protect-main` ruleset no longer requires an approving review (required status checks
 > stay), and the merge and migration-landing gates no longer require CodeRabbit `APPROVED`.
-> Agents open PRs as drafts and mark them ready once the head is frozen, which triggers the single
-> review. If that review arrives before the merge, fix or refute with evidence every comment, in
-> one push. Do not wait for CodeRabbit if it has not reviewed by the time checks are green and Sol
-> is clean, and never post `@coderabbitai review` to buy a re-review. A failed CodeRabbit
+> Agents still open PRs as drafts and mark them ready once the head is frozen (the Codex GitHub
+> App reviews on that switch). If a CodeRabbit review arrives before the merge, fix or refute with
+> evidence every comment, in one push. Do not wait for CodeRabbit on any other PR, and never post
+> `@coderabbitai review` to buy a re-review. A failed CodeRabbit
 > pre-merge check is a finding to fix or refute, not a blocker (all five custom checks are `warning` mode since 2026-10-19). Accepted loss: its
 > "edit to an already-applied migration" error check no longer blocks; the mandatory exact-SHA Sol
 > review of any migration change and the CI migration check remain.
@@ -26,7 +32,8 @@
 > "proceed without it" and "later commits are not reviewed" rules elsewhere.
 >
 > 1. **When:** after the head is frozen and every required check is green, and only if CodeRabbit
->    has not already reviewed that exact head (the automatic review on the ready switch counts).
+>    has not already reviewed that exact head. (No automatic review runs since 2026-10-21, but a
+>    review the old configuration started on an earlier ready switch still counts.)
 >    If its status comment shows a review still in progress, wait up to 15 minutes for it before
 >    requesting anything.
 > 2. **Title:** CodeRabbit skips titles containing `docs(`, so remove that from a qualifying PR's
@@ -86,8 +93,9 @@
 > **Limits, on purpose.** The file test is a word list, so money code in a generically named file
 > (`src/lib/math.ts`) is not caught by the gate. Mason accepted this gap on 2026-10-21 ("money
 > only, accept the gap"), choosing it over gating every `src/` change after the final Sol review
-> raised it; the agent's duty to add the label covers such a file, and
-> the gate cannot know what Mason said in chat or stop a label being removed. Those stay written
+> raised it; the agent's duty to add the label covers such a file. Since automatic reviews went off,
+> nothing else gives such a file a CodeRabbit review, and Mason accepted that too ("Accept the gap",
+> 2026-10-21, after the final Sol review of #1022 rated it high). The gate cannot know what Mason said in chat or stop a label being removed. Those stay written
 > rules. The one-retry cap is a written rule too: the gate's refusal repeats the cap, but it does
 > not count comments. The commit read covers the PR's last 100 commits; an older review than that
 > reads as missing (a false refusal, never a false pass). Two more limits Mason accepted on
@@ -263,7 +271,7 @@ only its unit shrank from "the PR" to "the candidate epoch".
 The legacy loop for a fix was therefore: fix, push to the same PR, wait for checks, run
 the exact-SHA Sol proof (not needed for a documentation-only change), apply
 `ready-for-coderabbit`, and merge once CodeRabbit
-approved the new head. Today CodeRabbit reviews each PR once, as advice only (see the banner
+approved the new head. Today CodeRabbit reviews only on request, as advice only (see the banner
 above). Never post `@coderabbitai` commands by hand — including `@coderabbitai review` to buy a
 re-review (the 2026-09-27 single-retrigger exception ended 2026-10-19) — and never use
 `@coderabbitai resume`. The one exception is the single `@coderabbitai full review` request on a

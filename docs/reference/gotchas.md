@@ -293,8 +293,8 @@ Two more consequences worth knowing before you carve a column out:
 
 ## A green CodeRabbit check does not mean a review happened (2026-08-17)
 
-Since 2026-10-19 CodeRabbit is advisory (one review per PR, comments only, no approval required to
-merge), but a CodeRabbit review that arrives before the merge must still be read and every comment
+Since 2026-10-19 CodeRabbit is advisory (comments only, no approval required to merge; since
+2026-10-21 no automatic reviews, only requested ones), but a CodeRabbit review that arrives before the merge must still be read and every comment
 fixed or refuted. The check row is **not** evidence that a review happened. On PR #411, `gh pr checks` reported:
 
 ```text
@@ -317,8 +317,8 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
 CodeRabbit review was submitted. Say so rather than treating green as clean. Current rule (Mason,
-2026-10-19): CodeRabbit reviews each PR once, when marked ready or opened non-draft, and only
-comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
+2026-10-19, narrowed 2026-10-21): CodeRabbit makes no automatic reviews, reviews only when an
+agent requests one, and only comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
 review has arrived by the time checks are green and Sol is clean, merge without it — never post
 `@coderabbitai review` to buy one. Exception (Mason, 2026-10-21): a money or Mason-named PR needs a
 clean CodeRabbit review of its current head, and the agent posts `@coderabbitai full review` once

@@ -34,9 +34,10 @@ The step-by-step procedures live in `DEPLOYMENT.md` and `.claude/commands/ship.m
 Vercel builds a preview for every PR and deploys production when a PR merges into `main`.
 Nobody pushes to `main` directly — the `protect-main` ruleset rejects it.
 
-1. Open a PR as a draft; CI runs the required checks. Mark it ready once the head is frozen:
-   CodeRabbit then reviews it once, as advice only (since 2026-10-19 it never approves or blocks,
-   and it skips PRs whose title contains `docs(`). Fix or answer its comments if they arrive before the merge.
+1. Open a PR as a draft; CI runs the required checks. Mark it ready once the head is frozen
+   (the Codex GitHub App reviews it then). CodeRabbit is advice only (since 2026-10-19 it never
+   approves or blocks) and makes no automatic reviews since 2026-10-21: it reviews a money or
+   Mason-named PR when the agent requests it. Fix or answer any comments that arrive before the merge.
 2. The PR merges only through the protected path in `.claude/commands/ship.md` Step 8:
    every check green, no `CHANGES_REQUESTED`, a fresh exact-SHA Sol review
    (except a documentation-only change, `docs/reference/sol-exempt-paths.md`), then

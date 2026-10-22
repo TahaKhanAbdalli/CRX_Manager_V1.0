@@ -530,7 +530,8 @@ function gateRequest(request) {
   // Anything short of it is denied here and stays with Mason.
   //
   // CodeRabbit's approval is NOT required (Mason, 2026-10-19: "not force to have
-  // a review"). It is advisory now — one review per PR, no verdicts — and the
+  // a review"). It is advisory now — no automatic reviews since 2026-10-21, no
+  // verdicts — and the
   // agent fixes or answers its comments before merging (ship.md Step 8).
   // A CHANGES_REQUESTED review from anyone still denies above.
 

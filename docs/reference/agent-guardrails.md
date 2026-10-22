@@ -35,8 +35,9 @@
 > pre-2026-10-19 CodeRabbit change request is dismissed by a Claude session (ship.md Step 8) (#973, because CodeRabbit never
 > re-reviews the fix. Mason sets the `protect-main` ruleset's required approving reviews to 0 himself (required status
 > checks stay). `.coderabbit.yaml`: `request_changes_workflow: false`
-> (CodeRabbit only comments), `auto_incremental_review: false` (one review per PR, when opened non-draft or marked
-> ready), `ignore_title_keywords: ["docs("]`. Agents open PRs as drafts, mark them ready once the head is frozen, fix or
+> (CodeRabbit only comments) and, since 2026-10-21, `auto_review.enabled: false` (Mason: "Yes turn off auto review"):
+> CodeRabbit reviews only when an agent requests it (before that, one review per PR, when opened non-draft or marked
+> ready, skipping `docs(` titles). Agents open PRs as drafts, mark them ready once the head is frozen, fix or
 > refute every CodeRabbit comment that arrives before the merge in one push, do not wait for a review that has not
 > arrived, and never post `@coderabbitai review`. Exception (Mason, 2026-10-21): a PR that touches money, invoices,
 > payments, inventory, or costs in any way, or one Mason asks to have reviewed, needs a clean CodeRabbit review of its
@@ -465,7 +466,7 @@ Detail behind the `docs/manual/DECISION_LOG.md` entry of 2026-09-26 ("Fewer perm
 reviews every PR automatically; GitHub requires its approval again"), moved here so that entry stays short.
 
 > **Superseded in part 2026-10-19 (Mason, "cut coderabbit volume").** Points 2 and 3 below are history: CodeRabbit
-> now reviews each PR once and only comments, agents no longer post `@coderabbitai review`, the ruleset no longer
+> only comments (and since 2026-10-21 makes no automatic reviews), agents no longer post `@coderabbitai review`, the ruleset no longer
 > requires an approving review, and the merge gates no longer require CodeRabbit APPROVED. See the "CodeRabbit is
 > advisory" block at the top of this page. The other points stand.
 
@@ -498,7 +499,11 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    moves to `allow`; the merge gates are its hard stop, and item 7 keeps them closed when the local guard breaks.
    `scripts/agent-manifest-parity.mjs` reads only each manifest's `hooks` block, so these `ask` rules are not mistaken
    for hook wiring.
-2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push, never pausing
+2. **SUPERSEDED — history only, do not follow.** Today (since 2026-10-21) `auto_review.enabled: false`: CodeRabbit
+   makes **no** automatic reviews, so marking a PR ready starts none, and a money or Mason-named PR gets its review
+   only when the agent posts `@coderabbitai full review` (rules: `docs/reference/coderabbit-native-review.md`). The
+   rest of this item records what applied from 2026-09-26 to 2026-10-19 (cut to one review per PR on 2026-10-19):
+   CodeRabbit then reviewed every non-draft PR automatically, on open and on every push, never pausing
    (`auto_review.enabled: true`, no label restriction, `auto_pause_after_reviewed_commits: 0`). Proven on PR #822:
    CodeRabbit reviewed it with no label or command. With no label filter the `ready-for-coderabbit` provider label no
    longer triggers a review (the workflow stays installed), so **for a head CodeRabbit skipped or was rate limited on,
@@ -529,7 +534,8 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    steps as a written bypass path, 2026-09-27).
 4. **Adversarial review:** unchanged from the autonomous-landing entry — Luna rounds and an exact-SHA Sol proof on
    every change (since 2026-10-07, except a documentation-only change; see the block at the top) — plus CodeRabbit
-   (since 2026-10-19 one advisory review per PR, skipping `docs(` titles) and the Codex GitHub App automatically.
+   (advisory since 2026-10-19; since 2026-10-21 no automatic reviews, only the requested full review on a money or
+   Mason-named PR) and the Codex GitHub App automatically.
 5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose definition changed since
    it was trusted; on 2026-09-26, 17 of 24 CRX Codex hooks were skipped — every Write/Edit content guard, the three MCP
    guards, `production-action-guard`, `review-proof-guard`, `hold-latch-guard` and both routers — while Codex ran with

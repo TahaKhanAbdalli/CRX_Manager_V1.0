@@ -79,22 +79,24 @@ reviews:
   # reviewed today. The exclusion work, and the repository-walking test that
   # enforces this rule, are parked in PR #441.
 
-  # ONE automatic review per PR (Mason, 2026-10-19, "cut CodeRabbit volume").
-  # CodeRabbit reviews a non-draft PR when it opens or is marked ready, and NOT
-  # again on later pushes: every push used to buy a fresh paid review, which made
-  # CodeRabbit the bottleneck and the largest review bill. PRs are opened as
-  # drafts (unreviewed) and marked ready once the head is frozen, so that single
-  # review lands on the finished change. Titles containing "docs(" are skipped
-  # entirely: documentation records need no outside review. Agents never post
-  # `@coderabbitai review` to buy a re-review (.claude/commands/ship.md); the one
-  # exception is a single `@coderabbitai full review` on a money or Mason-named PR
-  # (Mason, 2026-10-21; docs/reference/coderabbit-native-review.md).
+  # NO automatic reviews (Mason, 2026-10-21, "Yes turn off auto review").
+  # CodeRabbit reviews a PR only when an agent posts `@coderabbitai full review`,
+  # which it does once per head on a money or Mason-named PR
+  # (docs/reference/coderabbit-native-review.md). We get about one review an
+  # hour, and the automatic review on every PR marked ready spent those slots on
+  # documentation and tooling PRs that the money PRs needed. CodeRabbit's docs:
+  # "Regardless of any auto-review configuration, you can always trigger a
+  # review manually" (docs.coderabbit.ai/configuration/auto-review, checked
+  # 2026-10-21). The keys below `enabled` only matter if automatic reviews are
+  # turned back on; they keep the 2026-10-19 one-review-per-PR shape.
   #
-  # History: 2026-09-26 turned on a review of every push because the merge gates
+  # History: 2026-10-19 to 2026-10-21 CodeRabbit reviewed a non-draft PR once,
+  # when it opened or was marked ready (titles containing "docs(" skipped).
+  # 2026-09-26 to 2026-10-19 it reviewed every push, because the merge gates
   # then required CodeRabbit's APPROVED verdict on the exact head. That
   # requirement is gone (see request_changes_workflow above).
   auto_review:
-    enabled: true
+    enabled: false
     auto_incremental_review: false
     # 0 = never pause. The default (5) silently stops reviewing a PR after five
     # reviewed pushes, which is exactly when a long fix loop most needs one.
@@ -207,7 +209,7 @@ reviews:
       mode: warning
 
     # ---- WARNING mode since 2026-10-19 (were `error`) ----------------------
-    # CodeRabbit is advisory and reviews each PR once, so a failed check could
+    # CodeRabbit is advisory and never re-reviews by itself, so a failed check could
     # never be cleared by a re-review, and a red CodeRabbit status would hold the
     # merge gates (they refuse any red check) on a finding the agent already
     # fixed (Luna round 2). As warnings they stay findings the agent must fix or
