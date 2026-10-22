@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261022002748",
+    "migrations_high_water": "20261022163441",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -426,6 +426,10 @@
       "20261021070000_blend_invoice_approval_binding",
       "20261021140000_po_cost_admin_only_and_corrections",
       "20261021141000_po_cost_columns_admin_only",
+      "20261021150000_split_invoice_cross_customer_lineage",
+      "20261021155000_split_payer_return_credit",
+      "20261022020000_blend_invoice_binding_lows",
+      "20261022021000_order_invoice_refuses_field_split",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1417,6 +1421,7 @@
     "rebate_claim_counters",
     "receiving_photos",
     "receiving_records",
+    "return_credit_customer_claims",
     "return_items",
     "rup_sales_records",
     "split_invoice_creation_claims",
@@ -6038,6 +6043,17 @@
         "is_non_returnable"
       ]
     },
+    "return_credit_customer_claims": {
+      "no_default": [
+        "return_id",
+        "order_id",
+        "customer_id"
+      ],
+      "with_default": [
+        "transaction_id",
+        "created_at"
+      ]
+    },
     "return_items": {
       "no_default": [
         "return_id",
@@ -8430,6 +8446,13 @@
       "unit_size",
       "created_at",
       "is_non_returnable"
+    ],
+    "return_credit_customer_claims": [
+      "return_id",
+      "order_id",
+      "customer_id",
+      "transaction_id",
+      "created_at"
     ],
     "return_items": [
       "id",
