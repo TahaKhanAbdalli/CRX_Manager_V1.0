@@ -550,6 +550,16 @@ export default function QuoteBuilder() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
   const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
+  // Saved quote_items id (and the product it was saved with) per on-screen line,
+  // keyed by `_key`. save_quote keeps a line's quote-time cost only when the save
+  // names which saved line each row is; without ids, two lines of one product are
+  // refused as QUOTE_ITEM_AMBIGUOUS_COST. A ref, not section state: installing the
+  // ids a save returns must not mark the just-saved quote dirty.
+  const savedLineIdsRef = useRef(new Map<string, { id: string; productId: string }>());
+  // Lines switched to another product since the last save was sent. A switched
+  // line stops being its saved line, even if it is later switched back, so the
+  // reply of a save that was in flight must not hand it an id again.
+  const switchedLineKeysRef = useRef(new Set<string>());
   // Serial number for quote loads. App.tsx routes every /quotes/:id to this one
   // element with no `key`, so navigating between two saved quotes re-runs the id
   // effect WITHOUT remounting. A load whose serial is no longer current has been
@@ -1150,6 +1160,11 @@ export default function QuoteBuilder() {
     loadedCommissionSplitRef.current = q.commission_split ?? null;
     commissionSplitTouchedRef.current = false;
     setQuoteCreatedAt(q.created_at || null);
+    savedLineIdsRef.current = new Map(
+      localSections.flatMap((s) => s.items)
+        .filter((item) => item.id)
+        .map((item) => [item._key, { id: item.id as string, productId: item.product_id }]),
+    );
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
 
     // U13 (#111): which sections already have a job scheduled from them, so the
@@ -1766,6 +1781,16 @@ export default function QuoteBuilder() {
       ...(newStatus === 'sent' ? { sent_at: new Date(saveAttemptAtMs).toISOString() } : {}),
     };
 
+    // A saved id is sent only while the line still holds the product it was saved
+    // with. A line switched to another product is no longer named as its old line;
+    // the server prices it like any unnamed line.
+    const savedLineIdFor = (item: LocalItem): string | null => {
+      const saved = savedLineIdsRef.current.get(item._key);
+      return saved && saved.productId === item.product_id ? saved.id : null;
+    };
+    const sentLineProducts = new Map<string, string>();
+    switchedLineKeysRef.current.clear();
+
     // Build sections JSON for the atomic RPC
     const sectionsPayload = sections.map((sec) => ({
       section_name: sec.section_name,
@@ -1776,27 +1801,32 @@ export default function QuoteBuilder() {
       field_id: sec.field_id || null,
       items: sec.items
         .filter((item) => item.product_id)
-        .map((item) => ({
-          product_id: item.product_id,
-          sort_order: item.sort_order,
-          notes: item.notes || null,
-          price_per_unit: item.price_per_unit,
-          price_override: item.price_override ?? null,
-          current_cost: item.current_cost,
-          suggested_rate: item.suggested_rate,
-          actual_rate: item.actual_rate,
-          rate_unit: item.rate_unit,
-          oz_per_acre: item.oz_per_acre,
-          price_per_acre: item.price_per_acre,
-          acres: item.acres,
-          total_units_needed: item.total_units_needed,
-          unit_size: item.unit_size,
-          profit: item.profit,
-          total_price: item.total_price,
-          net_margin: item.net_margin,
-          calc_mode: item.calc_mode || 'rate_acres',
-          price_unit: item.price_unit || null,
-        })),
+        .map((item) => {
+          sentLineProducts.set(item._key, item.product_id);
+          return {
+            id: savedLineIdFor(item),
+            client_key: item._key,
+            product_id: item.product_id,
+            sort_order: item.sort_order,
+            notes: item.notes || null,
+            price_per_unit: item.price_per_unit,
+            price_override: item.price_override ?? null,
+            current_cost: item.current_cost,
+            suggested_rate: item.suggested_rate,
+            actual_rate: item.actual_rate,
+            rate_unit: item.rate_unit,
+            oz_per_acre: item.oz_per_acre,
+            price_per_acre: item.price_per_acre,
+            acres: item.acres,
+            total_units_needed: item.total_units_needed,
+            unit_size: item.unit_size,
+            profit: item.profit,
+            total_price: item.total_price,
+            net_margin: item.net_margin,
+            calc_mode: item.calc_mode || 'rate_acres',
+            price_unit: item.price_unit || null,
+          };
+        }),
     }));
 
     try {
@@ -1911,7 +1941,7 @@ export default function QuoteBuilder() {
         return null;
       }
 
-      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
+      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown; item_ids?: Record<string, unknown> | null }>(data, 'save_quote');
       // A save_quote that answers with an EMPTY payload and no error is ambiguous —
       // the row may already be committed — so retiring the key first would send the
       // user's retry under a fresh key the server cannot replay, writing the quote
@@ -1964,6 +1994,20 @@ export default function QuoteBuilder() {
       // the sentence true, and it is why the reset now sits below it rather than
       // above the assert as it did on main.
       if (editingSessionChanged()) return null;
+      // save_quote rewrites every line; install the id each one now has so the
+      // next save can name it. A line switched to another product while this save
+      // was in flight gets none, so it is still sent unnamed. A reply without the
+      // map (a receipt cached before it existed) keeps the ids already held, which
+      // still name this quote's lines.
+      if (result.item_ids && typeof result.item_ids === 'object' && !Array.isArray(result.item_ids)) {
+        const savedLineIds = new Map<string, { id: string; productId: string }>();
+        for (const [clientKey, itemId] of Object.entries(result.item_ids)) {
+          const productId = sentLineProducts.get(clientKey);
+          if (!productId || typeof itemId !== 'string' || switchedLineKeysRef.current.has(clientKey)) continue;
+          savedLineIds.set(clientKey, { id: itemId, productId });
+        }
+        savedLineIdsRef.current = savedLineIds;
+      }
       // The save committed, but conversion and other chained actions must not
       // continue unless this tab can install the exact authoritative token.
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
@@ -2766,6 +2810,10 @@ export default function QuoteBuilder() {
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
     setConfirmRestore(null);
     setSelectedVersion(null);
+    // The restore rewrote every line, so the held line ids no longer name them.
+    // The reload re-seeds them from the database; forgetting them first means a
+    // save that somehow ran before it could only be refused, never mismatch costs.
+    savedLineIdsRef.current = new Map();
     // Reload quote data
     window.location.reload();
   };
@@ -4702,7 +4750,16 @@ export default function QuoteBuilder() {
                   key={p.id}
                   product={p}
                   onClick={() => {
-                    if (productSearchOpen) assignProduct(productSearchOpen.sectionKey, productSearchOpen.itemKey, p);
+                    if (!productSearchOpen) return;
+                    const { sectionKey, itemKey } = productSearchOpen;
+                    const currentProductId = sections
+                      .find((sec) => sec._key === sectionKey)?.items
+                      .find((item) => item._key === itemKey)?.product_id;
+                    if (currentProductId && currentProductId !== p.id) {
+                      savedLineIdsRef.current.delete(itemKey);
+                      switchedLineKeysRef.current.add(itemKey);
+                    }
+                    assignProduct(sectionKey, itemKey, p);
                   }}
                   trailing={<><p className="font-mono text-sm text-nav-dark">{fmt(getTierPrice(p, tier))}</p><p className="text-xs text-gray-400">T{tier} price</p>{perAcre != null && <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>{fmt(perAcre)}/ac</p>}</>}
                 />

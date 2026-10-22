@@ -753,6 +753,18 @@
         "lifecycle"
       ]
     },
+    "save_quote_repeated_product_line_ids": {
+      "chain": "smoke-save-quote-repeated-product-line-ids.sql",
+      "description": "QUOTE_ITEM_AMBIGUOUS_COST fix (QuoteBuilder sends each saved line's id and a client_key, and installs the returned item_ids). A quote with one product on two field sections: an id-less re-save is refused QUOTE_ITEM_AMBIGUOUS_COST; re-saves that name every line succeed after a reprice, keep each saved line's quote-time cost, give a new line today's cost and keep ids stable; Mark Presented and Convert succeed and each order line carries its own quote line's cost; a quote without a repeated product re-saves with or without ids as before. Terminal rollback.",
+      "covers": [
+        "save_quote",
+        "create_quote_version",
+        "convert_quote_to_order"
+      ],
+      "area": [
+        "lifecycle"
+      ]
+    },
     "quote_commission_split_validation": {
       "chain": "smoke-quote-commission-split-validation.sql",
       "description": "Quote commission money-routing guard: blank or duplicate recipients and missing/JSON-null percentages fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
