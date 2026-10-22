@@ -89,16 +89,19 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## FIXED 2026-10-22 (Goal 1 part 3 complete: step 1 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 = migration `20261022030000_cost_columns_admin_only`, applied live before its PR merged; two residuals below stay for Mason) — product cost and margin were readable by sales reps, drivers and applicators through table columns
+## OPEN 2026-10-18 (HIGH; Goal 1 part 3, step 1 LIVE 2026-10-19; step 2 LIVE 2026-10-20 as `20261019230000`; step 3 written as migration `20261022030000_cost_columns_admin_only`, NOT YET APPLIED; this entry becomes FIXED only after its post-apply live read; two residuals below stay for Mason) — product cost and margin are still readable by sales reps, drivers and applicators through table columns
 
-**Step 3 (2026-10-22, `20261022030000`).** The column lock now covers the remaining cost tables: `products`,
+**Step 3 (written 2026-10-22, `20261022030000`, not yet applied).** Once applied, the column lock covers the remaining cost tables: `products`,
 `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`, `order_items`, `invoices`, `invoice_items`,
-`jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`. No API role (admins included) can read a cost,
+`jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`. No API role (admins included) will be able to read a cost,
 profit or margin column through the Data API; admins read them through `get_admin_cost_fields` and quote history
 through `get_quote_versions`. Where `authenticated` held direct `INSERT`/`UPDATE` (`quotes`, `orders`, `jobs`,
-`job_chemicals`, `blend_ticket_products`, `commissions`), the cost columns are now unwritable too. A read-only
+`job_chemicals`, `blend_ticket_products`, `commissions`), the cost columns become unwritable too. A read-only
 inventory before the change found no screen, Edge Function, function or trigger that would break (details in the
-PR and `docs/reference/migration-history.md` row 969). **Correction to the text below:** reps could NOT write
+PR and `docs/reference/migration-history.md` row 969). **Apply order:** PR #1018's `invoice_post_version` computed
+field reads a whole `invoices` row, which needs `SELECT` on every column, so this lock must ship together with an
+id-keyed replacement for it and may not be applied before that swap (the migration's preflight refuses while any
+whole-row function is executable by an API role). **Correction to the text below:** reps could NOT write
 `invoice_items` rows directly (`authenticated` held no table `INSERT`/`UPDATE` on it, live read 2026-10-22); the
 tables with direct writes were the six named above. The original entry follows.
 

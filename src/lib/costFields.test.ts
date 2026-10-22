@@ -187,6 +187,59 @@ describe('column lists match the schema registry', () => {
   }
 });
 
+// Since 20261022030000 the API roles hold per-column grants on these tables, so a column added later
+// is invisible to every screen (and the SAFE_COLUMNS list that must include it then fails for admins
+// too) until a migration grants it. Every ADD COLUMN after the lock must grant SELECT on the new
+// column to authenticated in the same file, unless it is another cost field.
+const COLUMN_CARVED = [...COST_TABLES, 'quote_versions'];
+const LOCK_STAMP = '20261022030000';
+
+function ungrantedNewColumns(sql: string): string[] {
+  const text = sql.replace(/--[^\n]*/g, '');
+  const missing: string[] = [];
+  const tables = COLUMN_CARVED.join('|');
+  const alter = new RegExp(`ALTER\\s+TABLE\\s+(?:ONLY\\s+)?(?:IF\\s+EXISTS\\s+)?(?:public\\.)?"?(${tables})"?\\b([^;]*);`, 'gi');
+  for (const m of text.matchAll(alter)) {
+    const table = m[1].toLowerCase();
+    for (const add of m[2].matchAll(/ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?/gi)) {
+      const column = add[1].toLowerCase();
+      if (['constraint', 'primary', 'unique', 'foreign', 'check', 'exclude'].includes(column)) continue;
+      if ((COST_COLUMNS[table as CostTable] as readonly string[] | undefined)?.includes(column)) continue;
+      const grant = new RegExp(`GRANT\\s+SELECT\\s*\\(([^)]*)\\)\\s*ON\\s+(?:TABLE\\s+)?(?:public\\.)?"?${table}"?\\s+TO\\s+[^;]*\\bauthenticated\\b`, 'gi');
+      const granted = [...text.matchAll(grant)].some((g) => g[1].split(',').map((c) => c.trim().replace(/"/g, '').toLowerCase()).includes(column));
+      if (!granted) missing.push(`${table}.${column}`);
+    }
+  }
+  return missing;
+}
+
+describe('new columns on the column-carved cost tables ship with their grants', () => {
+  const MIGRATIONS = join(HERE, '..', '..', 'supabase', 'migrations');
+
+  it(`every ADD COLUMN after ${LOCK_STAMP} grants SELECT on it to authenticated`, () => {
+    const problems: string[] = [];
+    for (const name of readdirSync(MIGRATIONS).filter((n) => n.endsWith('.sql') && n.slice(0, 14) > LOCK_STAMP)) {
+      for (const col of ungrantedNewColumns(readFileSync(join(MIGRATIONS, name), 'utf8'))) problems.push(`${name}: ${col}`);
+    }
+    expect(problems, 'add the column to the SELECT (and REFERENCES / INSERT / UPDATE where the table has them) grants in the same migration').toEqual([]);
+  });
+
+  it('the scanner catches each shape it exists for (mutation guard)', () => {
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;')).toEqual(['invoices.zz_new']);
+    expect(ungrantedNewColumns('ALTER TABLE ONLY quotes ADD COLUMN IF NOT EXISTS zz_a int, ADD zz_b int;')).toEqual(['quotes.zz_a', 'quotes.zz_b']);
+    expect(ungrantedNewColumns('ALTER TABLE public.quote_versions ADD COLUMN zz_new text;')).toEqual(['quote_versions.zz_new']);
+    // Granted to authenticated in the same file: fine.
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT (zz_new) ON public.invoices TO authenticated;')).toEqual([]);
+    // Granted to someone else, or for another privilege only: still missing.
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT (zz_new) ON public.invoices TO anon;')).toEqual(['invoices.zz_new']);
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT UPDATE (zz_new) ON public.invoices TO authenticated;')).toEqual(['invoices.zz_new']);
+    // A new cost field stays ungranted on purpose; a constraint is not a column; other tables are out of scope.
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN total_cost_cents bigint;')).toEqual([]);
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD CONSTRAINT zz_ck CHECK (true);')).toEqual([]);
+    expect(ungrantedNewColumns('ALTER TABLE public.customers ADD COLUMN zz_new text;')).toEqual([]);
+  });
+});
+
 describe('admin cost helpers', () => {
   beforeEach(() => rpc.mockReset());
 

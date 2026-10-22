@@ -201,11 +201,13 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     // Create PO directly via DB for reliability then verify UI shows it
     await nav(page, '/');
     const prods = await supabaseRest(page, 'GET',
-      `products?select=id,product_name,current_cost&id=eq.${S.poProductId}`
+      `products?select=id,product_name&id=eq.${S.poProductId}`
     );
     const prodArr = asArray(prods, 'po product');
     expect(prodArr.length).toBe(1);
-    const prod = prodArr[0] as Record<string, unknown>;
+    // Cost is admin-only and not a readable column (20261022030000): read it through the admin function.
+    const costs = await supabaseRpc(page, 'get_admin_cost_fields', { p_table: 'products', p_ids: [S.poProductId] }) as Record<string, Record<string, unknown>>;
+    const prod = { ...(prodArr[0] as Record<string, unknown>), current_cost: costs?.[S.poProductId as string]?.current_cost };
 
     // Get auto-generated PO number and user ID (both required NOT NULL)
     const userId = await getUserId(page);

@@ -16,7 +16,8 @@
 --     blend_ticket_products unit_cost_cents
 --     commissions         order_profit
 --   Every other column keeps exactly the privileges its table held before (live read 2026-10-22 ~02:10
---   UTC). Row security is unchanged. Admins keep reading cost through get_admin_cost_fields (SECURITY
+--   UTC), except generated jobs.remaining_acres, which drops the INSERT/UPDATE it could never use.
+--   Row security is unchanged. Admins keep reading cost through get_admin_cost_fields (SECURITY
 --   DEFINER, admin-only, 20261019230000) and quote history through get_quote_versions (SECURITY DEFINER;
 --   strips cost from a rep's snapshot). Purchase-order cost was locked by 20261021141000.
 --
@@ -38,14 +39,24 @@
 --   its OWN list (`GRANT SELECT, REFERENCES (cols)` would scope only REFERENCES: the 20260729015706
 --   trap). Only privileges a role held are re-granted: authenticated SELECT + REFERENCES (quote_versions:
 --   SELECT only), anon SELECT where it had it (not quote_items, quote_versions), and authenticated
---   INSERT + UPDATE where it had them (generated invoices.balance_cents and jobs.remaining_acres are left
---   out of the write lists). products keeps its older column-level INSERT/UPDATE grants, which never
+--   INSERT + UPDATE where it had them (generated jobs.remaining_acres is left out of the jobs write
+--   lists; invoices has no write grants). products keeps its older column-level INSERT/UPDATE grants, which never
 --   included cost. DELETE, TRUNCATE and TRIGGER are not column privileges and are left alone, as is
 --   service_role and metabase_ro (read-only reporting, not reachable through the Data API).
 --
 -- STANDING CONSEQUENCE: a NEW column on any of these tables is invisible to (and unwritable by)
 --   authenticated and anon until a migration grants it. Any ADD COLUMN on them must ship with its
 --   grants -- unless it is another cost field. The preflight refuses to run on a changed column set.
+--   The same holds for anything that reads a WHOLE row of these tables as an API role: a function
+--   taking the table's row type (a PostgREST computed field), a security_invoker view, or `SELECT *`
+--   in an INVOKER function. Postgres checks SELECT on every column for a whole-row reference, so each
+--   would fail with "permission denied" for admins and reps alike. The preflight refuses to run while a
+--   row-type function is executable by authenticated or anon, or while any view reads a cost column.
+--
+-- PREFLIGHT ALSO PINS (live read 2026-10-22, before this change): which of SELECT, REFERENCES, INSERT
+--   and UPDATE each API role holds on each table or any of its columns (so nothing is re-granted that
+--   was never held),
+--   and the bodies, SECURITY DEFINER mode and grants of get_admin_cost_fields and get_quote_versions.
 --
 -- ROLLBACK (re-opens cost to reps; only with Mason's approval):
 --   GRANT SELECT, REFERENCES ON public.products, public.quotes, public.quote_items, public.orders,
@@ -63,10 +74,97 @@
 
 SET LOCAL lock_timeout = '10s';
 
+CREATE TEMP TABLE cost_columns_admin_only_tx ON COMMIT DROP AS
+SELECT pg_current_xact_id()::text AS transaction_id;
+
 DO $preflight$
 DECLARE
   v_cols text;
+  v_bad text;
 BEGIN
+  -- Under autocommit the ON COMMIT DROP marker is already gone here: refuse before any change, so a
+  -- verify failure can never leave the REVOKEs committed without their re-grants.
+  IF to_regclass('pg_temp.cost_columns_admin_only_tx') IS NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_NOT_IN_TRANSACTION: apply this file as one transaction (scripts/apply-migration-file.mjs, or psql -1 -v ON_ERROR_STOP=1)';
+  END IF;
+  -- Two IFs, not one OR: the second reads the marker table, which must exist to be planned.
+  IF (SELECT transaction_id FROM pg_temp.cost_columns_admin_only_tx) IS DISTINCT FROM pg_current_xact_id()::text THEN
+    RAISE EXCEPTION 'COST_LOCK_NOT_IN_TRANSACTION: apply this file as one transaction (scripts/apply-migration-file.mjs, or psql -1 -v ON_ERROR_STOP=1)';
+  END IF;
+
+  -- The privileges each API role holds now, on the table or on any of its columns (the same answer
+  -- before this file and after it, so a re-apply still passes). The grants below re-grant exactly
+  -- these on the non-cost columns, so a role that lost one outside a migration must not get it back
+  -- from this file, and a role that gained one must be looked at before the lock is written over it.
+  SELECT string_agg(format('%s %s %s: held %s, expected %s', e.rol, e.priv, e.tbl,
+                           has_any_column_privilege(e.rol, ('public.' || e.tbl)::regclass, e.priv), e.held), '; ')
+    INTO v_bad
+    FROM (
+      SELECT t.tbl, r.rol, p.priv,
+             CASE
+               WHEN r.rol = 'anon' THEN p.priv = 'SELECT' AND t.tbl NOT IN ('quote_items', 'quote_versions')
+               WHEN p.priv = 'SELECT' THEN true
+               WHEN p.priv = 'REFERENCES' THEN t.tbl <> 'quote_versions'
+               -- products' INSERT/UPDATE are its older column-level grants (no cost column among them).
+               ELSE t.tbl IN ('products', 'quotes', 'orders', 'jobs', 'job_chemicals', 'blend_ticket_products', 'commissions')
+             END AS held
+        FROM unnest(ARRAY['products', 'quotes', 'quote_items', 'quote_versions', 'orders', 'order_items', 'invoices',
+                          'invoice_items', 'jobs', 'job_chemicals', 'blend_ticket_products', 'commissions']) AS t(tbl)
+        CROSS JOIN (VALUES ('authenticated'), ('anon')) AS r(rol)
+        CROSS JOIN (VALUES ('SELECT'), ('REFERENCES'), ('INSERT'), ('UPDATE')) AS p(priv)
+    ) e
+   WHERE has_any_column_privilege(e.rol, ('public.' || e.tbl)::regclass, e.priv) IS DISTINCT FROM e.held;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: table privileges are not the ones this file was written against (re-read them): %', v_bad;
+  END IF;
+
+  -- A whole-row reference needs SELECT on every column, so any API-executable function that takes one
+  -- of these row types (a PostgREST computed field) would fail for everyone once a cost column is gone.
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_bad
+    FROM pg_proc p
+   WHERE (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+     AND EXISTS (
+       SELECT 1 FROM unnest(p.proargtypes::oid[]) AS a(typ)
+         JOIN pg_type ty ON ty.oid = a.typ
+        WHERE ty.typrelid IN ('public.products'::regclass, 'public.quotes'::regclass, 'public.quote_items'::regclass,
+                              'public.quote_versions'::regclass, 'public.orders'::regclass, 'public.order_items'::regclass,
+                              'public.invoices'::regclass, 'public.invoice_items'::regclass, 'public.jobs'::regclass,
+                              'public.job_chemicals'::regclass, 'public.blend_ticket_products'::regclass,
+                              'public.commissions'::regclass));
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: these API-executable functions take a whole locked row and would fail once cost is revoked; move them to an id-based form first: %', v_bad;
+  END IF;
+
+  -- No view or materialized view may read a cost column (a definer view would keep exposing it; an
+  -- invoker view would start failing), and none may read a whole locked row.
+  SELECT string_agg(DISTINCT format('%s reads %s.%s', v.relname, src.relname, coalesce(a.attname::text, '*')), '; ') INTO v_bad
+    FROM pg_depend d
+    JOIN pg_rewrite rw ON rw.oid = d.objid
+    JOIN pg_class v ON v.oid = rw.ev_class AND v.relkind IN ('v', 'm')
+    JOIN pg_class src ON src.oid = d.refobjid
+    LEFT JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+   WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass AND v.oid <> src.oid
+     AND src.oid IN ('public.products'::regclass, 'public.quotes'::regclass, 'public.quote_items'::regclass,
+                     'public.quote_versions'::regclass, 'public.orders'::regclass, 'public.order_items'::regclass,
+                     'public.invoices'::regclass, 'public.invoice_items'::regclass, 'public.jobs'::regclass,
+                     'public.job_chemicals'::regclass, 'public.blend_ticket_products'::regclass,
+                     'public.commissions'::regclass)
+     AND (d.refobjsubid = 0 OR (src.relname, a.attname::text) IN (VALUES
+       ('products', 'current_cost'), ('products', 'cost_updated_date'), ('products', 'tier1_margin'),
+       ('products', 'tier2_margin'), ('products', 'tier3_margin'), ('products', 'tier1_gross_margin'),
+       ('products', 'tier2_gross_margin'), ('products', 'tier3_gross_margin'), ('quotes', 'total_cost'),
+       ('quotes', 'total_profit'), ('quotes', 'total_margin_pct'), ('quote_items', 'current_cost'),
+       ('quote_items', 'profit'), ('quote_items', 'net_margin'), ('quote_items', 'cost_at_quote_cents'),
+       ('quote_versions', 'snapshot_data'), ('orders', 'total_cost'), ('orders', 'total_profit'),
+       ('orders', 'total_margin_pct'), ('order_items', 'cost_per_unit'), ('order_items', 'profit'),
+       ('order_items', 'net_margin'), ('order_items', 'cost_at_time_cents'), ('invoices', 'total_cost_cents'),
+       ('invoice_items', 'cost_cents'), ('invoice_items', 'return_credit_cogs_cents'), ('jobs', 'total_cost_cents'),
+       ('job_chemicals', 'cost_per_unit_cents'), ('blend_ticket_products', 'unit_cost_cents'),
+       ('commissions', 'order_profit')));
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: a view reads a cost column or a whole locked row: %', v_bad;
+  END IF;
+
   SELECT string_agg(attname, ',' ORDER BY attname) INTO v_cols
     FROM pg_attribute WHERE attrelid = 'public.products'::regclass AND attnum > 0 AND NOT attisdropped;
   IF v_cols IS DISTINCT FROM 'category,container_size,container_type,container_unit,cost_updated_date,created_at,current_cost,'
@@ -166,11 +264,24 @@ BEGIN
        'ipient,recipient_user_id,season,split_percentage,status' THEN
     RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: commissions columns are not the ones this grant list covers (re-read them): %', v_cols;
   END IF;
+  -- The two admin-checked readers this lock leaves as the only way to cost: the reviewed 20261019230000
+  -- bodies (live md5 2026-10-22), SECURITY DEFINER, executable by authenticated and not by anon.
   IF to_regprocedure('public.get_admin_cost_fields(text,uuid[])') IS NULL THEN
     RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: get_admin_cost_fields(text, uuid[]) is missing; admins would lose cost';
   END IF;
   IF to_regprocedure('public.get_quote_versions(uuid)') IS NULL THEN
     RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: get_quote_versions(uuid) is missing; quote history would lose its snapshot';
+  END IF;
+  SELECT string_agg(f.sig, ', ') INTO v_bad
+    FROM (VALUES ('public.get_admin_cost_fields(text,uuid[])', 'cda5e9b6574e4eb1583c4d8812b9e51b'),
+                 ('public.get_quote_versions(uuid)', '8f0592c4877da51eb5b9074b775ed0cc')) AS f(sig, body_md5)
+    JOIN pg_proc p ON p.oid = to_regprocedure(f.sig)
+   WHERE md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM f.body_md5
+      OR NOT p.prosecdef
+      OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      OR has_function_privilege('anon', p.oid, 'EXECUTE');
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: not the reviewed admin-checked SECURITY DEFINER bodies and grants: %', v_bad;
   END IF;
 END
 $preflight$;

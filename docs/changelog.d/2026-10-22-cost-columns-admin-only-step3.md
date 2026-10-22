@@ -1,13 +1,15 @@
 ## 2026-10-22 — Goal 1 step 3: cost, profit and margin columns locked on the remaining cost tables
 
-**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 969) takes the cost,
+**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 969; written, not
+yet applied) takes the cost,
 profit and margin columns of `products`, `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`,
 `order_items`, `invoices`, `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions` out of
-the Data API grants of `authenticated` and `anon`. Every other column keeps exactly the privileges it had. Where
+the Data API grants of `authenticated` and `anon`. Every other column keeps exactly the privileges it had (except the generated `jobs.remaining_acres`, which drops
+an `INSERT`/`UPDATE` it could never use). Where
 `authenticated` could write a table directly (`quotes`, `orders`, `jobs`, `job_chemicals`, `blend_ticket_products`,
-`commissions`), its `INSERT`/`UPDATE` grants now list every column except cost, so a rep can no longer type a cost
+`commissions`), its `INSERT`/`UPDATE` grants list every column except cost, so a rep can no longer type a cost
 straight into those rows. Admins keep seeing cost through `get_admin_cost_fields`, and quote history through
-`get_quote_versions`, both admin-checked server functions; no screen changes. This finishes Goal 1 part 3 (cost and
+`get_quote_versions`, both admin-checked server functions; no screen changes. Once applied, this finishes Goal 1 part 3 (cost and
 margin are admin-only, Mason 2026-10-15). Purchase-order cost was locked earlier (`20261021141000`, PR #980).
 
 **Why it was safe.** A read-only inventory on 2026-10-22 checked every one of the 201 places the app reads these

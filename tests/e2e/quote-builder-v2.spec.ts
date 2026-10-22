@@ -274,10 +274,10 @@ test.describe.serial('Quote Builder V2 (12 Sprints)', () => {
     }
 
     // Verify a version was created in the DB
-    const versions = await supabaseRest(page, 'GET',
-      `quote_versions?quote_id=eq.${S.quoteId}&select=id,version_number,snapshot_data&order=version_number.desc`
-    );
-    const verArr = asArray(versions, 'quote versions');
+    // snapshot_data is not a readable column (20261022030000); get_quote_versions returns it.
+    const versions = await supabaseRpc(page, 'get_quote_versions', { p_quote_id: S.quoteId });
+    const verArr = (asArray(versions, 'quote versions') as Array<Record<string, unknown>>)
+      .sort((a, b) => (b.version_number as number) - (a.version_number as number));
     // If V2 migration not applied, version auto-creation on send won't work either
     if (verArr.length > 0) {
       const v1 = verArr[0] as Record<string, unknown>;

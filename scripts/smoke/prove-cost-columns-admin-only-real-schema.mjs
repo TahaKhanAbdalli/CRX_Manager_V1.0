@@ -20,14 +20,18 @@
  *      the admin the stored snapshot and the rep the cost-stripped one -- same before and after.
  *   4. A rep's direct INSERT/UPDATE naming a cost column is refused AFTER; the same write without
  *      the cost column touches the same rows before and after.
- *   5. anon keeps every non-cost column it had; every public view reads the same for rep and anon
- *      before and after (view_unmigrated_products included).
+ *   5. anon keeps every non-cost column it had; every public view reads the same for every role
+ *      before and after (view_unmigrated_products included), and no view reads a cost column or a
+ *      whole locked row. Steps 1, 2 and 5 also run as the driver and the applicator; non-cost writes
+ *      that return id / row_version still work, and one that returns a cost column is refused.
  *   6. save_job and save_quote (SECURITY DEFINER writers) still work for the rep and store the
  *      server-derived cost.
  *   7. Privilege diff: every (role, table, column, privilege) is unchanged except the cost columns
  *      (and the generated jobs.remaining_acres write grant); table-level DELETE/TRUNCATE/TRIGGER
- *      untouched. Preflight drift (a new column on each table, either admin function missing)
- *      refuses; a second apply succeeds and changes nothing.
+ *      untouched (PUBLIC included). Preflight drift refuses: a new column on each table, either
+ *      admin function missing, re-bodied, made INVOKER or re-granted, a role privilege lost or gained,
+ *      a whole-row function executable by an API role, a cost or whole-row view; so does a run outside
+ *      one transaction, before any change. A second apply succeeds and changes nothing.
  *   8. MUTATIONS: the candidate with the products REVOKE removed, with a non-cost column dropped
  *      from a grant list, and with a cost column added to one, each fails its own verify block.
  *
@@ -367,7 +371,12 @@ const OK = /^ok\|/;
 const SEES_ROWS = /^ok\|\d+\/[1-9]\d*$/;
 const ANON_BEFORE = /^ok\|0(\/0)?$|^42501\|permission denied for function is_admin$/;
 const ACF = (table, rowId) => `public.get_admin_cost_fields('${table}', ARRAY[${rowId}]::uuid[]) -> (${rowId})::text`;
-const ROLES = [['rep', U.REP], ['admin', U.ADMIN], ['anon', 'anon']];
+const ROLES = [['rep', U.REP], ['admin', U.ADMIN], ['anon', 'anon'], ['driver', U.DRIVER], ['applicator', U.APPLICATOR]];
+// The driver and applicator see whatever their row policies allow (possibly nothing, or a policy
+// helper they may not run); the privilege change is what this proof measures for them.
+const STAFF_BEFORE = /^ok\|\d+(\/\d+)?$|^42501\|permission denied for function \w+$/;
+const beforeFor = (label, table, seen) => (label === 'rep' || label === 'admin' ? seen
+  : label !== 'anon' ? STAFF_BEFORE : !ANON_TABLES.includes(table) ? DENIED_TABLE(table) : ANON_BEFORE);
 // "<rows touched>" for a write statement.
 const write = (sql) => ({ stmt: `${sql}; GET DIAGNOSTICS n = ROW_COUNT; v := n::text;` });
 
@@ -384,7 +393,7 @@ function buildScenarios() {
         // quote_versions (refused in both phases); on invoices / invoice_items anon's read already
         // failed before in the RLS policy (anon may not execute is_admin()); its column grant is
         // proven by the privilege snapshot instead.
-        const before = label !== 'anon' ? SEES_ROWS : !ANON_TABLES.includes(table) ? DENIED_TABLE(table) : ANON_BEFORE;
+        const before = beforeFor(label, table, SEES_ROWS);
         s1.push([`${label} reads ${table}.${col}`, as, `(SELECT count(t.${col}) || '/' || count(*) FROM public.${table} t)`, before, DENIED_TABLE(table)]);
       }
     }
@@ -392,7 +401,7 @@ function buildScenarios() {
   const s2 = [];
   for (const [label, as] of ROLES) {
     for (const table of LOCKED_TABLES) {
-      const before = label !== 'anon' ? /^ok\|[1-9]\d*$/ : !ANON_TABLES.includes(table) ? DENIED_TABLE(table) : ANON_BEFORE;
+      const before = beforeFor(label, table, /^ok\|[1-9]\d*$/);
       s2.push([`${label} reads the ${table} screen columns`, as, `(SELECT count(*) FROM (SELECT ${SCREEN[table]} FROM public.${table}) s)`, before, 'same']);
       s2.push([`${label} reads ${table} with *`, as, `(SELECT count(*) FROM (SELECT t.* FROM public.${table} t) s)`, before, DENIED_TABLE(table)]);
     }
@@ -429,6 +438,9 @@ function buildScenarios() {
     ['admin UPDATE commissions.order_profit', U.ADMIN, write(`UPDATE public.commissions SET order_profit = 1 WHERE id = '${COMM}'`), 'ok|1', DENIED_TABLE('commissions')],
     ['admin UPDATE quotes.total_cost', U.ADMIN, write(`UPDATE public.quotes SET total_cost = 1 WHERE id = '${QUOTE}'`), OK, DENIED_TABLE('quotes')],
     ['admin UPDATE job_chemicals.cost_per_unit_cents', U.ADMIN, write(`UPDATE public.job_chemicals SET cost_per_unit_cents = 1 WHERE id = ${JC}`), OK, DENIED_TABLE('job_chemicals')],
+    // A non-cost write that asks for a cost column back (what `.update().select('total_cost')` sends).
+    ['rep UPDATE orders.notes RETURNING total_cost', U.REP, { stmt: `UPDATE public.orders SET notes = 'prover' WHERE id = '${ORDER}' RETURNING total_cost::text INTO v;` }, OK, DENIED_TABLE('orders')],
+    ['admin UPDATE quotes.header_notes RETURNING total_cost', U.ADMIN, { stmt: `UPDATE public.quotes SET header_notes = 'prover' WHERE id = '${QUOTE}' RETURNING total_cost::text INTO v;` }, OK, DENIED_TABLE('quotes')],
     ['stored costs unchanged by the refused writes', 'owner', `(SELECT total_cost::text FROM public.quotes WHERE id = '${QUOTE}') || ':' || (SELECT cost_per_unit_cents FROM public.job_chemicals WHERE id = ${JC})`, OK, 'ok|45:300'],
   ];
   const s5 = [
@@ -447,6 +459,10 @@ function buildScenarios() {
     ['admin UPDATE orders.notes', U.ADMIN, write(`UPDATE public.orders SET notes = 'prover' WHERE id = '${ORDER}'`), 'ok|1', 'same'],
     ['admin UPDATE commissions.paid_note', U.ADMIN, write(`UPDATE public.commissions SET paid_note = 'prover' WHERE id = '${COMM}'`), 'ok|1', 'same'],
     ['admin UPDATE blend_ticket_products.lot_number', U.ADMIN, write(`UPDATE public.blend_ticket_products SET lot_number = 'L2' WHERE id = '${BTP}'`), 'ok|1', 'same'],
+    // What PostgREST sends for `.update(...).select('id')` / `.select('id, row_version')`.
+    ['rep UPDATE quotes.header_notes RETURNING id, row_version', U.REP, { stmt: `UPDATE public.quotes SET header_notes = 'prover' WHERE id = '${QUOTE}' RETURNING id::text || ':' || (row_version IS NOT NULL) INTO v;` }, `ok|${QUOTE}:true`, 'same'],
+    ['rep UPDATE jobs.notes RETURNING id', U.REP, { stmt: `UPDATE public.jobs SET notes = 'prover' WHERE id = ${JOB} RETURNING (id IS NOT NULL)::text INTO v;` }, OK, 'same'],
+    ['admin UPDATE orders.notes RETURNING id', U.ADMIN, { stmt: `UPDATE public.orders SET notes = 'prover' WHERE id = '${ORDER}' RETURNING id::text INTO v;` }, `ok|${ORDER}`, 'same'],
   ];
   const s6 = [
     ['anon reads view_unmigrated_products', 'anon', '(SELECT count(*) FROM public.view_unmigrated_products)', OK, 'same'],
@@ -459,7 +475,16 @@ function buildScenarios() {
         BEGIN EXECUTE format('SELECT count(*) FROM (SELECT * FROM public.%I LIMIT 50) s', r.relname) INTO c;
         EXCEPTION WHEN OTHERS THEN bad := bad || r.relname || ':' || SQLSTATE || ' '; END;
       END LOOP; v := (SELECT count(*) FROM pg_class c3 WHERE c3.relnamespace = 'public'::regnamespace AND c3.relkind = 'v') || ' views; failing: ' || COALESCE(NULLIF(bad, ''), 'none'); END;` };
-  for (const [label, as] of [['rep', U.REP], ['admin', U.ADMIN], ['anon', 'anon']]) s6.push([`${label} reads every public view`, as, VIEWS, OK, 'same']);
+  for (const [label, as] of ROLES) s6.push([`${label} reads every public view`, as, VIEWS, OK, 'same']);
+  // No view or materialized view reads a cost column or a whole locked row (the candidate's preflight
+  // refuses one; this shows the replayed schema has none, before and after).
+  s6.push(['no view reads a cost column or a whole locked row', 'owner', `(SELECT count(*) FROM pg_depend d
+      JOIN pg_rewrite rw ON rw.oid = d.objid JOIN pg_class v ON v.oid = rw.ev_class AND v.relkind IN ('v', 'm')
+      JOIN pg_class src ON src.oid = d.refobjid AND src.relnamespace = 'public'::regnamespace
+      LEFT JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+     WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass AND v.oid <> src.oid
+       AND src.relname IN (${LOCKED_TABLES.map((t) => `'${t}'`).join(', ')})
+       AND (d.refobjsubid = 0 OR (src.relname || '.' || a.attname) IN (${Object.entries(COST).flatMap(([t, cs]) => cs.map((c) => `'${t}.${c}'`)).join(', ')})))`, 'ok|0', 'same']);
   const JOB_STORED = (job) => `(SELECT string_agg(jc.cost_per_unit_cents::text, ',' ORDER BY jc.sort_order) FROM public.job_chemicals jc WHERE jc.job_id = ${job}) || '|' || (SELECT j2.total_cost_cents FROM public.jobs j2 WHERE j2.id = ${job})`;
   const NEWJOB = `(SELECT j.id FROM public.jobs j WHERE j.customer_id = '${CUST}' ORDER BY j.created_at DESC, j.id LIMIT 1)`;
   const NEWQ = "(SELECT q.id FROM public.quotes q WHERE q.quote_number = 'PROVER-Q-SAVE')";
@@ -516,7 +541,8 @@ function check(phase, results, before = null) {
 
 // ------------------------------------------------------------------------------------------------
 // Privileges: every (role, table, column, privilege) and every table-level privilege.
-const PRIV_ROLES = "SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role', 'metabase_ro', 'PUBLIC')";
+// PUBLIC is no pg_roles row; has_*_privilege accepts it as the name 'public'.
+const PRIV_ROLES = "SELECT rolname::text FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role', 'metabase_ro') UNION ALL SELECT 'public'";
 function privileges() {
   const tables = LOCKED_TABLES.map((t) => `'${t}'`).join(', ');
   const col = rows(`SELECT c.relname || '.' || a.attname || '|' || r.rolname || '|' || p.priv || '|' || has_column_privilege(r.rolname, c.oid, a.attname, p.priv)
@@ -581,13 +607,41 @@ function preflightRefusesDrift() {
     ['ALTER TABLE public.products DROP COLUMN tier3_gross_margin;', /COST_LOCK_PREFLIGHT: products columns are not the ones/],
     ['DROP FUNCTION public.get_admin_cost_fields(text, uuid[]);', /COST_LOCK_PREFLIGHT: get_admin_cost_fields\(text, uuid\[\]\) is missing/],
     ['DROP FUNCTION public.get_quote_versions(uuid);', /COST_LOCK_PREFLIGHT: get_quote_versions\(uuid\) is missing/],
+    // A role lost a privilege outside a migration: the lock must not hand it back on the non-cost columns.
+    ['REVOKE SELECT ON public.invoices FROM anon;', /COST_LOCK_PREFLIGHT: table privileges are not the ones[^\n]*anon SELECT invoices: held f, expected t/],
+    // A role gained one: the lock was not written for it.
+    ['GRANT INSERT ON public.invoices TO authenticated;', /COST_LOCK_PREFLIGHT: table privileges are not the ones[^\n]*authenticated INSERT invoices: held t, expected f/],
+    ['GRANT REFERENCES (id) ON public.quote_versions TO authenticated;', /COST_LOCK_PREFLIGHT: table privileges are not the ones[^\n]*authenticated REFERENCES quote_versions: held t, expected f/],
+    // A PostgREST computed field (whole-row argument) the lock would break for every role.
+    ["CREATE FUNCTION public.zz_prover_rowfn(p public.invoices) RETURNS int LANGUAGE sql STABLE AS 'SELECT 1'; GRANT EXECUTE ON FUNCTION public.zz_prover_rowfn(public.invoices) TO authenticated;",
+      /COST_LOCK_PREFLIGHT: these API-executable functions take a whole locked row[^\n]*zz_prover_rowfn\(invoices\)/],
+    ["CREATE FUNCTION public.zz_prover_rowfn(p public.order_items) RETURNS int LANGUAGE sql STABLE AS 'SELECT 1'; REVOKE ALL ON FUNCTION public.zz_prover_rowfn(public.order_items) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.zz_prover_rowfn(public.order_items) TO anon;",
+      /COST_LOCK_PREFLIGHT: these API-executable functions take a whole locked row[^\n]*zz_prover_rowfn\(order_items\)/],
+    // Views: a cost column, and a whole locked row.
+    ['CREATE VIEW public.zz_prover_cost_view AS SELECT id, current_cost FROM public.products;', /COST_LOCK_PREFLIGHT: a view reads a cost column or a whole locked row: zz_prover_cost_view reads products\.current_cost/],
+    ['CREATE VIEW public.zz_prover_row_view AS SELECT c FROM public.commissions c;', /COST_LOCK_PREFLIGHT: a view reads a cost column or a whole locked row: zz_prover_row_view reads commissions\.\*/],
+    // The two admin readers: mode, grants, body.
+    ['ALTER FUNCTION public.get_quote_versions(uuid) SECURITY INVOKER;', /COST_LOCK_PREFLIGHT: not the reviewed admin-checked SECURITY DEFINER bodies and grants: public\.get_quote_versions\(uuid\)/],
+    ['GRANT EXECUTE ON FUNCTION public.get_admin_cost_fields(text, uuid[]) TO anon;', /COST_LOCK_PREFLIGHT: not the reviewed admin-checked SECURITY DEFINER bodies and grants: public\.get_admin_cost_fields\(text,uuid\[\]\)/],
+    ['REVOKE EXECUTE ON FUNCTION public.get_quote_versions(uuid) FROM authenticated;', /COST_LOCK_PREFLIGHT: not the reviewed admin-checked SECURITY DEFINER bodies and grants: public\.get_quote_versions\(uuid\)/],
+    [`DO $b$ BEGIN EXECUTE format('CREATE OR REPLACE FUNCTION public.get_admin_cost_fields(p_table text, p_ids uuid[]) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS %L', (SELECT prosrc FROM pg_proc WHERE oid = 'public.get_admin_cost_fields(text,uuid[])'::regprocedure) || E'\\n-- prover: any body edit\\n'); END $b$;`,
+      /COST_LOCK_PREFLIGHT: not the reviewed admin-checked SECURITY DEFINER bodies and grants: public\.get_admin_cost_fields\(text,uuid\[\]\)/],
   ];
   for (const [setup, refusal] of cases) {
     const d = docker([...psqlArgs()], { input: `BEGIN;\n${setup}\n\\i /tmp/cand.sql\nROLLBACK;`, allowFailure: true });
     assert.notEqual(d.status, 0, `the candidate applied over: ${setup}`);
     assert.match(d.stderr, refusal, `wrong refusal for ${setup}:\n${d.stderr}`);
   }
-  console.log(`[prover] PREFLIGHT: ${cases.length} drifted states each abort the candidate (a new column on each of the ${LOCKED_TABLES.length} tables, a dropped column, either admin function missing)`);
+  // Under autocommit (no single transaction) the file refuses before its first REVOKE, so nothing
+  // half-applies: every table-level privilege is still exactly as it was.
+  const privPre = privileges();
+  const auto = docker([...psqlArgs()], { input: '\\i /tmp/cand.sql\n', allowFailure: true });
+  assert.notEqual(auto.status, 0, 'the candidate ran under autocommit');
+  assert.match(auto.stderr, /COST_LOCK_NOT_IN_TRANSACTION/, `wrong autocommit refusal:\n${auto.stderr}`);
+  const privPost = privileges();
+  assert.deepEqual([...privPost.tbl].filter(([k, v]) => privPre.tbl.get(k) !== v), [], 'the autocommit refusal changed a table privilege');
+  assert.deepEqual([...privPost.col].filter(([k, v]) => privPre.col.get(k) !== v), [], 'the autocommit refusal changed a column privilege');
+  console.log(`[prover] PREFLIGHT: ${cases.length} drifted states each abort the candidate (a new column on each of the ${LOCKED_TABLES.length} tables, a dropped column, either admin function missing, a lost or gained role privilege, a whole-row function for authenticated or anon, a cost or whole-row view, an admin reader made INVOKER / opened to anon / closed to authenticated / re-bodied); under autocommit it refuses before any change`);
 }
 
 // MUTATIONS: copies of the candidate with one grant edit each must fail the candidate's own verify block.
