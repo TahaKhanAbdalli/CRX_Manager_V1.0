@@ -93,6 +93,16 @@ describe('blendTicketInvoiceRefusalMessage', () => {
       .toMatch(/not matched to a product/);
   });
 
+  it('explains a line whose quantity rounds to zero, naming the product', () => {
+    const line = '11111111-1111-4111-8111-111111111111';
+    expect(blendTicketInvoiceRefusalMessage({ message: `BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO: Atrazine (4L) (blend ticket line ${line}) bills less than 0.0001 per line; correct the rate or acres` }))
+      .toBe('Atrazine (4L) would bill less than 0.0001 of a unit on a customer\'s invoice, so nothing was invoiced. Check that product\'s rate and the field acres, then try again.');
+    expect(blendTicketInvoiceRefusalMessage({ message: `BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO: UAN (blend ticket line additive) (blend ticket line ${line}) bills less than 0.0001 per line; correct the rate or acres` }))
+      .toMatch(/^UAN \(blend ticket line additive\) would bill/);
+    expect(blendTicketInvoiceRefusalMessage({ message: 'BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO' }))
+      .toMatch(/^A product on this ticket would bill less than 0\.0001/);
+  });
+
   it('leaves any other error to the caller', () => {
     expect(blendTicketInvoiceRefusalMessage({ message: 'BELOW_COST_REASON_REQUIRED:{}' })).toBeNull();
     expect(blendTicketInvoiceRefusalMessage(null)).toBeNull();

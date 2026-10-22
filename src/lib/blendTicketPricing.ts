@@ -111,6 +111,14 @@ export function blendTicketInvoiceRefusalMessage(
       ? `${name} has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.`
       : 'A product on this ticket has no cost entered, so nothing was invoiced. Enter its cost on the Price List, then try again.';
   }
+  // The database sends "<product> (blend ticket line <uuid>) bills less than 0.0001 ..."; a product
+  // name can itself contain parentheses or even that phrase, so anchor on the uuid and the fixed tail.
+  const zeroQtyDetail = rpcCodeDetail(error, RpcErrorCodes.BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO);
+  if (zeroQtyDetail !== null) {
+    const match = /^([\s\S]*) \(blend ticket line [0-9a-f-]{36}\) bills less than /i.exec(zeroQtyDetail);
+    const name = match ? match[1].trim() : '';
+    return `${name || 'A product on this ticket'} would bill less than 0.0001 of a unit on a customer's invoice, so nothing was invoiced. Check that product's rate and the field acres, then try again.`;
+  }
   const centsProductId = rpcCodeDetail(error, RpcErrorCodes.COST_BASIS_CENTS_REQUIRED);
   if (centsProductId !== null) {
     const name = productNameById.get(centsProductId);
