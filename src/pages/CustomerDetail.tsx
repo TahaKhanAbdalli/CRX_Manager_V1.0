@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan, PhoneCall } from 'lucide-react';
+import { Save, Plus, Trash2, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan, PhoneCall } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -49,6 +49,7 @@ import CustomerContacts, { CustomerInteractionsHistory } from '../components/cus
 import LogInteractionModal from '../components/customers/LogInteractionModal';
 import CustomerFacts from '../components/customers/CustomerFacts';
 import CustomerPrepCard from '../components/customers/CustomerPrepCard';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import CustomerDocuments from '../components/customers/CustomerDocuments';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import { ORDER_COLUMNS, QUOTE_COLUMNS, withAdminCosts } from '../lib/costFields';
@@ -199,10 +200,7 @@ export default function CustomerDetail() {
   const [financialsLoading, setFinancialsLoading] = useState(false);
   const financialsFetched = useRef(false);
 
-  // Parent customer search
-  const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
-  const [parentSearch, setParentSearch] = useState('');
-  const [showParentDropdown, setShowParentDropdown] = useState(false);
+  // Parent customer (searched in the database; only the chosen parent's name is kept)
   const [parentName, setParentName] = useState('');
 
   // Track dirty state for unsaved changes warning
@@ -411,13 +409,6 @@ export default function CustomerDetail() {
   }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey, saveCustomerIntentScope]);
 
   useEffect(() => {
-    // Fetch all customers for parent selector
-    void supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
-      .then(({ data, error }) => {
-        if (error) { toast('error', 'Failed to load customer list'); return; }
-        setAllCustomers((data || []) as { id: string; farm_name: string }[]);
-    });
-
     if (!isNew && id) {
       void fetchCustomerSnapshot();
     } else {
@@ -430,7 +421,6 @@ export default function CustomerDetail() {
         initialLoadDone.current = true;
       }, 0);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew, fetchCustomerSnapshot]);
 
   // CustomerDetail is NOT remounted when only :id changes (the route element has
@@ -1279,55 +1269,17 @@ export default function CustomerDetail() {
               {/* Parent Customer (Farm Group) selector */}
               <div className="relative">
                 <label className="block text-sm font-medium text-secondary mb-1">Parent Customer</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={showParentDropdown ? parentSearch : parentName}
-                    onChange={(e) => {
-                      setParentSearch(e.target.value);
-                      setShowParentDropdown(true);
-                    }}
-                    onFocus={() => {
-                      setParentSearch('');
-                      setShowParentDropdown(true);
-                    }}
-                    onBlur={() => setTimeout(() => setShowParentDropdown(false), 200)}
-                    placeholder="Search parent customer..."
-                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  />
-                </div>
-                {customer.parent_customer_id && (
-                  <button
-                    type="button"
-                    onClick={() => { update('parent_customer_id', null); setParentName(''); }}
-                    className="absolute right-2 top-8 text-xs text-gray-400 hover:text-red-500"
-                  >
-                    Clear
-                  </button>
-                )}
-                {showParentDropdown && (
-                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {allCustomers
-                      .filter((c) => c.id !== id && c.farm_name.toLowerCase().includes(parentSearch.toLowerCase()))
-                      .slice(0, 20)
-                      .map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            update('parent_customer_id', c.id);
-                            setParentName(c.farm_name);
-                            setShowParentDropdown(false);
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm hover:bg-crx-green-tint transition-colors"
-                        >
-                          {c.farm_name}
-                        </button>
-                      ))}
-                  </div>
-                )}
+                <CustomerSearchPicker
+                  value={customer.parent_customer_id || ''}
+                  selectedLabel={parentName}
+                  onSelect={(parent) => {
+                    update('parent_customer_id', parent?.id ?? null);
+                    setParentName(parent?.farm_name ?? '');
+                  }}
+                  excludeIds={id && !isNew ? [id] : undefined}
+                  placeholder="Search parent customer..."
+                  ariaLabel="Parent customer"
+                />
                 <p className="text-xs text-secondary mt-1">Link this customer to a parent farm group</p>
               </div>
             </div>

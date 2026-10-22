@@ -22,7 +22,7 @@ const { mockFrom, mockRpc, mockToast, mockSentryCaptureException } = vi.hoisted(
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'is', 'in', 'order', 'limit', 'update', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'is', 'in', 'order', 'range', 'limit', 'update', 'maybeSingle']) chain[name] = method;
   const promise = Promise.resolve(result);
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
@@ -70,12 +70,16 @@ const BLANK_UNIT_RECIPE = {
 };
 
 function mockTables(overrides: {
-  unitError?: Error; recipes?: unknown[]; recipeItems?: unknown[]; products?: unknown[];
+  unitError?: Error; recipes?: unknown[]; recipeItems?: unknown[]; products?: unknown[]; productError?: { message: string };
 } = {}) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'blend_recipes') return buildChain({ data: overrides.recipes ?? [], error: null });
     if (table === 'blend_recipe_items') return buildChain({ data: overrides.recipeItems ?? [], error: null });
-    if (table === 'products') return buildChain({ data: overrides.products ?? [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
+    if (table === 'products') {
+      return overrides.productError
+        ? buildChain({ data: null, error: overrides.productError })
+        : buildChain({ data: overrides.products ?? [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
+    }
     if (table === 'unit_conversions') {
       return overrides.unitError
         ? buildChain({ data: null, error: Object.assign(overrides.unitError, { message: overrides.unitError.message }) })
@@ -337,5 +341,23 @@ describe('BlendRecipes unit picker', () => {
       'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
     );
     expect(mockToast).not.toHaveBeenCalledWith('error', 'Units are still loading. Try saving again in a moment.');
+  });
+});
+
+describe('BlendRecipes product list (Goal 4 part 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a failed product read blocks adding items and saving instead of offering a short list', async () => {
+    mockTables({ productError: { message: 'connection reset' } });
+    render(<BlendRecipes />);
+    fireEvent.click(await screen.findByRole('button', { name: /New Recipe/ }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Products could not be loaded');
+    expect(screen.getByRole('button', { name: /Add Product/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create Recipe' })).toBeDisabled();
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load products: connection reset');
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

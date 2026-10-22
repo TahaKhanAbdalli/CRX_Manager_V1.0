@@ -78,6 +78,24 @@ useEffect(() => {
 }, []);
 ```
 
+### Choosing a record (pickers)
+A list read stops at 1,000 rows (the PostgREST cap), so never fill a picker from a one-shot list read.
+- **One record to choose:** use a database search box. `CustomerSearchPicker`
+  (`src/components/customers/`), `FieldSearchPicker` (`src/components/fields/`) or `ProductSearchPicker`
+  (`src/components/products/`), all built on `src/components/ui/RecordSearchPicker.tsx`.
+  - The page keeps the chosen id and its label. It does not look the record up in a loaded list.
+  - Pass `select` with any extra columns the page needs from the pick, e.g. `assigned_tier` for pricing.
+  - A saved record's label comes from the record's own join or a by-id read. A failed or missing by-id read
+    blocks pricing and saving; it never falls back to a default.
+  - Records not to offer go in `excludeIds`, which filters in the database.
+  - Keep the old list's active rule: `activeOnly={false}` where inactive customers were offered.
+  - When a field picker's `customerId` changes, clear a chosen field that belongs to another customer.
+- **The page uses the whole list** (tier pricing, a catalog modal with local search, names on printed
+  sheets): read it completely with `fetchAllRows` (`src/lib/pagedRead.ts`). On failure, clear the list,
+  show an error, and disable the actions that depend on it.
+- For a new kind of record, add a thin wrapper beside the existing ones. Quote search text with
+  `ilikeOrPattern` (`src/lib/recordSearch.ts`) so commas, brackets, `%` and `_` stay literal.
+
 ### Writing data (always use checkMutationResult)
 ```typescript
 async function updateCustomer(id: string, updates: Partial<Customer>) {

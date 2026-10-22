@@ -28,7 +28,9 @@ import {
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
-import SearchableSelect from '../components/ui/SearchableSelect';
+import CustomerSearchPicker, { CUSTOMER_SEARCH_SELECT, type CustomerSearchResult } from '../components/customers/CustomerSearchPicker';
+import FieldSearchPicker, { FIELD_SEARCH_SELECT, type FieldSearchResult } from '../components/fields/FieldSearchPicker';
+import { fetchAllRows } from '../lib/pagedRead';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
@@ -38,6 +40,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import { useLatestRef } from '../hooks/useLatestRef';
 import { sanitizeError, supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
 import {
   convertQuoteToOrderWithRowVersion,
@@ -142,14 +145,21 @@ interface LocalItem {
   price_unit: string | null;
 }
 
-interface FieldOption {
-  id: string;
-  field_name: string;
+// The picked customer's tier and default commission split set the quote's; the contact columns
+// feed the PDF and email.
+const QUOTE_CUSTOMER_SELECT =
+  `${CUSTOMER_SEARCH_SELECT}, assigned_tier, default_commission_split, email, phone, billing_address, contact_name`;
+type QuoteCustomer = CustomerSearchResult
+  & Pick<Customer, 'assigned_tier' | 'default_commission_split' | 'email' | 'phone' | 'billing_address' | 'contact_name'>;
+
+// A section's field supplies its acres (override → measured → legacy total).
+const QUOTE_FIELD_SELECT = `${FIELD_SEARCH_SELECT}, measured_acres, override_acres`;
+type FieldOption = FieldSearchResult & {
   customer_id: string | null;
   total_acres: number | null;
   measured_acres: number | null;
   override_acres: number | null;
-}
+};
 
 interface ActivePlannedHold {
   product_id: string;
@@ -378,6 +388,7 @@ export default function QuoteBuilder() {
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
   const [customerId, setCustomerId] = useState('');
+  const customerIdRef = useLatestRef(customerId);
   const [tier, setTier] = useState(1);
   const [validDays, setValidDays] = useState(15);
   const [headerNotes, setHeaderNotes] = useState('');
@@ -459,10 +470,21 @@ export default function QuoteBuilder() {
   const [wasPlanned, setWasPlanned] = useState(false);
 
   const [sections, setSections] = useState<LocalSection[]>([makeEmptySection(1)]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // The chosen customer's row: from the picker, the ?customer_id= link, or the saved quote. The
+  // picker searches the database, so no customer list is loaded.
+  const [customerRow, setCustomerRow] = useState<QuoteCustomer | null>(null);
+  // Set when the link's or the saved quote's customer could not be read; saving is blocked.
+  const [customerLoadError, setCustomerLoadError] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  // Set when the product list (or an admin's product costs) failed to load: the list is empty and
+  // adding lines and saving are blocked, so nothing is priced from a missing or partial list.
+  const [productsLoadFailed, setProductsLoadFailed] = useState(false);
+  // Until the product list and unit conversions land, every unit would convert at a factor of 1.
+  const [referenceDataReady, setReferenceDataReady] = useState(false);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
-  const [fields, setFields] = useState<FieldOption[]>([]);
+  // Fields this page knows by id: each section's saved field (read by id) plus each field picked.
+  const [fields, setFields] = useState<Record<string, FieldOption>>({});
+  const [fieldLoadError, setFieldLoadError] = useState<string | null>(null);
   const [activePlannedHolds, setActivePlannedHolds] = useState<ActivePlannedHold[]>([]);
 
   const [productSearchOpen, setProductSearchOpen] = useState<{
@@ -809,27 +831,34 @@ export default function QuoteBuilder() {
   const referenceSeqRef = useRef(0);
   const fetchReferenceData = useCallback(async () => {
     const seq = ++referenceSeqRef.current;
-    const [custRes, prodRes, convRes, fieldsRes] = await Promise.all([
-      supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
-      supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
+    setReferenceDataReady(false);
+    // Customers and fields are searched by their pickers; the product list is read whole because
+    // pricing, the product picker's local search and the admin cost overlay all use it.
+    const [prodRes, convRes] = await Promise.all([
+      fetchAllRows((from, to) => supabase
+        .from('products')
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
+        .eq('is_active', true)
+        .order('product_name')
+        .order('id')
+        .range(from, to)),
       supabase.from('unit_conversions').select('*'),
-      supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
 
-    if (custRes.error) {
-      Sentry.captureException(custRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
-      toast('error', 'Failed to load customers.');
-    }
     if (prodRes.error) {
       Sentry.captureException(prodRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
       toast('error', 'Failed to load products.');
     }
     if (convRes.error) {
       Sentry.captureException(convRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
+      toast('error', 'Failed to load unit conversions.');
     }
 
     // Cost and margin are admin-only (Mason, 2026-10-15): only an admin's product list carries cost.
-    let productRows = (prodRes.data || []) as unknown as Product[];
+    // A failed read leaves no list at all, never a partial or previous one. Without unit conversions
+    // every unit would convert at a factor of 1, so that failure blocks pricing the same way.
+    let productRows = prodRes.error || convRes.error ? [] : ((prodRes.data || []) as unknown as Product[]);
+    let productListFailed = !!prodRes.error || !!convRes.error;
     try {
       productRows = await withAdminCosts('products', productRows, isAdmin);
     } catch (costErr) {
@@ -837,13 +866,14 @@ export default function QuoteBuilder() {
       toast('error', 'Failed to load product costs.');
       // Never offer an admin a product list without cost (Luna round 1).
       productRows = [];
+      productListFailed = true;
     }
     if (seq !== referenceSeqRef.current) return;
 
-    setCustomers((custRes.data || []) as Customer[]);
     setProducts(productRows);
+    setProductsLoadFailed(productListFailed);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-    setFields((fieldsRes.data || []) as FieldOption[]);
+    setReferenceDataReady(!productListFailed);
   }, [toast, isAdmin]);
 
   const generateQuoteNumber = async () => {
@@ -1149,6 +1179,13 @@ export default function QuoteBuilder() {
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
+    // The quote read embeds its customer (customer:customers(*)); a quote whose customer did not
+    // come back cannot be saved, since the screen cannot show who it is for.
+    const loadedCustomer = (q as Quote & { customer?: QuoteCustomer | null }).customer ?? null;
+    setCustomerRow(loadedCustomer);
+    setCustomerLoadError(q.customer_id && !loadedCustomer
+      ? "This quote's customer could not be loaded. Refresh the page before saving."
+      : null);
     setTier(q.tier);
     setValidDays(q.valid_days);
     setHeaderNotes(q.header_notes || '');
@@ -1329,42 +1366,91 @@ export default function QuoteBuilder() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, fetchQuote, fetchReferenceData, isEditing]);
 
-  // Auto-set customer from URL query param (e.g., /quotes/new?customer_id=xxx)
+  const selectedCustomer = customerRow && customerRow.id === customerId ? customerRow : undefined;
+
+  // Saved sections name their field by id only; read those fields by id (no active filter: it is
+  // the saved record) for their names. One that fails to load or no longer exists blocks saving
+  // until the section's field is chosen again.
+  const unresolvedFieldKey = [...new Set(sections
+    .map((sec) => sec.field_id)
+    .filter((fieldId): fieldId is string => !!fieldId && !fields[fieldId]))]
+    .sort()
+    .join(',');
+  const unresolvedFieldIds = unresolvedFieldKey ? unresolvedFieldKey.split(',') : [];
   useEffect(() => {
-    if (!id && customers.length > 0) {
-      const params = new URLSearchParams(location.search);
-      const presetCustomerId = params.get('customer_id');
-      if (presetCustomerId && !customerId) {
-        const cust = customers.find((c) => c.id === presetCustomerId);
-        if (cust) {
-          setCustomerId(presetCustomerId);
-          setTier(cust.assigned_tier);
-          if (cust.default_commission_split) {
-            setCommissionSplit(cust.default_commission_split);
-            commissionSplitTouchedRef.current = true;
-          }
+    if (!unresolvedFieldKey) {
+      setFieldLoadError(null);
+      return;
+    }
+    let cancelled = false;
+    const ids = unresolvedFieldKey.split(',');
+    const customerIdAtStart = customerIdRef.current;
+    supabase
+      .from('fields')
+      .select(QUOTE_FIELD_SELECT)
+      .in('id', ids)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          Sentry.captureException(error, { tags: { source: 'fetch', page: 'quote_builder', action: 'load_section_fields' } });
+          setFieldLoadError("This quote's fields could not be loaded. Refresh the page before saving.");
+          return;
         }
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, customers.length, location.search]);
+        const rows = (data || []) as unknown as FieldOption[];
+        if (rows.length > 0) setFields((known) => ({ ...known, ...Object.fromEntries(rows.map((row) => [row.id, row])) }));
+        // The customer may have changed while these were loading: a field that belongs to another
+        // customer is then cleared, as a pick would have cleared it. A plain load never clears a
+        // saved field (CodeRabbit, #1017): a field later moved to another customer stays as saved.
+        const currentCustomerId = customerIdRef.current;
+        const customerChanged = currentCustomerId !== customerIdAtStart;
+        const foreign = new Set(rows
+          .filter((row) => customerChanged && currentCustomerId && row.customer_id !== currentCustomerId)
+          .map((row) => row.id));
+        if (foreign.size > 0) {
+          setSections((prev) => prev.map((sec) => (sec.field_id && foreign.has(sec.field_id) ? { ...sec, field_id: null } : sec)));
+          toast('warning', "The previous customer's field was removed from this quote. Check those lines' acres.");
+        }
+        if (rows.length < ids.length) {
+          setFieldLoadError('A field on this quote no longer exists. Choose the section\'s field again before saving.');
+        }
+      });
+    return () => { cancelled = true; };
+  }, [unresolvedFieldKey, customerIdRef, toast]);
 
-  const selectedCustomer = useMemo(
-    () => customers.find((c) => c.id === customerId),
-    [customers, customerId]
-  );
+  // Repricing lines before products and unit conversions load would convert every unit at a
+  // factor of 1, so a tier change waits for them. With no lines there is nothing to reprice.
+  const repriceBlocked = !referenceDataReady && sections.some((sec) => sec.items.length > 0);
 
-  const handleCustomerChange = (cId: string) => {
-    setCustomerId(cId);
-    const cust = customers.find((c) => c.id === cId);
-    if (cust) {
-      setTier(cust.assigned_tier);
-      if (cust.default_commission_split) {
-        setCommissionSplit(cust.default_commission_split);
-        commissionSplitTouchedRef.current = true;
-      }
-      recalcAllForTier(cust.assigned_tier);
+  const handleCustomerChange = (cust: QuoteCustomer | null): boolean => {
+    if (!cust) {
+      setCustomerId('');
+      return true;
     }
+    if (repriceBlocked) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return false;
+    }
+    setCustomerId(cust.id);
+    setCustomerRow(cust);
+    setCustomerLoadError(null);
+    setTier(cust.assigned_tier);
+    if (cust.default_commission_split) {
+      setCommissionSplit(cust.default_commission_split);
+      commissionSplitTouchedRef.current = true;
+    }
+    recalcAllForTier(cust.assigned_tier);
+    // A section's field must belong to the quote's customer: clear any that does not. A saved
+    // field still loading by id is kept; the unresolved-field check blocks saving until it loads.
+    // The lines keep their acres (they are the line's own values, as when a field is cleared by
+    // hand), so the user is told to check them (Luna, #1017).
+    const clearedSections = sections.filter((sec) => sec.field_id && fields[sec.field_id] && fields[sec.field_id].customer_id !== cust.id);
+    if (clearedSections.length > 0) {
+      setSections((prev) => prev.map((sec) => (
+        sec.field_id && fields[sec.field_id] && fields[sec.field_id].customer_id !== cust.id ? { ...sec, field_id: null } : sec
+      )));
+      toast('warning', `The previous customer's field was removed from ${clearedSections.map((sec) => sec.section_name || 'a section').join(', ')}. Check those lines' acres.`);
+    }
+    return true;
   };
 
   const getConversionFactor = useCallback(
@@ -1473,11 +1559,52 @@ export default function QuoteBuilder() {
     );
   };
 
+  const handleCustomerChangeRef = useLatestRef(handleCustomerChange);
+
+  // Auto-set customer from URL query param (e.g., /quotes/new?customer_id=xxx)
+  // The link's customer is read by id with the old list's filter (active customers only). One
+  // that fails to load or is not found is reported and left unselected, never priced at a default.
+  useEffect(() => {
+    if (id) return;
+    const presetCustomerId = new URLSearchParams(location.search).get('customer_id');
+    if (!presetCustomerId) return;
+    let cancelled = false;
+    supabase
+      .from('customers')
+      .select(QUOTE_CUSTOMER_SELECT)
+      .eq('id', presetCustomerId)
+      .eq('is_active', true)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) Sentry.captureException(error, { tags: { source: 'fetch', page: 'quote_builder', action: 'load_link_customer' } });
+        // A customer the user already chose wins over the link, as before.
+        if (customerIdRef.current) return;
+        const cust = error ? null : (data as unknown as QuoteCustomer | null);
+        if (!cust) {
+          setCustomerLoadError('The customer from the link could not be loaded. Choose the customer before saving this quote.');
+          return;
+        }
+        // Lines may already exist (the link read is separate from the product read), so the link
+        // customer is applied exactly like a pick: reprice for its tier and clear foreign fields.
+        if (!handleCustomerChangeRef.current(cust)) {
+          setCustomerLoadError('The customer from the link was not applied while products were loading. Choose the customer before saving this quote.');
+        }
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, location.search]);
+
   const updateItem = (
     sectionKey: string,
     itemKey: string,
     updates: Partial<LocalItem>
   ) => {
+    // A line priced before unit conversions load would convert at a factor of 1.
+    if (!referenceDataReady) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return;
+    }
     setSections((prev) =>
       prev.map((sec) => {
         if (sec._key !== sectionKey) return sec;
@@ -1576,12 +1703,18 @@ export default function QuoteBuilder() {
     );
   };
 
-  const handleSectionFieldChange = (sectionKey: string, fieldId: string | null) => {
-    updateSectionField(sectionKey, 'field_id', fieldId);
-    const field = fields.find((candidate) => candidate.id === fieldId);
+  // Returns false to refuse the pick (the picker keeps its label): a field's acres reprice the
+  // section's lines, which must wait for products and unit conversions (CodeRabbit, #1017).
+  const handleSectionFieldChange = (sectionKey: string, field: FieldOption | null): boolean => {
+    if (field && repriceBlocked) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return false;
+    }
+    if (field) setFields((known) => ({ ...known, [field.id]: field }));
+    updateSectionField(sectionKey, 'field_id', field?.id ?? null);
     // Documented field-acre precedence: override → measured → legacy total.
     const effectiveAcres = field?.override_acres ?? field?.measured_acres ?? field?.total_acres;
-    if (effectiveAcres == null) return;
+    if (effectiveAcres == null) return true;
 
     setSections((prev) =>
       prev.map((section) => {
@@ -1599,9 +1732,18 @@ export default function QuoteBuilder() {
         };
       })
     );
+    return true;
   };
 
   function addItem(sectionKey: string): string {
+    if (productsLoadFailed) {
+      toast('error', 'Products failed to load. Refresh the page before adding products.');
+      return '';
+    }
+    if (!referenceDataReady) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return '';
+    }
     const newItem = makeEmptyItem();
     setSections((prev) =>
       prev.map((sec) => {
@@ -1671,7 +1813,24 @@ export default function QuoteBuilder() {
       return null;
     }
     if (!customerId) {
-      toast('error', 'Please select a customer');
+      toast('error', customerLoadError ?? 'Please select a customer');
+      return null;
+    }
+    // Never save a quote whose customer, section fields or product list did not load.
+    if (!selectedCustomer) {
+      toast('error', customerLoadError ?? 'The selected customer could not be loaded. Choose the customer again before saving.');
+      return null;
+    }
+    if (unresolvedFieldIds.length > 0) {
+      toast('error', fieldLoadError ?? 'The fields on this quote are still loading. Try again in a moment.');
+      return null;
+    }
+    if (productsLoadFailed) {
+      toast('error', 'Products failed to load. Refresh the page before saving this quote.');
+      return null;
+    }
+    if (!referenceDataReady) {
+      toast('error', 'Products are still loading. Try again in a moment.');
       return null;
     }
     if (!profile) return null;
@@ -4114,15 +4273,28 @@ export default function QuoteBuilder() {
         <CardHeader title="Quote" accent="Details" />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <label className="block text-sm font-medium text-secondary mb-1">
+            <label htmlFor="quote-customer" className="block text-sm font-medium text-secondary mb-1">
               Customer
             </label>
-            <SearchableSelect
-              options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
+            {/* Active customers only, as the old list loaded. */}
+            <CustomerSearchPicker<QuoteCustomer>
+              id="quote-customer"
               value={customerId}
-              onChange={handleCustomerChange}
+              selectedLabel={selectedCustomer?.farm_name ?? ''}
+              onSelect={handleCustomerChange}
+              select={QUOTE_CUSTOMER_SELECT}
               placeholder="Select a customer..."
+              ariaLabel="Customer"
             />
+            {customerLoadError && (
+              <p role="alert" className="mt-1 text-sm text-red-600">{customerLoadError}</p>
+            )}
+            {fieldLoadError && unresolvedFieldIds.length > 0 && (
+              <p role="alert" className="mt-1 text-sm text-red-600">{fieldLoadError}</p>
+            )}
+            {productsLoadFailed && (
+              <p role="alert" className="mt-1 text-sm text-red-600">Products failed to load. Refresh the page before adding products or saving this quote.</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">
@@ -4131,6 +4303,10 @@ export default function QuoteBuilder() {
             <select
               value={tier}
               onChange={(e) => {
+                if (repriceBlocked) {
+                  toast('error', 'Products are still loading. Try again in a moment.');
+                  return;
+                }
                 const t = parseInt(e.target.value);
                 setTier(t);
                 recalcAllForTier(t);
@@ -4269,19 +4445,17 @@ export default function QuoteBuilder() {
                   )}
                   <div className="flex items-center gap-2 ml-2">
                     <label className="text-xs text-secondary whitespace-nowrap">Field:</label>
-                    <select
+                    {/* Active fields only (the customer's, once one is chosen), as the old list loaded. */}
+                    <FieldSearchPicker<FieldOption>
                       value={sec.field_id || ''}
-                      onChange={(e) => handleSectionFieldChange(sec._key, e.target.value || null)}
-                      className="text-sm border border-gray-200 rounded px-2 py-1 max-w-[180px]"
-                    >
-                      <option value="">— None —</option>
-                      {(customerId
-                        ? fields.filter(f => f.customer_id === customerId)
-                        : fields
-                      ).map(f => (
-                        <option key={f.id} value={f.id}>{f.field_name}</option>
-                      ))}
-                    </select>
+                      selectedLabel={(sec.field_id && fields[sec.field_id]?.field_name) || ''}
+                      onSelect={(field) => handleSectionFieldChange(sec._key, field)}
+                      select={QUOTE_FIELD_SELECT}
+                      customerId={customerId || null}
+                      placeholder="Search fields..."
+                      ariaLabel={`Field for ${sec.section_name || 'section'}`}
+                      className="w-[180px]"
+                    />
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

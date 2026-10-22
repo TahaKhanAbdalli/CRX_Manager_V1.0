@@ -20,7 +20,7 @@ const rpc = vi.fn();
 function chainable() {
   const builder: Record<string, unknown> = {};
   const self = () => builder;
-  for (const m of ['select', 'eq', 'order', 'limit', 'is', 'in', 'neq']) builder[m] = vi.fn(self);
+  for (const m of ['select', 'eq', 'order', 'limit', 'is', 'in', 'neq', 'range']) builder[m] = vi.fn(self);
   builder.then = vi.fn((resolve: (v: unknown) => void) => {
     Promise.resolve({ data: [], error: null }).then(resolve);
     return builder;

@@ -47,7 +47,7 @@ const siblings = [
 
 function query(data: unknown) {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'or', 'order', 'in', 'update']) {
+  for (const method of ['select', 'eq', 'or', 'order', 'in', 'update', 'range']) {
     builder[method] = vi.fn(() => builder);
   }
   builder.then = (resolve: (value: unknown) => void) =>
@@ -156,6 +156,94 @@ describe('InventoryPage Product identity writers', () => {
       'manual_inventory_add',
       expect.objectContaining({ p_product_id: 'product-b' }),
     ));
+  });
+
+  it('a failed product reload clears the earlier list and blocks Add Inventory (Goal 4 part 3)', async () => {
+    render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /add inventory/i }));
+    let dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+    expect(await within(dialog).findByRole('button', { name: /SKU-A.*Family: Family A/i })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /add.*inventory/i })).not.toBeInTheDocument());
+
+    // The next read of the product list fails.
+    mocks.from.mockImplementation((table: string) => {
+      if (table !== 'products') return query([]);
+      const failing: Record<string, unknown> = {};
+      for (const method of ['select', 'eq', 'order', 'range']) failing[method] = vi.fn(() => failing);
+      failing.then = (resolve: (value: unknown) => void) =>
+        Promise.resolve({ data: null, error: { message: 'connection reset' }, count: null }).then(resolve);
+      return failing;
+    });
+    fireEvent.click(screen.getByRole('button', { name: /add inventory/i }));
+    dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Products could not be loaded');
+    expect(within(dialog).queryByRole('button', { name: /SKU-A/i })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /SKU-B/i })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^add inventory$/i })).toBeDisabled();
+    expect(mocks.toast).toHaveBeenCalledWith('error', 'Failed to load products. Please try again.');
+    expect(mocks.rpc).not.toHaveBeenCalledWith('manual_inventory_add', expect.anything());
+  });
+
+  it('an older product read that fails late never replaces a newer good list (CodeRabbit, #1017)', async () => {
+    // Every products read waits for the test, so the replies can arrive out of order.
+    const releases: Array<(result: { data: unknown; error: unknown; count: number | null }) => void> = [];
+    mocks.from.mockImplementation((table: string) => {
+      if (table !== 'products') return query([]);
+      const held = new Promise((resolve) => { releases.push(resolve); });
+      const builder: Record<string, unknown> = {};
+      for (const method of ['select', 'eq', 'order', 'range']) builder[method] = vi.fn(() => builder);
+      builder.then = (resolve: (value: unknown) => void) => held.then(resolve);
+      return builder;
+    });
+    render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /add inventory/i }));
+    let dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /add.*inventory/i })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add inventory/i }));
+    dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+    expect(releases).toHaveLength(2);
+
+    // The newer read succeeds first, then the older one fails.
+    releases[1]({ data: siblings, error: null, count: siblings.length });
+    expect(await within(dialog).findByRole('button', { name: /SKU-A.*Family: Family A/i })).toBeInTheDocument();
+    releases[0]({ data: null, error: { message: 'connection reset' }, count: null });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(within(dialog).getByRole('button', { name: /SKU-B.*Family: Family B/i })).toBeInTheDocument();
+    expect(within(dialog).queryByText('Products could not be loaded')).toBeNull();
+    expect(mocks.toast).not.toHaveBeenCalledWith('error', 'Failed to load products. Please try again.');
+  });
+
+  it('blocks Add Inventory while a product reload is in flight (Luna, #1017)', async () => {
+    let release!: (result: { data: unknown; error: unknown; count: number | null }) => void;
+    let holdReads = false;
+    mocks.from.mockImplementation((table: string) => {
+      if (table !== 'products') return query([]);
+      if (!holdReads) return query(siblings);
+      const held = new Promise((resolve) => { release = resolve; });
+      const builder: Record<string, unknown> = {};
+      for (const method of ['select', 'eq', 'order', 'range']) builder[method] = vi.fn(() => builder);
+      builder.then = (resolve: (value: unknown) => void) => held.then(resolve);
+      return builder;
+    });
+    render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /add inventory/i }));
+    let dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+    expect(await within(dialog).findByRole('button', { name: /SKU-A/i })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /add.*inventory/i })).not.toBeInTheDocument());
+
+    // Reopening reloads the list; until it lands, the earlier list must not be used.
+    holdReads = true;
+    fireEvent.click(screen.getByRole('button', { name: /add inventory/i }));
+    dialog = screen.getByRole('dialog', { name: /add.*inventory/i });
+    expect(within(dialog).getByRole('button', { name: /^add inventory$/i })).toBeDisabled();
+
+    release({ data: siblings, error: null, count: siblings.length });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /^add inventory$/i })).not.toBeDisabled());
   });
 
   it('distinguishes siblings and sends exact UUID B to create_inventory_hold', async () => {

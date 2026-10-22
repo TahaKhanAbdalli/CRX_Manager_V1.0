@@ -18,10 +18,12 @@ import { pctsToMicro } from '../lib/splitVectorMath';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { todayInBusinessTz } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
-import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import ProductSearchPicker from '../components/products/ProductSearchPicker';
+import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import FieldSearchPicker, { type FieldSearchResult } from '../components/fields/FieldSearchPicker';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
-import type { UnitConversion } from '../types';
+import type { ProductSearchResult, UnitConversion } from '../types';
 
 /**
  * Per-line split-billing EDITOR (flag-gated, OFF by default).
@@ -56,6 +58,8 @@ interface LineDraft {
   uid: string;
   line_kind: LineKindUI;
   product_id: string;
+  /** The picked product (name, details, form); the picker searches, so no product list is kept. */
+  product: ProductOption | null;
   application_service_id: string;
   description: string;
   quantity: string; // chemical: total applied quantity
@@ -75,13 +79,9 @@ interface FieldPick {
   applied_acres: string;
 }
 
-interface FieldOption {
-  id: string;
-  field_name: string;
-}
+// The product search's columns plus product_form for the rate-unit picker.
 
-interface ProductOption extends ProductOptionPresentationModel {
-  product_name: string;
+interface ProductOption extends ProductSearchResult {
   /** liquid | dry — decides which unit_conversions rows the rate-unit picker offers. */
   product_form: string | null;
 }
@@ -190,8 +190,6 @@ export default function FieldAppSplitInvoiceEditor() {
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
 
   // Picker data
-  const [fieldOptions, setFieldOptions] = useState<FieldOption[]>([]);
-  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   // Rate unit is a PICKER, not free text, so an operator can no longer invent a unit the
   // pricing engine cannot resolve. unitLoad is tracked separately from the array because an
   // empty array means three different things (in flight / fetch failed / table really is
@@ -215,7 +213,8 @@ export default function FieldAppSplitInvoiceEditor() {
   const [headerNotes, setHeaderNotes] = useState('');
   const [sourceJobId, setSourceJobId] = useState('');
   const [fields, setFields] = useState<FieldPick[]>([]);
-  const [addFieldId, setAddFieldId] = useState('');
+  // The field chosen in the "Add a field" search, added to the list by the Add button.
+  const [addFieldPick, setAddFieldPick] = useState<FieldSearchResult | null>(null);
 
   // Resolved default split + customer names
   const [members, setMembers] = useState<Member[]>([]);
@@ -282,9 +281,9 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       try {
-        const [flds, prods, svcs, jbs, units] = await Promise.all([
-          supabase.from('fields').select('id, field_name').eq('is_active', true).order('field_name').limit(1000),
-          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_form, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
+        // Fields and products are not listed here: their pickers search the database as you
+        // type, so none is ever cut off at a row limit (Goal 4, M38).
+        const [svcs, jbs, units] = await Promise.all([
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
           supabase
             .from('jobs')
@@ -298,18 +297,12 @@ export default function FieldAppSplitInvoiceEditor() {
           supabase.from('unit_conversions').select('*').order('unit'),
         ]);
         if (cancelled) return;
-        const pickerErrors = [flds.error, prods.error, svcs.error, jbs.error, units.error].filter(Boolean);
+        const pickerErrors = [svcs.error, jbs.error, units.error].filter(Boolean);
         if (pickerErrors.length > 0) {
           pickerErrors.forEach((error) => {
             Sentry.captureException(error, { extra: { context: 'load_field_app_split_invoice_pickers' } });
           });
           toast('error', 'Some field application invoice pickers could not be loaded.');
-        }
-        if (!flds.error) {
-          setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
-        }
-        if (!prods.error) {
-          setProductOptions(((prods.data as Array<ProductOption> | null) ?? []).map((p) => ({ ...p, product_name: p.product_name || 'Unnamed product' })));
         }
         if (!svcs.error) {
           setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
@@ -355,15 +348,14 @@ export default function FieldAppSplitInvoiceEditor() {
 
   // ── Field selection ──────────────────────────────────────────────────────
   const addField = () => {
-    if (!addFieldId) return;
-    if (fields.some((f) => f.field_id === addFieldId)) {
+    const opt = addFieldPick;
+    if (!opt) return;
+    if (fields.some((f) => f.field_id === opt.id)) {
       toast('info', 'That field is already added.');
       return;
     }
-    const opt = fieldOptions.find((f) => f.id === addFieldId);
-    if (!opt) return;
-    setFields((prev) => [...prev, { field_id: opt.id, field_name: opt.field_name, applied_acres: '' }]);
-    setAddFieldId('');
+    setFields((prev) => [...prev, { field_id: opt.id, field_name: opt.field_name || 'Unnamed field', applied_acres: '' }]);
+    setAddFieldPick(null);
   };
 
   const removeField = (fieldId: string) => setFields((prev) => prev.filter((f) => f.field_id !== fieldId));
@@ -424,6 +416,7 @@ export default function FieldAppSplitInvoiceEditor() {
         uid: nextUid(),
         line_kind: kind,
         product_id: '',
+        product: null,
         application_service_id: '',
         description: '',
         quantity: '',
@@ -1000,19 +993,18 @@ export default function FieldAppSplitInvoiceEditor() {
       <Card>
         <CardHeader title="Fields & Applied Acres" />
         <div className="flex items-end gap-2 mb-4">
-          <label className="flex-1">
+          <div className="flex-1">
             <span className="text-xs font-medium text-secondary">Add a field</span>
-            <select
-              value={addFieldId}
-              onChange={(e) => setAddFieldId(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
-            >
-              <option value="">Select a field…</option>
-              {fieldOptions.filter((o) => !fields.some((f) => f.field_id === o.id)).map((o) => (
-                <option key={o.id} value={o.id}>{o.field_name}</option>
-              ))}
-            </select>
-          </label>
+            <FieldSearchPicker
+              value={addFieldPick?.id ?? ''}
+              selectedLabel={addFieldPick?.field_name ?? ''}
+              onSelect={setAddFieldPick}
+              excludeIds={fields.map((f) => f.field_id)}
+              placeholder="Select a field…"
+              ariaLabel="Add a field"
+              className="mt-1 w-full"
+            />
+          </div>
           <Button variant="secondary" icon={<Plus className="w-4 h-4" />} showChevron={false} onClick={addField}>Add</Button>
         </div>
 
@@ -1103,12 +1095,14 @@ export default function FieldAppSplitInvoiceEditor() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {l.line_kind === 'chemical' && (
                       <>
-                        <label className="block">
+                        <div className="block">
                           <span className="text-xs font-medium text-secondary">Product</span>
-                          <select
+                          <ProductSearchPicker<ProductOption>
                             value={l.product_id}
-                            onChange={(e) => {
-                              const nextForm = productOptions.find((p) => p.id === e.target.value)?.product_form ?? null;
+                            selectedLabel={l.product?.product_name ?? ''}
+                            onSelect={(product) => {
+                              const nextForm = product?.product_form ?? null;
+                              const nextId = product?.id ?? '';
                               // Switching to a product of the other form would leave the old rate
                               // unit selected as a grandfathered option (a liquid unit on a dry
                               // product). Clear it so the operator must pick one that fits.
@@ -1117,16 +1111,15 @@ export default function FieldAppSplitInvoiceEditor() {
                               const dropUnit = unitLoad === 'loaded' && unitConversions.length > 0
                                 && !isKnownUnit(unitConversions, nextForm, l.rateUnit);
                               patchLine(l.uid, dropUnit
-                                ? { product_id: e.target.value, rateUnit: '' }
-                                : { product_id: e.target.value });
+                                ? { product_id: nextId, product, rateUnit: '' }
+                                : { product_id: nextId, product });
                             }}
-                            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
-                          >
-                            <option value="">Select a product…</option>
-                            {productOptions.map((p) => (<option key={p.id} value={p.id}>{productOptionLabel(p)}</option>))}
-                          </select>
-                          {productOptions.find((p) => p.id === l.product_id) && <ProductOptionDetails product={productOptions.find((p) => p.id === l.product_id)!} />}
-                        </label>
+                            placeholder="Select a product…"
+                            ariaLabel="Product"
+                            className="mt-1 w-full"
+                          />
+                          {l.product && <ProductOptionDetails product={l.product} />}
+                        </div>
                         <label className="block">
                           <span className="text-xs font-medium text-secondary">Total quantity</span>
                           <input type="number" min="0" step="0.0001" value={l.quantity} onChange={(e) => patchLine(l.uid, { quantity: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
@@ -1135,11 +1128,11 @@ export default function FieldAppSplitInvoiceEditor() {
                           <span className="block text-xs font-medium text-secondary mb-1">Rate unit</span>
                           <UnitSelect
                             unitConversions={unitConversions}
-                            form={productOptions.find((p) => p.id === l.product_id)?.product_form ?? null}
+                            form={l.product?.product_form ?? null}
                             value={l.rateUnit}
                             onChange={(value) => patchLine(l.uid, { rateUnit: value })}
                             disabled={saving}
-                            ariaLabel={`Rate unit for ${productOptions.find((p) => p.id === l.product_id)?.product_name || 'chemical line'}`}
+                            ariaLabel={`Rate unit for ${l.product?.product_name || 'chemical line'}`}
                           />
                         </div>
                         <div className="block sm:col-span-2">

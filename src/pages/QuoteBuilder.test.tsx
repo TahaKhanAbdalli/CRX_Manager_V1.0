@@ -194,8 +194,11 @@ vi.mock('../lib/db', async () => {
   };
 });
 
+// The signed-in role; a test may change it to re-run the reference load (a role change does).
+const authState = vi.hoisted(() => ({ role: 'admin' }));
+
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
+  useAuth: () => ({ profile: { id: 'user-1', role: authState.role, full_name: 'Test Admin' }, role: authState.role }),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -321,11 +324,16 @@ function renderQuoteBuilderWithQuoteSwitch(fromId: string, toId: string) {
 // midnight-anchored ISO string keeps the rendered date deterministic within a run.
 const RECENT_QUOTE_CREATED_AT = `${new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`;
 
+// The quote header read embeds its customer (customer:customers(*)); the page takes the customer's
+// name and contact details from it, and refuses to save a quote whose customer did not load.
+const QUOTE_FIXTURE_CUSTOMER = { id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true };
+
 function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVersion?: number) {
   const quote = {
     id: `quote-${status}-${rowVersion ?? 'legacy'}`,
     quote_number: 'Q-version-test',
     customer_id: 'customer-1',
+    customer: QUOTE_FIXTURE_CUSTOMER,
     tier: 1,
     valid_days: 30,
     header_notes: 'Version test header',
@@ -444,9 +452,278 @@ describe('QuoteBuilder', () => {
     quoteIdempotencyState.reset();
     quoteIdempotencyHandles.clear();
     dirtyStates.length = 0;
+    authState.role = 'admin';
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
     mockSendEmail.mockResolvedValue({ deduplicated: false });
+  });
+
+  it('prices from the searched customer\'s tier and clears a section field of another customer', async () => {
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'customers'
+        ? [{ id: 'customer-3', farm_name: 'Far Field Farm', assigned_tier: 3, is_active: true }]
+        : table === 'fields'
+          ? [{ id: 'field-9', field_name: 'North Forty', customer_id: 'customer-9', total_acres: 40, measured_acres: null, override_acres: null }]
+          : [],
+      error: null,
+    }));
+    renderQuoteBuilder();
+
+    const fieldBox = await screen.findByRole('combobox', { name: 'Field for Section 1' });
+    fireEvent.change(fieldBox, { target: { value: 'No' } });
+    fireEvent.click(await screen.findByRole('option', { name: /North Forty/ }));
+    expect(fieldBox).toHaveValue('North Forty');
+
+    const customerBox = screen.getByRole('combobox', { name: 'Customer' });
+    fireEvent.change(customerBox, { target: { value: 'Far' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Far Field Farm/ }));
+
+    expect(customerBox).toHaveValue('Far Field Farm');
+    expect(screen.getByDisplayValue('Tier 3')).toBeInTheDocument();
+    // North Forty belongs to another customer, so the section no longer names it, and the
+    // user is told to check that section's acres (Luna, #1017).
+    await waitFor(() => expect(fieldBox).toHaveValue(''));
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining("Check those lines' acres"));
+  });
+
+  it('clears a saved section field of the original customer when it loads after another customer was picked', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    const savedSection = { ...section, field_id: 'field-1' };
+    // The by-id read of the saved section's field is held open until the test releases it.
+    let releaseFieldRead!: (result: { data: unknown; error: unknown }) => void;
+    const fieldRead = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseFieldRead = resolve; });
+    let fieldReadsById = 0;
+    const fieldsChain = () => {
+      let byId = false;
+      const self: Record<string, unknown> = {};
+      for (const m of ['select', 'eq', 'neq', 'or', 'not', 'order', 'limit', 'range', 'ilike', 'is']) self[m] = () => self;
+      self.in = () => { byId = true; fieldReadsById += 1; return self; };
+      const settle = () => (byId ? fieldRead : Promise.resolve({ data: [], error: null }));
+      self.then = (...args: Parameters<Promise<unknown>['then']>) => settle().then(...args);
+      self.catch = (...args: Parameters<Promise<unknown>['catch']>) => settle().catch(...args);
+      self.finally = (...args: Parameters<Promise<unknown>['finally']>) => settle().finally(...args);
+      return self;
+    };
+    mockFrom.mockImplementation((table: string) => (table === 'fields' ? fieldsChain() : buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [savedSection]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-3', farm_name: 'Far Field Farm', assigned_tier: 3, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    })));
+
+    renderQuoteBuilder(quote.id);
+    const fieldBox = await screen.findByRole('combobox', { name: /^Field for/ });
+    await waitFor(() => expect(fieldReadsById).toBeGreaterThan(0));
+
+    // While the saved field is still loading, the user picks a different customer.
+    const customerBox = screen.getByRole('combobox', { name: 'Customer' });
+    fireEvent.change(customerBox, { target: { value: 'Far' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Far Field Farm/ }));
+    expect(customerBox).toHaveValue('Far Field Farm');
+
+    // The saved field then arrives: it belongs to the ORIGINAL customer, so the section drops it.
+    await act(async () => {
+      releaseFieldRead({
+        data: [{ id: 'field-1', field_name: 'Home Quarter', customer_id: 'customer-1', total_acres: 80, measured_acres: null, override_acres: null }],
+        error: null,
+      });
+      await fieldRead;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(fieldBox).toHaveValue('');
+    expect(screen.queryByDisplayValue('Home Quarter')).not.toBeInTheDocument();
+  });
+
+  it('keeps a saved section field that now belongs to another customer when the quote is only opened (CodeRabbit, #1017)', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    const savedSection = { ...section, field_id: 'field-1' };
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [savedSection]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'fields'
+              // The field was moved to another customer after the quote was saved.
+              ? [{ id: 'field-1', field_name: 'Home Quarter', customer_id: 'customer-elsewhere', total_acres: 80, measured_acres: null, override_acres: null }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+
+    renderQuoteBuilder(quote.id);
+    const fieldBox = await screen.findByRole('combobox', { name: /^Field for/ });
+    await waitFor(() => expect(fieldBox).toHaveValue('Home Quarter'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(fieldBox).toHaveValue('Home Quarter');
+  });
+
+  it('clears the product list and blocks new lines when a reload of the products fails', async () => {
+    let productsFail = false;
+    let failedReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'products') return buildChain({ data: [], error: null });
+      if (!productsFail) {
+        return buildChain({ data: [{ id: 'product-1', product_name: 'Alpha Herbicide', is_active: true }], error: null });
+      }
+      failedReads += 1;
+      return buildChain({ data: null, error: { message: 'products unavailable' } });
+    });
+    const view = renderQuoteBuilder();
+    expect(await screen.findByRole('button', { name: 'Add one' })).toBeInTheDocument();
+    await waitFor(() => expect(mockFrom).toHaveBeenCalledWith('products'));
+    expect(screen.queryByText(/Products failed to load/)).not.toBeInTheDocument();
+
+    // A role change re-runs the reference load; this time the product read fails.
+    productsFail = true;
+    authState.role = 'sales';
+    view.rerender(
+      <MemoryRouter initialEntries={['/quotes/new']}>
+        <Routes>
+          <Route path="/quotes/new" element={<QuoteBuilder />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/Products failed to load\. Refresh the page before adding products or saving this quote\./)).toBeInTheDocument();
+    expect(failedReads).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add one' }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Products failed to load. Refresh the page before adding products.');
+    // No line was added: the section still offers its first line.
+    expect(screen.getByRole('button', { name: 'Add one' })).toBeInTheDocument();
+  });
+
+  it('no line can be added or priced, and nothing saved, until the products and unit conversions finish loading', async () => {
+    // The product read is held open until the test releases it; until then every unit
+    // would convert at a factor of 1, so the page must refuse to add, price or save.
+    let releaseProducts!: (result: { data: unknown; error: unknown }) => void;
+    const productsRead = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseProducts = resolve; });
+    const heldChain = () => {
+      const self: Record<string, unknown> = {};
+      for (const m of ['select', 'eq', 'neq', 'or', 'not', 'order', 'limit', 'range', 'in', 'is']) self[m] = () => self;
+      self.then = (...args: Parameters<Promise<unknown>['then']>) => productsRead.then(...args);
+      self.catch = (...args: Parameters<Promise<unknown>['catch']>) => productsRead.catch(...args);
+      self.finally = (...args: Parameters<Promise<unknown>['finally']>) => productsRead.finally(...args);
+      return self;
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'products') return heldChain();
+      return buildChain({
+        data: table === 'customers' ? [{ id: 'customer-3', farm_name: 'Far Field Farm', assigned_tier: 3, is_active: true }] : [],
+        error: null,
+      });
+    });
+    renderQuoteBuilder();
+
+    const customerBox = await screen.findByRole('combobox', { name: 'Customer' });
+    fireEvent.change(customerBox, { target: { value: 'Far' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Far Field Farm/ }));
+    expect(customerBox).toHaveValue('Far Field Farm');
+
+    // Adding a line is refused while the products load.
+    fireEvent.click(await screen.findByRole('button', { name: 'Add one' }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.');
+    expect(screen.getByRole('button', { name: 'Add one' })).toBeInTheDocument();
+
+    // Saving is refused too, before any save reaches the server.
+    mockToast.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.'));
+    expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+
+    // Once the products land, adding a line works.
+    await act(async () => {
+      releaseProducts({ data: [{ id: 'product-1', product_name: 'Alpha Herbicide', is_active: true }], error: null });
+      await productsRead;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    mockToast.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Add one' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Add one' })).not.toBeInTheDocument());
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.');
+  });
+
+  it('refuses a customer, tier or section field change while saved lines exist and products are still loading, then allows it', async () => {
+    // Repricing a saved line before unit conversions load would convert at a factor of 1.
+    let releaseProducts!: (result: { data: unknown; error: unknown }) => void;
+    const productsRead = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseProducts = resolve; });
+    const heldChain = () => {
+      const self: Record<string, unknown> = {};
+      for (const m of ['select', 'eq', 'neq', 'or', 'not', 'order', 'limit', 'range', 'in', 'is']) self[m] = () => self;
+      self.then = (...args: Parameters<Promise<unknown>['then']>) => productsRead.then(...args);
+      self.catch = (...args: Parameters<Promise<unknown>['catch']>) => productsRead.catch(...args);
+      self.finally = (...args: Parameters<Promise<unknown>['finally']>) => productsRead.finally(...args);
+      return self;
+    };
+    const product = { id: 'product-1', product_name: 'Alpha Herbicide', is_active: true, tier1_price: 10, tier2_price: 9, tier3_price: 8 };
+    const quote = {
+      id: 'quote-77', quote_number: 'Q-2026-0077', customer_id: null, tier: 1, valid_days: 30,
+      header_notes: null, footer_notes: null, status: 'draft', is_planned: false, commission_split: null,
+      created_at: RECENT_QUOTE_CREATED_AT,
+    };
+    const section = {
+      id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 1, section_notes: null,
+      section_header_notes: null, needed_by_date: null, field_id: null,
+    };
+    const item = {
+      id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 1, product,
+      calc_mode: 'units_direct', total_units_needed: 1, price_per_unit: 10, price_override: null, suggested_rate: null,
+      actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: null,
+      total_price: 10, notes: null, price_unit: null,
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'products') return heldChain();
+      const data = table === 'quotes' ? quote
+        : table === 'quote_sections' ? [section]
+          : table === 'quote_items' ? [item]
+            : table === 'customers' ? [{ id: 'customer-3', farm_name: 'Far Field Farm', assigned_tier: 3, is_active: true }]
+              : table === 'fields' ? [{ id: 'field-9', field_name: 'North Forty', customer_id: null, total_acres: 40, is_active: true }]
+                : [];
+      return buildChain({ data, error: null });
+    });
+    renderQuoteBuilder(quote.id);
+
+    // A field's acres would reprice the saved line, so the field pick waits too (CodeRabbit, #1017).
+    const fieldBox = await screen.findByRole('combobox', { name: 'Field for Products' });
+    fireEvent.focus(fieldBox);
+    fireEvent.change(fieldBox, { target: { value: 'North' } });
+    fireEvent.click(await screen.findByRole('option', { name: /North Forty/ }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.');
+    expect(fieldBox).toHaveValue('');
+    mockToast.mockClear();
+
+    const customerBox = await screen.findByRole('combobox', { name: 'Customer' });
+    fireEvent.focus(customerBox);
+    fireEvent.change(customerBox, { target: { value: 'Far' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Far Field Farm/ }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.');
+    expect(customerBox).toHaveValue('');
+    const tierSelect = screen.getByDisplayValue('Tier 1');
+    fireEvent.change(tierSelect, { target: { value: '2' } });
+    expect(tierSelect).toHaveValue('1');
+
+    await act(async () => {
+      releaseProducts({ data: [product], error: null });
+      await productsRead;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    mockToast.mockClear();
+    fireEvent.focus(customerBox);
+    fireEvent.change(customerBox, { target: { value: 'Far' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Far Field Farm/ }));
+    expect(customerBox).toHaveValue('Far Field Farm');
+    expect(screen.getByDisplayValue('Tier 3')).toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Products are still loading. Try again in a moment.');
   });
 
   it('renders the Quote Builder heading for a new quote', async () => {
@@ -897,7 +1174,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {
-    const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const reloadedQuote = { ...quote, header_notes: 'Newer header', row_version: 8 };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
@@ -1250,7 +1527,7 @@ describe('QuoteBuilder', () => {
    * offered retired a save_quote receipt whose own reply had never been validated.
    */
   it('does not let a decline-originated recovery reload release the save_quote key', async () => {
-    const quote = { id: 'quote-decline-key', quote_number: 'Q-decline-key', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-decline-key', quote_number: 'Q-decline-key', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: 'Local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1631,7 +1908,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps a committed direct decline visible and opens recovery when its returned version jumps from 7 to 9', async () => {
-    const quote = { id: 'quote-direct-jump', quote_number: 'Q-direct-jump', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Keep this local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-direct-jump', quote_number: 'Q-direct-jump', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: 'Keep this local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1658,7 +1935,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the conflict dialog and every local quote edit when Reload cannot read sections', async () => {
-    const quote = { id: 'quote-partial', quote_number: 'Q-partial', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-partial', quote_number: 'Q-partial', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1681,7 +1958,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the conflict dialog and local quote when the header version changes during Reload', async () => {
-    const quote = { id: 'quote-unstable-reload', quote_number: 'Q-unstable', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-unstable-reload', quote_number: 'Q-unstable', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const changedQuote = { ...quote, header_notes: 'Other writer header', row_version: 8 };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
@@ -1706,7 +1983,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('uses the reread token after reopening before the next revise/save', async () => {
-    const quote = { id: 'quote-reopen', quote_number: 'Q-reopen', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-reopen', quote_number: 'Q-reopen', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1727,7 +2004,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('fails closed instead of adopting a jumped post-reopen token', async () => {
-    const quote = { id: 'quote-jumped-token', quote_number: 'Q-jumped', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-jumped-token', quote_number: 'Q-jumped', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1749,7 +2026,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the committed reopened status and gives refresh guidance when its token reread fails', async () => {
-    const quote = { id: 'quote-reopen-read-fail', quote_number: 'Q-reopen-read-fail', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-reopen-read-fail', quote_number: 'Q-reopen-read-fail', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     let quoteReads = 0;
     mockFrom.mockImplementation((table: string) => {
       if (table === 'quotes') {
@@ -1771,7 +2048,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('uses the reread token after freezing a quote before the next revise/save', async () => {
-    const quote = { id: 'quote-freeze', quote_number: 'Q-freeze', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const quote = { id: 'quote-freeze', quote_number: 'Q-freeze', customer_id: 'customer-1', customer: QUOTE_FIXTURE_CUSTOMER, tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };

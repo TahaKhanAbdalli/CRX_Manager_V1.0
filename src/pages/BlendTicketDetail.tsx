@@ -15,6 +15,8 @@ import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
 import SearchableSelect from '../components/ui/SearchableSelect';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
+import { fetchAllRows } from '../lib/pagedRead';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
@@ -30,12 +32,15 @@ import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { withBelowCostReason } from '../lib/belowCostApproval';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import QuotePriceChoiceModal from '../components/blendtickets/QuotePriceChoiceModal';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
+
+// Thrown inside loadTicketData when a newer load has started; it is not an error.
+const STALE_TICKET_LOAD = Symbol('stale blend ticket load');
 
 export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
@@ -59,7 +64,13 @@ export function BlendTicketDetail() {
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
   const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // Farm name of the chosen customer; the picker searches as you type, so no customer list is loaded.
+  const [customerLabel, setCustomerLabel] = useState('');
+  // Goal 4: the product catalog and the field list are read whole, page by page.
+  // A failed read clears the list and closes what depends on it (adding or
+  // choosing products, saving the ticket, choosing or saving fields).
+  const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
+  const [fieldsLoadFailed, setFieldsLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
@@ -71,6 +82,7 @@ export function BlendTicketDetail() {
   const [hasApplicationRecord, setHasApplicationRecord] = useState(false);
   const [hasActiveInvoice, setHasActiveInvoice] = useState(false);
   const initialLoadDone = useRef(false);
+  const loadSeqRef = useRef(0);
   const hasUnsavedChanges = isDirty || fieldsDirty || saveHydrationRequired;
   const blocker = useUnsavedChanges(hasUnsavedChanges);
 
@@ -154,7 +166,13 @@ export function BlendTicketDetail() {
     || hasActiveInvoice
     || hasApplicationRecord
   ));
-  const fieldControlsDisabled = fieldsLocked || saveHydrationRequired;
+  const fieldControlsDisabled = fieldsLocked || saveHydrationRequired || fieldsLoadFailed;
+  // The saved customer's row did not come back with the ticket (deleted or hidden),
+  // so its name is unknown. Nothing is saved or billed against it until a customer is chosen.
+  const customerRowMissing = Boolean(
+    ticket?.customer_id && !ticket.customer
+    && (formData.customer_id === ticket.customer_id || formData.customer_id === ''),
+  );
 
   const orderActionBlockReason = !ticket
     ? 'Blend ticket is still loading.'
@@ -162,6 +180,8 @@ export function BlendTicketDetail() {
       ? 'Save your ticket changes before creating, linking, or billing downstream records.'
       : hasActiveInvoice
         ? 'This blend ticket has an active invoice. Void or cancel that invoice before creating or linking an order.'
+        : customerRowMissing
+          ? 'This ticket\'s customer could not be loaded. Choose the customer again before creating or linking an order.'
         : ticket.status !== 'completed'
           ? 'Complete OCR processing before creating or linking an order.'
           : ticket.review_status !== 'approved'
@@ -186,6 +206,8 @@ export function BlendTicketDetail() {
           ? 'This blend ticket is linked to a sales order. Bill through the order path instead of creating a direct invoice.'
           : !ticket.customer_id
             ? 'Assign a customer before creating an invoice.'
+            : customerRowMissing
+              ? 'This ticket\'s customer could not be loaded. Choose the customer again before creating an invoice.'
             : products.length === 0
               ? 'Add at least one product before creating an invoice.'
               : null;
@@ -197,13 +219,19 @@ export function BlendTicketDetail() {
     && !hasUnsavedChanges;
 
   const loadTicketData = useCallback(async () => {
+    // Only the newest load may apply its results: a slower load of the previous ticket
+    // (the route id changed, or an earlier refresh) must never overwrite this one.
+    const seq = ++loadSeqRef.current;
+    const ensureCurrent = () => {
+      if (seq !== loadSeqRef.current) throw STALE_TICKET_LOAD;
+    };
     const wasTrackingDirty = initialLoadDone.current;
     // Every call is a server hydration (initial load or an explicit refetch),
     // not a user edit. Suppress the form/products effects until all hydrated
     // state has rendered, then re-arm dirty tracking in the animation frame.
     initialLoadDone.current = false;
     try {
-      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult, jobsResult, applicationRecordResult, activeInvoiceResult] = await Promise.all([
+      const [ticketResult, imagesResult, productsResult, allProductsResult, fieldsResult, linkedResult, jobsResult, applicationRecordResult, activeInvoiceResult] = await Promise.all([
         // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
         // resolved via profile_public_view post-fetch (see below).
         supabase
@@ -225,20 +253,21 @@ export function BlendTicketDetail() {
           .select(`${BLEND_TICKET_PRODUCT_COLUMNS}, product:products(${PRODUCT_COLUMNS})`)
           .eq('blend_ticket_id', id!)
           .order('sequence_order'),
-        supabase
+        // Goal 4: the catalog and field list are read whole, page by page; one
+        // request would stop silently at the server's row cap.
+        fetchAllRows((from, to) => supabase
           .from('products')
-          .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
+          .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
           .eq('is_active', true)
-          .order('product_name'),
-        supabase
-          .from('customers')
-          .select('*')
-          .eq('is_active', true)
-          .order('farm_name'),
-        supabase
+          .order('product_name')
+          .order('id')
+          .range(from, to)),
+        fetchAllRows((from, to) => supabase
           .from('fields')
-          .select('id, field_name, customer_id')
-          .order('field_name'),
+          .select('id, field_name, customer_id', { count: 'exact' })
+          .order('field_name')
+          .order('id')
+          .range(from, to)),
         supabase
           .from('blend_ticket_to_order_items')
           .select('*, order:orders(id, order_number, status, customer_id, total_price)')
@@ -263,6 +292,7 @@ export function BlendTicketDetail() {
           .or('status.is.null,status.not.in.(voided,cancelled)')
           .limit(1)
       ]);
+      ensureCurrent();
 
       if (ticketResult.error) throw ticketResult.error;
       if (imagesResult.error) throw imagesResult.error;
@@ -280,6 +310,7 @@ export function BlendTicketDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', profIds);
+        ensureCurrent();
         ((profRows || []) as { id: string; full_name: string }[]).forEach((p: { id: string; full_name: string }) => {
           profMap[p.id] = p;
         });
@@ -321,6 +352,7 @@ export function BlendTicketDetail() {
           `${unavailableImageCount} ticket image${unavailableImageCount === 1 ? '' : 's'} could not be loaded. The rest of the ticket is still available.`,
         );
       }
+      ensureCurrent();
       setImages(imagesWithSignedUrls);
       const hydratedProducts = (productsResult.data || []) as BlendTicketProduct[];
       hydratedStateRef.current.products = hydratedProducts;
@@ -330,12 +362,22 @@ export function BlendTicketDetail() {
           level: 'warning',
           extra: { context: 'blend_ticket_product_catalog' },
         });
-        toast('warning', 'The Product catalog could not be loaded. Existing ticket details are still available.');
+        toast('error', 'The Product catalog could not be loaded, so products cannot be added, changed or saved. Reload to try again.');
       }
-      setAllProducts((allProductsResult.data || []) as unknown as PickerProduct[]);
-      setCustomers((customersResult.data || []) as Customer[]);
-      const allFields = (fieldsResult.data || []) as Field[];
+      // A failed read clears the list: never keep a previous or partial one.
+      setCatalogLoadFailed(Boolean(allProductsResult.error));
+      setAllProducts(allProductsResult.error ? [] : (allProductsResult.data || []) as unknown as PickerProduct[]);
+      if (fieldsResult.error) {
+        Sentry.captureException(fieldsResult.error, {
+          level: 'warning',
+          extra: { context: 'blend_ticket_field_list' },
+        });
+        toast('error', 'The Field list could not be loaded, so application fields cannot be changed. Reload to try again.');
+      }
+      setFieldsLoadFailed(Boolean(fieldsResult.error));
+      const allFields = fieldsResult.error ? [] : (fieldsResult.data || []) as Field[];
       setAvailableFields(allFields);
+      setCustomerLabel(ticketResult.data.customer?.farm_name ?? '');
       setLinkedOrders((linkedResult.data || []) as BlendTicketToOrderItem[]);
       setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
       setHasApplicationRecord((applicationRecordResult.data || []).length > 0);
@@ -343,6 +385,7 @@ export function BlendTicketDetail() {
       setSelectedJobId(ticketResult.data.job_id || '');
       // Fetch application services for dropdown
       const { data: svcData } = await supabase.from('application_services').select('id, name, vehicle_id').eq('is_active', true).order('sort_order');
+      ensureCurrent();
       setAppServices(svcData || []);
 
       // Load existing blend_ticket_fields
@@ -351,6 +394,7 @@ export function BlendTicketDetail() {
         .select('field_id, customer_id, planned_acres, sort_order')
         .eq('blend_ticket_id', id!)
         .order('sort_order');
+      ensureCurrent();
       if (btfError) throw btfError;
       setTicketFields((btfData || []).map((btf: { field_id: string; customer_id: string | null; planned_acres: number | null }) => {
           const f = allFields.find(af => af.id === btf.field_id);
@@ -388,6 +432,7 @@ export function BlendTicketDetail() {
           p_ticket_number: ticketResult.data.ticket_number,
           p_ticket_date: ticketResult.data.ticket_date,
         });
+        ensureCurrent();
         if (dupeError) throw dupeError;
         assertRpcResult(dupeData, 'check_duplicate_blend_ticket');
         const otherDupes = (dupeData || []).filter((d: { id: string }) => d.id !== ticketResult.data.id);
@@ -418,7 +463,8 @@ export function BlendTicketDetail() {
               mi.forEach(m => { ct[m.order_id] = (ct[m.order_id] || 0) + 1; });
               const best = Object.entries(ct).sort((a, b) => b[1] - a[1])[0];
               const bo = co.find(o => o.id === best[0]);
-              if (bo) setSuggestedOrder({ id: bo.id, order_number: bo.order_number, matchCount: best[1] });
+              ensureCurrent();
+            if (bo) setSuggestedOrder({ id: bo.id, order_number: bo.order_number, matchCount: best[1] });
             }
           }
         }
@@ -426,13 +472,14 @@ export function BlendTicketDetail() {
         // Non-critical: suggestion just won't appear
       }
     } catch (error) {
+      if (error === STALE_TICKET_LOAD) return;
       // A failed refetch did not replace local state, so preserve the prior
       // tracking mode and keep subsequent user edits protected.
       initialLoadDone.current = wasTrackingDirty;
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'blend_ticket_detail' } });
       toast('error', 'Failed to load blend ticket. Please try again.');
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, [id, toast]);
 
@@ -522,6 +569,14 @@ export function BlendTicketDetail() {
     }
     if (contentLocked) {
       toast('error', 'Ticket details are locked after billing or order linkage.');
+      return;
+    }
+    if (catalogLoadFailed) {
+      toast('error', 'The Product catalog could not be loaded. Reload this ticket before saving.');
+      return;
+    }
+    if (customerRowMissing) {
+      toast('error', 'This ticket\'s customer could not be loaded. Choose the customer again before saving.');
       return;
     }
     // Only block when the missing list is actually costing the ticket a unit. A
@@ -673,6 +728,10 @@ export function BlendTicketDetail() {
       toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before changing its lifecycle state.');
       return;
     }
+    if (fieldsLoadFailed) {
+      toast('error', 'The Field list could not be loaded. Reload this ticket before saving application fields.');
+      return;
+    }
     setSavingFields(true);
     try {
       const payload = ticketFields.map(tf => ({
@@ -707,6 +766,10 @@ export function BlendTicketDetail() {
     }
     if (saveHydrationRequired) {
       toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before editing application fields.');
+      return;
+    }
+    if (fieldsLoadFailed) {
+      toast('error', 'The Field list could not be loaded. Reload this ticket before adding application fields.');
       return;
     }
     setTicketFields(previous => [
@@ -798,6 +861,10 @@ export function BlendTicketDetail() {
 
   function addProduct() {
     if (!ticket) return;
+    if (catalogLoadFailed) {
+      toast('error', 'The Product catalog could not be loaded. Reload this ticket before adding products.');
+      return;
+    }
     if (contentLocked) {
       toast('error', 'Ticket details are locked after billing, order linkage, or application record creation.');
       return;
@@ -1336,12 +1403,21 @@ export function BlendTicketDetail() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Customer
               </label>
-              <SearchableSelect
-                options={customers.map((customer) => ({ value: customer.id, label: customer.farm_name }))}
+              <CustomerSearchPicker
                 value={formData.customer_id}
-                onChange={(value) => setFormData({ ...formData, customer_id: value })}
-                placeholder="Select Customer"
+                selectedLabel={customerLabel}
+                onSelect={(customer) => {
+                  setFormData({ ...formData, customer_id: customer?.id ?? '' });
+                  setCustomerLabel(customer?.farm_name ?? '');
+                }}
+                placeholder="Search customers..."
+                ariaLabel="Customer"
               />
+              {customerRowMissing && (
+                <p role="alert" className="mt-1 text-xs text-red-600">
+                  This ticket&apos;s saved customer could not be loaded. Choose the customer again before saving or billing.
+                </p>
+              )}
             </div>
 
             <div>
@@ -1553,18 +1629,23 @@ export function BlendTicketDetail() {
       </div>
 
       <fieldset
-        disabled={contentLocked}
+        disabled={contentLocked || catalogLoadFailed}
         className="m-0 min-w-0 border-0 p-0"
         aria-label="Ticket products editor"
       >
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Products</h2>
-          <Button size="sm" onClick={addProduct}>
+          <Button size="sm" onClick={addProduct} disabled={catalogLoadFailed}>
             <Plus className="h-4 w-4" />
             Add Product
           </Button>
         </div>
+        {catalogLoadFailed && (
+          <p role="alert" className="mb-4 text-sm text-red-600">
+            The Product catalog could not be loaded, so products cannot be added, changed or saved. Reload this ticket to try again.
+          </p>
+        )}
 
         <div className="space-y-4">
           {products.map((product, index) => {
@@ -1593,6 +1674,7 @@ export function BlendTicketDetail() {
                     }
                   }}
                   placeholder="Select Product"
+                  disabled={catalogLoadFailed}
                 />
                 {allProducts.find((candidate) => candidate.id === product.product_id) && (
                   <ProductOptionDetails product={allProducts.find((candidate) => candidate.id === product.product_id)!} />
@@ -1747,6 +1829,12 @@ export function BlendTicketDetail() {
             </div>
           )}
         </div>
+
+        {fieldsLoadFailed && (
+          <p role="alert" className="mb-3 text-sm text-red-600">
+            The Field list could not be loaded, so application fields cannot be changed. Reload this ticket to try again.
+          </p>
+        )}
 
         {ticketFields.length > 0 ? (
           <div className="space-y-3">
@@ -2183,7 +2271,7 @@ export function BlendTicketDetail() {
         )}
         <Button
           onClick={handleSave}
-          disabled={saveHydrationRequired || saving || fieldsDirty || reprocessing || ticket.status === 'processing' || contentLocked}
+          disabled={saveHydrationRequired || saving || fieldsDirty || reprocessing || ticket.status === 'processing' || contentLocked || catalogLoadFailed || customerRowMissing}
         >
           <Save className="h-4 w-4" />
           {saving ? 'Saving...' : 'Save Changes'}

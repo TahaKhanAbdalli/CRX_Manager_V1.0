@@ -14,6 +14,7 @@ import { validateInventoryPositionShape } from '../lib/inventoryPositionValidato
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { PRODUCT_COLUMNS } from '../lib/costFields';
+import { fetchAllRows } from '../lib/pagedRead';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -38,6 +39,10 @@ import type { ProductOptionPresentationModel } from '../components/products/Prod
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
+
+const PRODUCTS_FAILED_MESSAGE = 'Products could not be loaded. Close and reopen this window to try again.';
+const PRODUCTS_LOADING_MESSAGE = 'Products are still loading. Try again in a moment.';
+const HOLD_LISTS_FAILED_MESSAGE = 'Products or customers could not be loaded. Close and reopen this window to try again.';
 
 interface InventoryRow extends Inventory {
   product_name: string;
@@ -201,6 +206,12 @@ export default function InventoryPage() {
   const [adjustNote, setAdjustNote] = useState('');
   const [products, setProducts] = useState<PickerProduct[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [productsFailed, setProductsFailed] = useState(false);
+  // True while the newest product read is in flight: the list on screen may be an older one.
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [customersFailed, setCustomersFailed] = useState(false);
+  // True while the newest customer read is in flight; a new hold waits for it (Luna, #1017).
+  const [customersLoading, setCustomersLoading] = useState(false);
   const [addProductId, setAddProductId] = useState('');
   const [addLocation, setAddLocation] = useState('Main Warehouse');
   const [addQty, setAddQty] = useState('');
@@ -412,32 +423,57 @@ export default function InventoryPage() {
     if (activeTab === 'forecast' && forecastData.length === 0) fetchForecast();
   }, [activeTab, forecastData.length, fetchForecast]);
 
+  // Both pickers below filter these lists locally and a locked hold retry shows
+  // its frozen product/customer from them, so each list is read in full, page
+  // by page (one read stops silently at the server's 1,000-row cap). A failed
+  // read clears the list and blocks new adds/holds rather than offering a short one.
+  // Each list keeps only its newest read: an older one finishing late never overwrites it.
+  const productsReadRef = useRef(0);
+  const customersReadRef = useRef(0);
   const fetchProducts = useCallback(async () => {
-    const { data, error } = await supabase
+    const readId = ++productsReadRef.current;
+    setProductsLoading(true);
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('products')
-      .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
+      .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
       .eq('is_active', true)
-      .order('product_name');
+      .order('product_name')
+      .order('id')
+      .range(from, to));
+    if (readId !== productsReadRef.current) return;
+    setProductsLoading(false);
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load products. Please try again.');
+      setProducts([]);
+      setProductsFailed(true);
       return;
     }
     setProducts((data || []) as unknown as PickerProduct[]);
+    setProductsFailed(false);
   }, [toast]);
 
   const fetchCustomers = useCallback(async () => {
-    const { data, error } = await supabase
+    const readId = ++customersReadRef.current;
+    setCustomersLoading(true);
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('customers')
-      .select('id, farm_name')
+      .select('id, farm_name', { count: 'exact' })
       .eq('is_active', true)
-      .order('farm_name');
+      .order('farm_name')
+      .order('id')
+      .range(from, to));
+    if (readId !== customersReadRef.current) return;
+    setCustomersLoading(false);
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('warning', 'Customer names could not be loaded. Any saved customer on this hold is unchanged.');
+      setCustomers([]);
+      setCustomersFailed(true);
       return;
     }
     setCustomers((data || []) as Customer[]);
+    setCustomersFailed(false);
   }, [toast]);
 
   useEffect(() => {
@@ -585,6 +621,14 @@ export default function InventoryPage() {
     // A locked retry re-sends the frozen payload, so form validation and the
     // free-stock preview only apply to a NEW hold.
     if (!createHoldIntent.isIntentLocked) {
+      if (productsFailed || customersFailed) {
+        toast('error', HOLD_LISTS_FAILED_MESSAGE);
+        return;
+      }
+      if (productsLoading || customersLoading) {
+        toast('error', 'Products and customers are still loading. Try again in a moment.');
+        return;
+      }
       if (!holdProductId) {
         toast('error', 'Please select a product');
         return;
@@ -712,8 +756,22 @@ export default function InventoryPage() {
   };
 
   const handleAdd = async () => {
+    if (productsFailed) {
+      toast('error', PRODUCTS_FAILED_MESSAGE);
+      return;
+    }
+    if (productsLoading) {
+      toast('error', PRODUCTS_LOADING_MESSAGE);
+      return;
+    }
     if (!addProductId) {
       toast('error', 'Please select a product');
+      return;
+    }
+    // A product picked while the list reloaded must still be in the list that arrived (Luna, #1017).
+    if (!products.some((p) => p.id === addProductId)) {
+      setAddProductId('');
+      toast('error', 'That product is no longer active. Please select a product again.');
       return;
     }
     const qty = parseFloat(addQty) || 0;
@@ -1782,6 +1840,8 @@ export default function InventoryPage() {
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
               {createHoldIntent.isIntentLocked && holdProductId && !filteredProducts.some((product) => product.id === holdProductId) ? (
                 <p className="px-3 py-4 text-sm text-nav-dark bg-crx-green/10">Saved product (name unavailable)</p>
+              ) : productsFailed ? (
+                <p role="alert" className="px-3 py-4 text-sm text-red-600 text-center">{PRODUCTS_FAILED_MESSAGE}</p>
               ) : filteredProducts.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
               ) : (
@@ -1838,6 +1898,9 @@ export default function InventoryPage() {
                 <option key={c.id} value={c.id}>{c.farm_name}</option>
               ))}
             </select>
+            {customersFailed && (
+              <p role="alert" className="mt-1 text-xs text-red-600">Customers could not be loaded. Close and reopen this window to try again.</p>
+            )}
           </div>
 
           <Input
@@ -1861,7 +1924,12 @@ export default function InventoryPage() {
             <Button
               onClick={handleCreateHold}
               loading={creatingHold}
-              disabled={createHoldIntent.isForeignIntentLocked || createHoldIntent.isRetryExpired}
+              disabled={
+                createHoldIntent.isForeignIntentLocked
+                || createHoldIntent.isRetryExpired
+                // A new hold needs the complete lists; a locked retry re-sends its frozen request.
+                || (!createHoldIntent.isIntentLocked && (productsFailed || customersFailed || productsLoading || customersLoading))
+              }
             >
               {createHoldIntent.isIntentLocked ? 'Retry Exact Hold' : 'Create Hold'}
             </Button>
@@ -1882,7 +1950,9 @@ export default function InventoryPage() {
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
             />
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-              {filteredProducts.length === 0 ? (
+              {productsFailed ? (
+                <p role="alert" className="px-3 py-4 text-sm text-red-600 text-center">{PRODUCTS_FAILED_MESSAGE}</p>
+              ) : filteredProducts.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
               ) : (
                 filteredProducts.map((p) => (
@@ -1961,7 +2031,7 @@ export default function InventoryPage() {
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button onClick={handleAdd} disabled={adding}>
+            <Button onClick={handleAdd} disabled={adding || productsFailed || productsLoading}>
               {adding ? 'Adding...' : 'Add Inventory'}
             </Button>
           </div>

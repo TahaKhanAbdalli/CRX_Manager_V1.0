@@ -160,13 +160,19 @@ function listChain(data: unknown, error: unknown = null): Record<string, unknown
   const chain: Record<string, unknown> = {};
   chain.select = vi.fn().mockReturnValue(chain);
   chain.eq = vi.fn().mockReturnValue(chain);
+  chain.or = vi.fn().mockReturnValue(chain);
+  chain.not = vi.fn().mockReturnValue(chain);
   chain.order = vi.fn().mockReturnValue(chain);
   chain.limit = vi.fn().mockReturnValue(chain);
   chain.then = (resolve: (result: { data: unknown; error: unknown }) => void) => resolve({ data, error });
   return chain;
 }
 
+// Every customers query the page builds (only the owner/split search pickers read customers).
+const customerChains: Array<Record<string, unknown>> = [];
+
 function configureSupabase(obstacleReadError: unknown = null, measuredAcres: number | null = null): void {
+  customerChains.length = 0;
   mockRpc.mockImplementation((name: string) => {
     if (name === 'get_field_geojson' || name === 'get_field_polygons') {
       return Promise.resolve({ data: [], error: null });
@@ -186,6 +192,8 @@ function configureSupabase(obstacleReadError: unknown = null, measuredAcres: num
       return {
         select: () => ({
           eq: () => ({
+            // Duplicate-name check run when an owner is picked.
+            ilike: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }),
             maybeSingle: () => Promise.resolve({
               data: {
                 id: 'field-1',
@@ -205,7 +213,12 @@ function configureSupabase(obstacleReadError: unknown = null, measuredAcres: num
         }),
       };
     }
-    if (table === 'customers' || table === 'field_billing_defaults') {
+    if (table === 'customers') {
+      const chain = listChain([{ id: 'customer-2', farm_name: 'Jones Farm', is_active: true }]);
+      customerChains.push(chain);
+      return chain;
+    }
+    if (table === 'field_billing_defaults') {
       return listChain([]);
     }
     if (table === 'field_obstacles') {
@@ -341,6 +354,23 @@ describe('FieldSetup field obstacles', () => {
     await waitFor(() => expect(mockDrawLayer).toHaveBeenLastCalledWith(
       expect.objectContaining({ allowRemoveSinglePart: false }),
     ));
+  });
+
+  it('loads no customer list and finds the owner by searching active customers', async () => {
+    render(<FieldSetup />);
+
+    const owner = await screen.findByRole('combobox', { name: 'Owner (Customer)' });
+    expect(owner).toHaveValue('Smith Farm');
+    expect(customerChains).toHaveLength(0);
+
+    fireEvent.focus(owner);
+    fireEvent.change(owner, { target: { value: 'Jon' } });
+    fireEvent.click(await screen.findByText('Jones Farm'));
+
+    expect(owner).toHaveValue('Jones Farm');
+    expect(customerChains).toHaveLength(1);
+    expect(customerChains[0].eq).toHaveBeenCalledWith('is_active', true);
+    expect(customerChains[0].limit).toHaveBeenCalled();
   });
 
   it('keeps obstacle write controls hidden from applicators', async () => {

@@ -18,6 +18,7 @@ import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../hooks/useUnre
 import { fingerprintIntentPayload } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
 import { PRODUCT_COLUMNS } from '../lib/costFields';
+import { fetchAllRows } from '../lib/pagedRead';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
 import type { BlendRecipe, Product, RecipeType, UnitConversion } from '../types';
@@ -44,6 +45,7 @@ interface RecipeItemDbRow {
   product?: { product_name: string } | null;
 }
 
+const PRODUCTS_FAILED_MESSAGE = 'Products could not be loaded, so items cannot be added or checked. Reload the page to try again.';
 const CROP_OPTIONS = ['corn', 'soybeans', 'wheat', 'cotton', 'rice', 'other'];
 const TIMING_OPTIONS = ['pre-emerge', 'post-emerge', 'early-season', 'late-season', 'burndown', 'other'];
 
@@ -69,6 +71,9 @@ export default function BlendRecipes() {
   const duplicateUnresolved = useUnresolvedIntent();
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productsFailed, setProductsFailed] = useState(false);
+  // Save checks each item's unit against its product's form, so it waits for the catalog (Luna, #1017).
+  const [productsLoading, setProductsLoading] = useState(true);
   // Item units are a PICKER, not free text, so a recipe can no longer carry a unit the
   // pricing/conversion path cannot resolve. unitLoad is tracked separately from the array
   // because an empty array means three different things (in flight / fetch failed / table
@@ -134,17 +139,28 @@ export default function BlendRecipes() {
     setLoading(false);
   }, [toast]);
 
+  // Every active product, page by page: the item pickers list it and Save checks
+  // each item's unit against its product's form from it, so a read cut off at the
+  // server's 1,000-row cap would hide products. A failed read clears the list and
+  // blocks adding items and saving.
   const fetchProducts = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('products')
-      .select(PRODUCT_COLUMNS)
+      .select(PRODUCT_COLUMNS, { count: 'exact' })
       .eq('is_active', true)
-      .order('product_name');
+      .order('product_name')
+      .order('id')
+      .range(from, to));
     if (error) {
       toast('error', 'Failed to load products: ' + error.message);
+      setProducts([]);
+      setProductsFailed(true);
+      setProductsLoading(false);
       return;
     }
-    setProducts((data || []) as Product[]);
+    setProducts((data || []) as unknown as Product[]);
+    setProductsFailed(false);
+    setProductsLoading(false);
   }, [toast]);
 
   const fetchUnitConversions = useCallback(async () => {
@@ -224,6 +240,14 @@ export default function BlendRecipes() {
   };
 
   const handleSave = async () => {
+    if (productsFailed) {
+      toast('error', PRODUCTS_FAILED_MESSAGE);
+      return;
+    }
+    if (productsLoading) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return;
+    }
     if (!form.name.trim()) {
       toast('error', 'Recipe name is required');
       return;
@@ -672,10 +696,13 @@ export default function BlendRecipes() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-gray-700">Products</label>
-              <Button size="sm" variant="secondary" onClick={addItem}>
+              <Button size="sm" variant="secondary" onClick={addItem} disabled={productsFailed || productsLoading}>
                 <Plus className="w-3 h-3" /> Add Product
               </Button>
             </div>
+            {productsFailed && (
+              <p role="alert" className="mb-2 text-sm text-red-600">{PRODUCTS_FAILED_MESSAGE}</p>
+            )}
             <div className="space-y-2 max-h-60 overflow-y-auto">
               {editItems.map((item, idx) => (
                 <div key={idx} className="flex gap-2 items-center p-2 bg-gray-50 rounded-lg">
@@ -754,7 +781,7 @@ export default function BlendRecipes() {
 
           <div className="flex justify-end gap-2 pt-2 border-t">
             <Button variant="secondary" onClick={() => setShowEditor(false)}>Cancel</Button>
-            <Button onClick={handleSave} loading={saving}>
+            <Button onClick={handleSave} loading={saving} disabled={productsFailed || productsLoading}>
               {editId ? 'Save Changes' : 'Create Recipe'}
             </Button>
           </div>

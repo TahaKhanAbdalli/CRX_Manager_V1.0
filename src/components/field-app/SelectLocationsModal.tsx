@@ -1,11 +1,15 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useLatestRef } from '../../hooks/useLatestRef';
 import { X, MapPin, Search } from 'lucide-react';
 import Button from '../ui/Button';
+import { useToast } from '../ui/Toast';
+import CustomerSearchPicker from '../customers/CustomerSearchPicker';
 import { supabase } from '../../lib/db';
+import { fetchAllRows } from '../../lib/pagedRead';
 import { Sentry } from '../../lib/sentry';
 import CRXMap from '../map/CRXMap';
 import FieldBoundaryLayer from '../map/FieldBoundaryLayer';
-import type { Field, Customer } from '../../types';
+import type { Field } from '../../types';
 
 interface FieldWithBilling extends Field {
   customer_name?: string;
@@ -25,27 +29,44 @@ export default function SelectLocationsModal({
   onSelect,
   initialSelectedIds = [],
 }: SelectLocationsModalProps) {
+  const { toast } = useToast();
   const [fields, setFields] = useState<FieldWithBilling[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // A failed field read empties the list and blocks selecting (never a short or stale list).
+  const [loadFailed, setLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(initialSelectedIds));
   const [customerFilter, setCustomerFilter] = useState('');
+  const [customerFilterName, setCustomerFilterName] = useState('');
   const [searchText, setSearchText] = useState('');
   const [cropFilter, setCropFilter] = useState('');
+  const loadSeqRef = useRef(0);
+  // The caller passes a fresh array on every render; read it only when the modal opens.
+  const initialSelectedIdsRef = useLatestRef(initialSelectedIds);
 
   const fetchFields = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
-    const { data, error } = await supabase
+    // Every active field, page by page: this list feeds the map, the table and the
+    // local filters, and one read stops at the server's row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('fields')
-      .select('*, customer:customers!fields_customer_id_fkey(farm_name), billing_defaults:field_billing_defaults(customer_id, split_pct, is_primary, customer:customers!field_billing_defaults_customer_id_fkey(farm_name))')
+      .select('*, customer:customers!fields_customer_id_fkey(farm_name), billing_defaults:field_billing_defaults(customer_id, split_pct, is_primary, customer:customers!field_billing_defaults_customer_id_fkey(farm_name))', { count: 'exact' })
       .eq('is_active', true)
-      .order('field_name');
+      .order('field_name')
+      .order('id')
+      .range(from, to));
+    // A slower read from an earlier open must not overwrite this one.
+    if (seq !== loadSeqRef.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', component: 'SelectLocationsModal' } });
+      setFields([]);
+      setLoadFailed(true);
+      toast('error', 'Failed to load fields');
       setLoading(false);
       return;
     }
+    setLoadFailed(false);
 
     const enriched = ((data || []) as Array<Record<string, unknown>>).map((f) => {
       const cust = f.customer as { farm_name: string } | null;
@@ -63,24 +84,14 @@ export default function SelectLocationsModal({
 
     setFields(enriched);
     setLoading(false);
-  }, []);
-
-  const fetchCustomers = useCallback(async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, farm_name')
-      .eq('is_active', true)
-      .order('farm_name');
-    setCustomers((data || []) as Customer[]);
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     if (isOpen) {
       fetchFields();
-      fetchCustomers();
-      setSelectedIds(new Set(initialSelectedIds));
+      setSelectedIds(new Set(initialSelectedIdsRef.current));
     }
-  }, [isOpen, fetchFields, fetchCustomers, initialSelectedIds]);
+  }, [isOpen, fetchFields, initialSelectedIdsRef]);
 
   const cropTypes = useMemo(() => {
     const set = new Set(fields.map((f) => f.crop_type).filter(Boolean) as string[]);
@@ -179,16 +190,17 @@ export default function SelectLocationsModal({
                 className="w-full pl-8 pr-3 py-2 text-sm border rounded-lg"
               />
             </div>
-            <select
+            <CustomerSearchPicker
               value={customerFilter}
-              onChange={(e) => setCustomerFilter(e.target.value)}
-              className="text-sm border rounded-lg px-2 py-2"
-            >
-              <option value="">All Customers</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.farm_name}</option>
-              ))}
-            </select>
+              selectedLabel={customerFilterName}
+              onSelect={(c) => {
+                setCustomerFilter(c?.id ?? '');
+                setCustomerFilterName(c?.farm_name ?? '');
+              }}
+              placeholder="All Customers"
+              ariaLabel="Filter by customer"
+              className="w-56"
+            />
             <select
               value={cropFilter}
               onChange={(e) => setCropFilter(e.target.value)}
@@ -207,6 +219,10 @@ export default function SelectLocationsModal({
               <div className="flex items-center justify-center py-20">
                 <div className="w-6 h-6 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
               </div>
+            ) : loadFailed ? (
+              <p role="alert" className="px-4 py-8 text-center text-sm text-red-600">
+                Fields could not be loaded. Close and open this window again to retry.
+              </p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 sticky top-0">
@@ -268,7 +284,7 @@ export default function SelectLocationsModal({
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={onClose}>Cancel</Button>
-              <Button onClick={handleSelect} disabled={selectedIds.size === 0}>
+              <Button onClick={handleSelect} disabled={selectedIds.size === 0 || loading || loadFailed}>
                 Select {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
               </Button>
             </div>

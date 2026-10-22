@@ -1105,20 +1105,36 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   - Still capped (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`; the pages
     fixed above are removed):
     - 1000: Customers (shows a banner).
-    - 500: Jobs (shows a banner) and Field Setup.
+    - 500: Jobs (shows a banner). (Field Setup's 500-customer list became a search on 2026-10-21.)
   - Pages that cap one of several queries:
     - Crop Programs: its product list, 500.
     - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
       `.range()` and are not capped.
-  - Record pickers inside detail and editor pages (checked 2026-10-04): Customer Detail's parent-customer
-    selector, Invoice Detail's customer selector and Order Detail's share editor each load 500 customers; the
-    split field-invoice editor (`FieldAppSplitInvoiceEditor.tsx`) loads 1,000 fields, 1,000 products and the
-    200 most recent completed jobs. Past those counts a record silently cannot be chosen there.
-  - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
+  - **Fixed 2026-10-21 (Goal 4, part 3, first PR — record pickers):** customer, field and product pickers
+    either search the database as you type (`src/components/ui/RecordSearchPicker.tsx` with
+    `CustomerSearchPicker`, `FieldSearchPicker`, `ProductSearchPicker`) or, where the page uses the list as
+    a whole (pricing, names on sheets, catalog modals), read it completely with `fetchAllRows`. The full
+    list of controls is in `docs/changelog.d/2026-10-21-goal4-part3-picker-search.md`. A failed or timed-out
+    search shows an error with Retry, never "no matches".
+  - Still capped, deferred to the second part-3 PR:
+    - Invoice Detail's customer selector (M29: 500 customers, also its PDF and email lookups);
+    - the order, job and purchase-order pickers: New Delivery open orders, Blend Ticket Detail's linked job
+      (200), the split field-invoice editor's completed jobs (200), the vendor bill link-to-PO (200);
+    - the purchase-order screens' product lists;
+    - cycle-count locations, bulk-import name matching, Label Data Quality, Product Detail's choice lists;
+    - the blend-ticket scanner Edge Function (needs a deploy).
+    Past those counts a record silently cannot be chosen there.
+  - Part 3 limits carried to part 4:
+    - the complete paged reads above grow with the table: correct at any size, but slower as it grows;
+    - more than 20 records with identical names and no account number or SKU to tell them apart cannot all
+      be reached in a search box;
+    - `%term%` search speed at large volume may need a trigram index.
+  - The picker entries above are not a complete inventory: other selectors also call `.limit(`, so
     search `src/` for `.limit(` before relying on this list.
   - Complete current inventory (2026-10-20, after part 1): `docs/audits/2026-10-20-goal4-row-limit-inventory-refresh.md`.
-    Parts 2a and 2b above fixed its part 2 items; next is part 3 (pickers as search boxes), then part 4
-    (server-side paging, including H36's dashboard queue counts).
+    Parts 2a and 2b above fixed its part 2 items, and part 3's first PR its customer, field and product
+    pickers; next is part 3's second PR (order, job and PO pickers), then part 4 (server-side paging,
+    including H36's dashboard queue counts).
   - Jobs and Customers show a banner when capped.
   - Paging is by position, so records changing during a long load are handled four ways:
     - repeats are dropped by `id`, and each page re-reads a 50-row overlap;

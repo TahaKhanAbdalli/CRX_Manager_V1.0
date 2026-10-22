@@ -12,6 +12,7 @@ import Badge from '../ui/Badge';
 import Input from '../ui/Input';
 import DataTable, { type Column } from '../ui/DataTable';
 import Modal from '../ui/Modal';
+import CustomerSearchPicker from '../customers/CustomerSearchPicker';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
@@ -113,7 +114,8 @@ export default function PrepaymentManagerPanel() {
 
   // Split Check modal state
   const [showNewCheck, setShowNewCheck] = useState(false);
-  const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // The check's customer picker searches every active customer; this is the chosen one's name.
+  const [checkCustomerName, setCheckCustomerName] = useState('');
   const [bucketLabels, setBucketLabels] = useState<string[]>([]);
   const [checkForm, setCheckForm] = useState({ customer_id: '', reference_number: '', total: '' });
   const [bucketSplits, setBucketSplits] = useState<BucketSplit[]>([{ label: '', amount: '' }]);
@@ -317,7 +319,7 @@ export default function PrepaymentManagerPanel() {
   // (openBooking / handleSaveBooking earmark handlers removed 2026-06-14 — the
   // booking-prepay earmark engine is shelved: docs/roadmap/shelved-earmark-engine/)
 
-  // Fetch bucket labels + all customers for the New Check modal
+  // Fetch bucket labels for the New Check modal
   useEffect(() => {
     supabase
       .from('app_settings')
@@ -327,12 +329,6 @@ export default function PrepaymentManagerPanel() {
       .then(({ data }) => {
         if (data?.setting_value) setBucketLabels(JSON.parse(data.setting_value as string));
       });
-    supabase
-      .from('customers')
-      .select('id, farm_name')
-      .eq('is_active', true)
-      .order('farm_name')
-      .then(({ data }) => setAllCustomers(data || []));
   }, []);
 
   const openNewCheck = () => {
@@ -347,6 +343,7 @@ export default function PrepaymentManagerPanel() {
     // than replayed. The key is therefore NOT reset on open: an unresolved check A reopened and
     // resubmitted unchanged replays its receipt instead of creating its credits twice.
     setCheckForm({ customer_id: '', reference_number: '', total: '' });
+    setCheckCustomerName('');
     setBucketSplits([{ label: '', amount: '' }]);
     setShowNewCheck(true);
   };
@@ -982,17 +979,19 @@ export default function PrepaymentManagerPanel() {
       <Modal open={showNewCheck} onClose={() => setShowNewCheck(false)} title="New Check — Split Into Buckets">
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-nav-dark">Customer *</label>
-            <select
+            <label htmlFor="split-check-customer" className="text-sm font-medium text-nav-dark">Customer *</label>
+            <CustomerSearchPicker
+              id="split-check-customer"
               value={checkForm.customer_id}
-              onChange={(e) => setCheckForm({ ...checkForm, customer_id: e.target.value })}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select customer...</option>
-              {allCustomers.map((c) => (
-                <option key={c.id} value={c.id}>{c.farm_name}</option>
-              ))}
-            </select>
+              selectedLabel={checkCustomerName}
+              onSelect={(customer) => {
+                setCheckForm((prev) => ({ ...prev, customer_id: customer?.id ?? '' }));
+                setCheckCustomerName(customer?.farm_name ?? '');
+              }}
+              placeholder="Select customer..."
+              ariaLabel="Check customer"
+              className="mt-1 w-full"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

@@ -189,6 +189,8 @@ Plain-English terms: **paging** means asking for records one batch at a time unt
 Done when each reads past a 1,000-row fake in tests, and a live check with a 10-row page matches the database count, as in part 1. Size: likely two PRs (money and checks first, then the lookups). H36 (dashboard counts) needs the function to return a true count, so it moves to part 4.
 
 **Part 3, item (b): pickers become search boxes.**
+
+> **Status 2026-10-21 (first part-3 PR).** Fixed: M30–M33, M37, M43–M45, M50 (Compliance acre total and Select Locations fields), M59, N2, N3, N12, and the remaining customer and product entries in M48 and M49 (the bulk-import, Label Data Quality and purchase-order entries stay open, below). Some are search boxes; others, whose page uses the whole list, are complete paged reads. The per-control list is in `docs/changelog.d/2026-10-21-goal4-part3-picker-search.md`. Still open for the second part-3 PR: M17, M29 (Invoice Detail, owned by another session at the time), M34, the M38 jobs, M47, N6, the bulk-import, Label Data Quality, purchase-order and Product Detail (M60) entries, and M51 (Edge Function deploy).
 - Add a database search picker for each kind of record still chosen from a fixed list, beside the existing `ProductSearchPicker`. Each asks the database as you type and loads a saved choice by id:
   - customers;
   - fields;
