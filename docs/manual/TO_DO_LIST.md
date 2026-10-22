@@ -1,8 +1,14 @@
-# Day one: what must work on 2027-01-01 (DRAFT for Mason's approval)
+# CRX Manager To-Do List
+
+**What this is:** the one list of work still to finish in the app, in the order Mason approved. It's built around the 2027-01-01 start of CRX-only billing ("day one"), but it stays the working to-do list after that. Approved by Mason, 2026-10-22.
+
+**How to keep it current:** when an item ships, update its "Today" cell with the PR and date. When Mason changes a priority, change the row's rank, quote him, and add a `docs/manual/DECISION_LOG.md` entry. Add new work as a new row in the right section. The older `TODO.md` at the repository root (last updated 2026-09-27) predates this list; for order and priority, this list wins.
+
+**Moved and renamed 2026-10-22** (Mason: "rename this ... like future to do list"). It was `docs/plans/2026-10-21-day-one-must-work-list.md`. The same day, every still-open item from the old root `TODO.md` was checked against the code and folded in (Mason: "yes fold it all in"). Rows that came from it say "old `TODO.md`".
 
 **Owner:** Mason Wells approves. **Drafted:** 2026-10-21 by Claude, as asked in `docs/plans/2026-10-13-direction-and-goals.md` section 2 ("must work on day one" list, checkpoint 2026-10-31).
 **Reviewed:** an advisory Codex `gpt-6-sol` (high) review of the first draft, 2026-10-21. It made 57 findings. Claude checked each against the goals doc and the code. Most were applied; the few that weren't are listed at the end, with the reason.
-**Status:** DRAFT, revised with Mason's changes of 2026-10-22. Everything before delivery comes first: quoting, product pricing, cost tracking, inventory (knowing what to order) and invoicing. Field-app, job and blend-ticket invoices are built last. Returns, including "sitting at farm" tracking, can wait. Jobs can have two applicators. Rep-only rules wait because there are no regular reps yet. It still needs Mason's approval. Nothing here authorizes building anything. Each item is built through its own goal and pull request.
+**Status:** APPROVED. Mason, in chat, 2026-10-22: "Approve the revised day-one list. Yes, un-park the small cost-freshness part (as-of date and stale-cost report). Names: not chosen yet." That approves the ranking rule, every rank and the build order. The open items in "What Mason needs to decide" stay open until answered. The list was revised with Mason's changes of 2026-10-22 before he approved it. Everything before delivery comes first: quoting, product pricing, cost tracking, inventory (knowing what to order) and invoicing. Field-app, job and blend-ticket invoices are built last. Returns, including "sitting at farm" tracking, can wait. Jobs can have two applicators. Rep-only rules wait because there are no regular reps yet. Nothing here authorizes building anything. Each item is built through its own goal and pull request.
 **Evidence date:** every "today" status was checked against `main` at `13f83434d`, the open PR list and the open-issue list on 2026-10-22. It was first checked at `e0b5d4234` on 2026-10-21, then refreshed at `d720cf681` and again at `13f83434d` (after PR #1010 went live). Statuses go stale quickly; re-check before relying on one. "Open PR" means written and in review, not live.
 
 ---
@@ -33,13 +39,13 @@ Words used below:
 Mason's priority is everything that happens **before delivery**: quoting, product pricing, cost tracking, inventory (so he knows what to order) and invoicing. Returns, field-application invoices and rep-only rules wait. Code work goes in this order:
 
 1. **Before delivery, first:**
-   - pricing and cost tracking: quote line identity 1.3, then the sent-quote price lock 1.2 (which depends on 1.3), then 0.1–0.6. The price sheet's safety work (0.1) can be built alongside, but per the pricing plan's rollout gate it isn't switched on for live price changes until 1.2 and the margin floors (0.2) are live. Otherwise a price-sheet change could re-price a quote the customer was already sent;
+   - pricing and cost tracking: quote line identity 1.3, then the sent-quote price lock 1.2 (which depends on 1.3), then 0.1–0.7. The price sheet's safety work (0.1) can be built alongside, but per the pricing plan's rollout gate it isn't switched on for live price changes until 1.2 and the margin floors (0.2) are live. Otherwise a price-sheet change could re-price a quote the customer was already sent;
    - cost and margin admin-only: 11.3;
-   - knowing what to order: 0.8–0.10;
-   - quoting and orders: 1.1, 1.4;
+   - knowing what to order: 0.8–0.10, then the SHOULD inventory fixes 0.12–0.16;
+   - quoting and orders: 1.1, 1.4, then the SHOULD quote fixes 1.6–1.12;
    - invoicing: 3.1–3.5 and 3.8;
-   - quote and order numbers in Chicago's year: 12.1.
-2. **Delivering and billing it:** deliveries and retry safety 2.1–2.3 and 2.6, split billing 4.1–4.3, payments and prepay 6.1–6.6, commissions 8.1 and 8.3, documents and emails 9.1–9.4.
+   - Chicago dates at the year boundary: quote and order numbers 12.1, payment dates 6.7.
+2. **Delivering and billing it:** deliveries and retry safety 2.1–2.3 and 2.6, split billing 4.1–4.3, payments and prepay 6.1–6.9, commissions 8.1, 8.3 and 8.4, documents and emails 9.1–9.9.
 3. **Complete numbers at volume:** 10.1–10.4.
 4. **Last:** everything marked CAN-WAIT (section 17).
 
@@ -49,17 +55,17 @@ The non-code MUST items (backups and recovery in section 13, QuickBooks and paym
 
 | | Count |
 |---|---|
-| MUST, built and live (still needs its December proof) | 19 |
-| MUST, code not built or only partly built (6 of them are the new pricing and cost-tracking rows 0.1–0.6) | 28 |
-| MUST, a business process, drill, review or Mason action (not code) | 24 |
-| SHOULD | 4 |
-| CAN-WAIT | 20, plus the parked items in section 17 |
+| MUST, built and live (still needs its December proof) | 20 |
+| MUST, code not built or only partly built (7 of them are the new pricing and cost-tracking rows 0.1–0.7) | 29 |
+| MUST, a business process, drill, review or Mason action (not code) | 25 |
+| SHOULD (28 of them folded in from the old `TODO.md` on 2026-10-22) | 32 |
+| CAN-WAIT | 19, plus the parked items in section 17 |
 
 Rows that only point to another row ("See 4.4") aren't counted twice. A row split between two ranks (for example 8.3) counts under its MUST part.
 
 **The four biggest risks for January 1:**
 1. **The before-delivery work is mostly not built.** Six of the pricing and cost-tracking pieces haven't started, and neither has the sent-quote price lock. On billing, "post uses what was saved" is in review, while voids on posted invoices and partly delivered split orders are open. Billing a landlord went live on 2026-10-22.
-2. **We can't yet recover from losing the database (Goal 6).** The weekly off-site copy runs, but it has never been restored, photos aren't backed up, and the Supabase plan can't rewind to a chosen time. Today a bad day could cost about a week of work.
+2. **We can't yet recover from losing the database (Goal 6).** The weekly off-site database copy and (since 2026-10-22) the weekly photo and file backup run, but neither has been restored in a drill, and the Supabase plan can't rewind to a chosen time. Today a bad day could cost about a week of work.
 3. **No staging system yet.** Nearly every proof below, plus the December rehearsal and staff training, needs one.
 4. **The QuickBooks and Stripe connections haven't started, and Stripe may not accept a restricted-use pesticide seller at all.** If they aren't proven by 2026-12-15, January runs on manual procedures that aren't written yet.
 
@@ -77,11 +83,16 @@ Mason, 2026-10-22: "i need everything built that is quoting, invoice, inventory 
 | 0.4 | **Sell-price history on the product page** (admin-only), with a real date axis on the price chart | **Not built** (pricing plan, slice 4). Tier price changes are already logged in `cost_history`, but no screen shows them. | Pricing slice 4 | MUST |
 | 0.5 | **Cost beside each quote line** (admin-only, hidden from customers and PDFs): the cost when quoted next to today's cost, so a locked quote that has lost margin is visible | **Not built** (pricing plan, slice 5). | Pricing slice 5 | MUST |
 | 0.6 | **Profit reports use the cost at the time of sale**, not today's cost | **Not built on screen.** The server report `get_profitability_report` is live, but no screen calls it (pricing plan, slice 6). | Pricing slice 6 | MUST |
-| 0.7 | **Cost freshness:** an "as of" date on each cost, a stale-cost report, and supplier price evidence used for more products | **Parked by Mason 2026-10-14** (pricing plan, slice 7). 602 of 604 product costs were still the original setup load on 2026-09-02. | Decision for Mason (below) | CAN-WAIT unless Mason un-parks it |
+| 0.7 | **Cost freshness:** an "as of" date on each cost, a stale-cost report, and supplier price evidence used for more products | **Not built.** Mason un-parked the small part on 2026-10-22: an "as of" date on each cost and a stale-cost report. The supplier-evidence rollout stays parked (pricing plan, slice 7). 602 of 604 product costs were still the original setup load on 2026-09-02. | Pricing slice 7 (small part) | MUST: as-of date and stale-cost report. CAN-WAIT: supplier-evidence rollout |
 | 0.8 | **Know what to order.** Each product has a reorder point. The Inventory page shows net position (in stock − booked + on order) and a "Need Reordering" list grouped by vendor | **Built** (`src/pages/InventoryPage.tsx`: reorder points, net position, reorder alerts by vendor). It's only right if the stock count is right (15.2) and each product has a reorder point. How many products have one hasn't been checked. | Done; set reorder points and prove it after the count | MUST |
 | 0.9 | **Purchase orders and receiving**: ordering from vendors, receiving into stock, purchase cost kept admin-only, and cost corrections tracked | **Built.** Purchase-order cost is admin-only, with a cost history and governed corrections, live 2026-10-22 (PR #980). | Done; prove on staging | MUST |
 | 0.10 | **Bookings count against stock**, so quoted and ordered goods show up in "what to order" | **Built** (the "booked" figure in net position; job reservations). Old orders still holding stock are cleared in the inventory readiness step (15.2). | Done; clean up in 15.2 | MUST |
 | 0.11 | Named or seasonal price lists ("Early Bird") | **Parked by Mason 2026-10-14** (pricing plan, slice 9). | Later plan | CAN-WAIT |
+| 0.12 | **Product category remap**, so pickers, reports and the price sheet group products the right way | **Open** (old `TODO.md` (2026-09-27), §1 owner actions). Mason, 2026-10-22: "category remap we probably need to do sooner". | New, with the pricing work | SHOULD |
+| 0.13 | A retired product that still has an open purchase order still counts as "on order" | **Open** (old `TODO.md` (2026-09-27), §5). Today it drops out of the on-order view, so "what to order" undercounts. | Inventory fix | SHOULD |
+| 0.14 | Stock holds that never release (a crop-program hold; holds on dead jobs) are cleared | **Open** (old `TODO.md` (2026-09-27), §5). They inflate "booked" in 0.10. PR #889 cleared holds on deleted orders; a sweep for dead jobs isn't confirmed. | Inventory fix | SHOULD |
+| 0.15 | **Send a purchase order to a vendor** as a PDF and by email | **Not built** (old `TODO.md` (2026-09-27), §5). | New | SHOULD |
+| 0.16 | Merge duplicate vendor names, so the reorder list by vendor isn't split | **Open** (old `TODO.md` (2026-09-27), §1). It changes live data, so it needs Mason's OK first. | Data cleanup | SHOULD |
 
 Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (slice 2) is row 1.2. Admin-only cost and margin is row 11.3.
 
@@ -94,6 +105,13 @@ Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (sli
 | 1.3 | Convert to Order never leaves an accepted quote with no order; re-saving a quote with one product on two lines works | **Open, latent** (`KNOWN_ISSUES.md`, "quote screen: re-saving a quote with two lines of one product is refused", 2026-10-13). An accepted quote with no order can lose a sale without anyone noticing. | Goal 3 (same area as 1.2) | MUST |
 | 1.4 | Create an order; a rep records only their own name on orders and blend tickets | **Built.** Live since 2026-10-15 (PR #933, migration `20261015130000`). | Done; prove on staging | MUST |
 | 1.5 | **Only admins change commission splits** (customers, jobs, quotes, orders). New customers go on an admin to-do list. Copied and rolled-over quotes take the customer's current split. An admin editor recalculates *unpaid* commissions and can't race a payout | **Not built.** Today a customer's assigned rep can edit that customer's split, and any rep can edit a job's split (goals doc, Goal 2 "Still to do"). No regular reps yet (Mason, 2026-10-22), so only admins edit splits in practice. | Goal 2 follow-up | CAN-WAIT (MUST before the first regular rep gets an account) |
+| 1.6 | A quote's price tier is checked against the customer's assigned tier | **Not built** (old `TODO.md` (2026-09-27), §5). A quote could be priced at the wrong tier. | With 1.2 | SHOULD |
+| 1.7 | The quote and order screens use the tested price calculator (`quoteCalc`) instead of their own math | **Open** (old `TODO.md` (2026-09-27), §5). Totals could drift between the quote and the order. | With 1.2 and 1.3 | SHOULD |
+| 1.8 | The customer's credit status shows in the quote header | **Not built** (old `TODO.md` (2026-09-27), §5). Credit problems would be caught before Convert. | New | SHOULD |
+| 1.9 | A quote draft survives the app being closed on the iPad | **Not built** (old `TODO.md` (2026-09-27), §5). | New | SHOULD |
+| 1.10 | Importing orders or quotes from a spreadsheet handles commas inside a name | **Open** (old `TODO.md` (2026-09-27), §5; confirmed in code). Matters for cut-over imports. | Fix | SHOULD |
+| 1.11 | Someone actually looks at price-later orders, draft consolidation and booking rollover on a real screen | **Not done** (old `TODO.md` (2026-09-27), §1). | Staging proofs | SHOULD |
+| 1.12 | Two people editing the same order can't overwrite each other's changes; ticket-number and allocation-version collisions are prevented | **Open** (old `TODO.md` (2026-09-27), §5). Orders have no stale-edit check. | Fix | SHOULD |
 
 ## 2. Delivering
 
@@ -105,6 +123,7 @@ Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (sli
 | 2.4 | Customer gets a delivery receipt email | **Built, with gaps.** The phone sends it, and doesn't retry if signal drops right after. A driver who can't see an older stop's customer sends no receipt, and on the normal signature path isn't told (`KNOWN_ISSUES.md`, "a driver's completion receipt can be skipped", MED). The office can resend. Receipts carry no photos (Mason, 2026-10-14). Open PR #1024 also covers driver receipts. | Goal 5 follow-up | SHOULD (the office resend covers it, see 9.3) |
 | 2.5 | A counter sale through quick delivery in a few taps, including amounts under 1 unit | **Not built** (goals doc, Goal 3: today 9–12 actions across 3 screens). Counter sales still work, just slowly. | Goal 3 | SHOULD |
 | 2.6 | A stock shortage warns but never blocks a delivery | **Built.** Mason's permanent decision (2026-10-15, 6b). | Done | MUST |
+| 2.7 | A driver's shortage or damage report tells the office what happened, not just a generic notice | **Open** (old `TODO.md` (2026-09-27), §5). The office may bill the wrong amount. | Fix | SHOULD |
 
 ## 3. Billing: invoices
 
@@ -118,6 +137,8 @@ Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (sli
 | 3.6 | **Reps read every invoice.** Another rep's invoice is view, print and re-email only, with no edit, post, unpost, transfer or added lines. Invoices nobody owns are admin-only. Every balance a rep sees covers the whole customer (Customer Balance report, printed Customer Invoice Summary, payment-allocation screen) | **Not built.** Reps can still unpost or edit some other reps' invoices (goals doc, Goal 2 "Back doors to close"). No regular reps yet (Mason, 2026-10-22). | Goal 2 follow-up | CAN-WAIT (MUST before the first regular rep gets an account) |
 | 3.7 | A rep invoices only under their own name on every path: splits, groups with mixed owners, list posting, unposting, consolidation, transfer. Admins can reassign | **Partly built.** Manual, order and blend-ticket invoices are live (PRs #907, #928, #933). Job invoices don't record a salesperson yet (goals doc, Goal 2). No regular reps yet (Mason, 2026-10-22). | Goal 2 follow-up | CAN-WAIT (MUST before the first regular rep gets an account) |
 | 3.8 | Invoice numbers take Chicago's year | **Built.** Live 2026-09-21 (migration `20260914100100`). | Done | MUST |
+| 3.9 | The month-end delivery check doesn't count cancelled deliveries | **Open** (old `TODO.md` (2026-09-27), §5). Today the month never shows as complete. | Fix | SHOULD |
+| 3.10 | Finance charges respect grace days and run on Chicago time | **Open** (old `TODO.md` (2026-09-27), §5). Only matters if finance charges are used; see decision 11. | Fix | SHOULD |
 
 ## 4. Split billing (one sale billed to more than one customer)
 
@@ -130,6 +151,7 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 4.3 | At the first delivery the split freezes the *money*: each line's billed total after discounts, its price, acres and owners. The last delivery bills exactly what's left. An order can be closed short and split on what was delivered | **Not built** (goals doc, Goal 3 build notes). | Goal 3 | MUST |
 | 4.4 | A return on a split order credits each payer for their own share, from their original invoice lines | **Built.** Live since 2026-10-22 (PR #1010, migration `20261021155000_split_payer_return_credit`): each payer returns and is credited only for what its own invoices billed (`DECISION_LOG.md`, 2026-10-21 "Split returns are built before split billing to a landlord ships"). | Done; prove on staging | CAN-WAIT (built; returns wait) |
 | 4.5 | Splitting one *field-application* invoice among customers | **Not built, on purpose.** Parked by Mason 2026-10-15. | Future work | CAN-WAIT |
+| 4.6 | The office is notified when a delivery creates split draft invoices automatically | **Not built** (old `TODO.md` (2026-09-27), §5). The office could miss split bills. | New | SHOULD |
 
 ## 5. Field-application, job and blend-ticket invoices
 
@@ -154,6 +176,9 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 6.4 | **A refund paid outside CRX is recorded in CRX**, so the customer's credit can't be spent twice | **Not built** (goals doc, Goal 3 "Voids and cancellations"). | Goal 3 | MUST |
 | 6.5 | Balances and aging use Chicago's date and include every customer, for admins | **Built.** PRs #991, #996 and #998 (2026-10-21). Rep-visible full balances are still open (see 3.6). | Done | MUST |
 | 6.6 | A customer's full payment history past 200 entries | **Open** (goals doc, Goal 4 list). Goal 4's done test includes a 200+ payment history, and Goal 4 is a launch gate. | Goal 4 | MUST |
+| 6.7 | **A payment's date is Chicago's date, not the server's** | **Open.** `allocate_payment` defaults the payment date to the server's `CURRENT_DATE` (UTC, six hours ahead), and the payment screen never sends a date (latest definition `supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql`, checked 2026-10-22; old `TODO.md` (2026-09-27), §5). A payment entered after 6 pm can land on the wrong day, and on December 31 in the wrong month and year. | Fix (year boundary) | MUST |
+| 6.8 | A check that each customer's prepay balance equals the sum of their prepay credits | **Not built** (old `TODO.md` (2026-09-27), §5). Prepay could drift silently. | New check; part of 16.5 | SHOULD |
+| 6.9 | No leftover money records on deleted orders (deliveries, commissions), and deleting a product doesn't wipe its stock holds | **Open** (old `TODO.md` (2026-09-27), §5). | Fix and data check | SHOULD |
 
 ## 7. Returns
 
@@ -172,6 +197,7 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 8.1 | Commissions calculated on orders and jobs, and payouts recorded | **Built** (job-level commissions live; commission cohort live 2026-09-21 to 09-28). | Done; prove on staging | MUST |
 | 8.2 | Admin-only splits | See 1.5. | Goal 2 follow-up | CAN-WAIT |
 | 8.3 | **Commission already paid on a returned or credited sale comes off the next payout**, as a lasting negative adjustment in CRX that the payout and the commission reports both show. It carries forward if it's bigger than one payout, and stays visible as owed if the person has left | **Not built.** Today `create_commission_payment` pays pending rows at full amount and refuses negative lines (goals doc, Goal 3 build notes). Mason allowed the *calculation* to be manual at first, but it still has to be recorded in CRX. | Goal 3 | MUST: the recorded adjustment. SHOULD: automatic calculation |
+| 8.4 | **Prove the commission "as of" report on live**: create, post and void a test payout | **Not done.** The report shipped (PR #592, migration `20260903150100`) but has never been proven on live (old `TODO.md` (2026-09-27), §5). Mason called it "very important", and the first real payouts land near year-end. The live test needs Mason's OK at the time. | Agent, with Mason's OK | MUST |
 
 ## 9. Statements, printed documents and emails
 
@@ -182,6 +208,10 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 9.3 | A failed email is visible, a named office person resends it, and a resend never bills twice | **Partly built.** The office can resend a receipt; there's no guaranteed automatic retry (Goal 5, "Still open" item 3). | Goal 3 / Goal 5 | MUST: visible failure and a proven manual resend. SHOULD: automatic retry |
 | 9.4 | Payment instructions on invoices match how customers can actually pay on January 1 (no online-payment link until Stripe is live) | **Process.** No Stripe link exists today, so nothing to remove yet. Recheck if Stripe ships partway. | Goal 7 / Phase D | MUST |
 | 9.5 | A PDF over 20 pages is refused plainly rather than cut short | **Built** (PR #993, 2026-10-21). | Done | SHOULD |
+| 9.6 | The bulk "Email" button on the Invoices list sends the selected invoices | **Not built.** It still says "Coming soon" (`src/pages/Invoices.tsx`; old `TODO.md` (2026-09-27), §5). January invoice volume needs it. | New | SHOULD |
+| 9.7 | A statement prints its last-page footer once, not twice | **Open** (old `TODO.md` (2026-09-27), §5; the code still draws it twice). Customer-facing. | Fix | SHOULD |
+| 9.8 | Email "don't send twice" keys come from the record, not the clock or a random number | **Open** (old `TODO.md` (2026-09-27), §5). A retry could send a customer the same email twice. | Fix | SHOULD |
+| 9.9 | Names are cleaned before going into delivery emails | **Open** (old `TODO.md` (2026-09-27), §5). Odd text in a name could change what the email shows. | Fix | SHOULD |
 
 ## 10. Reports and complete numbers
 
@@ -191,6 +221,7 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 10.2 | **The bookkeeper approves what each money report means** (which statuses count, the date basis, returns, credits, prepay, write-offs, costs), checked to the exact cent against independently prepared answers | **Not done** (goals doc, Goal 4 "Done when"). | Goal 4 | MUST |
 | 10.3 | Pickers become search boxes; list pages page on the server | **Open.** Part 3 (pickers) is written: open PR #1017. Part 4 (server-side paging) isn't started. Both are in Goal 4's done test, which the goals doc makes a launch gate (due 2026-12-15). | Goal 4 | MUST |
 | 10.4 | Workload test at twice the busiest day, with response-time targets agreed first | **Not run** (Goal 4). Needs staging. | Goal 4 | MUST |
+| 10.5 | A screen that fails to load says so, instead of showing "No … found" | **Open** (old `TODO.md` (2026-09-27), §5). In the pilot, staff could think data is missing. | Fix | SHOULD |
 
 ## 11. Security and roles
 
@@ -206,6 +237,8 @@ Four staff roles must each get through a normal day: **admin** (everything), **s
 | 11.4 | An applicator sees only the fields for their assigned jobs, by every route (job, location dispatch, crew), and loses access when the assignment ends | **Not proven.** It's a Goal 1 rule with no shipped check found. | Goal 1 | MUST |
 | 11.5 | A rep can't write RUP register rows for an invoice that was never posted | **Open** (`KNOWN_ISSUES.md`, MED, 2026-10-14). It would put false sales in a regulated record, but only a sales rep can do it. | Goal 1 follow-up | CAN-WAIT (MUST before the first regular rep gets an account) |
 | 11.6 | **Two applicators on one job** working together (Mason, 2026-10-22) | **Partly built.** A job has one main applicator (`jobs.applicator_id`). The Dispatch Board can give each field on a job a different applicator, or a crew (`job_location_dispatches`, `src/pages/DispatchBoard.tsx`), and a crew's members can be recorded on what was applied. Two named applicators on the *same* field isn't possible; the workaround is a crew with both of them. | New | SHOULD (the crew workaround covers January); MUST before spring application season |
+| 11.7 | Drivers and applicators see only the customer addresses they need | **Open** (old `TODO.md` (2026-09-27), §5). Today they can read every customer's address. Narrow it, or Mason accepts it. | Fix or accept | SHOULD |
+| 11.8 | Known-leaked passwords are refused at sign-in | **Not on.** It needs the Supabase Pro plan (13.1) (old `TODO.md` (2026-09-27), §1). | Settings change after 13.1 | SHOULD |
 
 ## 12. The year boundary (December 31 to January 1)
 
@@ -225,7 +258,7 @@ Mason's target: an outage can last overnight, CRX is back by the next business m
 |---|---|---|---|---|
 | 13.1 | **Supabase Pro with point-in-time recovery** (rewinding the database to a chosen minute) | **Not done.** The plan is Free (live check 2026-10-18, `docs/plans/2026-10-18-goal-6-safety-net-findings.md`). Already decided 2026-10-13; it needs Mason's billing click. | Goal 6 (Mason's action) | MUST |
 | 13.2 | **A full restore drill**, timed and logged: database, permissions, logins and every file bucket restored into an isolated copy, with photos opening against their records; plus one rewind-to-a-time on a throwaway copy, with recovery time and lost work measured against Mason's target | **Not done.** The weekly off-site copy has run every Sunday since 2026-09-06 (last 2026-10-18) but has never been restored. The steps are a draft (`docs/plans/2026-10-19-goal6-restore-procedure-draft.md`). A parallel session is working on Goal 6. | Goal 6 | MUST |
-| 13.3 | Photos, signatures and uploads backed up (all nine storage buckets) | **Built, not running.** A weekly file backup for every bucket was written on 2026-10-21 (`CRX_Backups` PR #1; `docs/operations/production-runbook.md`, storage row). It waits on Mason adding two storage keys as secrets, and on that PR merging. Until its first run succeeds, the files have no backup. | Goal 6 | MUST |
+| 13.3 | Photos, signatures and uploads backed up (all nine storage buckets) | **Built and running.** The weekly file backup of every bucket is live since 2026-10-22 (PR #1029; `CRX_Backups` PRs #1 and #2). Its first run saved 9 buckets and 38 files, matching the database list of files, and a break test caught a deliberately dropped file (`docs/operations/production-runbook.md`, storage row). A restore drill (13.2) still has to prove the files come back. | Done; restore in 13.2 | MUST |
 | 13.4 | **After a restore, nothing happens twice**: payments, QuickBooks entries and emails already sent are reconciled before anything restarts | **Process not written** (goals doc, Goal 6 "Done when"). | Goal 6 | MUST |
 | 13.5 | Two named people can run the recovery; the backup passphrase isn't held by Mason alone | **Not done.** Only Mason holds the passphrase. | Goal 6 (Mason names them) | MUST |
 | 13.6 | A failed backup alerts a named person and a backup, who know what to do | **Partly built, not live.** A daily freshness check that fails when a backup is too old was written on 2026-10-21 (`CRX_Backups` PR #1; runbook section 4.11). It only reaches Mason if GitHub emails him about failed runs, which isn't confirmed yet. The outside watchdog, which still works if GitHub Actions stops, isn't built. Until then, someone checks the backup dates every Monday. A silent failure would quietly break the "minutes, not days" target. | Goal 6 | MUST |
@@ -233,7 +266,7 @@ Mason's target: an outage can last overnight, CRX is back by the next business m
 
 ## 14. QuickBooks and Stripe
 
-Both integrations stay in the plan (Goal 7). Nothing exists in the code yet: searching `src/` and `supabase/functions/` on 2026-10-21 found no QuickBooks or Stripe code. A research plan landed on 2026-10-21 (`docs/plans/2026-10-21-goal7-quickbooks-stripe-groundwork.md`, PR #1016). It recommends testing the paid Conductor connector for QuickBooks first. It also found that **Stripe's prohibited-business list may exclude restricted-use pesticide sellers**, so Stripe has to confirm in writing before anything is built, and another processor may be needed. The manual fallbacks below are a **time-limited contingency**, used only if Mason chooses one at the 2026-12-15 checkpoint. Each has an owner and an end date for returning to the integration.
+Both integrations stay in the plan (Goal 7). The QuickBooks sync is one-way: CRX sends invoices, payments and credits to QuickBooks. Two-way sync stays on the "not building" list. Nothing exists in the code yet: searching `src/` and `supabase/functions/` on 2026-10-21 found no QuickBooks or Stripe code. A research plan landed on 2026-10-21 (`docs/plans/2026-10-21-goal7-quickbooks-stripe-groundwork.md`, PR #1016). It recommends testing the paid Conductor connector for QuickBooks first. It also found that **Stripe's prohibited-business list may exclude restricted-use pesticide sellers**, so Stripe has to confirm in writing before anything is built, and another processor may be needed. The manual fallbacks below are a **time-limited contingency**, used only if Mason chooses one at the 2026-12-15 checkpoint. Each has an owner and an end date for returning to the integration.
 
 | # | What must work | Today (evidence) | Closed by | Rank |
 |---|---|---|---|---|
@@ -252,6 +285,8 @@ These are Mason's checklists (goals doc, L1–L3), not agent gates. The full che
 | 15.1 | **Opening balances, record by record** (L3): every customer balance, unpaid invoice, prepay or deposit, unapplied payment, outstanding credit, open order, unbilled delivery and stock balance matches Chem Man, QuickBooks and the count. Original IDs and the source system are kept, nothing is entered twice, and the bookkeeper signs | Not started. | MUST |
 | 15.2 | **Inventory readiness** (L2): a stock count by product, package and location, approved adjustments, and old deliveries, reservations and receipts that still hold stock cleared. Receiving, partial delivery, return, void, transfer and field use all checked | Not started. On 2026-08-19 there were 19 negative stock rows, and five products still flag in the integrity report until counted (`KNOWN_ISSUES.md`, 2026-10-07 entry). | MUST |
 | 15.3 | **Compliance readiness** (L1): EPA numbers and labels verified; customer and staff licenses on file; expired, missing and wrong-state licenses and label restrictions handled; a full reporting period produces correct state reports. Mason decides wherever a rule needs a hard block instead of today's warning | Not started. Today the RUP license check only warns (`src/lib/rupCompliance.ts`). | MUST |
+| 15.4 | Junk records cleaned and duplicate customers merged before opening balances | **Not done** (old `TODO.md` (2026-09-27), §1 and §5). It changes live data, so each step needs Mason's OK. | Mason + agent | SHOULD |
+| 15.5 | A printable Application Record PDF for inspectors | **Not built** (old `TODO.md` (2026-09-27), §5). | New | SHOULD |
 
 ## 16. Launch readiness: trial, developer, cut-over and pilot operations
 
@@ -266,6 +301,7 @@ These are Mason's checklists (goals doc, L1–L3), not agent gates. The full che
 | 16.7 | **Outage paper fallback** for dispatch, delivery and payments, printed and rehearsed | **Not done** (goals doc, Goal 6). | Goal 6 | MUST |
 | 16.8 | **Launch support**: where staff report a problem (app error, failed email, stuck bill, sync failure, stock difference), who answers, how fast, and when to pull the emergency brake | **Not written.** | Phase D prep | MUST |
 | 16.9 | **Training per role in December**, on staging, covering normal work *and* the exceptions: partial delivery, return, split billing, failed payment, missing signature, outage | **December** (goals doc, Phase D). | Phase D | MUST |
+| 16.10 | Mapbox and satellite map licensing terms checked for business use | **Not done** (old `TODO.md` (2026-09-27), §5). | Mason | SHOULD |
 
 ## 17. Can wait until after the pilot
 
@@ -273,7 +309,7 @@ These are Mason's checklists (goals doc, L1–L3), not agent gates. The full che
 |---|---|
 | Remaining field-app, job and blend-ticket invoice work (section 5) | Mason, 2026-10-22: least important, built last. They keep working as they do today. |
 | Returns work, including "sitting at farm" pickup tracking and the Chem Man credit block (section 7) | Mason, 2026-10-22: "returns are not important either it can wait". Returns keep working as they do today: stock comes back at "received" and the credit follows. |
-| Cost freshness and Early Bird price lists (0.7, 0.11) | Parked by Mason, 2026-10-14. |
+| Supplier-evidence cost rollout (0.7) and Early Bird price lists (0.11) | Parked by Mason, 2026-10-14. The rest of cost freshness was un-parked 2026-10-22. |
 | Rules that only limit sales reps (1.5, 3.6, 3.7, 11.5) | Mason, 2026-10-22: no regular reps yet. They become MUST before the first regular rep gets an account. |
 | Field-application split billing (4.5) | Parked by Mason, 2026-10-15. |
 | Blend-ticket billing that picks the exact quoted line by itself | Parked by Mason; staff pick it today (5.2). |
@@ -284,21 +320,47 @@ These are Mason's checklists (goals doc, L1–L3), not agent gates. The full che
 
 ---
 
+### Folded in from the old `TODO.md` (CAN-WAIT, 2026-10-22)
+
+These were open in the old `TODO.md` (last updated 2026-09-27), aren't needed for day one, and stay here so they aren't lost.
+
+| Area | Items |
+|---|---|
+| Field-application, job and blend-ticket work (built last, with section 5) | Re-entry and pre-harvest tracking and the dicamba 72-hour rule (**MUST before spring application season**). Sprayer packet. Dispatch board lanes, job templates and a weather strip. Commissions on blend tickets and job split visibility. Duplicate fields on boundary re-import, and field saves that aren't one step. Loader worksheet keeping stale "loads done", missing jobs on loader prints, a blank product on a blend line. Field-app leftovers (attachments, fuel surcharge, dispatch retry key). Pre- and post-spray emails, label-rate warn or block, wrong-field alert. The first real split field-app invoice check. The full-acreage billing nudge. Boundary import tested in a real vendor format. Whether an invoice is drafted automatically when an applicator finishes. |
+| Screens and polish | Record Payment opens with no customer filled in. One combined PDF for batch invoice printing. Dashboard alerts for overdue vendor bills and blend tickets awaiting approval. Create Invoice from the Orders list; Link Order on blend tickets. Product filter on Field Invoices and a balance per field. Customer summary bar extras and drawer quick actions. Customer name links, status text, More menus, the phone blend page. The month-end month and year picker. Redirect or keep the old A/R pages. The Action Queue "+N more" link and search delay. Recipe filter, undo point, tab keys. Navigation items. Activity feed gaps. Rep not told of a cancellation; unused dashboard counts. Post next step, void preview, split percent, prepay queries, the A/R local date. PDF export promise, email branding, PDF previews. Pop-up animations. |
+| Later features | Earmarked prepay buckets (the earmark engine redesign). EPA auto-fill from scanned labels. True average purchase cost for inventory (decision 12). Vendor bill lines and the return-policy screen. Finish or remove driver rush ordering. The idea backlog (soil tests, compliance vault and the rest). A CSV-only compliance export and other small compliance items. Clean up the leftover `apply_prepay_to_invoice` code. About 11 parked low-severity bug-hunt findings. Small retry-safety items (a dead "pending" check, planned holds' own retry key, an empty user key). |
+| Rules that only limit sales reps (MUST before the first regular rep) | Any rep can edit any customer's fields, and the by-customer total is low for reps. Reps write the stock ledger directly; the Planned toggle fails for reps. |
+
+### Agent and tooling work (not app work)
+
+Kept here so it isn't lost; it doesn't take app build time. Keep the pricing branches (PRs #397, #350, #892) until the pricing work ships. Decide whether to keep or drop 159 unused database indexes. Set up workstation `psql` access for agent database checks. Re-run gauntlet sections 5–8. Retire the unused `setup-blend-tickets-storage` function (a deploy change, so Mason's OK). Combine the old migration files into one baseline. The guard-system hardening backlog (frozen during Goal 8). One shared route list. Put `require_admin()` into a migration (it exists only live). Engineering hygiene (lint rules, big files, tests). Re-check three removed audits.
+
+### Not doing (Mason, 2026-10-22)
+
+Removed for good. Don't re-add without asking Mason: bank reconciliation, 1099s, reading vendor bills automatically, and profit per field.
+
 ## What Mason needs to decide
+
+**Answered 2026-10-22:** item 1 (approved) and item 7 (yes, the small part). Items 2, 5 and 6 are "not chosen yet". Items 3 and 4 wait for the 2026-12-15 checkpoint, after the contingencies are written and rehearsed.
 
 Recommended answers first. Reply with the number and "yes", or say what to change.
 
-1. **Approve the ranking rule and the MUST list** (the "How each item is ranked" section and every row marked MUST). Recommend: approve them now, so the next ten weeks work from one list. The QuickBooks and payment contingencies (items 3 and 4) are a separate yes, after they're written and rehearsed.
+1. **ANSWERED: approved.** **Approve the ranking rule and the MUST list** (the "How each item is ranked" section and every row marked MUST). Recommend: approve them now, so the next ten weeks work from one list. The QuickBooks and payment contingencies (items 3 and 4) are a separate yes, after they're written and rehearsed.
 2. **Senior developer (open question 6d).** Who, the cost, whether they can start in October for early reviews, the December review, and launch support. Recommend choosing them by 2026-10-31, the checkpoint already in the goals doc.
 3. **QuickBooks at the 2026-12-15 checkpoint.** If the sync isn't proven, do we start January 1 on the hand-entry contingency (14.3), or move the date? Recommend: start on hand entry **only if** it has been rehearsed on staging and the bookkeeper confirms they have the time, with a written date for returning to the sync. Otherwise, move the date.
 4. **Online payments.** If Stripe isn't approved and tested by 2026-12-15, start January 1 with checks and bank transfers under the written payment steps (14.5)? Recommend **yes**. Customers pay that way today, and Stripe can follow during the pilot.
 5. **Name an owner and a backup** for: the daily pilot check (16.5), hand entry into QuickBooks if used, the emergency brake (16.6), launch support (16.8) and recovery (13.5). Recommend naming them by 2026-12-01, so they rehearse in December.
 6. **Who reviews printed and emailed documents (9.2) and approves the money reports (10.2)**, and by when. Recommend the bookkeeper, by 2026-12-01.
-7. **Cost freshness (0.7), parked on 2026-10-14.** With cost tracking now a priority, un-park it? Recommend **yes, the small part**: an "as of" date on each cost and a stale-cost report, so old costs are visible. The supplier-evidence rollout stays parked, because it's mostly data entry. Without this, the margin warnings in 0.1 compare against costs that are mostly still the original setup load.
+7. **ANSWERED: yes, the small part.** **Cost freshness (0.7), parked on 2026-10-14.** With cost tracking now a priority, un-park it? Recommend **yes, the small part**: an "as of" date on each cost and a stale-cost report, so old costs are visible. The supplier-evidence rollout stays parked, because it's mostly data entry. Without this, the margin warnings in 0.1 compare against costs that are mostly still the original setup load.
+
+8. **Can unshipped lines be edited on a partly delivered order?** (old `TODO.md`, §5)
+9. **Should a price-later rush order count against the customer's credit limit?** (old `TODO.md`, §5)
+10. **How do quote discounts and fees work?** Sales tax is already settled: none. (old `TODO.md`, §5)
+11. **Finance charges and month-end:** automate finance charges, warn before reopening a closed period, and save the month-end checkboxes? Decide before January 31. (old `TODO.md`, §5)
+12. **True average purchase cost for inventory?** Recommend later. (old `TODO.md`, §3)
 
 **Actions already decided, still waiting on Mason** (not new decisions):
 - **Upgrade Supabase to Pro and turn on point-in-time recovery** (decided 2026-10-13). Due this week, because the rewind-to-a-time drill (13.2) can't run without it. The first database-only restore of the existing weekly dump doesn't wait on it and can run now (`docs/plans/2026-10-18-goal-6-safety-net-findings.md`).
-- **Add the two storage-key secrets** that the file backup (13.3) waits on.
 - **Send Stripe the eligibility question** about restricted-use pesticide sales (section 14, and section 5.6 of the Goal 7 groundwork plan).
 - **Fallback for December 31 evening**: if the quote and order number fix (12.1) misses its December proof, staff stop entering quotes and orders in CRX after 6 pm that evening. It's a backup plan, not a substitute for the fix.
 
