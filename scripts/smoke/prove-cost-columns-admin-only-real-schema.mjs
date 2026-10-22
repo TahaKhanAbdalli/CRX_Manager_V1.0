@@ -612,6 +612,11 @@ function preflightRefusesDrift() {
     // A role gained one: the lock was not written for it.
     ['GRANT INSERT ON public.invoices TO authenticated;', /COST_LOCK_PREFLIGHT: table privileges are not the ones[^\n]*authenticated INSERT invoices: held t, expected f/],
     ['GRANT REFERENCES (id) ON public.quote_versions TO authenticated;', /COST_LOCK_PREFLIGHT: table privileges are not the ones[^\n]*authenticated REFERENCES quote_versions: held t, expected f/],
+    // A role narrowed to a few columns: "held on some column" must not let the lock widen it back.
+    ['REVOKE SELECT ON public.invoices FROM authenticated; GRANT SELECT (id) ON public.invoices TO authenticated;',
+      /COST_LOCK_PREFLIGHT: a role holds a privilege on only some non-cost columns[^\n]*authenticated SELECT invoices\.application_date/],
+    ['REVOKE UPDATE ON public.jobs FROM authenticated; GRANT UPDATE (notes) ON public.jobs TO authenticated;',
+      /COST_LOCK_PREFLIGHT: a role holds a privilege on only some non-cost columns[^\n]*authenticated UPDATE jobs\.additional_info/],
     // A PostgREST computed field (whole-row argument) the lock would break for every role.
     ["CREATE FUNCTION public.zz_prover_rowfn(p public.invoices) RETURNS int LANGUAGE sql STABLE AS 'SELECT 1'; GRANT EXECUTE ON FUNCTION public.zz_prover_rowfn(public.invoices) TO authenticated;",
       /COST_LOCK_PREFLIGHT: these API-executable functions take a whole locked row[^\n]*zz_prover_rowfn\(invoices\)/],
@@ -641,7 +646,7 @@ function preflightRefusesDrift() {
   const privPost = privileges();
   assert.deepEqual([...privPost.tbl].filter(([k, v]) => privPre.tbl.get(k) !== v), [], 'the autocommit refusal changed a table privilege');
   assert.deepEqual([...privPost.col].filter(([k, v]) => privPre.col.get(k) !== v), [], 'the autocommit refusal changed a column privilege');
-  console.log(`[prover] PREFLIGHT: ${cases.length} drifted states each abort the candidate (a new column on each of the ${LOCKED_TABLES.length} tables, a dropped column, either admin function missing, a lost or gained role privilege, a whole-row function for authenticated or anon, a cost or whole-row view, an admin reader made INVOKER / opened to anon / closed to authenticated / re-bodied); under autocommit it refuses before any change`);
+  console.log(`[prover] PREFLIGHT: ${cases.length} drifted states each abort the candidate (a new column on each of the ${LOCKED_TABLES.length} tables, a dropped column, either admin function missing, a lost, gained or narrowed role privilege, a whole-row function for authenticated or anon, a cost or whole-row view, an admin reader made INVOKER / opened to anon / closed to authenticated / re-bodied); under autocommit it refuses before any change`);
 }
 
 // MUTATIONS: copies of the candidate with one grant edit each must fail the candidate's own verify block.

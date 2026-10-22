@@ -117,6 +117,40 @@ BEGIN
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: table privileges are not the ones this file was written against (re-read them): %', v_bad;
   END IF;
+  -- "Held" must mean held on EVERY non-cost column (table-wide before this file, column by column
+  -- after it): a role narrowed to a few columns outside a migration would otherwise get the rest back
+  -- from the grants below. Generated columns are skipped (this file leaves jobs.remaining_acres out of
+  -- the write lists); products' INSERT/UPDATE are not re-granted here, so they need only be held.
+  SELECT string_agg(format('%s %s %s.%s', r.rol, p.priv, c.relname, a.attname), '; ' ORDER BY r.rol, p.priv, c.relname, a.attname)
+    INTO v_bad
+    FROM unnest(ARRAY['products', 'quotes', 'quote_items', 'quote_versions', 'orders', 'order_items', 'invoices',
+                      'invoice_items', 'jobs', 'job_chemicals', 'blend_ticket_products', 'commissions']) AS t(tbl)
+    JOIN pg_class c ON c.oid = ('public.' || t.tbl)::regclass
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+    CROSS JOIN (VALUES ('authenticated'), ('anon')) AS r(rol)
+    CROSS JOIN (VALUES ('SELECT'), ('REFERENCES'), ('INSERT'), ('UPDATE')) AS p(priv)
+   WHERE CASE
+           WHEN r.rol = 'anon' THEN p.priv = 'SELECT' AND t.tbl NOT IN ('quote_items', 'quote_versions')
+           WHEN p.priv = 'SELECT' THEN true
+           WHEN p.priv = 'REFERENCES' THEN t.tbl <> 'quote_versions'
+           ELSE t.tbl IN ('quotes', 'orders', 'jobs', 'job_chemicals', 'blend_ticket_products', 'commissions')
+         END
+     AND (t.tbl, a.attname::text) NOT IN (VALUES
+       ('products', 'current_cost'), ('products', 'cost_updated_date'), ('products', 'tier1_margin'),
+       ('products', 'tier2_margin'), ('products', 'tier3_margin'), ('products', 'tier1_gross_margin'),
+       ('products', 'tier2_gross_margin'), ('products', 'tier3_gross_margin'), ('quotes', 'total_cost'),
+       ('quotes', 'total_profit'), ('quotes', 'total_margin_pct'), ('quote_items', 'current_cost'),
+       ('quote_items', 'profit'), ('quote_items', 'net_margin'), ('quote_items', 'cost_at_quote_cents'),
+       ('quote_versions', 'snapshot_data'), ('orders', 'total_cost'), ('orders', 'total_profit'),
+       ('orders', 'total_margin_pct'), ('order_items', 'cost_per_unit'), ('order_items', 'profit'),
+       ('order_items', 'net_margin'), ('order_items', 'cost_at_time_cents'), ('invoices', 'total_cost_cents'),
+       ('invoice_items', 'cost_cents'), ('invoice_items', 'return_credit_cogs_cents'), ('jobs', 'total_cost_cents'),
+       ('job_chemicals', 'cost_per_unit_cents'), ('blend_ticket_products', 'unit_cost_cents'),
+       ('commissions', 'order_profit'))
+     AND NOT has_column_privilege(r.rol, c.oid, a.attname, p.priv);
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: a role holds a privilege on only some non-cost columns; this file would widen it (re-read them): %', v_bad;
+  END IF;
 
   -- A whole-row reference needs SELECT on every column, so any API-executable function that takes one
   -- of these row types (a PostgREST computed field) would fail for everyone once a cost column is gone.

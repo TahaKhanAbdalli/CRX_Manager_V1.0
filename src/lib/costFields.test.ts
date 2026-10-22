@@ -189,10 +189,20 @@ describe('column lists match the schema registry', () => {
 
 // Since 20261022030000 the API roles hold per-column grants on these tables, so a column added later
 // is invisible to every screen (and the SAFE_COLUMNS list that must include it then fails for admins
-// too) until a migration grants it. Every ADD COLUMN after the lock must grant SELECT on the new
-// column to authenticated in the same file, unless it is another cost field.
+// too) until a migration grants it. Every ADD COLUMN after the lock must, in the same file, grant
+// the read privileges the table's other columns carry: SELECT and REFERENCES to authenticated
+// (quote_versions: SELECT only) and SELECT to anon where anon reads the table. Write grants are left
+// to judgement: a column the screens never write is safer without them. Unless it is another cost field.
 const COLUMN_CARVED = [...COST_TABLES, 'quote_versions'];
 const LOCK_STAMP = '20261022030000';
+const NO_ANON = ['quote_items', 'quote_versions'];
+
+function requiredGrants(table: string): Array<[privilege: string, role: string]> {
+  const out: Array<[string, string]> = [['SELECT', 'authenticated']];
+  if (table !== 'quote_versions') out.push(['REFERENCES', 'authenticated']);
+  if (!NO_ANON.includes(table)) out.push(['SELECT', 'anon']);
+  return out;
+}
 
 function ungrantedNewColumns(sql: string): string[] {
   const text = sql.replace(/--[^\n]*/g, '');
@@ -205,9 +215,12 @@ function ungrantedNewColumns(sql: string): string[] {
       const column = add[1].toLowerCase();
       if (['constraint', 'primary', 'unique', 'foreign', 'check', 'exclude'].includes(column)) continue;
       if ((COST_COLUMNS[table as CostTable] as readonly string[] | undefined)?.includes(column)) continue;
-      const grant = new RegExp(`GRANT\\s+SELECT\\s*\\(([^)]*)\\)\\s*ON\\s+(?:TABLE\\s+)?(?:public\\.)?"?${table}"?\\s+TO\\s+[^;]*\\bauthenticated\\b`, 'gi');
-      const granted = [...text.matchAll(grant)].some((g) => g[1].split(',').map((c) => c.trim().replace(/"/g, '').toLowerCase()).includes(column));
-      if (!granted) missing.push(`${table}.${column}`);
+      for (const [privilege, role] of requiredGrants(table)) {
+        // Each privilege needs its own list: `GRANT SELECT, REFERENCES (cols)` scopes only REFERENCES.
+        const grant = new RegExp(`GRANT\\s+(?:[A-Z]+\\s*,\\s*)*${privilege}\\s*\\(([^)]*)\\)\\s*ON\\s+(?:TABLE\\s+)?(?:public\\.)?"?${table}"?\\s+TO\\s+[^;]*\\b${role}\\b`, 'gi');
+        const granted = [...text.matchAll(grant)].some((g) => g[1].split(',').map((c) => c.trim().replace(/"/g, '').toLowerCase()).includes(column));
+        if (!granted) missing.push(`${table}.${column}: ${role} ${privilege}`);
+      }
     }
   }
   return missing;
@@ -216,7 +229,7 @@ function ungrantedNewColumns(sql: string): string[] {
 describe('new columns on the column-carved cost tables ship with their grants', () => {
   const MIGRATIONS = join(HERE, '..', '..', 'supabase', 'migrations');
 
-  it(`every ADD COLUMN after ${LOCK_STAMP} grants SELECT on it to authenticated`, () => {
+  it(`every ADD COLUMN after ${LOCK_STAMP} grants the table's read privileges on it`, () => {
     const problems: string[] = [];
     for (const name of readdirSync(MIGRATIONS).filter((n) => n.endsWith('.sql') && n.slice(0, 14) > LOCK_STAMP)) {
       for (const col of ungrantedNewColumns(readFileSync(join(MIGRATIONS, name), 'utf8'))) problems.push(`${name}: ${col}`);
@@ -225,14 +238,20 @@ describe('new columns on the column-carved cost tables ship with their grants', 
   });
 
   it('the scanner catches each shape it exists for (mutation guard)', () => {
-    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;')).toEqual(['invoices.zz_new']);
-    expect(ungrantedNewColumns('ALTER TABLE ONLY quotes ADD COLUMN IF NOT EXISTS zz_a int, ADD zz_b int;')).toEqual(['quotes.zz_a', 'quotes.zz_b']);
-    expect(ungrantedNewColumns('ALTER TABLE public.quote_versions ADD COLUMN zz_new text;')).toEqual(['quote_versions.zz_new']);
-    // Granted to authenticated in the same file: fine.
-    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT (zz_new) ON public.invoices TO authenticated;')).toEqual([]);
-    // Granted to someone else, or for another privilege only: still missing.
-    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT (zz_new) ON public.invoices TO anon;')).toEqual(['invoices.zz_new']);
-    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT UPDATE (zz_new) ON public.invoices TO authenticated;')).toEqual(['invoices.zz_new']);
+    const ALL_READS = (t: string, c: string) => [`${t}.${c}: authenticated SELECT`, `${t}.${c}: authenticated REFERENCES`, `${t}.${c}: anon SELECT`];
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;')).toEqual(ALL_READS('invoices', 'zz_new'));
+    expect(ungrantedNewColumns('ALTER TABLE ONLY quotes ADD COLUMN IF NOT EXISTS zz_a int, ADD zz_b int;')).toEqual([...ALL_READS('quotes', 'zz_a'), ...ALL_READS('quotes', 'zz_b')]);
+    // quote_versions: authenticated SELECT only; quote_items: no anon.
+    expect(ungrantedNewColumns('ALTER TABLE public.quote_versions ADD COLUMN zz_new text;')).toEqual(['quote_versions.zz_new: authenticated SELECT']);
+    expect(ungrantedNewColumns('ALTER TABLE public.quote_items ADD COLUMN zz_new text;')).toEqual(['quote_items.zz_new: authenticated SELECT', 'quote_items.zz_new: authenticated REFERENCES']);
+    // Every read privilege granted, each with its own list: fine.
+    const GRANTS = 'GRANT SELECT (zz_new) ON public.invoices TO authenticated;\nGRANT REFERENCES (zz_new) ON public.invoices TO authenticated;\nGRANT SELECT (zz_new) ON public.invoices TO anon;';
+    expect(ungrantedNewColumns(`ALTER TABLE public.invoices ADD COLUMN zz_new text;\n${GRANTS}`)).toEqual([]);
+    // One privilege or one role missing: named.
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT (zz_new) ON public.invoices TO authenticated;\nGRANT REFERENCES (zz_new) ON public.invoices TO authenticated;')).toEqual(['invoices.zz_new: anon SELECT']);
+    // `GRANT SELECT, REFERENCES (cols)` scopes only REFERENCES, so SELECT is still missing.
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT SELECT, REFERENCES (zz_new) ON public.invoices TO authenticated;\nGRANT SELECT (zz_new) ON public.invoices TO anon;')).toEqual(['invoices.zz_new: authenticated SELECT']);
+    expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN zz_new text;\nGRANT UPDATE (zz_new) ON public.invoices TO authenticated;')).toEqual(ALL_READS('invoices', 'zz_new'));
     // A new cost field stays ungranted on purpose; a constraint is not a column; other tables are out of scope.
     expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD COLUMN total_cost_cents bigint;')).toEqual([]);
     expect(ungrantedNewColumns('ALTER TABLE public.invoices ADD CONSTRAINT zz_ck CHECK (true);')).toEqual([]);

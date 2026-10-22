@@ -318,10 +318,13 @@ test.describe.serial('Comprehensive UI Workflow (12 Acts)', () => {
       if (found) {
         // Cost is admin-only and not a readable column (20261022030000): read it through the admin function.
         const costs = await supabaseRpc(page, 'get_admin_cost_fields', { p_table: 'products', p_ids: [found.id] }) as Record<string, Record<string, unknown>>;
+        const cost = costs?.[found.id as string]?.current_cost;
+        // A missing cost must fail the fixture, never become a free product.
+        expect(typeof cost === 'number' || (typeof cost === 'string' && cost !== ''), `no admin cost for ${info.name}`).toBe(true);
         (S.products as Array<{ id: string; name: string; costCents: number; tier1Price: number }>).push({
           id: found.id as string,
           name: found.product_name as string,
-          costCents: Math.round(((costs?.[found.id as string]?.current_cost as number) || 0) * 100),
+          costCents: Math.round(Number(cost) * 100),
           tier1Price: (found.tier1_price as number) || 0,
         });
       }
