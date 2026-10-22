@@ -1,7 +1,7 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-21 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
+`execute_sql`, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
 at 05:13 UTC still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
@@ -116,7 +116,7 @@ purchase-order screens now lists the non-cost columns it reads (`src/lib/costFie
 admins add cost through `get_admin_cost_fields`, quote history comes through `get_quote_versions`, the three saves derive a
 non-admin's cost, and chemical history and Quick Receive no longer show purchase cost to reps. **Purchase orders are NOT part of
 step 2 (Mason, 2026-10-20, option 1 "for now"):** the purchase order screens and `save_purchase_order` are unchanged, so reps still
-see and enter purchase cost there until PR #980 lands (below). Until step 3, the columns themselves are still readable through the Data API. Step 3: the column
+see and enter purchase cost there until PR #980 landed (below; live 2026-10-22). Until step 3, the columns themselves are still readable through the Data API. Step 3: the column
 lock, applied only after step 2's screens are live, then live per-role refusal checks; it must also revoke INSERT/UPDATE of the
 cost columns, because reps can still write `job_chemicals` and `invoice_items` rows directly. Step 3 must leave the columns the purchase order screens read (product `current_cost`, purchase order and line cost) unlocked
 until the purchase order project lands (`costFields.test.ts` names those four screens as its only exemption). **TOP-PRIORITY
@@ -124,13 +124,14 @@ FOLLOW-UP / OPEN COST QUESTION (Mason, 2026-10-20, "dig deeper in future"): purc
 on PR #965 showed any cost a rep's purchase order line is given (the catalog cost, or $0) can be wrong and then locked at receipt
 (the supplier-cost-basis snapshot trigger, and the writer's received-line rule), with no governed way to correct it. The project
 needs a governed way to correct, or at least track, a received line's cost, then can hide purchase cost from reps.
-**Being closed by PR #980 (Mason, 2026-10-20, Option B; migrations `20261021140000` and `20261021141000`, NOT applied yet,
-both applied before the PR merges):** the four purchase-order screens show and send unit cost only to admins; `save_purchase_order`
+**Closed by PR #980 (Mason, 2026-10-20, Option B; merged 2026-10-22 00:28 UTC as `8399309dc`; migrations `20261021140000`
+(ledger `20261021224056`) and `20261021141000` (ledger `20261022002748`) both LIVE, applied before the merge on Mason's `I approve`):** the four purchase-order screens show and send unit cost only to admins; `save_purchase_order`
 ignores a non-admin's cost, gives a rep's new line the catalog cost and flags it (`cost_needs_review`, the admin "Costs to confirm"
 filter); `set_purchase_order_item_costs` is the governed, admin-only correction (received lines included, a reason required once
 a line has been received), and every cost change is kept in the admin-only, append-only `purchase_order_item_cost_changes`;
-`20261021141000` then locks the purchase-order cost columns from every API role. This entry moves to resolved once both are live
-and the PR is merged. Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
+`20261021141000` then locks the purchase-order cost columns from every API role (live read 2026-10-22 00:27 UTC: `authenticated` and
+`anon` can no longer read `purchase_order_items.unit_cost` or `purchase_orders.total_cost`). Still open: step 3's lock on the other
+tables (product `current_cost` and the rest stay readable through the Data API). Quick Receive still marks the cheaper open PO line NO-RETURN for reps (they saw it, and the prices, before step 2), so it tells a rep which line cost less but never by how much; kept because receiving needs it. Residuals for Mason to decide later (no fix planned yet): a commission amount and rate together still imply
 profit to the rep who earns it; and a rep can still find a product's cost by trial and error, because a price below cost is
 refused and one at or above cost saves (about 20 attempts on a draft quote narrow it to the cent; refused attempts are not
 logged or limited).
