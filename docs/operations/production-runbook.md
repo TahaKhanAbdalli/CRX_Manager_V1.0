@@ -273,8 +273,8 @@ layer, `.github/workflows/backup-freshness.yml`. Daily at 20:00 UTC it fails whe
 dump or the newest validated storage marker is older than the most recent Sunday 08:00 UTC, allowing 10 hours because
 GitHub has started the Sunday runs 4 to 6.5 hours late. It needs no secret. A failed run is only a red mark in GitHub:
 it reaches Mason by email **only if** his GitHub notification settings send Actions failure emails for `CRX_Backups`
-(the design doc's caveat). The break test on 2026-10-22 produced that deliberately failed run; record here once Mason confirms its
-email arrived, and until then keep the Monday check below. It is a second layer only: if GitHub Actions
+(the design doc's caveat). **Confirmed 2026-10-22:** Mason received the GitHub failure email for that day's deliberately failed storage
+break test. Keep the Monday check below anyway: a run that never starts sends no email. It is a second layer only: if GitHub Actions
 is switched off it does not run either, so the outside watchdog (design part B, needs a credential Mason approves) and
 the stronger dump checks (design part A) are still owed.
 
