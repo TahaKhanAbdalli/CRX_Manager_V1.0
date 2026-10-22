@@ -253,6 +253,17 @@ function versionReadsOffView(src: string): number[] {
   return lines;
 }
 
+/** An ALTER TABLE on public.invoices that adds, drops or renames a column. */
+function changesInvoiceColumns(sql: string): boolean {
+  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?(?:public\.)?"?invoices"?\s+([^;]*);/gi)) {
+    // ADD/DROP COLUMN, or the bare form `ADD name type` / `DROP name` (not a constraint, nor an
+    // ALTER COLUMN sub-action such as DROP NOT NULL / DROP DEFAULT / DROP EXPRESSION / DROP IDENTITY).
+    if (/\b(ADD|DROP)\s+(COLUMN\b|(?!(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE|NOT|DEFAULT|EXPRESSION|IDENTITY)\b)\w+\s)/i.test(m[1])) return true;
+    if (/\bRENAME\s+(COLUMN\s+)?\w+\s+TO\b/i.test(m[1])) return true;
+  }
+  return false;
+}
+
 describe('the posting version is read only from invoices_postable', () => {
   it('every select of invoice_post_version in src/ is on invoices_postable', () => {
     const offences: string[] = [];
@@ -284,5 +295,33 @@ describe('the posting version is read only from invoices_postable', () => {
     const viewColumns = body![1].split(',').map((c) => c.trim());
     const cost: string[] = [...COST_COLUMNS.invoices];
     expect([...viewColumns].sort()).toEqual(registry.columns.invoices.filter((c) => !cost.includes(c)).sort());
+  });
+
+  // The registry is refreshed after a live apply, so the test above can lag a migration on disk. Any
+  // migration after the view's newest definition that adds, drops or renames an invoices column must
+  // re-create the view in the same file (a DROP COLUMN ... CASCADE would silently drop it).
+  it('a migration that changes invoices columns after the view re-creates the view', () => {
+    const migrations = join(HERE, '..', '..', 'supabase', 'migrations');
+    const names = readdirSync(migrations).filter((n) => n.endsWith('.sql')).sort();
+    const defines = (sql: string) => /CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+public\.invoices_postable\b/i.test(sql);
+    const firstView = names.findIndex((n) => defines(readFileSync(join(migrations, n), 'utf8')));
+    expect(firstView).toBeGreaterThanOrEqual(0);
+    const offences = names.slice(firstView + 1).filter((n) => {
+      const sql = readFileSync(join(migrations, n), 'utf8').replace(/--[^\n]*/g, '');
+      return changesInvoiceColumns(sql) && !defines(sql);
+    });
+    expect(offences, 're-create public.invoices_postable (every invoices column but cost) in the same migration').toEqual([]);
+  });
+
+  it('the invoices column-change detector catches each shape it exists for (mutation guard)', () => {
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices ADD COLUMN zz text;')).toBe(true);
+    expect(changesInvoiceColumns('alter table only invoices drop column if exists zz cascade;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices RENAME COLUMN a TO b;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices RENAME a TO b;')).toBe(true);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices ADD CONSTRAINT zz CHECK (true);')).toBe(false);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoice_items ADD COLUMN zz text;')).toBe(false);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices ALTER COLUMN zz SET DEFAULT 0;')).toBe(false);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices ALTER COLUMN zz DROP NOT NULL, ALTER COLUMN yy DROP DEFAULT;')).toBe(false);
+    expect(changesInvoiceColumns('ALTER TABLE public.invoices ADD zz integer;')).toBe(true);
   });
 });

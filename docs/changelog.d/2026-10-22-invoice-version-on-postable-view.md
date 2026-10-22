@@ -13,8 +13,11 @@ the app's accounts, after which reading the version from `invoices` fails for ev
 opened nor posted. The view's row has no cost column, so the version keeps working. This PR lands first; the lock then
 drops the old version function.
 
-**Guards.** `src/lib/costFields.test.ts` fails if any screen selects the version from anything but the view, and if the
-view's columns drift from the invoice table's columns minus cost.
+**Guards.** `src/lib/costFields.test.ts` fails if a `.from(...).select(...)` chain in `src/` selects the version from
+anything but the view (it reads literal and same-file constant select strings; queries built across statements or
+from imported constants are not traced), if the view's columns drift from the invoice table's columns minus cost, and
+if a later migration changes an invoice column without re-creating the view. A live rollback-only smoke chain
+(`smoke-invoices-postable-view.sql`) checks the view and the new function after the apply.
 
 **Proof.** `node scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs` replays PR #1018's whole posting
 matrix with every version read from the view, checks the view's rules, then simulates the cost lock and replays the

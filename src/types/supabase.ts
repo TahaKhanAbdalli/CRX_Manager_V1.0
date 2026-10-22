@@ -11097,16 +11097,16 @@ export type Database = {
           applicator_name: string | null
           balance_cents: number | null
           blend_ticket_id: string | null
-          created_at: string
-          created_by: string
-          credit_applied_cents: number
+          created_at: string | null
+          created_by: string | null
+          credit_applied_cents: number | null
           crop_type: string | null
-          customer_id: string
+          customer_id: string | null
           deleted_at: string | null
           delivery_id: string | null
           diluent_rate_gpa: number | null
           discount_date: string | null
-          discount_earned_cents: number
+          discount_earned_cents: number | null
           due_date: string | null
           end_humidity_pct: number | null
           end_temp_f: number | null
@@ -11118,177 +11118,51 @@ export type Database = {
           field_names: string[] | null
           footer_notes: string | null
           header_notes: string | null
-          id: string
+          id: string | null
           internal_notes: string | null
-          invoice_date: string
+          invoice_date: string | null
           invoice_group_id: string | null
-          invoice_number: string
+          invoice_number: string | null
           invoice_post_version: string | null
-          invoice_type: string
+          invoice_type: string | null
           is_quick_delivery: boolean | null
           job_id: string | null
           order_id: string | null
-          paid_amount_cents: number
+          paid_amount_cents: number | null
           parent_invoice_id: string | null
           payment_terms: string | null
           posted_at: string | null
           posted_by: string | null
-          prepay_applied_cents: number
-          pricing_pending: boolean
+          prepay_applied_cents: number | null
+          pricing_pending: boolean | null
           purchase_order_ref: string | null
           salesman_id: string | null
-          season: number
-          send_disposition: string
+          season: number | null
+          send_disposition: string | null
           start_humidity_pct: number | null
           start_temp_f: number | null
           start_weather_source: string | null
           start_weather_time: string | null
           start_wind_direction: string | null
           start_wind_mph: number | null
-          status: string
+          status: string | null
           temperature_text: string | null
           total_acres: number | null
-          total_amount_cents: number
-          updated_at: string
+          total_amount_cents: number | null
+          updated_at: string | null
           vehicle_name: string | null
           void_reason: string | null
           voided_at: string | null
           voided_by: string | null
           weather_manual_override: boolean | null
           wind_direction: string | null
-          write_off_cents: number
+          write_off_cents: number | null
         }
         Insert: {
-          application_date?: string | null
-          application_service_id?: string | null
-          applicator_name?: string | null
-          balance_cents?: number | null
-          blend_ticket_id?: string | null
-          created_at?: string
-          created_by?: string
-          credit_applied_cents?: number
-          crop_type?: string | null
-          customer_id: string
-          deleted_at?: string | null
-          delivery_id?: string | null
-          diluent_rate_gpa?: number | null
-          discount_date?: string | null
-          discount_earned_cents?: number
-          due_date?: string | null
-          end_humidity_pct?: number | null
-          end_temp_f?: number | null
-          end_weather_source?: string | null
-          end_weather_time?: string | null
-          end_wind_direction?: string | null
-          end_wind_mph?: number | null
-          field_app_billing_set_id?: string | null
-          field_names?: string[] | null
-          footer_notes?: string | null
-          header_notes?: string | null
-          id?: string
-          internal_notes?: string | null
-          invoice_date?: string
-          invoice_group_id?: string | null
-          invoice_number?: string
-          invoice_type?: string
-          is_quick_delivery?: boolean | null
-          job_id?: string | null
-          order_id?: string | null
-          paid_amount_cents?: number
-          parent_invoice_id?: string | null
-          payment_terms?: string | null
-          posted_at?: string | null
-          posted_by?: string | null
-          prepay_applied_cents?: number
-          pricing_pending?: boolean
-          purchase_order_ref?: string | null
-          salesman_id?: string | null
-          season?: number
-          send_disposition?: string
-          start_humidity_pct?: number | null
-          start_temp_f?: number | null
-          start_weather_source?: string | null
-          start_weather_time?: string | null
-          start_wind_direction?: string | null
-          start_wind_mph?: number | null
-          status?: string
-          temperature_text?: string | null
-          total_acres?: number | null
-          total_amount_cents?: number
-          updated_at?: string
-          vehicle_name?: string | null
-          void_reason?: string | null
-          voided_at?: string | null
-          voided_by?: string | null
-          weather_manual_override?: boolean | null
-          wind_direction?: string | null
-          write_off_cents?: number
+          [_ in never]: never
         }
         Update: {
-          application_date?: string | null
-          application_service_id?: string | null
-          applicator_name?: string | null
-          balance_cents?: number | null
-          blend_ticket_id?: string | null
-          created_at?: string
-          created_by?: string
-          credit_applied_cents?: number
-          crop_type?: string | null
-          customer_id?: string
-          deleted_at?: string | null
-          delivery_id?: string | null
-          diluent_rate_gpa?: number | null
-          discount_date?: string | null
-          discount_earned_cents?: number
-          due_date?: string | null
-          end_humidity_pct?: number | null
-          end_temp_f?: number | null
-          end_weather_source?: string | null
-          end_weather_time?: string | null
-          end_wind_direction?: string | null
-          end_wind_mph?: number | null
-          field_app_billing_set_id?: string | null
-          field_names?: string[] | null
-          footer_notes?: string | null
-          header_notes?: string | null
-          id?: string
-          internal_notes?: string | null
-          invoice_date?: string
-          invoice_group_id?: string | null
-          invoice_number?: string
-          invoice_type?: string
-          is_quick_delivery?: boolean | null
-          job_id?: string | null
-          order_id?: string | null
-          paid_amount_cents?: number
-          parent_invoice_id?: string | null
-          payment_terms?: string | null
-          posted_at?: string | null
-          posted_by?: string | null
-          prepay_applied_cents?: number
-          pricing_pending?: boolean
-          purchase_order_ref?: string | null
-          salesman_id?: string | null
-          season?: number
-          send_disposition?: string
-          start_humidity_pct?: number | null
-          start_temp_f?: number | null
-          start_weather_source?: string | null
-          start_weather_time?: string | null
-          start_wind_direction?: string | null
-          start_wind_mph?: number | null
-          status?: string
-          temperature_text?: string | null
-          total_acres?: number | null
-          total_amount_cents?: number
-          updated_at?: string
-          vehicle_name?: string | null
-          void_reason?: string | null
-          voided_at?: string | null
-          voided_by?: string | null
-          weather_manual_override?: boolean | null
-          wind_direction?: string | null
-          write_off_cents?: number
+          [_ in never]: never
         }
         Relationships: [
           {
@@ -11345,6 +11219,13 @@ export type Database = {
             columns: ["parent_invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_parent_invoice_id_fkey"
+            columns: ["parent_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices_postable"
             referencedColumns: ["id"]
           },
           {

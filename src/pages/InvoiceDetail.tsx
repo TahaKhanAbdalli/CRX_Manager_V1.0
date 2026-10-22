@@ -675,7 +675,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         .is('deleted_at', null);
       if (isStale()) return;
       membersError = error;
-      for (const m of members ?? []) if (m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
+      // A member without an id (impossible; the view types make id nullable) would be left out of
+      // the map, and post_invoice_group then refuses the changed membership.
+      for (const m of members ?? []) if (m.id && m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
     }
 
     // Fetch items

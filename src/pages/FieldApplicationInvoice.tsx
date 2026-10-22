@@ -1040,9 +1040,11 @@ export default function FieldApplicationInvoice() {
 
     // Cost is admin-only (Mason, 2026-10-15). An admin whose cost read fails must not reach
     // the editor: re-saving it would write zero cost onto every chemical line.
-    let inv = rawInv;
+    // The view's generated types make every column nullable; this row was read by its id.
+    const loadedInv = { ...rawInv, id };
+    let inv = loadedInv;
     try {
-      inv = (await withAdminCost('invoices', rawInv, isAdmin)) ?? rawInv;
+      inv = (await withAdminCost('invoices', loadedInv, isAdmin)) ?? loadedInv;
     } catch (costErr) {
       if (!isCurrentLoad()) return;
       Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_costs' } });

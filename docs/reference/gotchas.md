@@ -260,7 +260,12 @@ form → **false**. Live example: `application_services.cost_per_acre_cents`, mi
 **The trap this leaves behind:** once the grant is an explicit list, every column added later is
 invisible and unwritable to `authenticated` until someone adds it to that list. It surfaces as
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
-is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
+is actually a missing grant. **`invoices_postable` (20261022025000) names every `invoices` column but
+`total_cost_cents`:** a migration that adds, drops or renames an `invoices` column must re-create the view in
+the same file (a `DROP COLUMN … CASCADE` would silently drop it and its `invoice_post_version` overload), or
+every screen that reads `INVOICE_COLUMNS` from it fails with "column does not exist". `costFields.test.ts`
+fails such a migration. Select `invoice_post_version` only from that view: on `invoices` it fails once a
+column is revoked. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
 `GRANT` for the new column in the same migration.** Tables in this state today:
 `public.application_services` **and `public.products`**, and (since `20261021141000` went live on 2026-10-22, ledger `20261022002748`)
 **`public.purchase_orders` and `public.purchase_order_items`**, whose `SELECT`/`REFERENCES` grants for

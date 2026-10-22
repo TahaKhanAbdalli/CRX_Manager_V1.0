@@ -27,7 +27,9 @@
 --       before this PR merges keep working;
 --   (b) this PR's app switches the seven version-bearing reads to invoices_postable;
 --   (c) the cost lock (20261022030000) then DROPS invoice_post_version(public.invoices), leaving
---       exactly this overload, and revokes cost.
+--       exactly this overload, and revokes cost. A browser still running a bundle from before (b)
+--       (the PWA service worker) then cannot open an invoice screen until it reloads, so (c) waits
+--       a while after (b) deploys.
 --
 -- STANDING CONSEQUENCE: a new invoices column is not in the view until a migration re-creates it.
 --   src/lib/costFields.test.ts pins the view's columns to the schema registry minus cost.
@@ -105,11 +107,12 @@ SELECT id, invoice_number, order_id, blend_ticket_id, customer_id, invoice_type,
   FROM public.invoices;
 
 COMMENT ON VIEW public.invoices_postable IS
-  'Invoices without cost columns, for screens that post (20261022025000). security_invoker: the caller''s row security and column grants apply. Select invoice_post_version from here, in the same query as the rows shown. Read-only (SELECT to authenticated only).';
+  'Invoices without cost columns, for screens that post (20261022025000). security_invoker: the caller''s row security and column grants apply. Select invoice_post_version from here, in the same query as the rows shown. Read-only: SELECT to authenticated and service_role, nothing else to anyone.';
 
--- Supabase's default privileges grant a new view to anon and authenticated with every privilege;
--- the view is simple, so INSERT/UPDATE/DELETE would pass through to invoices. Take them all back.
-REVOKE ALL ON public.invoices_postable FROM PUBLIC, anon, authenticated;
+-- Supabase's default privileges grant a new view to anon, authenticated and service_role with every
+-- privilege; the view is simple, so INSERT/UPDATE/DELETE would pass through to invoices. Take them
+-- all back and give back only SELECT.
+REVOKE ALL ON public.invoices_postable FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.invoices_postable TO authenticated, service_role;
 
 -- 2. The computed field on the view: invoice_post_version(public.invoices)'s rule and helper,
@@ -154,20 +157,17 @@ BEGIN
                                  AND attname <> 'total_cost_cents') THEN
     RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: the view columns are not every invoices column but total_cost_cents: %', v_cols;
   END IF;
-  IF NOT has_table_privilege('authenticated', 'public.invoices_postable', 'SELECT')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'INSERT')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'UPDATE')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'DELETE')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'TRUNCATE')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'REFERENCES')
-     OR has_table_privilege('authenticated', 'public.invoices_postable', 'TRIGGER')
-     OR has_any_column_privilege('authenticated', 'public.invoices_postable', 'INSERT')
-     OR has_any_column_privilege('authenticated', 'public.invoices_postable', 'UPDATE')
-     OR has_any_column_privilege('anon', 'public.invoices_postable', 'SELECT')
-     OR has_any_column_privilege('anon', 'public.invoices_postable', 'INSERT')
-     OR has_any_column_privilege('anon', 'public.invoices_postable', 'UPDATE')
-     OR has_table_privilege('anon', 'public.invoices_postable', 'DELETE') THEN
-    RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: the view must be SELECT-only for authenticated and closed to anon';
+  -- Every privilege of every API role (and PUBLIC), table-wide and on any column: SELECT for
+  -- authenticated and service_role, nothing else for anyone.
+  SELECT string_agg(format('%s %s', r.rol, p.priv), ', ' ORDER BY r.rol, p.priv) INTO v_cols
+    FROM (VALUES ('authenticated'), ('service_role'), ('anon'), ('public')) AS r(rol)
+    CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
+   WHERE (has_table_privilege(r.rol, 'public.invoices_postable', p.priv)
+          OR (p.priv IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+              AND has_any_column_privilege(r.rol, 'public.invoices_postable', p.priv)))
+         IS DISTINCT FROM (r.rol IN ('authenticated', 'service_role') AND p.priv = 'SELECT');
+  IF v_cols IS NOT NULL THEN
+    RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: the view must be SELECT-only for authenticated and service_role and closed to anon; wrong: %', v_cols;
   END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'invoice_post_version') <> 2
@@ -175,7 +175,9 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices)', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public._invoice_post_version(uuid)', 'EXECUTE') THEN
+     OR has_function_privilege('anon', 'public.invoice_post_version(public.invoices)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._invoice_post_version(uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._invoice_post_version(uuid)', 'EXECUTE') THEN
     RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: expected both invoice_post_version overloads for authenticated only, and the helper closed';
   END IF;
 END
