@@ -690,15 +690,15 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_save_purchase_order_serialized binds v_actor := auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then requires is_admin() OR is_sales_rep(); both helpers use active auth.uid() identity. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
-      "dated": "2026-09-12",
+      "justification": "Re-reviewed 2026-10-21 against live pg_get_functiondef after migration 20261021140000 (PR #980, purchase-order cost admin-only) replaced the public wrapper's body; the first review was 2026-09-12. The only change to the wrapper (diffed against its 20260726190515 body) is one step between the advisory lock and the call: IF NOT public.is_admin() it removes unit_cost and unit_cost_cents from each object in p_items. That step reads only is_admin() and the item list; it never reads, replaces or drops p_performed_by, which is still forwarded unchanged to the owner-only _section9_save_purchase_order_serialized (EXECUTE: postgres and service_role, not authenticated; its digest is unchanged since 2026-09-12). That body binds v_actor := auth.uid(), raises 'Not authenticated' on NULL, raises ACTOR_MISMATCH when p_performed_by IS DISTINCT FROM v_actor (NULL refused too) before any replay or write, then requires is_admin() OR is_sales_rep(); both helpers use the active auth.uid() identity. A forged actor is therefore still refused before any write. The wrapper stays SECURITY DEFINER with search_path public, pg_temp, EXECUTE for authenticated and service_role, none for anon. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Digests were read live 2026-10-21 with the sweep's own contract expression, after the review above.",
+      "dated": "2026-10-21",
       "suspect_param": "p_performed_by",
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
         "public._section9_save_purchase_order_serialized(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "d2d4f93908a5824047254ed5eea7697c",
         "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
         "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0",
-        "public.save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "83373a602215eb4d88818a55ef5cc5a3"
+        "public.save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "f98e08398e4f727c95f11db1830a92f7"
       }
     },
     {
