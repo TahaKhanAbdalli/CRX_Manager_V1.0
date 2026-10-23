@@ -1596,11 +1596,14 @@ export function nativePatchEnvelope(toolName, toolInput) {
 // existing part are followed, or `null` when that cannot be determined (a link
 // that does not resolve, an unreadable directory) so the caller refuses. The
 // part of the path that does not exist yet is appended unchanged.
-export function realPathThroughLinks(candidate, baseDir) {
+export function realPathThroughLinks(candidate, baseDir, deadlineMs = Infinity, clock = () => Date.now()) {
   const absolute = path.resolve(baseDir, String(candidate));
   const missing = [];
   let probe = absolute;
   for (;;) {
+    // Checked between lookups, so one slow path cannot keep the walk going past
+    // the hook's limit: out of time is "cannot resolve", which the caller refuses.
+    if (clock() >= deadlineMs) return null;
     let present = true;
     try {
       lstatSync(probe);
@@ -1705,7 +1708,7 @@ export function evaluateProductionAction({
     // The caps above bound the work; this is the backstop: a hook killed at its
     // time limit allows the action, so past the deadline the answer is no.
     if (clock() >= hardGateDeadlineMs) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
-    const landed = realPathThroughLinks(destination, actionRepoDir);
+    const landed = realPathThroughLinks(destination, actionRepoDir, hardGateDeadlineMs, clock);
     if (landed === null) {
       return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} could not be resolved to the file it would really write (a link that does not resolve, or an unreadable directory), so it is refused (fail closed).`);
     }

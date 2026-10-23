@@ -3509,6 +3509,13 @@ try {
   const worstCaseStart = Date.now();
   assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(200, 46) } }).blocked, false, "the worst case the caps admit is still allowed");
   assert.ok(Date.now() - worstCaseStart < 5000, `the worst case the caps admit resolves well inside the hook limit (took ${Date.now() - worstCaseStart} ms)`);
+  // Parsing is a single linear pass: a protected destination followed by millions of content lines
+  // (4M lines, ~12 MB) is still denied in well under a second, not after the hook limit.
+  const manyLinesStart = Date.now();
+  const manyLines = nativePatch("*** Update File: .codex/hooks/production-action-guard.mjs", "@@", "-x", "+a\n".repeat(4_000_000).trimEnd());
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyLines } }).blocked, true, "a protected destination followed by millions of lines is denied");
+  assert.ok(Date.now() - manyLinesStart < 8000, `millions of lines parse far inside the hook limit (took ${Date.now() - manyLinesStart} ms)`);
+  assert.equal(realPathThroughLinks("src/a/b/c.ts", projectRoot, Date.now() - 1), null, "the link walk gives up (null) once its deadline has passed");
   assert.equal(
     evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: addProbe }, hardGateDeadlineMs: Date.now() - 1 }).blocked,
     true,
