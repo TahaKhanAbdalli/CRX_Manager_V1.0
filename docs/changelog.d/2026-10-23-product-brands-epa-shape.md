@@ -1,0 +1,5 @@
+## 2026-10-23 — Product brands: saved EPA numbers use the EPA lookup's formats (step 1, PR A)
+
+**What changed.** A Codex App review of PR #1050 (head `932c43040`) found that the brand table, the save function and the Add/Edit brand form accepted any digit groups, such as `0-1` or `1234567-1`. The app's EPA lookup (`supabase/functions/epa-lookup/logic.ts`) treats those as invalid. Because a skipped lookup does not block Save, an invalid registration number could have been stored. All three now accept only the lookup's two shapes: a Section 3 number (`524-475`) or a distributor number (`100-1234-5905`), each part not zero-led and at most 6, 5 and 6 digits. The migration `20261022086500_product_brands.sql` is still not applied and its table is new and empty, so no existing data is affected.
+
+**Proof.** Docker tests B5d (`0-1` refused), B5e (`1234567-1` refused) and B5f (the table's own check uses the same shapes) fail on the old migration and pass on the new one. `prove-product-brands.mjs` passes all phases with 38 behaviour tests, and the frontend pattern test covers the same edges.

@@ -7475,6 +7475,83 @@ export type Database = {
           },
         ]
       }
+      product_brands: {
+        Row: {
+          brand_name: string
+          created_at: string
+          created_by: string
+          epa_registration: string | null
+          id: string
+          is_currently_sourced: boolean
+          is_rup: boolean | null
+          manufacturer: string | null
+          product_id: string
+          row_version: number
+          signal_word: string | null
+          updated_at: string
+          updated_by: string
+        }
+        Insert: {
+          brand_name: string
+          created_at?: string
+          created_by: string
+          epa_registration?: string | null
+          id?: string
+          is_currently_sourced?: boolean
+          is_rup?: boolean | null
+          manufacturer?: string | null
+          product_id: string
+          row_version?: number
+          signal_word?: string | null
+          updated_at?: string
+          updated_by: string
+        }
+        Update: {
+          brand_name?: string
+          created_at?: string
+          created_by?: string
+          epa_registration?: string | null
+          id?: string
+          is_currently_sourced?: boolean
+          is_rup?: boolean | null
+          manufacturer?: string | null
+          product_id?: string
+          row_version?: number
+          signal_word?: string | null
+          updated_at?: string
+          updated_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_brands_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_cost_basis: {
         Row: {
           basis_type: string
@@ -15224,6 +15301,21 @@ export type Database = {
           p_notes: string
           p_po_overage_reason?: string
           p_subtotal_cents: number
+        }
+        Returns: Json
+      }
+      upsert_product_brand: {
+        Args: {
+          p_brand_id?: string
+          p_brand_name: string
+          p_epa_registration: string
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_is_currently_sourced: boolean
+          p_is_rup: boolean
+          p_manufacturer: string
+          p_product_id: string
+          p_signal_word: string
         }
         Returns: Json
       }
