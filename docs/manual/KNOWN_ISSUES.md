@@ -421,11 +421,9 @@ server-side ruleset is the boundary).
 These sub-items belong to the numbered entries above. They were found missing or blurred when a second reviewer
 (Luna) compared this file with the old one. Each is an open or accepted limitation as the old file recorded it.
 
-### KI-72 — Two fixes merged on `main` whose last steps are still pending (moved here from "closed")
-**MED · PARTIAL · security/money · Mason (item b)**
-(a) A driver's completion receipt skipped when the customer row is hidden: code merged (PR #1024, migration
-`20261022075000`), but the live-apply record (history row 973) exists only in draft PR #1061; the old file keeps the
-item open until that is recorded. (b) CRX-LIFE-001, reps creating a `field_application` invoice through the order
+### KI-72 — A fix merged on `main` whose last steps are still pending (moved here from "closed")
+**MED · PARTIAL · security/money · Mason**
+CRX-LIFE-001, reps creating a `field_application` invoice through the order
 pipeline: fix merged (PR #885, `20261006200000`, applied live per the old record). Two proof gates remain: the 29th
 live-sweep predicate (`quote-versions-rpc-owned`) was declined at its prompt, and the live smoke chains need
 Mason's REAL-DATA-OK.
