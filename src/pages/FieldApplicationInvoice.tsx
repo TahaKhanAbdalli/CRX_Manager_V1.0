@@ -74,7 +74,7 @@ import {
   type ProofDraft,
 } from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE, withAdminCost, withAdminCosts } from '../lib/costFields';
 import { requireGroupVersions, requirePostVersion } from '../lib/invoicePostVersion';
 import {
   carryoverRowsFromRecords,
@@ -1025,7 +1025,7 @@ export default function FieldApplicationInvoice() {
     // Post binds what this load showed (a save landing mid-load makes the post refuse).
     postVersionsRef.current = {};
     const { data: rawInv, error } = await supabase
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
       .eq('id', id)
       .single();
@@ -1040,9 +1040,11 @@ export default function FieldApplicationInvoice() {
 
     // Cost is admin-only (Mason, 2026-10-15). An admin whose cost read fails must not reach
     // the editor: re-saving it would write zero cost onto every chemical line.
-    let inv = rawInv;
+    // The view's generated types make every column nullable; this row was read by its id.
+    const loadedInv = { ...rawInv, id };
+    let inv = loadedInv;
     try {
-      inv = (await withAdminCost('invoices', rawInv, isAdmin)) ?? rawInv;
+      inv = (await withAdminCost('invoices', loadedInv, isAdmin)) ?? loadedInv;
     } catch (costErr) {
       if (!isCurrentLoad()) return;
       Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_costs' } });
@@ -1238,8 +1240,8 @@ export default function FieldApplicationInvoice() {
     let sibsError: unknown = null;
     if (groupId) {
       const { data: sibs, error: sibsReadError } = await supabase
-        .from('invoices')
-        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .from(INVOICES_POSTABLE)
+        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version:invoice_postable_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');

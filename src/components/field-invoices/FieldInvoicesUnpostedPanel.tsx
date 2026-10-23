@@ -10,7 +10,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError, describePostInvoiceBlock } from '../../lib/db';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
-import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS } from '../../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE } from '../../lib/costFields';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { logActivity } from '../../lib/activityLogger';
@@ -127,7 +127,7 @@ export default function FieldInvoicesUnpostedPanel() {
     // and Post All used to skip the oldest drafts past it. The embedded lists are
     // sorted too, so the confirming read compares like with like.
     const { data, error } = await fetchAllRows((from, to) => supabase
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       .select(LIST_SELECT, { count: 'exact' })
       .eq('invoice_type', 'field_application')
       .in('status', ['draft', 'unposted'])
