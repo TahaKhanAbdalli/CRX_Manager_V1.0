@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import EmptyState from './EmptyState';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import EmptyState, { LoadFailedState } from './EmptyState';
 
 describe('EmptyState', () => {
   it('renders the title', () => {
@@ -45,5 +45,22 @@ describe('EmptyState', () => {
     // The default Inbox icon from lucide-react renders as an SVG
     const svg = container.querySelector('svg');
     expect(svg).toBeInTheDocument();
+  });
+});
+
+describe('LoadFailedState', () => {
+  it('says the list failed to load, not that it is empty, and retries on click', () => {
+    const onRetry = vi.fn();
+    render(<LoadFailedState onRetry={onRetry} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('This list could not be loaded');
+    expect(screen.getByRole('alert')).toHaveTextContent('does not mean the records are gone');
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no Try again button without onRetry', () => {
+    render(<LoadFailedState title="Users could not be loaded" />);
+    expect(screen.getByText('Users could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });

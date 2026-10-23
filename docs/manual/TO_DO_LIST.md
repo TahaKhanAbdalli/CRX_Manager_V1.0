@@ -222,7 +222,7 @@ Mason, 2026-10-15: "for regular order and deliveries we have to have the split b
 | 10.2 | **The bookkeeper approves what each money report means** (which statuses count, the date basis, returns, credits, prepay, write-offs, costs), checked to the exact cent against independently prepared answers | **Not done** (goals doc, Goal 4 "Done when"). | Goal 4 | MUST |
 | 10.3 | Pickers become search boxes; list pages page on the server | **Open.** Part 3 (pickers) is written: open PR #1017. Part 4 (server-side paging) isn't started. Both are in Goal 4's done test, which the goals doc makes a launch gate (due 2026-12-15). | Goal 4 | MUST |
 | 10.4 | Workload test at twice the busiest day, with response-time targets agreed first | **Not run** (Goal 4). Needs staging. | Goal 4 | MUST |
-| 10.5 | A screen that fails to load says so, instead of showing "No … found" | **Open** (old `TODO.md` (2026-09-27), §5). In the pilot, staff could think data is missing. | Fix | SHOULD |
+| 10.5 | A screen that fails to load says so, instead of showing "No … found" | **Partly built** (old `TODO.md` (2026-09-27), §5). In the pilot, staff could think data is missing. PR #1043 (2026-10-22) shows "This list could not be loaded" with Try again on Customers, Fields, Products, Vendors, Vehicles, Crop Programs, Program Tracker, Notifications and Settings → Users (shared `LoadFailedState`; `DataTable` `loadError`). **Missing:** the money screens, plus Jobs, Field Setup, Compliance, Brand vs Generic and Office Cockpit (other open PRs were changing them). | Finish the remaining screens | SHOULD |
 
 ## 11. Security and roles
 

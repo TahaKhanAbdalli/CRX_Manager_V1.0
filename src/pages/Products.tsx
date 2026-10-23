@@ -78,6 +78,7 @@ export default function Products() {
   const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [vendorFilter, setVendorFilter] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
@@ -117,9 +118,12 @@ export default function Products() {
         .order('product_name')
         .order('id')
         .range(from, from + PAGE_SIZE - 1);
+      if (seq !== loadSeqRef.current) return false;
       if (error) {
         Sentry.captureException(error);
+        // A silent reload's caller keeps the rows on screen and explains the failure itself.
         if (reportError) toast('error', 'Failed to load products. Please try again.');
+        if (reportError) setLoadError(true);
         setLoading(false);
         return false;
       }
@@ -133,12 +137,15 @@ export default function Products() {
       prods = await withAdminCosts('products', all, isAdmin);
     } catch (costError) {
       Sentry.captureException(costError);
+      if (seq !== loadSeqRef.current) return false;
       if (reportError) toast('error', 'Failed to load products. Please try again.');
+      if (reportError) setLoadError(true);
       setLoading(false);
       return false;
     }
     if (seq !== loadSeqRef.current) return false;
     setProducts(prods);
+    setLoadError(false);
 
     const cats = [...new Set(prods.map((p) => p.category).filter(Boolean))] as string[];
     const vends = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
@@ -151,6 +158,11 @@ export default function Products() {
   useEffect(() => {
     void fetchProducts();
   }, [fetchProducts]);
+
+  const retryProducts = () => {
+    setLoading(true);
+    void fetchProducts();
+  };
 
   const filtered = products.filter((p) => {
     if (categoryFilter && p.category !== categoryFilter) return false;
@@ -773,7 +785,8 @@ export default function Products() {
         subtitle={<HelpTip text="Your product master list. Set tier pricing (1/2/3) for customer-specific pricing, mark products as RUP for compliance tracking, and manage unit sizes. Edit inline by clicking any editable cell." />}
         actions={(
           <>
-          {canBulkAction && (
+          {/* Bulk actions act on the selection, so they wait while the rows are hidden by a failed load. */}
+          {canBulkAction && !loadError && (
             <BulkActionBar
               selectedCount={selectedCount}
               actions={bulkActions}
@@ -781,13 +794,14 @@ export default function Products() {
             />
           )}
           <div className="flex flex-wrap gap-2">
-          {/* Download All dropdown */}
+          {/* Download All dropdown. Exports wait while a failed load hides the rows: they would
+              export the old catalog as if it were current. */}
           <div className="relative">
             <Button
               variant="secondary"
               icon={<Download className="w-4 h-4" />}
               onClick={() => setExportMenuOpen((v) => !v)}
-              disabled={exporting || filtered.length === 0}
+              disabled={exporting || loadError || filtered.length === 0}
             >
               {exporting ? 'Exporting...' : 'Download'} <ChevronDown className="w-3 h-3 ml-1 inline" />
             </Button>
@@ -825,7 +839,7 @@ export default function Products() {
                 icon={<FileSpreadsheet className="w-4 h-4" />}
                 onClick={handleExportPricingWorkbook}
                 loading={workbookBusy}
-                disabled={filtered.length === 0}
+                disabled={loadError || filtered.length === 0}
               >
                 Pricing .xlsx
               </Button>
@@ -885,6 +899,8 @@ export default function Products() {
               ) : undefined
             }
             loading={loading}
+            loadError={loadError}
+            onRetry={retryProducts}
             canEdit={isAdmin}
             onSave={handleBulkSave}
             headerActions={isAdmin ? (
@@ -921,7 +937,7 @@ export default function Products() {
                     <option key={v} value={v}>{v}</option>
                   ))}
                 </select>
-                {canBulkAction && filtered.length > 0 && (
+                {canBulkAction && !loadError && filtered.length > 0 && (
                   <button
                     onClick={toggleAll}
                     className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"

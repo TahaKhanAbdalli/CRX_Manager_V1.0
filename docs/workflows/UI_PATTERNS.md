@@ -200,6 +200,7 @@ import { Plus, Edit, Trash2, Search } from 'lucide-react';
 - Forms: standard controlled inputs with `useState`
 - Loading states: show a spinner or skeleton while `loading === true`
 - Error states: show error message in red text
+- A list whose read failed: show `LoadFailedState` (from `src/components/ui/EmptyState.tsx`, with Try again), or pass `loadError` and `onRetry` to `DataTable`/`EditableDataTable`. Never let a failed read fall through to the empty "No … found" message.
 
 ---
 

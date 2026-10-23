@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, MapPin, List, Map as MapIcon, Upload, Download, FileText, Trash2, ChevronDown, ChevronRight, Link } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -39,6 +39,9 @@ export default function Fields() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('active');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [loadError, setLoadError] = useState(false);
+  // Only the newest read may change the list or its error state: a slow older read must not overwrite a newer one.
+  const loadSeqRef = useRef(0);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -66,15 +69,18 @@ export default function Fields() {
    * creates a duplicate field.
    */
   const fetchFields = useCallback(async (): Promise<boolean> => {
+    const seq = ++loadSeqRef.current;
     // get_fields_with_geojson returns total_acres only; the two-acre model's
     // override/measured acres live on the fields table. Pull them alongside (the
     // fields_select RLS policy allows it) so the list shows the acres that actually
     // BILL — override ?? measured ?? legacy total — instead of the legacy total alone.
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
+    if (seq !== loadSeqRef.current) return false;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_fields' } });
       toast('error', 'Failed to load fields. Please try again.');
+      setLoadError(true);
       setLoading(false);
       return false;
     }
@@ -82,6 +88,15 @@ export default function Fields() {
     // Pull the two-acre columns separately (kept sequential, not Promise.all, so the
     // assertRpcResult coverage check still pairs the rpc capture above with its assert).
     const acreRes = await supabase.from('fields').select('id, override_acres, measured_acres, acres_source');
+    if (seq !== loadSeqRef.current) return false;
+    if (acreRes.error) {
+      // Without these columns the list would quietly show legacy acres instead of the acres that bill.
+      Sentry.captureException(acreRes.error, { tags: { source: 'fetch', action: 'load_field_acres' } });
+      toast('error', 'Failed to load fields. Please try again.');
+      setLoadError(true);
+      setLoading(false);
+      return false;
+    }
     const acreMap = new Map<string, { override_acres: number | null; measured_acres: number | null; acres_source: Field['acres_source'] }>();
     if (!acreRes.error && acreRes.data) {
       for (const a of acreRes.data as Array<{ id: string; override_acres: number | null; measured_acres: number | null; acres_source: Field['acres_source'] }>) {
@@ -103,6 +118,7 @@ export default function Fields() {
       };
     });
     setFields(rows);
+    setLoadError(false);
     setLoading(false);
     return true;
   }, [toast]);
@@ -110,6 +126,11 @@ export default function Fields() {
   useEffect(() => {
     fetchFields();
   }, [fetchFields]);
+
+  const retryFields = () => {
+    setLoading(true);
+    void fetchFields();
+  };
 
   const filtered = fields.filter((f) => {
     if (cropFilter && f.crop_type !== cropFilter) return false;
@@ -403,7 +424,8 @@ export default function Fields() {
               Map
             </button>
           </div>
-          {canBulkAction && viewMode === 'list' && (
+          {/* Bulk actions act on the selection, so they wait while the rows are hidden by a failed load. */}
+          {canBulkAction && !loadError && viewMode === 'list' && (
             <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
           )}
         </div>
@@ -422,12 +444,14 @@ export default function Fields() {
         </div>
       </div>
 
-      {/* Stats Bar */}
-      <div className="flex gap-4 text-sm text-secondary">
-        <span><strong className="text-nav-dark">{filtered.length}</strong> fields</span>
-        <span><strong className="text-nav-dark">{totalAcres.toLocaleString()}</strong> billable acres</span>
-        <span><strong className="text-nav-dark">{withBoundary}</strong> with boundaries</span>
-      </div>
+      {/* Stats Bar — hidden after a failed load, where its counts would read as "no fields". */}
+      {!loadError && (
+        <div className="flex gap-4 text-sm text-secondary">
+          <span><strong className="text-nav-dark">{filtered.length}</strong> fields</span>
+          <span><strong className="text-nav-dark">{totalAcres.toLocaleString()}</strong> billable acres</span>
+          <span><strong className="text-nav-dark">{withBoundary}</strong> with boundaries</span>
+        </div>
+      )}
 
       {viewMode === 'map' ? (
         <Card>
@@ -457,7 +481,12 @@ export default function Fields() {
             <FieldMarkerLayer fields={filtered} onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)} />
           </CRXMap>
 
-          {filtered.some((f) => f.centroid_geojson || f.boundary_geojson) ? (
+          {loadError ? (
+            <p role="alert" className="text-xs text-red-600 mt-2">
+              Fields could not be loaded, so the map may be empty or out of date.{' '}
+              <button type="button" onClick={retryFields} className="font-medium underline">Try again</button>
+            </p>
+          ) : filtered.some((f) => f.centroid_geojson || f.boundary_geojson) ? (
             <p className="text-xs text-secondary mt-2">
               Showing {withBoundary} boundar{withBoundary === 1 ? 'y' : 'ies'} and {filtered.filter((f) => f.centroid_geojson && !f.boundary_geojson).length} marker(s) of {filtered.length} fields.
             </p>
@@ -485,6 +514,8 @@ export default function Fields() {
                 </Button>
               }
               loading={loading}
+              loadError={loadError}
+              onRetry={retryFields}
               filters={
                 <>
                   <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} aria-label="Filter by customer" className={filterSelect}>
@@ -504,7 +535,7 @@ export default function Fields() {
                     <option value="inactive">Inactive</option>
                     <option value="all">All Status</option>
                   </select>
-                  {canBulkAction && filtered.length > 0 && (
+                  {canBulkAction && !loadError && filtered.length > 0 && (
                     <button
                       onClick={toggleAll}
                       className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
