@@ -58,7 +58,7 @@ The non-code MUST items (backups and recovery in section 13, QuickBooks and paym
 | MUST, built and live (still needs its December proof) | 22 (2026-10-23: +2, rows 11.9 and 11.10) |
 | MUST, code not built or only partly built (7 of them are the new pricing and cost-tracking rows 0.1–0.7) | 29 |
 | MUST, a business process, drill, review or Mason action (not code) | 25 |
-| SHOULD (28 of them folded in from the old `TODO.md` on 2026-10-22; 2.8 added the same day) | 33 |
+| SHOULD (28 of them folded in from the old `TODO.md` on 2026-10-22; 2.8 added the same day; 11.11 added 2026-10-23) | 34 |
 | CAN-WAIT | 19, plus the parked items in section 17 |
 
 Rows that only point to another row ("See 4.4") aren't counted twice. A row split between two ranks (for example 8.3) counts under its MUST part. The 2026-10-23 refresh only added the two built rows above; no other MUST row changed category, so the other counts are as of 2026-10-22.
