@@ -109,6 +109,10 @@ async function deleteByFk(
   );
 
   const text = await resp.text();
+  if (!resp.ok) {
+    console.warn(`  ! ${table}: delete refused (${resp.status}) ${text.slice(0, 200)}`);
+    return 0;
+  }
   try {
     const rows = JSON.parse(text);
     return Array.isArray(rows) ? rows.length : 0;
@@ -215,7 +219,11 @@ export default async function teardownFixtures(): Promise<void> {
   await del('prepay_applications', () => deleteByFk(token, 'prepay_applications', 'invoice_id', invoiceIds));
   await del('invoice_items', () => deleteByFk(token, 'invoice_items', 'invoice_id', invoiceIds));
   await del('invoice_shares', () => deleteByFk(token, 'invoice_shares', 'invoice_id', invoiceIds));
-  await del('invoice_line_allocations', () => deleteByFk(token, 'invoice_line_allocations', 'invoice_id', invoiceIds));
+  // invoice_line_allocations / allocation_sets are not deleted here: since 20261022040000 they are
+  // written only by database functions (allocate_payment, void_payment, void_invoice and
+  // update_order_items), so a browser DELETE is refused.
+  // An E2E run that records a payment leaves its allocation rows (and so its invoice and customer)
+  // until a service-role cleanup exists for the staging project.
   await del('rup_sales_records (invoice)', () => deleteByFk(token, 'rup_sales_records', 'invoice_id', invoiceIds));
   await del('delivery_items', () => deleteByFk(token, 'delivery_items', 'delivery_id', deliveryIds));
   await del('delivery_photos', () => deleteByFk(token, 'delivery_photos', 'delivery_id', deliveryIds));
@@ -234,7 +242,6 @@ export default async function teardownFixtures(): Promise<void> {
   // ── Phase 2: Customer/product child tables ──
   console.log('Phase 2: Customer/product child tables...');
   await del('activity_feed', () => deleteByFk(token, 'activity_feed', 'customer_id', customerIds));
-  await del('allocation_sets', () => deleteByFk(token, 'allocation_sets', 'customer_id', customerIds));
   await del('ar_reminder_tracking', () => deleteByFk(token, 'ar_reminder_tracking', 'customer_id', customerIds));
   await del('customer_addresses', () => deleteByFk(token, 'customer_addresses', 'customer_id', customerIds));
   await del('email_log', () => deleteByFk(token, 'email_log', 'customer_id', customerIds));
