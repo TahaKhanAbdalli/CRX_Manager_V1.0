@@ -91,6 +91,19 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## OPEN 2026-10-22 (HIGH; To-Do List row 11.4) — applicators and drivers can read every customer's fields, field maps and some customer money totals
 
+**Status 2026-10-23: part A written, NOT applied.** `20261023090000_field_functions_require_field_access.sql`
+adds `_can_see_field`, filters `get_fields_geojson_by_ids` and `get_field_geojson` by it, makes the other
+field and money functions in findings 1 and 2 office-only, makes `global_search` return nothing to field roles,
+turns `get_notes_for_entity` into a SECURITY INVOKER function that returns notes only for a record the caller
+can read, and re-emits `operational_dashboard_summary` with its live check. Proof in a disposable database:
+`scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs` (before: every field role, an inactive
+applicator and an `entity_recipient` read all nine seeded fields, every office-only function, search and every
+note; after: each applicator sees only the fields assigned to them, everyone else none, office staff unchanged).
+Findings 1 and 2 stay open until it is applied live and re-checked read-only; findings 3–5 wait on parts B and C.
+One thing part A does not change: `team_notes` itself (`tnotes_select`) admits every active profile, and the Team
+Board shows field roles every note, so the notes gate closes the unchecked function, not field roles' view of
+notes on the Team Board (Mason's call whether to narrow that).
+
 A read-only audit of row 11.4 ("an applicator sees only the fields for their assigned jobs, by every route, and loses
 access when the assignment ends") read the live policies, functions, grants, storage rules and views on 2026-10-22
 (17:30–17:50 UTC, 12:30–12:50 PM Central), then proved each HIGH by read-only impersonation inside a `BEGIN READ ONLY …
