@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const { mockNavigate, mockRpc, mockToast, mockGenerateIdempotencyKey, mockAuth } = vi.hoisted(() => ({
+const { mockNavigate, mockRpc, mockToast, mockGenerateIdempotencyKey, mockAuth, mockCatalog } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
   mockGenerateIdempotencyKey: vi.fn(),
   mockAuth: { role: 'sales_rep' },
+  // How many upcoming catalog reads fail.
+  mockCatalog: { failuresLeft: 0 },
 }));
 
 const product = {
@@ -19,9 +21,13 @@ const product = {
 };
 
 function buildProductsQuery() {
-  const result = Promise.resolve({ data: [product], error: null });
+  const failed = mockCatalog.failuresLeft > 0;
+  if (failed) mockCatalog.failuresLeft -= 1;
+  const result = Promise.resolve(failed
+    ? { data: null, error: new Error('catalog read failed'), count: null }
+    : { data: [product], error: null, count: 1 });
   const chain: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'order']) {
+  for (const method of ['select', 'eq', 'order', 'range']) {
     chain[method] = vi.fn(() => chain);
   }
   chain.then = result.then.bind(result);
@@ -90,6 +96,7 @@ describe('NewPurchaseOrder save and submit workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuth.role = 'sales_rep';
+    mockCatalog.failuresLeft = 0;
     const counts = new Map<string, number>();
     mockGenerateIdempotencyKey.mockImplementation((operation: string) => {
       const count = (counts.get(operation) ?? 0) + 1;
@@ -180,5 +187,21 @@ describe('NewPurchaseOrder save and submit workflow', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_purchase_order', expect.anything()));
     const [, args] = mockRpc.mock.calls.find(([name]) => name === 'save_purchase_order')!;
     expect(args.p_items).toEqual([expect.objectContaining({ unit_cost_cents: 1250, unit_cost: 12.5 })]);
+  });
+
+  it('a failed product load blocks save and submit and Retry loads the catalog (CodeRabbit)', async () => {
+    mockCatalog.failuresLeft = 1;
+    render(<NewPurchaseOrder />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Products could not be loaded');
+    expect(screen.getByRole('button', { name: 'Save as Draft' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Submit PO' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save as Draft' })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Product' }));
+    expect(screen.getByRole('button', { name: /Test Herbicide/ })).toBeInTheDocument();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

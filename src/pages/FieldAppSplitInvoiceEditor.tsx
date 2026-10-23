@@ -21,6 +21,8 @@ import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/spli
 import ProductSearchPicker from '../components/products/ProductSearchPicker';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import FieldSearchPicker, { type FieldSearchResult } from '../components/fields/FieldSearchPicker';
+import JobSearchPicker, { type JobSearchResult } from '../components/jobs/JobSearchPicker';
+import { jobSearchLabel } from '../lib/recordLabels';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
 import type { ProductSearchResult, UnitConversion } from '../types';
@@ -93,10 +95,8 @@ interface ServiceOption {
   name: string;
 }
 
-interface JobOption {
-  id: string;
-  label: string;
-}
+// The saved source job's label columns (jobs is a cost table: a fixed, cost-free list).
+const SOURCE_JOB_LABEL_SELECT = 'id, job_number, job_date, status, customer:customers(farm_name)';
 
 interface ResultInvoice {
   id: string;
@@ -201,7 +201,6 @@ export default function FieldAppSplitInvoiceEditor() {
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
   const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
-  const [jobOptions, setJobOptions] = useState<JobOption[]>([]);
 
   // Header + selection
   // Chicago BUSINESS date (2026-09-04). Two earlier revisions of this line were both wrong:
@@ -216,6 +215,8 @@ export default function FieldAppSplitInvoiceEditor() {
   const [invoiceDate, setInvoiceDate] = useState(() => todayInBusinessTz());
   const [headerNotes, setHeaderNotes] = useState('');
   const [sourceJobId, setSourceJobId] = useState('');
+  // Label of the source job; the job picker searches the database, so no job list is loaded.
+  const [sourceJobLabel, setSourceJobLabel] = useState('');
   const [fields, setFields] = useState<FieldPick[]>([]);
   // The field chosen in the "Add a field" search, added to the list by the Add button.
   const [addFieldPick, setAddFieldPick] = useState<FieldSearchResult | null>(null);
@@ -285,23 +286,14 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       try {
-        // Fields and products are not listed here: their pickers search the database as you
-        // type, so none is ever cut off at a row limit (Goal 4, M38).
-        const [svcs, jbs, units] = await Promise.all([
+        // Jobs, fields and products are not listed here: their pickers search the database as
+        // you type, so none is ever cut off at a row limit (Goal 4, M38).
+        const [svcs, units] = await Promise.all([
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
-          supabase
-            .from('jobs')
-            // #E (Codex round-2): only COMPLETED, not-yet-invoiced jobs can be billed. An
-            // 'invoiced' job is already billed (via split or the normal flow); showing it would
-            // invite a double-bill that the save RPC now hard-refuses anyway.
-            .select('id, job_number, job_date, customer:customers(farm_name)')
-            .eq('status', 'completed')
-            .order('job_date', { ascending: false })
-            .limit(200),
           supabase.from('unit_conversions').select('*').order('unit'),
         ]);
         if (cancelled) return;
-        const pickerErrors = [svcs.error, jbs.error, units.error].filter(Boolean);
+        const pickerErrors = [svcs.error, units.error].filter(Boolean);
         if (pickerErrors.length > 0) {
           pickerErrors.forEach((error) => {
             Sentry.captureException(error, { extra: { context: 'load_field_app_split_invoice_pickers' } });
@@ -316,14 +308,6 @@ export default function FieldAppSplitInvoiceEditor() {
         } else {
           setUnitConversions((units.data || []) as UnitConversion[]);
           setUnitLoad('loaded');
-        }
-        if (!jbs.error) {
-          setJobOptions(
-            ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
-              id: j.id,
-              label: `${j.job_number || 'Job'}${j.job_date ? ` — ${j.job_date}` : ''}${j.customer?.farm_name ? ` (${j.customer.farm_name})` : ''}`,
-            })),
-          );
         }
       } catch (err) {
         if (!cancelled) {
@@ -866,6 +850,18 @@ export default function FieldAppSplitInvoiceEditor() {
         const row = setRow as { id: string; invoice_group_id: string | null; source_job_id: string | null };
         setBillingSetId(row.id);
         setSourceJobId(row.source_job_id ?? '');
+        setSourceJobLabel('');
+        if (row.source_job_id) {
+          // Only the label: the saved job id is kept and sent as it is, whatever this read returns.
+          const { data: job, error: jobError } = await supabase
+            .from('jobs')
+            .select(SOURCE_JOB_LABEL_SELECT)
+            .eq('id', row.source_job_id)
+            .maybeSingle();
+          if (cancelled) return;
+          if (jobError) Sentry.captureException(jobError, { extra: { context: 'load_split_invoice_source_job' } });
+          setSourceJobLabel(job ? jobSearchLabel(job as unknown as JobSearchResult) : 'Saved source job (name could not be loaded)');
+        }
         // Codex round-6 P1: expose the group id to the posting state ONLY after a COMPLETE readback.
         // If the set row loads but any invoice/item/share query fails, leaving invoiceGroupId set would
         // enable Post on empty/partial results (posted stays false, dirtyAfterSave false).
@@ -987,17 +983,25 @@ export default function FieldAppSplitInvoiceEditor() {
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
           </label>
-          <label className="block sm:col-span-2">
+          <div className="block sm:col-span-2">
             <span className="text-xs font-medium text-secondary">Source job (optional — for job-share precedence)</span>
-            <select
+            {/* #E (Codex round-2): only COMPLETED, not-yet-invoiced jobs can be billed. An 'invoiced'
+                job is already billed (via split or the normal flow); offering it would invite a
+                double-bill that the save RPC hard-refuses anyway. */}
+            <JobSearchPicker
               value={sourceJobId}
-              onChange={(e) => setSourceJobId(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
-            >
-              <option value="">No source job</option>
-              {jobOptions.map((j) => (<option key={j.id} value={j.id}>{j.label}</option>))}
-            </select>
-          </label>
+              selectedLabel={sourceJobLabel}
+              onSelect={(job) => {
+                setSourceJobId(job?.id ?? '');
+                setSourceJobLabel(job ? jobSearchLabel(job) : '');
+              }}
+              statuses={['completed']}
+              placeholder="No source job. Search completed jobs..."
+              ariaLabel="Source job"
+              clearLabel="Clear source job"
+              className="mt-1"
+            />
+          </div>
           <label className="block sm:col-span-3">
             <span className="text-xs font-medium text-secondary">Header notes (optional)</span>
             <input

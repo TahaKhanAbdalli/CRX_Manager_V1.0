@@ -31,8 +31,12 @@ import {
 } from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
-import { PURCHASE_ORDER_COLUMNS, withAdminCosts } from '../lib/costFields';
-import type { Vendor, PurchaseOrder } from '../types';
+import PurchaseOrderSearchPicker from '../components/purchase-orders/PurchaseOrderSearchPicker';
+import { purchaseOrderSearchLabel } from '../lib/recordLabels';
+import type { Vendor, PurchaseOrder, POStatus } from '../types';
+
+// Purchase orders a bill can be linked to (the PO picker's status filter).
+const LINKABLE_PO_STATUSES: readonly POStatus[] = ['submitted', 'partially_received', 'fully_received'];
 
 export default function NewVendorBill() {
   const navigate = useNavigate();
@@ -72,7 +76,8 @@ export default function NewVendorBill() {
 
   // Lookups
   const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<(PurchaseOrder & { vendor_id_match?: string })[]>([]);
+  // Label of the linked PO; the PO picker searches the database, so no PO list is loaded.
+  const [purchaseOrderLabel, setPurchaseOrderLabel] = useState('');
 
   // Form
   const [vendorId, setVendorId] = useState('');
@@ -114,28 +119,26 @@ export default function NewVendorBill() {
     setVendors((data || []) as Vendor[]);
   }, []);
 
-  const fetchPOs = useCallback(async () => {
-    const { data } = await supabase
-      .from('purchase_orders')
-      .select(PURCHASE_ORDER_COLUMNS)
-      .in('status', ['submitted', 'partially_received', 'fully_received'])
-      .order('created_at', { ascending: false })
-      .limit(200);
-    // Cost is admin-only (Mason, 2026-10-15); this page is admin-only, so admins add PO totals here.
-    let rows = (data || []) as PurchaseOrder[];
-    try {
-      rows = await withAdminCosts('purchase_orders', rows, isAdmin);
-    } catch (err) {
-      Sentry.captureException(err, { tags: { source: 'fetch', page: 'new-vendor-bill', action: 'load_po_costs' } });
-      toast('error', 'Failed to load purchase order totals. Please refresh.');
-    }
-    setPurchaseOrders(rows);
-  }, [isAdmin, toast]);
-
   useEffect(() => {
     fetchVendors();
-    fetchPOs();
-  }, [fetchVendors, fetchPOs]);
+  }, [fetchVendors]);
+
+  // A bill recovered from an unconfirmed save names its PO by id only; read its label.
+  useEffect(() => {
+    if (!purchaseOrderId || purchaseOrderLabel) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('purchase_orders')
+        .select('po_number, vendor')
+        .eq('id', purchaseOrderId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) Sentry.captureException(error, { tags: { source: 'fetch', page: 'new-vendor-bill', action: 'load_linked_po' } });
+      setPurchaseOrderLabel(data ? purchaseOrderSearchLabel(data) : 'Linked purchase order (name could not be loaded)');
+    })();
+    return () => { cancelled = true; };
+  }, [purchaseOrderId, purchaseOrderLabel]);
 
   // When vendor selected, apply default terms
   useEffect(() => {
@@ -148,11 +151,9 @@ export default function NewVendorBill() {
   }, [vendorId, vendors, createBillIntent.isIntentLocked]);
 
   // When PO selected, auto-fill vendor + amount
-  const handlePOSelect = (poId: string) => {
-    setPurchaseOrderId(poId);
-    if (!poId) return;
-
-    const po = purchaseOrders.find((p) => p.id === poId);
+  const handlePOSelect = (po: PurchaseOrder | null) => {
+    setPurchaseOrderId(po?.id ?? '');
+    setPurchaseOrderLabel(po ? purchaseOrderSearchLabel(po) : '');
     if (!po) return;
 
     // Try to match vendor by name
@@ -362,19 +363,17 @@ export default function NewVendorBill() {
       {/* Link to PO (optional) */}
       <Card>
         <h3 className="text-sm font-semibold text-nav-dark mb-3">Link to Purchase Order (Optional)</h3>
-        <select
+        {/* Cost is admin-only (Mason, 2026-10-15); this page is admin-only, so an admin's results carry PO totals. */}
+        <PurchaseOrderSearchPicker
           value={purchaseOrderId}
-          onChange={(e) => handlePOSelect(e.target.value)}
+          selectedLabel={purchaseOrderLabel}
+          onSelect={handlePOSelect}
+          statuses={LINKABLE_PO_STATUSES}
+          isAdmin={isAdmin}
           disabled={createBillIntent.isIntentLocked}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-        >
-          <option value="">No linked PO</option>
-          {purchaseOrders.map((po) => (
-            <option key={po.id} value={po.id}>
-              {po.po_number} — {po.vendor}{isAdmin && po.total_cost != null ? ` — $${po.total_cost.toFixed(2)}` : ''}
-            </option>
-          ))}
-        </select>
+          placeholder="No linked PO. Search by PO # or vendor..."
+          ariaLabel="Link to Purchase Order"
+        />
         <p className="text-xs text-secondary mt-1">
           Linking a PO auto-fills vendor and amount. You can still edit them.
         </p>

@@ -11,7 +11,7 @@ const { mockFrom, mockToast, mockSentryCaptureException } = vi.hoisted(() => ({
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'or', 'not', 'order', 'limit', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'or', 'not', 'in', 'is', 'order', 'limit', 'maybeSingle']) chain[name] = method;
   const promise = Promise.resolve(result);
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
@@ -101,7 +101,7 @@ describe('FieldAppSplitInvoiceEditor picker loading', () => {
     });
   });
 
-  it('keeps successful field, Product, and service pickers usable when jobs fail', async () => {
+  it('keeps field, Product, and service pickers usable when the job search fails, and Retry finds the job', async () => {
     render(
       <MemoryRouter>
         <FieldAppSplitInvoiceEditor />
@@ -113,7 +113,24 @@ describe('FieldAppSplitInvoiceEditor picker loading', () => {
     fireEvent.focus(fieldBox);
     fireEvent.change(fieldBox, { target: { value: 'North' } });
     expect(await screen.findByRole('option', { name: /North 40/ })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Source job/).querySelectorAll('option')).toHaveLength(1);
+
+    // Jobs are searched, not listed (Goal 4, M38): a failed search says so and offers Retry.
+    const jobBox = screen.getByRole('combobox', { name: 'Source job' });
+    fireEvent.focus(jobBox);
+    fireEvent.change(jobBox, { target: { value: 'JOB-0250' } });
+    expect(await screen.findByText('Job search failed.')).toBeInTheDocument();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({ data: [{ id: 'job-250', job_number: 'JOB-0250', job_date: '2026-02-01', status: 'completed', customer: { farm_name: 'Seed Farm 0250' } }], error: null });
+      }
+      if (table === 'products') {
+        return buildChain({ data: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Exact Product', sku: 'SKU-EXACT', inventory_unit: 'gal', return_policy: 'returnable', is_full_tote_only: false, product_family: { name: 'Family Alpha' } }], error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(await screen.findByRole('option', { name: /JOB-0250 \(2026-02-01\) - Seed Farm 0250/ }));
+    expect(jobBox).toHaveValue('JOB-0250 (2026-02-01) - Seed Farm 0250');
 
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
     const productBox = await screen.findByRole('combobox', { name: 'Product' });
@@ -124,11 +141,12 @@ describe('FieldAppSplitInvoiceEditor picker loading', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Service' }));
     expect(await screen.findByRole('option', { name: 'Aerial application' })).toBeInTheDocument();
 
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some field application invoice pickers could not be loaded.'));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to search Jobs');
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Some field application invoice pickers could not be loaded.');
     expect(mockSentryCaptureException).toHaveBeenCalledTimes(1);
     expect(mockSentryCaptureException).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ extra: { context: 'load_field_app_split_invoice_pickers' } }),
+      expect.objectContaining({ extra: { context: 'job_search_picker' } }),
     );
   });
 });

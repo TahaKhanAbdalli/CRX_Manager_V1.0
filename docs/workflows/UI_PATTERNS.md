@@ -81,12 +81,18 @@ useEffect(() => {
 ### Choosing a record (pickers)
 A list read stops at 1,000 rows (the PostgREST cap), so never fill a picker from a one-shot list read.
 - **One record to choose:** use a database search box. `CustomerSearchPicker`
-  (`src/components/customers/`), `FieldSearchPicker` (`src/components/fields/`) or `ProductSearchPicker`
-  (`src/components/products/`), all built on `src/components/ui/RecordSearchPicker.tsx`.
+  (`src/components/customers/`), `FieldSearchPicker` (`src/components/fields/`), `ProductSearchPicker`
+  (`src/components/products/`), `OrderSearchPicker` (`src/components/orders/`), `JobSearchPicker`
+  (`src/components/jobs/`) or `PurchaseOrderSearchPicker` (`src/components/purchase-orders/`), all built on
+  `src/components/ui/RecordSearchPicker.tsx`.
+  - Pass the old list's status filter (`statuses`). Order and job searches also match the customer's name.
+  - Label a record read by id with `src/lib/recordLabels.ts`, so it reads the same as a pick.
+  - Where the save requires a record of the page's customer (a blend ticket's job), pass `customerId`.
   - The page keeps the chosen id and its label. It does not look the record up in a loaded list.
   - Pass `select` with any extra columns the page needs from the pick, e.g. `assigned_tier` for pricing.
   - A saved record's label comes from the record's own join or a by-id read. A failed or missing by-id read
-    blocks pricing and saving; it never falls back to a default.
+    blocks pricing and saving; it never falls back to a default. A read used only for a label (the saved id
+    is sent unchanged) may show a "could not be loaded" label instead.
   - Records not to offer go in `excludeIds`, which filters in the database.
   - Keep the old list's active rule: `activeOnly={false}` where inactive customers were offered.
   - When a field picker's `customerId` changes, clear a chosen field that belongs to another customer.

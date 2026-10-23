@@ -32,7 +32,9 @@ import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { withBelowCostReason } from '../lib/belowCostApproval';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Product, Order, OrderItem, Field, UnitConversion } from '../types';
+import JobSearchPicker from '../components/jobs/JobSearchPicker';
+import { jobSearchLabel } from '../lib/recordLabels';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import QuotePriceChoiceModal from '../components/blendtickets/QuotePriceChoiceModal';
@@ -87,7 +89,8 @@ export function BlendTicketDetail() {
   const blocker = useUnsavedChanges(hasUnsavedChanges);
 
   // Jobs for job linking (B6)
-  const [availableJobs, setAvailableJobs] = useState<Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]>([]);
+  // Label of the linked job; the job picker searches the database, so no job list is loaded.
+  const [jobLabel, setJobLabel] = useState('');
   const [selectedJobId, setSelectedJobId] = useState<string>('');
   const [appServices, setAppServices] = useState<{id: string; name: string; vehicle_id: string | null}[]>([]);
 
@@ -231,7 +234,7 @@ export function BlendTicketDetail() {
     // state has rendered, then re-arm dirty tracking in the animation frame.
     initialLoadDone.current = false;
     try {
-      const [ticketResult, imagesResult, productsResult, allProductsResult, fieldsResult, linkedResult, jobsResult, applicationRecordResult, activeInvoiceResult] = await Promise.all([
+      const [ticketResult, imagesResult, productsResult, allProductsResult, fieldsResult, linkedResult, applicationRecordResult, activeInvoiceResult] = await Promise.all([
         // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
         // resolved via profile_public_view post-fetch (see below).
         supabase
@@ -239,7 +242,8 @@ export function BlendTicketDetail() {
           .select(`
             *,
             customer:customers(id, farm_name),
-            field:fields(id, field_name)
+            field:fields(id, field_name),
+            job:jobs!blend_tickets_job_id_fkey(job_number, job_date, customer:customers(farm_name))
           `)
           .eq('id', id!)
           .single(),
@@ -272,12 +276,6 @@ export function BlendTicketDetail() {
           .from('blend_ticket_to_order_items')
           .select('*, order:orders(id, order_number, status, customer_id, total_price)')
           .eq('blend_ticket_id', id!),
-        supabase
-          .from('jobs')
-          .select('id, job_number, job_date, status')
-          .is('deleted_at', null)
-          .order('job_date', { ascending: false })
-          .limit(200),
         supabase
           .from('application_records')
           .select('id')
@@ -379,7 +377,9 @@ export function BlendTicketDetail() {
       setAvailableFields(allFields);
       setCustomerLabel(ticketResult.data.customer?.farm_name ?? '');
       setLinkedOrders((linkedResult.data || []) as BlendTicketToOrderItem[]);
-      setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
+      const linkedJob = (ticketResult.data as { job?: { job_number: string; job_date: string | null; customer: { farm_name: string | null } | null } | null }).job;
+      // A linked job the reader cannot see keeps its link; only the label says so.
+      setJobLabel(linkedJob ? jobSearchLabel(linkedJob) : ticketResult.data.job_id ? 'Linked job (not visible)' : '');
       setHasApplicationRecord((applicationRecordResult.data || []).length > 0);
       setHasActiveInvoice((activeInvoiceResult.data || []).length > 0);
       setSelectedJobId(ticketResult.data.job_id || '');
@@ -1407,7 +1407,15 @@ export function BlendTicketDetail() {
                 value={formData.customer_id}
                 selectedLabel={customerLabel}
                 onSelect={(customer) => {
-                  setFormData({ ...formData, customer_id: customer?.id ?? '' });
+                  const customerId = customer?.id ?? '';
+                  // A linked job must belong to the ticket's customer (the save refuses
+                  // BLEND_JOB_CUSTOMER_MISMATCH), so a customer change unlinks it.
+                  if (customerId !== formData.customer_id && selectedJobId) {
+                    setSelectedJobId('');
+                    setJobLabel('');
+                    toast('info', 'The linked job belonged to the previous customer, so it was unlinked.');
+                  }
+                  setFormData({ ...formData, customer_id: customerId });
                   setCustomerLabel(customer?.farm_name ?? '');
                 }}
                 placeholder="Search customers..."
@@ -1459,18 +1467,20 @@ export function BlendTicketDetail() {
                 Link to Job
                 <HelpTip className="ml-1" text="Linking connects this ticket to a scheduled application job — the 'we apply it' path. It does not bill anything on its own: the customer is billed later, either from the job (Transfer to Invoice) or directly here with Create Invoice. Do one or the other for a given application, never both, or you double-charge." />
               </label>
-              <select
+              <JobSearchPicker
                 value={selectedJobId}
-                onChange={(e) => { setSelectedJobId(e.target.value); setIsDirty(true); }}
-                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">— No linked job —</option>
-                {availableJobs.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.job_number} ({j.job_date}) — {j.status}
-                  </option>
-                ))}
-              </select>
+                selectedLabel={jobLabel}
+                customerId={formData.customer_id}
+                disabled={!formData.customer_id}
+                onSelect={(job) => {
+                  setSelectedJobId(job?.id ?? '');
+                  setJobLabel(job ? jobSearchLabel(job) : '');
+                  setIsDirty(true);
+                }}
+                placeholder={formData.customer_id ? "No linked job. Search this customer's jobs..." : 'Choose a customer to link a job'}
+                ariaLabel="Link to Job"
+                clearLabel="Unlink job"
+              />
             </div>
 
             <div>
