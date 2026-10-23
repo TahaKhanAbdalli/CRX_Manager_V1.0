@@ -2,7 +2,7 @@
 -- (unit_cost, unit_cost_cents) for everyone.
 -- idempotency-body-check: exempt -- this internal writer checks the key for replay and delegates
 -- recording it to _save_purchase_order_atomic_number_impl -> _save_purchase_order_cost_input_impl,
--- which calls save_idempotency; unchanged from 20260717112906 apart from the fingerprint step.
+-- which calls save_idempotency; it then binds a request fingerprint to that receipt.
 --
 -- Why: since 20261021140000 (purchase cost is admin-only) save_purchase_order
 -- strips unit_cost / unit_cost_cents from a non-admin's lines before this
@@ -17,21 +17,27 @@
 -- cost on the existing purchase order with set_purchase_order_item_costs. A real
 -- content change (different quantity, product, unit or invoice date) still
 -- raises BULK_PO_DOCUMENT_CONTENT_CONFLICT. A same-key retry (a lost response)
--- must be the exact request, cost included: a new bulk import binds a
--- cost-inclusive request fingerprint to its idempotency receipt
--- (_bind_replay_receipt_20261015, the house receipt binder), and a retry that
--- changed only a cost gets the conflict instead of a "saved" replay.
+-- must carry the same lines and invoice date, cost included: a new bulk import
+-- binds a cost-inclusive request fingerprint (invoice date + lines) to its
+-- idempotency receipt (_bind_replay_receipt_20261015, the house receipt
+-- binder), and a retry that changed only a cost gets the conflict instead of a
+-- "saved" replay. Header fields such as notes stay outside both fingerprints,
+-- as before.
 --
 -- Stored fingerprints: a claim stored before this migration from lines that
 -- carried cost would keep its old hash, so a same-key retry of that request
 -- would get the conflict refusal instead of its saved result. Live had 0 claims
--- on 2026-10-22, so the preflight locks the claim table (no import can commit a
--- claim while this applies) and refuses to apply while any claim exists; with
--- none, every stored fingerprint is computed by the new rule.
+-- on 2026-10-22, so the preflight locks the claim table and refuses to apply
+-- while any claim exists. A save already running the old body when the lock is
+-- taken can still store one old-rule claim after this commits; that only gives
+-- a later re-import of that document the conflict refusal (no duplicate, no
+-- write).
 --
--- Only the canonical-items step of _save_purchase_order_ascii_identity_impl
--- changes; the rest of the body is the live 2026-10-22 body (from
--- 20260717112906) unchanged. Non-destructive: no rows, no grants widened.
+-- Changes to _save_purchase_order_ascii_identity_impl (the rest of the body is
+-- the live 2026-10-22 body from 20260717112906, unchanged): the canonical-items
+-- step leaves out cost; a cost-inclusive request fingerprint is computed, bound
+-- to the receipt after a new bulk save and compared on a same-key replay.
+-- Non-destructive: no rows, no grants widened.
 --
 -- Rollback: run only the CREATE OR REPLACE FUNCTION statement from
 -- 20260717112906 (not that whole file: its preflight expects an older body).
@@ -39,12 +45,14 @@
 -- an admin stored with cost while this rule was live then conflicts on a later
 -- re-import that carries cost (no duplicate, no write).
 
--- Held until this transaction commits: an import cannot store a claim under the
--- old rule between the check below and the new body.
+-- Held until this transaction commits: no claim commits between the check
+-- below and the new body. Waits at most 5 seconds for running imports.
+SET LOCAL lock_timeout = '5s';
 LOCK TABLE public.purchase_order_import_intents IN SHARE MODE;
 
 DO $preflight$
 DECLARE
+  r record;
   v_md5 text;
   v_claims bigint;
 BEGIN
@@ -52,20 +60,31 @@ BEGIN
   IF v_claims <> 0 THEN
     RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: % stored import claim(s) were fingerprinted by the old rule; re-plan before applying', v_claims;
   END IF;
-  SELECT md5(replace(prosrc, chr(13), ''))
-    INTO v_md5
-    FROM pg_proc
-   WHERE oid = to_regprocedure('public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)');
-  IF v_md5 IS DISTINCT FROM 'f5b2c9e81df528a449881ecd339ee54a' THEN
-    RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text) changed since 2026-10-22 (md5 %)', COALESCE(v_md5, 'missing');
-  END IF;
-  -- The receipt binder the new body calls (20261015).
-  SELECT md5(replace(prosrc, chr(13), ''))
-    INTO v_md5
-    FROM pg_proc
-   WHERE oid = to_regprocedure('public._bind_replay_receipt_20261015(text,text,text)');
-  IF v_md5 IS DISTINCT FROM '722ddd3b5d9174c598735cb321088f73' THEN
-    RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: public._bind_replay_receipt_20261015(text,text,text) changed since 2026-10-22 (md5 %)', COALESCE(v_md5, 'missing');
+  -- Live bodies read 2026-10-22 (md5 of prosrc without carriage returns): the
+  -- body this replaces, the receipt binder it calls, and the chain that writes
+  -- the receipt the binder stamps.
+  FOR r IN
+    SELECT * FROM (VALUES
+      ('public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)', 'f5b2c9e81df528a449881ecd339ee54a'),
+      ('public._bind_replay_receipt_20261015(text,text,text)', '722ddd3b5d9174c598735cb321088f73'),
+      ('public._save_purchase_order_atomic_number_impl(uuid,jsonb,jsonb,uuid,text)', 'ebc897c7df1430fa3b6d828f2b431cd2'),
+      ('public._save_purchase_order_cost_input_impl(uuid,jsonb,jsonb,uuid,text)', '6fa0f26553e3a562ca08e809b82aaa68'),
+      ('public.save_idempotency(text,text,jsonb)', 'f600171c426e48c995f204c4dac3ff8b')
+    ) AS v(sig, md5)
+  LOOP
+    SELECT md5(replace(p.prosrc, chr(13), ''))
+      INTO v_md5
+      FROM pg_proc AS p
+     WHERE p.oid = to_regprocedure(r.sig);
+    IF v_md5 IS DISTINCT FROM r.md5 THEN
+      RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: % changed since 2026-10-22 (md5 %)', r.sig, COALESCE(v_md5, 'missing');
+    END IF;
+  END LOOP;
+  -- The binder is not SECURITY DEFINER: it runs with this writer's owner's rights.
+  IF (SELECT pg_get_userbyid(p.proowner) FROM pg_proc AS p
+       WHERE p.oid = 'public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure)
+     IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: the writer is not owned by postgres';
   END IF;
 END
 $preflight$;
@@ -189,8 +208,8 @@ BEGIN
       'hex'
     );
 
-    -- A same-key retry must be the exact request, cost included (the lines as
-    -- this writer received them): bound to the idempotency receipt below.
+    -- A same-key retry must carry the same invoice date and lines, cost included
+    -- (the lines as this writer received them): bound to the receipt below.
     SELECT COALESCE(
       jsonb_agg(item.value ORDER BY item.value::text),
       '[]'::jsonb
@@ -389,7 +408,7 @@ BEGIN
      OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] THEN
     RAISE EXCEPTION 'Internal purchase-order writer security is incorrect';
   END IF;
-  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '16f2836a375c917fb393054e69fd7645' THEN
+  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '3a3140cce1c478924bf7cda9f7e57e0a' THEN
     RAISE EXCEPTION 'Bulk-PO cost-free fingerprint body is not the reviewed body';
   END IF;
   IF v_source NOT LIKE '%raw.value - ''unit_cost'' - ''unit_cost_cents''%'
