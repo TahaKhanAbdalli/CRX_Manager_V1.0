@@ -42,6 +42,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | `returns.requested_by` (NOT `created_by`) | And status starts at `'requested'` (NOT `'pending'`) |
 | `return_items.order_item_id` (NOT `delivery_item_id`) | Returns are linked to order lines, not delivery lines |
 | `invoice_items.extended_cents` (NOT `line_total_cents`) | Naming inconsistency from early schema |
+| A user the Auth service creates starts as an inactive, login-banned `driver` named `Pending user <id>` (since `20261022023000`) | `handle_new_user` ignores `raw_user_meta_data` role and name unless the session is `postgres`/`supabase_admin` with no `SET ROLE` in effect (direct SQL, provers' seeds). Signup and the `create-user` admin API both get the safe default; an admin sets the role with `admin_update_profile` (Settings does it right after Create User). Never trust signup metadata for a privilege |
 | `financial_audit_log.entity_type` is a CHECK-constrained list | The CHECK was AR-only until PR-04 (2026-05-10) and has grown since; read the current values from `.claude/schema-registry.json` → `check_constraints["financial_audit_log.entity_type"]` (same for `operation_type`). Adding a new entity type means expanding the CHECK with every existing value kept. |
 
 ---

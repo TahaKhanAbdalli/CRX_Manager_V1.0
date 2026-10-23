@@ -159,6 +159,7 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const adminUpdateIdem = useIdempotencyKey('admin_update_profile', profile?.id || '');
+  const newUserRoleIdem = useIdempotencyKey('admin_update_profile_new_user', profile?.id || '');
 
   const [companyName, setCompanyName] = useState('');
   const [companyPhone, setCompanyPhone] = useState('');
@@ -500,9 +501,62 @@ export default function SettingsPage() {
       );
 
       const data = await response.json();
-      if (!response.ok || data?.error) {
-        toast('error', data?.error || `Request failed (${response.status})`);
+      const newUserId: string | null = response.ok && !data?.error ? data.user.id : null;
+      if (!newUserId) {
+        let message = data?.error || `Request failed (${response.status})`;
+        if (/already (been )?registered|already exists/i.test(String(data?.error ?? ''))) {
+          // An earlier click whose reply was lost can leave this email's login created but never
+          // activated ('Pending user <id>', inactive, login banned). It is NOT adopted here: a
+          // self-signup could have taken the email first and would own the password, so an admin
+          // decides. Only say so, so the admin is not left with a bare "already registered".
+          const { data: pending } = await supabase
+            .from('profiles')
+            .select('id, full_name, is_active')
+            .eq('email', newEmail.trim().toLowerCase())
+            .maybeSingle();
+          if (pending && !pending.is_active && pending.full_name === `Pending user ${pending.id}`) {
+            message = `${newEmail} already has a blocked, not-yet-activated login (${pending.full_name}). If you just created it, open it in the list, set the name and role, mark it active, and set its password; if you did not, leave it blocked.`;
+          }
+        }
+        toast('error', message);
+        if (message !== data?.error) fetchUsers();
       } else {
+        // handle_new_user (migration 20261022023000) creates every new login as an inactive,
+        // login-blocked driver named 'Pending user <id>', whatever the signup metadata says, so the
+        // chosen name and role are set and the user is activated here, by an admin. The key is
+        // scoped to the new user so a lost reply for one user never replays onto the next.
+        let activationError: string | null = null;
+        try {
+          const { data: roleData, error: roleError } = await supabase.rpc('admin_update_profile', {
+            target_user_id: newUserId,
+            new_role: newRole,
+            new_full_name: newName,
+            new_phone: newPhone || undefined,
+            new_is_active: true,
+            p_idempotency_key: newUserRoleIdem.getKeyFor(newUserId),
+          });
+          if (roleError) {
+            activationError = /duplicate key|uq_profiles_.*full_name/i.test(String((roleError as { message?: string })?.message ?? ''))
+              ? `Another user is already named ${newName}. The new login (${newEmail}) exists but is blocked: open it, give it a different name and role, and mark it active.`
+              : sanitizeError(roleError);
+          } else {
+            const roleResult = assertRpcResult<{ error?: string }>(roleData, 'admin_update_profile');
+            if (roleResult?.error) activationError = roleResult.error;
+          }
+        } catch (activationErr: unknown) {
+          activationError = sanitizeError(activationErr);
+        }
+        if (activationError) {
+          toast('error', activationError.startsWith('Another user')
+            ? activationError
+            : `The login ${newEmail} was created but could not be confirmed active (${activationError}). Check it in the list; if it is not active, open it, set the name and role, and mark it active.`);
+          if (profile) logActivity({ event: 'user_created', description: `User ${newEmail} created but not activated`, performedBy: profile.id });
+          setUserModalOpen(false);
+          fetchUsers();
+          setCreatingUser(false);
+          return;
+        }
+        newUserRoleIdem.resetKeyFor(newUserId);
         toast('success', 'User created successfully');
         if (profile) logActivity({ event: 'user_created', description: `User ${newName} (${newRole}) created`, performedBy: profile.id });
         setUserModalOpen(false);
