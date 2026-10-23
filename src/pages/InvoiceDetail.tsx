@@ -42,7 +42,7 @@ import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 
 interface LineItem {
   id?: string;
@@ -377,7 +377,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         // The siblings are read with their versions: if any changed (or the membership did) since
         // this screen loaded, the post would be refused, so reload now and show what would post.
         const { data: grp } = await supabase
-          .from('invoices')
+          .from(INVOICES_POSTABLE)
           .select(`id, invoice_number, customer_id, ${INVOICE_POST_VERSION_COLUMNS}, invoice_items(product_id)`)
           .eq('invoice_group_id', invoice.invoice_group_id)
           .is('deleted_at', null);
@@ -505,7 +505,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // invoice_post_version is read in this same query, before the lines below, so Post binds
     // what this load shows: a save landing mid-load makes the post refuse, never slip through.
     const { data, error } = await supabase
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}, customer:customers(farm_name)`)
       .eq('id', invoiceId)
       .single();
@@ -683,13 +683,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     let membersError: unknown = null;
     if (data.invoice_group_id) {
       const { data: members, error } = await supabase
-        .from('invoices')
+        .from(INVOICES_POSTABLE)
         .select(`id, ${INVOICE_POST_VERSION_COLUMNS}`)
         .eq('invoice_group_id', data.invoice_group_id)
         .is('deleted_at', null);
       if (isStale()) return;
       membersError = error;
-      for (const m of members ?? []) if (m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
+      // A member without an id (impossible; the view types make id nullable) would be left out of
+      // the map, and post_invoice_group then refuses the changed membership.
+      for (const m of members ?? []) if (m.id && m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
     }
 
     // Fetch items
