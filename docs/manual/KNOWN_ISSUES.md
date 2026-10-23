@@ -446,7 +446,10 @@ Mason's REAL-DATA-OK.
 `blend_recipe_items` and cost fields reachable through field-billing and dispatch paths remain readable (HIGH).
 Commission amount plus rate can reveal a rep's profit, and Quick Receive reveals which open PO line is cheaper
 (MED). The computed field `invoice_post_version` reads the whole invoice row, so revoking invoice columns can break
-posting: the cost-column lock must ship with a column-safe version design in the same change (MED).
+posting: the cost-column lock must ship with a column-safe version design in the same change (MED). **Done in
+`20261022090000` (written 2026-10-22, not applied):** the version is a computed field, `invoice_postable_version`, on
+the `invoices_postable` view (every column but `total_cost_cents`), the seven screens read it there, and the cost lock then drops the
+`invoices` overload.
 
 ### KI-75 — Retry-key detail (extends KI-10, KI-11)
 **HIGH on money paths · OPEN · money**

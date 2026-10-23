@@ -51,7 +51,8 @@ function buildPendingChain(): Record<string, unknown> {
 }
 
 vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
+  // The version-bearing reads use the invoices_postable view (20261022090000): same rows as invoices here.
+  supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   describePostInvoiceBlock: vi.fn(() => null),
