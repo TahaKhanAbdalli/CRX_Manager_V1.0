@@ -54,6 +54,17 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { solExemptPathProblem } from "../.claude/hooks/sol-exempt-lib.mjs";
 import { carriedSolProof, SOL_PROOF_MAX_AGE_MS } from "../.claude/hooks/codex-push-lib.mjs";
+import {
+  CODEX_THREAD_PAGE_SIZE,
+  CODEX_THREADS_QUERY,
+  coderabbitThreadCount,
+  collectCodexThreads,
+  evaluateCodexBotReview,
+  isCodeRabbitLogin,
+  isCodexBotLogin,
+  readCodeRabbitRequirement,
+} from "../.claude/hooks/codex-bot-review-lib.mjs";
+import { findCodeRabbitSkip, skipStateDirs } from "../.claude/hooks/coderabbit-skip-lib.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -1075,6 +1086,358 @@ export function captureReviewOutput(root, result, runInfo = {}) {
   return outPath;
 }
 
+// ── Sol pre-flight: run Sol only on a quiet head (Mason, 2026-10-23) ─────────
+// Of the commits pushed after a PR was marked ready between 2026-10-14 and
+// 10-23, 32% answered the Codex GitHub App and 23% answered CodeRabbit. The App
+// re-reviews every push, usually within 5 minutes; CodeRabbit is often an hour
+// or more behind. Sol was run on a head those reviewers had not seen yet, they
+// then flagged it, and the fix voided the Sol proof, so the PR paid for a second
+// full Sol review. This check refuses to START a full review until:
+//
+//   - an open, non-draft pull request has exactly this commit as its head;
+//   - the Codex App has finished reviewing this exact commit (its summary
+//     comment's machine-readable state names it), or 15 minutes have passed
+//     since the commit with no review (the App sometimes never reviews);
+//   - no Codex App thread raised against this commit is unanswered, and no
+//     CodeRabbit thread anywhere on the PR is unanswered;
+//   - CodeRabbit is not in the middle of reviewing this commit, and a money or
+//     Mason-named PR already has its completed CodeRabbit review (or Mason's
+//     "skip coderabbit #<PR>" waiver from any session).
+//
+// It is a cost control, not a safety gate: the merge gates enforce all of this
+// again and are unchanged. It FAILS CLOSED on an unreadable answer because the
+// merge needs the same reads, so Sol spent then would be wasted. `--carry-forward`
+// does not run it: that path costs no full review.
+export const SOL_PREFLIGHT_QUIET_MS = 15 * 60 * 1000;
+const PREFLIGHT_GH_TIMEOUT_MS = 20_000;
+const CODEX_REVIEW_STATE_RE = /<!--\s*codex-review-state:v1\s+(\{.*?\})\s*-->/s;
+
+// The commit the Codex App last reviewed, from its summary comment. Only a
+// comment written by the App counts (anyone can paste the marker); the newest
+// one wins, and a newest one whose state cannot be read is UNREADABLE — never a
+// reason to fall back to an older one (Luna round 1). Returns { sha, status, at }
+// (at = when the App last touched the summary, NaN if unreadable),
+// { unreadable: true }, or null (the App has posted no summary).
+export function codexAppReviewState(comments) {
+  let newest = null;
+  for (const comment of Array.isArray(comments) ? comments : []) {
+    if (!isCodexBotLogin(comment?.user?.login)) continue;
+    const body = String(comment?.body || "");
+    if (!/codex-review-state|codex-pull-request-review-summary/.test(body)) continue;
+    const at = Date.parse(comment?.updated_at || comment?.created_at || "");
+    if (newest && !(at > newest.at)) continue;
+    let state = null;
+    const match = body.match(CODEX_REVIEW_STATE_RE);
+    try { state = match ? JSON.parse(match[1]) : null; } catch { state = null; }
+    const sha = String(state?.code_review?.commit_sha || "").trim().toLowerCase();
+    const status = String(state?.code_review?.status || "").trim().toLowerCase();
+    newest = { at: Number.isFinite(at) ? at : 0, state: state && status ? { sha, status, at } : { unreadable: true } };
+  }
+  return newest ? newest.state : null;
+}
+
+// A Codex App review of this exact commit whose summary has not changed for
+// this long is a review that died; the 15-minute rule cannot cut one short
+// (Luna round 1). Measured from the summary's own last update, never the
+// commit's age: a draft's old head can start its review only when marked ready
+// (Codex App on #1075).
+export const CODEX_APP_STALE_RUN_MS = 60 * 60 * 1000;
+
+// A CodeRabbit "Review in progress" older than this is a review that died, not
+// one to wait for (the merge gates do not read it, so waiting would deadlock).
+// Deliberate (Luna round 2 raised it): a slower live review can still land after
+// Sol on a non-money PR, which costs a second Sol run, never a bad merge.
+export const CODERABBIT_STALE_PENDING_MS = 60 * 60 * 1000;
+
+// Is CodeRabbit reviewing this commit right now? GitHub lists EVERY status ever
+// set on the commit, so only CodeRabbit's NEWEST one counts (an old "in
+// progress" is followed by its result). A status set by anyone else is ignored.
+// One of CodeRabbit's own statuses with no readable time cannot be ordered, so
+// the answer is null (unreadable, refuses) rather than "not busy" (Luna round 2).
+export function coderabbitReviewInProgress(statuses, nowMs = Date.now()) {
+  let newest = null;
+  for (const status of Array.isArray(statuses) ? statuses : []) {
+    if (String(status?.context || "").trim().toLowerCase() !== "coderabbit") continue;
+    if (!isCodeRabbitLogin(status?.creator?.login)) continue;
+    const at = Date.parse(status?.created_at || "");
+    if (!Number.isFinite(at)) return null;
+    if (!newest || at > newest.at) newest = { at, state: String(status?.state || "").trim().toLowerCase() };
+  }
+  return Boolean(newest && newest.state === "pending" && nowMs - newest.at < CODERABBIT_STALE_PENDING_MS);
+}
+
+// When GitHub first saw this commit: the earliest check suite created for it.
+// GitHub sets that time; a commit's own date is whatever its author wrote, so
+// it is never used (Luna round 1). NaN when there is none, which never counts
+// as quiet. ACCEPTED GAP (Luna round 2): suites belong to the commit, not the
+// branch, so a commit pushed to another branch first can look quiet sooner. The
+// cost is one early Sol run in that rare case; the merge gates are unaffected.
+export function headPushedAt(checkSuites) {
+  let earliest = Number.NaN;
+  for (const suite of Array.isArray(checkSuites) ? checkSuites : []) {
+    const at = Date.parse(suite?.created_at || "");
+    if (Number.isFinite(at) && !(at >= earliest)) earliest = at;
+  }
+  return earliest;
+}
+
+// When the PR was last marked ready, from its timeline: the App reviews on that
+// switch, so a draft's head is not "quiet" until 15 minutes after it (Codex App
+// on #1075). NaN when it was never a draft (no such event).
+export function readyForReviewAt(events) {
+  let latest = Number.NaN;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.event !== "ready_for_review") continue;
+    const at = Date.parse(event?.created_at || "");
+    if (Number.isFinite(at) && !(at <= latest)) latest = at;
+  }
+  return latest;
+}
+
+// The decision, from facts already read. Every fact that could not be read is
+// null and refuses. Returns { ok, problems, notes }.
+export function evaluateSolPreflight({
+  headSha,
+  pr,
+  codexState,
+  codexThreads,
+  coderabbitOpen,
+  coderabbitBusy,
+  coderabbitRequirement,
+  waiverFound,
+  headPushedMs,
+  readyForReviewMs = Number.NaN,
+  nowMs = Date.now(),
+} = {}) {
+  const head = String(headSha || "").trim().toLowerCase();
+  const problems = [];
+  const notes = [];
+  if (!pr) {
+    problems.push(
+      "no open pull request has this exact commit as its head. Push the branch, open the PR (as a draft), " +
+      "and run Sol only after it is marked ready.",
+    );
+    return { ok: false, problems, notes };
+  }
+  if (pr.ambiguous) {
+    problems.push(`more than one open pull request (${pr.ambiguous.map((n) => `#${n}`).join(", ")}) has this commit as its head. Close the extra one, then run Sol.`);
+    return { ok: false, problems, notes };
+  }
+  const which = `#${pr.number}`;
+  if (pr.draft) {
+    problems.push(`${which} is still a draft. Mark it ready (the Codex GitHub App reviews on that switch), then wait for its review.`);
+  }
+
+  // Quiet since the later of the push and the last switch to ready; a ready
+  // time that could not be read (null) never counts as quiet.
+  const quietSince = readyForReviewMs === null ? Number.NaN : Math.max(headPushedMs, Number.isFinite(readyForReviewMs) ? readyForReviewMs : -Infinity);
+  const quietFor = Number.isFinite(quietSince) ? nowMs - quietSince : -1;
+  const runningFor = Number.isFinite(codexState?.at) ? nowMs - codexState.at : -1;
+  const reviewedHere = codexState?.sha === head && codexState?.status === "completed";
+  if (codexState === undefined || codexState?.unreadable) {
+    problems.push(`could not read the Codex GitHub App's review summary on ${which}. Retry in a minute.`);
+  } else if (!reviewedHere && codexState?.sha === head) {
+    // Its review of THIS commit has started and not finished: wait for it, however long, until it is plainly dead.
+    if (runningFor >= CODEX_APP_STALE_RUN_MS) {
+      notes.push(`the Codex GitHub App's review of ${head.slice(0, 9)} has shown "${codexState.status}" with no update for over an hour, so it is treated as dead and Sol may run.`);
+    } else {
+      problems.push(
+        `the Codex GitHub App is still reviewing ${head.slice(0, 9)} (status "${codexState.status}"). Wait for it to finish, answer what it finds, then run Sol.`,
+      );
+    }
+  } else if (!reviewedHere) {
+    if (quietFor >= 0 && quietFor >= SOL_PREFLIGHT_QUIET_MS) {
+      notes.push(`the Codex GitHub App has not reviewed ${head.slice(0, 9)}, but 15 minutes have passed since it was pushed, so Sol may run.`);
+    } else {
+      const left = quietFor >= 0 ? Math.ceil((SOL_PREFLIGHT_QUIET_MS - quietFor) / 60000) : 15;
+      problems.push(
+        `the Codex GitHub App has not finished reviewing ${head.slice(0, 9)} yet. Wait for its review ` +
+        `(usually 2-5 minutes; Sol may run without it in ${left} minute${left === 1 ? "" : "s"}), answer what it finds, then run Sol.`,
+      );
+    }
+  }
+  if (!codexThreads || codexThreads.status === "incomplete") {
+    problems.push(`could not read ${which}'s Codex GitHub App threads completely. Retry in a minute.`);
+  } else if (codexThreads.status === "findings-at-head") {
+    problems.push(
+      `the Codex GitHub App has ${codexThreads.unresolvedAtHead} unanswered comment(s) on this commit. ` +
+      "Fix them (one push for all of them) or reply with a reason and resolve each thread, then run Sol.",
+    );
+  }
+
+  if (coderabbitOpen === null || coderabbitOpen === undefined) {
+    problems.push(`could not read ${which}'s CodeRabbit threads completely. Retry in a minute.`);
+  } else if (coderabbitOpen > 0) {
+    problems.push(
+      `CodeRabbit has ${coderabbitOpen} unanswered thread(s) on ${which}. Fix or refute each one, reply, resolve it, then run Sol.`,
+    );
+  }
+  if (coderabbitBusy === null || coderabbitBusy === undefined) {
+    problems.push(`could not read this commit's CodeRabbit status. Retry in a minute.`);
+  } else if (coderabbitBusy) {
+    problems.push("CodeRabbit is reviewing this commit right now. Wait for it to finish and answer its comments, then run Sol.");
+  }
+  const requirement = coderabbitRequirement?.status;
+  if (!requirement || requirement === "unreadable") {
+    problems.push(`could not tell whether ${which} needs a CodeRabbit review (labels, files or statuses unreadable). Retry in a minute.`);
+  } else if (requirement === "missing" && !coderabbitBusy) {
+    if (waiverFound) {
+      notes.push(`${which} has no CodeRabbit review of this commit, but Mason waived it ("skip coderabbit"); the merging session must hold that waiver.`);
+    } else {
+      problems.push(
+        `${which} needs a completed CodeRabbit review of this commit first, because ${coderabbitRequirement.why || "it qualifies"}. ` +
+        "The merge gates refuse it without one, so a Sol review now would be wasted. Request it per ship.md Step 8 item 2 " +
+        "(one `@coderabbitai full review` for this head), answer its findings, then run Sol.",
+      );
+    }
+  }
+  return { ok: problems.length === 0, problems, notes };
+}
+
+// Read-only GitHub calls. A failed or timed-out call throws, and the caller
+// leaves that fact null, which refuses.
+function preflightGh(root, args) {
+  const result = spawnSync("gh", args, {
+    cwd: root,
+    encoding: "utf8",
+    timeout: PREFLIGHT_GH_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 32 * 1024 * 1024,
+    windowsHide: true,
+    shell: false,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`gh ${args[0]} ${args[1] || ""} failed: ${result.error?.message || String(result.stderr || "").trim().split("\n")[0]}`);
+  }
+  return result.stdout;
+}
+
+export function parseGithubSlug(remoteUrl) {
+  const match = String(remoteUrl || "").trim().match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  return match ? { owner: match[1], name: match[2] } : null;
+}
+
+// Did Mason waive CodeRabbit for this PR in ANY session? The merge gate still
+// requires the waiver in the session that merges; this only avoids refusing Sol
+// for a PR that can legitimately land without CodeRabbit.
+function anyCodeRabbitWaiver(root, number) {
+  for (const dir of skipStateDirs([root])) {
+    let names = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      const match = name.match(/^coderabbit-skip-([0-9A-Za-z_-]{8,128})-pr(\d+)\.json$/);
+      if (!match || Number(match[2]) !== number) continue;
+      if (findCodeRabbitSkip({ dirs: [dir], sessionId: match[1], pullRequest: number })) return true;
+    }
+  }
+  return false;
+}
+
+// Read every fact evaluateSolPreflight() needs. Any read that fails leaves its
+// fact null, which refuses.
+// The open pull requests whose head is exactly this commit, or null when GitHub
+// could not be read.
+function openPullsAtHead(root, owner, name, headSha) {
+  let pulls;
+  try {
+    pulls = JSON.parse(preflightGh(root, ["api", `repos/${owner}/${name}/commits/${headSha}/pulls?per_page=100`]));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(pulls)) return null;
+  return pulls.filter((pull) => pull?.state === "open" && String(pull?.head?.sha || "").toLowerCase() === headSha.toLowerCase());
+}
+
+export function readSolPreflightFacts(root, headSha) {
+  const facts = { headSha, pr: null, nowMs: Date.now(), headPushedMs: Number.NaN };
+  const slug = parseGithubSlug(runGit(["remote", "get-url", "origin"], { cwd: root }));
+  if (!slug) return { ...facts, unreadable: "could not read the origin remote's GitHub owner and name" };
+  const { owner, name } = slug;
+  const pulls = openPullsAtHead(root, owner, name, headSha);
+  if (!pulls) return { ...facts, unreadable: "could not ask GitHub which pull request has this head" };
+  if (pulls.length === 0) return facts;
+  if (pulls.length > 1) return { ...facts, pr: { ambiguous: pulls.map((pull) => pull.number) } };
+  const [open] = pulls;
+  facts.pr = { number: open.number, draft: open.draft === true };
+  const number = open.number;
+  try {
+    const comments = JSON.parse(preflightGh(root, [
+      "api", `repos/${owner}/${name}/issues/${number}/comments?per_page=100`, "--paginate", "--slurp",
+    ])).flat();
+    facts.codexState = codexAppReviewState(comments);
+  } catch { facts.codexState = undefined; }
+  try {
+    // Read CodeRabbit's completion BEFORE the threads, as the merge gate does: a
+    // review finishing between the reads must not pair with a stale thread list.
+    facts.coderabbitRequirement = readCodeRabbitRequirement((args) => preflightGh(root, args), { owner, name, number });
+  } catch { facts.coderabbitRequirement = null; }
+  try {
+    const statuses = JSON.parse(preflightGh(root, [
+      "api", `repos/${owner}/${name}/commits/${headSha}/statuses?per_page=100`, "--paginate", "--slurp",
+    ])).flat();
+    facts.coderabbitBusy = coderabbitReviewInProgress(statuses, facts.nowMs);
+  } catch { facts.coderabbitBusy = null; }
+  try {
+    const pages = JSON.parse(preflightGh(root, [
+      "api", `repos/${owner}/${name}/commits/${headSha}/check-suites?per_page=100`, "--paginate", "--slurp",
+    ]));
+    facts.headPushedMs = headPushedAt(pages.flatMap((page) => page?.check_suites || []));
+  } catch { /* NaN: never quiet */ }
+  try {
+    const pages = JSON.parse(preflightGh(root, [
+      "api", `repos/${owner}/${name}/issues/${number}/timeline?per_page=100`, "--paginate", "--slurp",
+    ]));
+    facts.readyForReviewMs = readyForReviewAt(pages.flat());
+  } catch { facts.readyForReviewMs = null; }
+  try {
+    const node = collectCodexThreads((cursor) => {
+      const args = [
+        "api", "graphql",
+        "-f", `query=${CODEX_THREADS_QUERY}`,
+        "-F", `owner=${owner}`,
+        "-F", `name=${name}`,
+        "-F", `number=${number}`,
+        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+      ];
+      if (cursor) args.push("-F", `after=${cursor}`);
+      return JSON.parse(preflightGh(root, args))?.data?.repository?.pullRequest;
+    });
+    // Threads read for a different head than the one Sol would review prove nothing.
+    if (String(node.headRefOid || "").toLowerCase() === headSha.toLowerCase()) {
+      facts.codexThreads = evaluateCodexBotReview(node);
+      facts.coderabbitOpen = coderabbitThreadCount(node);
+    }
+  } catch { /* left null: refuses */ }
+  // The CodeRabbit read must describe this head too, or it proves nothing.
+  if (facts.coderabbitRequirement && facts.coderabbitRequirement.headOid !== headSha.toLowerCase()) {
+    facts.coderabbitRequirement = null;
+  }
+  if (facts.coderabbitRequirement?.status === "missing") {
+    try { facts.waiverFound = anyCodeRabbitWaiver(root, number); } catch { facts.waiverFound = false; }
+  }
+  // Read the PR's head once more LAST: a push during the reads above would leave
+  // them describing a commit the PR no longer points at (Luna round 1).
+  const after = openPullsAtHead(root, owner, name, headSha);
+  if (!after) return { ...facts, unreadable: "could not re-read which pull request has this head" };
+  if (after.length !== 1 || after[0].number !== number) {
+    return { ...facts, unreadable: `#${number} no longer has this commit as its head (a push landed during the check)` };
+  }
+  return facts;
+}
+
+export function solPreflight(root, headSha) {
+  const facts = readSolPreflightFacts(root, headSha);
+  if (facts.unreadable) return { ok: false, problems: [`${facts.unreadable}. Retry in a minute.`], notes: [], facts };
+  return { ...evaluateSolPreflight(facts), facts };
+}
+
+function preflightReport({ problems, notes }) {
+  const lines = [];
+  for (const note of notes) lines.push(`  note: ${note}`);
+  for (const problem of problems) lines.push(`  - ${problem}`);
+  return lines.join("\n");
+}
+
 // ── carry-forward (Mason, 2026-10-21: "go with carry-forward") ──────────────
 // A clean Sol proof is bound to one head and one base, so every merge into main
 // voided every waiting PR's review and each one paid for a full Sol pass again
@@ -1581,6 +1944,9 @@ function usage() {
     "clean verdict with a stable clean worktree, writes the HEAD-bound Codex push",
     "proof that .claude/hooks/codex-push-guard.mjs requires for risky pushes to main.",
     "The base is fixed (not overridable) so a narrower diff cannot mint an unearned proof.",
+    "Before a full review it checks the head is quiet (open non-draft PR, Codex GitHub App done with",
+    "this commit or 15 minutes passed, no unanswered Codex App/CodeRabbit threads, CodeRabbit not",
+    "reviewing, a money PR's CodeRabbit review done) and refuses without spending Sol tokens if not.",
     "",
     `  --timeout <sec>  Max seconds for the Codex review (default ${DEFAULT_TIMEOUT_SEC}). A timeout writes no`,
     "                   proof; it means the review was cut off, not that it found problems.",
@@ -1633,6 +1999,12 @@ export function run(argv = process.argv.slice(2)) {
     process.stdout.write(`[dry-run] Command: codex ${args.slice(0, -1).join(" ")} <review-prompt>\n`);
     process.stdout.write(`[dry-run] Review base (pinned): ${GUARDED_BASE}\n`);
     process.stdout.write(`[dry-run] Would mint proof at: ${codexPushProofPath(root, "<HEAD>")}\n`);
+    const head = runGit(["rev-parse", "HEAD"], { cwd: root });
+    const preflight = solPreflight(root, head);
+    process.stdout.write(
+      `[dry-run] Sol pre-flight for ${head.slice(0, 12)}: ${preflight.ok ? "would run" : "would REFUSE"}\n` +
+      `${preflightReport(preflight)}\n`,
+    );
     return 0;
   }
 
@@ -1648,6 +2020,21 @@ export function run(argv = process.argv.slice(2)) {
     clearCodexPushProof({ root, headSha: headBefore });
     return 1;
   }
+
+  // Refuse before spending a full Sol review on a head the Codex GitHub App or
+  // CodeRabbit has not finished with (see "Sol pre-flight" above). An existing
+  // proof is left alone: this refusal says "not yet", not "the review failed".
+  const preflight = solPreflight(root, headBefore);
+  if (!preflight.ok) {
+    process.stderr.write(
+      `SOL PRE-FLIGHT: not running the Sol review of ${headBefore.slice(0, 12)} yet, so no Sol tokens were spent.\n` +
+      `${preflightReport(preflight)}\n` +
+      "Sol runs LAST, on a quiet head: once the reviewers above are done and answered, re-run this command " +
+      "(ship.md Step 8 item 4).\n",
+    );
+    return 1;
+  }
+  if (preflight.notes.length) process.stdout.write(`Sol pre-flight passed:\n${preflightReport(preflight)}\n`);
 
   let reviewWorkspace;
   let result;
