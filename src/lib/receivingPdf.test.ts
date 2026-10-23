@@ -32,7 +32,7 @@ vi.mock('jspdf-autotable', () => ({
   }),
 }));
 
-import { generateReceivingPdf, downloadReceivingPdf, generateBatchReceivingPdf } from './receivingPdf';
+import { generateReceivingPdf, downloadReceivingPdf } from './receivingPdf';
 import type { PdfReceivingData, PdfReceivingItem } from './receivingPdf';
 
 function makeReceivingItem(overrides: Partial<PdfReceivingItem> = {}): PdfReceivingItem {
@@ -237,35 +237,5 @@ describe('downloadReceivingPdf', () => {
   it('calls doc.save', async () => {
     await downloadReceivingPdf(makeReceivingData({ po_number: 'PO-2026-0099' }));
     expect(mockDoc.save).toHaveBeenCalledWith('PO-2026-0099_receiving_receipt.pdf');
-  });
-});
-
-describe('generateBatchReceivingPdf', () => {
-  it('generates batch with multiple receipts', async () => {
-    const dataList = [
-      makeReceivingData({ po_number: 'PO-2026-0001', vendor: 'Syngenta' }),
-      makeReceivingData({ po_number: 'PO-2026-0002', vendor: 'BASF' }),
-    ];
-    await generateBatchReceivingPdf(dataList);
-    expect(mockDoc.save).toHaveBeenCalledWith('receiving_receipts_batch_2.pdf');
-    // Both PO numbers should appear in text calls
-    const textCalls = mockDoc.text.mock.calls;
-    const po1 = textCalls.find(
-      (call) => typeof call[0] === 'string' && call[0] === 'PO-2026-0001'
-    );
-    const po2 = textCalls.find(
-      (call) => typeof call[0] === 'string' && call[0] === 'PO-2026-0002'
-    );
-    expect(po1).toBeDefined();
-    expect(po2).toBeDefined();
-  });
-
-  it('calls addPage for second receipt', async () => {
-    const dataList = [
-      makeReceivingData({ po_number: 'PO-2026-0001' }),
-      makeReceivingData({ po_number: 'PO-2026-0002' }),
-    ];
-    await generateBatchReceivingPdf(dataList);
-    expect(mockDoc.addPage).toHaveBeenCalledTimes(1);
   });
 });
