@@ -105,7 +105,8 @@ The file refuses to run over any changed live body (md5 pins on all eighteen) an
 new body, the helper's included. Findings 1 and 2 stay open until it is applied live and re-checked read-only; findings 3–5 wait on parts B and C.
 One thing part A does not change: `team_notes` itself (`tnotes_select`) admits every active profile, and the Team
 Board shows field roles every note, so the notes gate closes the unchecked function, not field roles' view of
-notes on the Team Board (Mason's call whether to narrow that). Until part B narrows `job_fields`, an applicator
+notes on the Team Board. Mason decided 2026-10-23 to keep the Team Board as it is for now; narrowing it is To-Do
+row 11.9 (`DECISION_LOG.md`). Until part B narrows `job_fields`, an applicator
 sent to one field of a split job still sees the job's other field rows, so Job Detail's weather capture (which
 reads the first field's centroid through `get_field_geojson`) is blank for them when that first field is not
 theirs (0 split assignments live, 2026-10-22); part B fixes it by hiding the other rows.
