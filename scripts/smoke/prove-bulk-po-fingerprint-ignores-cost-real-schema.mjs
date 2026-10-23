@@ -311,6 +311,10 @@ const SCENARIOS = [
     // The receipt binds the exact request, cost included: a lost-response retry with another cost is
     // refused, not replayed as "saved" while the PO keeps the first cost.
     ['retry, same key, only the cost changed', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ cents: 444 })]), CONFLICT, 'same'],
+    // The same key without the bulk-import marker: before, the cached result replays as saved; after, a
+    // bound bulk receipt refuses it.
+    ['same key, no bulk-import marker', U.ADMIN, `(SELECT r->>'status' FROM (SELECT public.save_purchase_order(NULL, jsonb_build_object('vendor', '${VENDOR}', 'status', 'draft'),
+        jsonb_build_array(${line({ qty: 12, cents: COST })}), '${U.ADMIN}', 'k4') AS r) s)`, 'ok|saved', /^P0001\|IDEMPOTENCY_PAYLOAD_CONFLICT$/],
     ['the receipt carries a request fingerprint', 'owner', "(SELECT (request_fingerprint ~ '^[0-9a-f]{64}$')::text || ':' || (request_actor_id IS NOT NULL)::text FROM public.idempotency_keys WHERE idempotency_key = 'k4')",
       'ok|<null>', 'ok|true:true'],
     ['the stored cost is the first one', 'owner', `${NEW_POS} || '|' || ${LINECOST('D4')}`, `ok|1|10:${COST}`, 'same'],
@@ -400,7 +404,8 @@ function mutation() {
   assert.equal(out['rep imports'], 'ok|saved:true');
   assert.match(out['admin with cost'], CONFLICT, `MUTATION 1: with unit_cost kept the admin import should conflict, got ${out['admin with cost']}`);
 
-  const unbound = candidateBody.replace('IF v_existing_request_fingerprint IS NOT NULL\n', 'IF false AND v_existing_request_fingerprint IS NOT NULL\n');
+  const unbound = candidateBody.replace('IF v_existing_request_fingerprint IS DISTINCT FROM v_request_fingerprint THEN',
+    'IF false AND v_existing_request_fingerprint IS DISTINCT FROM v_request_fingerprint THEN');
   assert.notEqual(unbound, candidateBody, 'mutation 2 did not apply');
   const out2 = scenario([
     { key: 'admin imports', as: U.ADMIN, call: imp(U.ADMIN, 'M2', 'km2', [line({ cents: COST })]) },

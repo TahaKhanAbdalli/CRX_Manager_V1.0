@@ -27,16 +27,18 @@
 -- Stored fingerprints: a claim stored before this migration from lines that
 -- carried cost would keep its old hash, so a same-key retry of that request
 -- would get the conflict refusal instead of its saved result. Live had 0 claims
--- on 2026-10-22, so the preflight locks the claim table and refuses to apply
--- while any claim exists. A save already running the old body when the lock is
--- taken can still store one old-rule claim after this commits; that only gives
--- a later re-import of that document the conflict refusal (no duplicate, no
--- write).
+-- on 2026-10-22, so the preflight first takes save_purchase_order's own lock
+-- (advisory 73492009, the first thing every save takes: a save already running
+-- the old body finishes first, and later saves wait for this commit and run the
+-- new body), then locks the claim table and refuses to apply while any claim
+-- exists.
 --
 -- Changes to _save_purchase_order_ascii_identity_impl (the rest of the body is
 -- the live 2026-10-22 body from 20260717112906, unchanged): the canonical-items
 -- step leaves out cost; a cost-inclusive request fingerprint is computed, bound
--- to the receipt after a new bulk save and compared on a same-key replay.
+-- to the receipt after a new bulk save and compared on a same-key replay, and a
+-- bound receipt refuses a same-key call without the bulk-import marker
+-- (IDEMPOTENCY_PAYLOAD_CONFLICT).
 -- Non-destructive: no rows, no grants widened.
 --
 -- Rollback: run only the CREATE OR REPLACE FUNCTION statement from
@@ -45,9 +47,11 @@
 -- an admin stored with cost while this rule was live then conflicts on a later
 -- re-import that carries cost (no duplicate, no write).
 
--- Held until this transaction commits: no claim commits between the check
--- below and the new body. Waits at most 5 seconds for running imports.
+-- Held until this transaction commits: no save runs, and no claim commits,
+-- between the check below and the new body. Waits at most 5 seconds for a
+-- running save.
 SET LOCAL lock_timeout = '5s';
+SELECT pg_advisory_xact_lock(73492009);
 LOCK TABLE public.purchase_order_import_intents IN SHARE MODE;
 
 DO $preflight$
@@ -290,15 +294,21 @@ BEGIN
         IF v_existing_content_fingerprint IS DISTINCT FROM v_content_fingerprint THEN
           RAISE EXCEPTION 'BULK_PO_DOCUMENT_CONTENT_CONFLICT';
         END IF;
-        -- The document fingerprint ignores cost; the receipt binds the exact
-        -- request, so a retry that changed only a cost is not replayed as saved.
-        SELECT receipt.request_fingerprint
-          INTO v_existing_request_fingerprint
-          FROM public.idempotency_keys AS receipt
-         WHERE receipt.idempotency_key = p_idempotency_key
-           AND receipt.operation = 'save_purchase_order';
-        IF v_existing_request_fingerprint IS NOT NULL
-           AND v_existing_request_fingerprint IS DISTINCT FROM v_request_fingerprint THEN
+      END IF;
+
+      -- The document fingerprint ignores cost; a bulk import's receipt binds its
+      -- invoice date and lines, cost included. A retry that changed only a cost,
+      -- or that reuses the key without the bulk-import marker, is not replayed.
+      SELECT receipt.request_fingerprint
+        INTO v_existing_request_fingerprint
+        FROM public.idempotency_keys AS receipt
+       WHERE receipt.idempotency_key = p_idempotency_key
+         AND receipt.operation = 'save_purchase_order';
+      IF v_existing_request_fingerprint IS NOT NULL THEN
+        IF v_bulk_intent_key IS NULL THEN
+          RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+        END IF;
+        IF v_existing_request_fingerprint IS DISTINCT FROM v_request_fingerprint THEN
           RAISE EXCEPTION 'BULK_PO_DOCUMENT_CONTENT_CONFLICT';
         END IF;
       END IF;
@@ -408,7 +418,7 @@ BEGIN
      OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] THEN
     RAISE EXCEPTION 'Internal purchase-order writer security is incorrect';
   END IF;
-  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '3a3140cce1c478924bf7cda9f7e57e0a' THEN
+  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '3363a589cf46a0f23cd0d404072098d3' THEN
     RAISE EXCEPTION 'Bulk-PO cost-free fingerprint body is not the reviewed body';
   END IF;
   IF v_source NOT LIKE '%raw.value - ''unit_cost'' - ''unit_cost_cents''%'
