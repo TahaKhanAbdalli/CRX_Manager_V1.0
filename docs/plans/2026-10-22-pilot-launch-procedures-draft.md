@@ -373,7 +373,10 @@ each printed form next to its CRX screen, and add any field the form is missing.
      server's date, not the day it was received (see the known gap in procedure 1, Step 4). The real
      received date stays on the paper form. The bookkeeper decides how that affects deposit matching
      and QuickBooks (question below).
-   - **Deliveries:** the assigned driver completes each delivery from their own delivery screen. They
+   - **Deliveries:** complete each one from a screen that has the paper-ticket option: the driver's
+     own delivery screen, or **My Route** (open to admins, sales reps and drivers; open the stop from
+     the list). The office's normal delivery page has no paper-ticket option for admins and sales
+     reps, so it would record the delivery as made at that moment, not on the ticket's date. They
      tick **Customer signed a paper ticket (no signal at the site)**, add the photo of the signed
      ticket, type the signer's printed name from the ticket in the **Signed By** box, and enter
      **Delivered on (date on the ticket)**. The app never captures a signature after the fact.
@@ -505,9 +508,13 @@ the one record until CRX is back.
      Delivery** only works from an existing order, using that order's products). If there's no order
      at all (for example, one taken by phone during the outage), the order has to be entered and
      approved through the normal order steps first, then the delivery is created from it. Write the
-     new CRX delivery number on the outage ticket list. Then the assigned driver completes each
-     delivery from their own delivery screen. They tick **Customer signed a paper ticket (no signal
-     at the site)**, add the ticket photo, type the signer's name in **Signed By**, and enter
+     new CRX delivery number on the outage ticket list. Then each delivery is completed by its
+     assigned driver from their own delivery screen, or by the office from **My Route** (open to
+     admins, sales reps and drivers; open the stop from the list). Don't use the office's normal
+     delivery page: it has no paper-ticket option for admins and sales reps, so it would record the
+     delivery as made at that moment, not on the ticket's date. After a restore, while CRX is closed
+     to staff, the person running the recovery does this step from **My Route**. They tick **Customer signed a paper ticket (no signal at
+     the site)**, add the ticket photo, type the signer's name in **Signed By**, and enter
      **Delivered on (date on the ticket)**.
    - **Payments:** enter each log line in **Record Payments**, with the check number and the log
      line number together in the **Reference #** box (for example `4471 OUT-012`). That box is what
@@ -537,7 +544,6 @@ drill log (section 4.9).
 6. When in December should the rehearsal happen, and who takes part?
 7. A "price later" order entered after an outage gets the entry date, not the day it was taken.
    Is a note with the real date enough, or should CRX let that date be set?
-
 ---
 
 ## 4. Launch support (16.8)

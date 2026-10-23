@@ -3083,10 +3083,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   record_commission_settlement_event:
     'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
-  // Prune once 20261022023000 is in the applied-name snapshot (it is re-emitted there, so it is
-  // discovered until then).
-  handle_new_user:
-    'local signup-role candidate 20261022023000 re-emits this AFTER INSERT ON auth.users trigger (RETURNS trigger, so no direct call); it inserts the new profile and bans the login once per new auth user inside the Auth service transaction',
+  // Pruned 2026-10-23: handle_new_user, re-emitted by 20261022023000, which is now in the
+  //   applied-name snapshot (ledger 20261023031652), so the trigger left the discovered inventory.
   // Pruned 2026-10-22: guard_invoice_terminal_order, re-emitted by 20261021150000, which is now in
   //   the applied-name snapshot (registry regenerated from live in PR #1033), so it left the inventory.
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',

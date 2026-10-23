@@ -1422,6 +1422,22 @@
         "billing",
         "idempotency"
       ]
+    },
+    "role_reads_require_active_profile": {
+      "chain": "smoke-role-reads-require-active-profile.sql",
+      "container_only": true,
+      "container_prover": "prove-role-reads-require-active-profile-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-role-reads-require-active-profile-real-schema.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] logins (auth.users rows), a customer, an order and deliveries, which the LIVE-DATA GUARD refuses. Covers 20261022070000: get_team_board_deliveries, get_yesterday_delivery_recap, mark_inventory_row_verified and get_ar_reminder_candidates refuse an inactive or profile-less caller (the team board and recap with INSUFFICIENT_ROLE: active account required; mark_inventory_row_verified with INSUFFICIENT_ROLE: admin required, also for an active sales rep holding a key with a saved result; get_ar_reminder_candidates with permission denied: admin role required, also for an inactive rep whose JWT carries user_role = admin), while an active admin sees every [SMOKE] delivery, an active driver only their own, and an active admin passes the verification gate and gets the overdue list. Fail-first: step a fails before the migration. Terminal rollback.",
+      "covers": [
+        "get_team_board_deliveries",
+        "get_yesterday_delivery_recap",
+        "mark_inventory_row_verified",
+        "get_ar_reminder_candidates"
+      ],
+      "area": [
+        "security",
+        "inventory"
+      ]
     }
   }
 }
