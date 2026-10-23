@@ -10,6 +10,9 @@
   `autofillPriceText` blanks an inexact price. Recipe loads already left any converted price blank
   (`priceTextInLineUnit`). No server function converts a chemical price: `save_job` converts cost
   only, and `load_recipe_into_job` copies a recipe's price as stored and is no longer called.
+- A chemical line with a quantity of 0 and a blank price now saves (as $0) instead of being refused,
+  the same way a customer-supplied line does: it bills nothing, and the `job_chemicals` price
+  trigger from #1060 skips quantity 0 too (Mason's choice, 2026-10-23).
 - Cost is still converted with rounding (it is not billed); unchanged here.
 - Proof: unit tests in `chemCalculator.test.ts` and `cropProgramHelpers.test.ts`; a local
   click-through against a fake database showed a $1.50/GAL product's oz line with a blank price

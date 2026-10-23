@@ -300,12 +300,16 @@ describe('chemCalculator — autofillPriceText', () => {
     expect(oz.unit).toBe('oz');
     expect(oz.priceIsExact).toBe(false);
     expect(autofillPriceText(150, oz)).toBe('');
-    // 2850 / 8 = 356.25¢/pt rounds UP (an over-bill): blanked too.
+    // 2850 / 8 = 356.25¢/pt would round to 356¢ (an under-bill): blanked too.
     const pt = reconcileChemAutofillUnits('GAL', 'pt/ac', 0, 2850, 'liquid');
     expect(pt.priceIsExact).toBe(false);
     expect(autofillPriceText(2850, pt)).toBe('');
     // Dry: 450¢/LB per oz is 28.125¢.
     expect(autofillPriceText(450, reconcileChemAutofillUnits('LB', 'oz/ac', 0, 450, 'dry'))).toBe('');
+    // The finest step (ton → oz, 1/32000): 1¢/ton is 0.00003¢/oz, never filled as $0.
+    const tonOz = reconcileChemAutofillUnits('ton', 'oz/ac', 0, 1, 'dry');
+    expect(tonOz.priceIsExact).toBe(false);
+    expect(autofillPriceText(1, tonOz)).toBe('');
   });
   it('keeps a price that converts to whole cents, a stated $0, and an unconverted price', () => {
     // 1280 / 128 = 10¢/oz exactly; 128 oz bills $12.80 = 1 GAL.

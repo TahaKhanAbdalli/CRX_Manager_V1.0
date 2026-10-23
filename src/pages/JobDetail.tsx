@@ -1656,9 +1656,10 @@ export default function JobDetail() {
       // that has already lost precision before any arithmetic runs. Refusing above 2^53
       // keeps every cents amount that reaches the total exactly representable.
       ] as const).find(([side, raw]) => {
-        // A customer-supplied line is never billed, so a blank price there (a picked product that
-        // states no price) saves as 0 instead of blocking the save.
-        if (side === 'price' && raw === '' && (c.customer_supplied ?? false)) return false;
+        // A customer-supplied line, or one with a quantity of 0, bills nothing, so a blank price
+        // there (a picked product that states no price) saves as 0 instead of blocking the save.
+        // The job_chemicals price trigger skips quantity 0 too.
+        if (side === 'price' && raw === '' && ((c.customer_supplied ?? false) || parseFloat(c.quantity) === 0)) return false;
         return !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0;
       });
       if (badCents) {
