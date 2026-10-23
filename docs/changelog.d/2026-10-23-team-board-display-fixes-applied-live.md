@@ -7,5 +7,5 @@
   the postflight md5 pins, with SECURITY DEFINER, owner, search_path and ACL unchanged, and both return their
   usual shape for an active admin. The full ledger is 1055 rows; the effective ordering high-water is
   `20261022086000`.
-- Row 979, a new live capture in `migration-history.md`, the `CURRENT_STATE.md` ledger header and
+- Row 979 in `migration-history.md` (the 17:46 UTC live capture from PR #1050 already covers this ledger), the `CURRENT_STATE.md` ledger header and
   `rpc-functions.md` now reflect live. No registry change: the migration changes two function bodies only.

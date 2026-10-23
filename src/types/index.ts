@@ -387,6 +387,26 @@ export interface LegacyVendorResolution {
   updated_at: string;
 }
 
+export type BrandSignalWord = EpaSignalWordCanonical;
+
+/** An acceptable real brand of a (usually generic) product, with its own EPA registration. */
+export interface ProductBrand {
+  id: string;
+  product_id: string;
+  brand_name: string;
+  epa_registration: string | null;
+  manufacturer: string | null;
+  is_currently_sourced: boolean;
+  /** null = restricted-use status not yet confirmed. */
+  is_rup: boolean | null;
+  signal_word: BrandSignalWord | null;
+  row_version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProductSupplierLink {
   id: string;
   product_id: string;

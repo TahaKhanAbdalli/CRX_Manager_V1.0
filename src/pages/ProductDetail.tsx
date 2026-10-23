@@ -9,13 +9,14 @@ import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
 import ProductPriceHistory from '../components/products/ProductPriceHistory';
+import ProductBrandsSection from '../components/products/ProductBrandsSection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { sanitizeError, assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../lib/db';
 import { localToday } from '../lib/dateUtils';
-import { waitForEpaRequestSlot } from '../lib/epaRequestThrottle';
+import { lookupEpaRegistration } from '../lib/epaLookupClient';
 import { Sentry } from '../lib/sentry';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -170,66 +171,6 @@ function namesClearlyDiffer(productName: string | null | undefined, epaName: str
   const currentTokens = new Set(current.split(' ').filter((token) => token.length >= 3));
   const epaTokens = epa.split(' ').filter((token) => token.length >= 3);
   return !epaTokens.some((token) => currentTokens.has(token));
-}
-
-function isEpaLookupResult(value: unknown): value is EpaLookupResult {
-  if (!value || typeof value !== 'object') return false;
-  const result = value as Partial<EpaLookupResult>;
-  const nullableString = (field: unknown) => field === null || typeof field === 'string';
-  const canonicalSignalWord = result.signalWordCanonical === null
-    || result.signalWordCanonical === 'Danger'
-    || result.signalWordCanonical === 'Warning'
-    || result.signalWordCanonical === 'Caution';
-  const activeIngredientsValid = Array.isArray(result.activeIngredients)
-    && result.activeIngredients.every((ingredient) => (
-      ingredient
-      && typeof ingredient === 'object'
-      && typeof ingredient.name === 'string'
-      && (ingredient.percent === null
-        || (typeof ingredient.percent === 'number' && Number.isFinite(ingredient.percent)))
-      && nullableString(ingredient.pcCode)
-      && nullableString(ingredient.casNumber)
-    ));
-  const labelPdfsValid = Array.isArray(result.labelPdfs)
-    && result.labelPdfs.every((pdf) => (
-      pdf
-      && typeof pdf === 'object'
-      && typeof pdf.fileName === 'string'
-      && nullableString(pdf.acceptedDate)
-      && typeof pdf.url === 'string'
-    ));
-  return typeof result.found === 'boolean'
-    && (result.regType === 'section3' || result.regType === 'distributor')
-    && nullableString(result.eparegno)
-    && nullableString(result.productname)
-    && canonicalSignalWord
-    && typeof result.needsManual === 'boolean'
-    && nullableString(result.manufacturer)
-    && (result.rupYn === null || result.rupYn === 'Yes' || result.rupYn === 'No')
-    && nullableString(result.productStatus)
-    && typeof result.isCancelled === 'boolean'
-    && nullableString(result.latestLabelPdfUrl)
-    && activeIngredientsValid
-    && labelPdfsValid;
-}
-
-async function epaFunctionErrorMessage(error: unknown): Promise<string> {
-  if (error && typeof error === 'object' && 'context' in error) {
-    const context = (error as { context?: unknown }).context;
-    if (typeof Response !== 'undefined' && context instanceof Response) {
-      try {
-        const payload = await context.clone().json() as { error?: unknown };
-        if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
-      } catch {
-        // Fall through to the SDK error message when the response is not JSON.
-      }
-    }
-  }
-  if (error && typeof error === 'object' && 'message' in error
-      && typeof (error as { message?: unknown }).message === 'string') {
-    return (error as { message: string }).message;
-  }
-  return 'EPA lookup failed. Please try again.';
 }
 
 export default function ProductDetail() {
@@ -837,19 +778,8 @@ export default function ProductDetail() {
     setEpaLookupResult(null);
     setEpaLookupRegNumber('');
     try {
-      const slotReady = await waitForEpaRequestSlot(() => false);
-      if (!slotReady) return;
-      const { data, error } = await supabase.functions.invoke<EpaLookupResult>('epa-lookup', {
-        body: { regNumber },
-      });
-      if (error) throw new Error(await epaFunctionErrorMessage(error));
-      if (data && typeof data === 'object' && 'error' in data
-          && typeof (data as { error?: unknown }).error === 'string') {
-        throw new Error((data as { error: string }).error);
-      }
-      if (!isEpaLookupResult(data)) {
-        throw new Error('EPA lookup returned an invalid response. Please try again.');
-      }
+      const data = await lookupEpaRegistration(regNumber);
+      if (!data) return;
 
       setEpaLookupResult(data);
       setEpaLookupRegNumber(regNumber);
@@ -1450,6 +1380,18 @@ export default function ProductDetail() {
               />
             </div>
           </Card>
+
+          {!isNew && id && persistedProduct?.id === id && (
+            <ProductBrandsSection
+              // Shown only once this page's own product has loaded, and remounted for each product, so one
+              // product's name, brands, open form or copy picker never reach (or get saved onto) the next.
+              key={id}
+              productId={id}
+              productName={persistedProduct.product_name}
+              isAdmin={isAdmin}
+              userId={profile?.id ?? null}
+            />
+          )}
 
           {isAdmin && (
             <Card>
