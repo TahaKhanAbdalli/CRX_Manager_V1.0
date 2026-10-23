@@ -3356,6 +3356,7 @@ try {
       "+A line saying *** Add File: .codex/hooks/production-action-guard.mjs is only prose when it follows a plus sign.",
     ),
     "CRLF line endings": addProbe.replaceAll("\n", "\r\n"),
+    "dotted names": nativePatch("*** Add File: src/.hidden.config.ts", "+a", "*** Update File: docs/a.b.md", "@@", "-a", "+b"),
   };
   for (const [label, patch] of Object.entries(ordinaryNativePatches)) {
     for (const field of ["command", "cmd"]) {
@@ -3455,6 +3456,15 @@ try {
     "unknown header": "*** Begin Patch\n*** Rename File: src/a.ts\n*** End Patch\n",
     "header with no path": "*** Begin Patch\n*** Add File: \n+a\n*** End Patch\n",
     "NUL byte": addProbe.replace("probe", "pro\0be"),
+    // Windows spellings of a file the path matchers may not recognise as protected.
+    "trailing-dot guard alias": nativePatch("*** Update File: .codex/hooks/production-action-guard.mjs.", "@@", "-a", "+b"),
+    "trailing-dot proof alias": nativePatch("*** Update File: .claude/session-state/claude-review-push.json.", "@@", "-a", "+b"),
+    "trailing-space segment": nativePatch("*** Update File: .codex /hooks/production-action-guard.mjs", "@@", "-a", "+b"),
+    "alternate data stream": nativePatch("*** Update File: .codex/hooks/production-action-guard.mjs::$DATA", "@@", "-a", "+b"),
+    "8.3 short name": nativePatch("*** Update File: .codex/hooks/PRODUC~1.MJS", "@@", "-a", "+b"),
+    "wildcard in path": nativePatch("*** Update File: .codex/hooks/production-action-*.mjs", "@@", "-a", "+b"),
+    "stray colon": nativePatch("*** Add File: src/a:b.ts", "+a"),
+    "bad Move to target": nativePatch("*** Update File: src/a.ts", "*** Move to: .claude/session-state/claude-review-push.json.", "@@", "-a", "+b"),
     "empty text": "",
   };
   for (const [label, patch] of Object.entries(malformedNativePatches)) {

@@ -1462,6 +1462,24 @@ const NATIVE_PATCH_OTHER_PAYLOAD_FIELDS = ["patch", "diff", "input", "changes"];
 const NATIVE_PATCH_FILE_HEADER_RE = /^\*\*\* (Add|Update|Delete) File: (.+)$/;
 const NATIVE_PATCH_MOVE_RE = /^\*\*\* Move to: (.+)$/;
 
+// Spellings that name a DIFFERENT file than the path matchers compare on Windows
+// (where the patch is applied): a segment ending in `.` or a space, an NTFS
+// alternate data stream (`name::$DATA`), an 8.3 short name (`PRODUC~1.MJS`), and
+// wildcard or control characters. The shared path matchers resolve some of
+// these but not all, and this route used to refuse every patch, so a path that
+// is not plain is refused here rather than judged by a matcher that may not
+// know the alias. Returns the reason, or "" for a plain path.
+function nativePatchPathProblem(filePath) {
+  if (/[\x00-\x1f*?"<>|]/.test(filePath)) return "a path with a wildcard or control character";
+  if (filePath.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return "a path with a stream or drive separator (`:`)";
+  for (const segment of filePath.split(/[\\/]/)) {
+    if (segment === "." || segment === "..") continue;
+    if (/[. ]$/.test(segment)) return "a path segment ending in a dot or space";
+    if (/~\d/.test(segment)) return "a path with an 8.3 short-name alias (`~1`)";
+  }
+  return "";
+}
+
 // Parses a whole native patch. `{ ok: true, paths }` lists every file path the
 // patch touches; `{ ok: false, reason }` names the first line the grammar
 // rejects. Strict on purpose: a refusal costs one retry, a mis-parse could hide
@@ -1490,6 +1508,8 @@ export function parseNativePatch(text) {
       if (unfinished) return unfinished;
       const filePath = header[2].trim();
       if (!filePath) return { ok: false, reason: `line ${i + 1}: a file header has no path` };
+      const odd = nativePatchPathProblem(filePath);
+      if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
       paths.push(filePath);
       kind = header[1];
       bodyLines = 0;
@@ -1501,6 +1521,8 @@ export function parseNativePatch(text) {
       if (!sawMoveWindow) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` is only valid straight after an Update File header` };
       const target = move[1].trim();
       if (!target) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` has no path` };
+      const odd = nativePatchPathProblem(target);
+      if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
       paths.push(target);
       sawMoveWindow = false;
       continue;

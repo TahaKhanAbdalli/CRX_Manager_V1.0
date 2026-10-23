@@ -178,7 +178,7 @@
 > text, no second payload field (`patch`/`diff`/`input`/`changes`) is present, and the WHOLE text parses under the patch grammar
 > (`parseNativePatch`: Begin line, Add/Update/Delete sections with correctly prefixed lines, `Move to` only straight after an Update
 > header, End line, nothing after it). Every path the patch touches — add, update, delete and both ends of a move — is then held to
-> the same protected-harness and review-proof checks as any other file write, resolved from the event `cwd` and a nested `workdir`.
+> the same protected-harness and review-proof checks as any other file write, resolved from the event `cwd` and a nested `workdir`. A path with a Windows alias spelling (a segment ending in a dot or space, `::$DATA`, an 8.3 `~1` short name, wildcards, a stray `:`) is refused on this route instead of being judged by the shared matchers, which do not know every alias (the older bare-string route still has that gap).
 > A malformed, trailing-text, ambiguous or conflicting `apply_patch` envelope is denied, and any other tool (`Bash`, `PowerShell`,
 > `Edit`, `mcp__…__apply_patch`) that carries patch-looking text stays under shell inspection. The bare-string and `patch`-field shapes
 > are unchanged. **Still open (not repaired here):** a read-only `rg`/`Select-String` of a PROTECTED file whose quoted pattern holds a
