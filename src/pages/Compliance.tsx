@@ -13,6 +13,7 @@ import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -64,6 +65,9 @@ export default function Compliance() {
 
   // RUP Products
   const [rupProducts, setRUPProducts] = useState<RUPProduct[]>([]);
+  // The last RUP products load failed: show "could not be loaded", never "No RUP products" (To-Do 10.5).
+  const [rupProductsFailed, setRupProductsFailed] = useState(false);
+  const rupProductsLoadSeq = useRef(0);
 
   // RUP Sales Register
   const [rupSales, setRUPSales] = useState<RUPSalesRecord[]>([]);
@@ -170,18 +174,24 @@ export default function Compliance() {
   }, [toast]);
 
   const fetchRUPProducts = useCallback(async () => {
+    const seq = ++rupProductsLoadSeq.current;
     const { data, error } = await supabase
       .from('products')
       .select('id, product_name, sku, vendor, manufacturer, epa_registration, signal_word, is_active')
       .eq('is_rup', true)
       .order('product_name');
+    if (seq !== rupProductsLoadSeq.current) return;
 
-    if (error) {
+    // No list is not "No RUP products": treat it as a failed read.
+    if (error || !Array.isArray(data)) {
       toast('error', 'Failed to load RUP products');
-      Sentry.captureException(error);
+      Sentry.captureException(error ?? new Error('RUP products read returned no list'));
+      setRUPProducts([]);
+      setRupProductsFailed(true);
       return;
     }
     setRUPProducts((data || []) as RUPProduct[]);
+    setRupProductsFailed(false);
   }, [toast]);
 
   const fetchRUPSales = useCallback(async () => {
@@ -594,7 +604,7 @@ export default function Compliance() {
       {/* A failed load shows no counts or list: "0 expired" would look like good news. */}
       {tab === 'licenses' && licensesFailed && (
         <Card>
-          <p role="alert" className="text-center text-red-600 py-8 text-sm">Licenses could not be loaded. Reload to try again.</p>
+          <LoadFailedState title="Licenses could not be loaded" onRetry={() => void fetchData()} />
         </Card>
       )}
       {tab === 'licenses' && !licensesFailed && (
@@ -700,6 +710,8 @@ export default function Compliance() {
               columns={rupColumns}
               data={rupProducts}
               loading={loading}
+              loadError={rupProductsFailed}
+              onRetry={() => void fetchRUPProducts()}
               searchable
               searchPlaceholder="Search RUP products..."
               searchKeys={['product_name', 'sku', 'manufacturer', 'epa_registration']}
@@ -787,7 +799,7 @@ export default function Compliance() {
 
           {rupFailed && (
             <Card>
-              <p role="alert" className="text-center text-red-600 py-8 text-sm">The RUP sales register could not be loaded. Press Refresh to try again.</p>
+              <LoadFailedState title="The RUP sales register could not be loaded" onRetry={() => void fetchRUPSales()} />
             </Card>
           )}
 
@@ -843,7 +855,7 @@ export default function Compliance() {
       {/* A failed load shows no counts or list: "0 acres" or "No fields found" would be wrong. */}
       {tab === 'field_listing' && fieldsFailed && (
         <Card>
-          <p role="alert" className="text-center text-red-600 py-8 text-sm">Fields could not be loaded. Reload to try again.</p>
+          <LoadFailedState title="Fields could not be loaded" onRetry={() => void fetchData()} />
         </Card>
       )}
       {tab === 'field_listing' && !fieldsFailed && (

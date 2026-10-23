@@ -242,7 +242,8 @@ describe('BrandVsGeneric — ingredient-map management', () => {
     H.state.failProductReads = true;
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add Mapping' }));
 
-    expect(await screen.findByText(/Products and mappings could not be loaded/)).toBeInTheDocument();
+    expect(await screen.findByText('This list could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText('No mappings yet')).not.toBeInTheDocument();
     expect(screen.queryAllByLabelText('Edit mapping for Roundup PowerMAX')).toHaveLength(0);
     expect(screen.queryByRole('option', { name: 'Roundup PowerMAX' })).not.toBeInTheDocument();
     const addButtons = screen.getAllByRole('button', { name: 'Add Mapping' });

@@ -5,6 +5,8 @@ import { render, screen } from '@testing-library/react';
 let failTable: string | null = null;
 // An RPC that answers with no data and no error (a silent permission denial).
 let nullRpc: string | null = null;
+// A table read that answers with no list and no error.
+let nullTable: string | null = null;
 
 function query(table: string) {
   const builder: Record<string, unknown> = {};
@@ -15,7 +17,9 @@ function query(table: string) {
   builder.then = vi.fn((resolve: (value: unknown) => unknown) =>
     Promise.resolve(table === failTable
       ? { data: null, error: { message: `${table} unavailable` } }
-      : { data: [], error: null }).then(resolve));
+      : table === nullTable
+        ? { data: null, error: null }
+        : { data: [], error: null }).then(resolve));
   return builder;
 }
 
@@ -65,6 +69,32 @@ describe('OfficeCockpit "All clear!" banner', () => {
     // Wait until the load has finished (this tile renders only after a successful delivery check).
     await screen.findByText('No completed deliveries need invoicing.', {}, { timeout: 5000 });
     expect(screen.queryByText('All clear!')).toBeNull();
+  });
+
+  it('a tile whose read failed says so instead of its all-clear line (To-Do 10.5)', async () => {
+    failTable = 'jobs';
+    nullRpc = null;
+    render(<OfficeCockpit />);
+    expect(await screen.findByText('Unbilled jobs could not be loaded', {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getByText('Upcoming jobs could not be loaded')).toBeTruthy();
+    expect(screen.getByText('Jobs needing dispatch could not be loaded')).toBeTruthy();
+    expect(screen.queryByText('No completed jobs without an invoice.')).toBeNull();
+    expect(screen.queryByText('No scheduled jobs in the next 7 days.')).toBeNull();
+    // Tiles whose reads loaded keep their all-clear line.
+    expect(screen.getByText('No overdue field-app receivables.')).toBeTruthy();
+  });
+
+  it('stays hidden when a tile read returns no list and no error', async () => {
+    failTable = null;
+    nullRpc = null;
+    nullTable = 'applicator_licenses';
+    try {
+      render(<OfficeCockpit />);
+      expect(await screen.findByText('Expiring licenses could not be loaded', {}, { timeout: 5000 })).toBeTruthy();
+      expect(screen.queryByText('All clear!')).toBeNull();
+    } finally {
+      nullTable = null;
+    }
   });
 
   it.each(['operational_dashboard_summary', 'get_program_completion'])(

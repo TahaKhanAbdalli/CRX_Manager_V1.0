@@ -107,6 +107,11 @@ export default function Products() {
   const loadSeqRef = useRef(0);
   const fetchProducts = useCallback(async (reportError = true): Promise<boolean> => {
     const seq = ++loadSeqRef.current;
+    // A failed load hides the rows, so an open Deactivate dialog for a hidden selection closes too.
+    const failLoad = () => {
+      setLoadError(true);
+      setDeactivateModalOpen(false);
+    };
     // Paginate so the master catalog never silently truncates as the catalog grows.
     // PostgREST caps a single response (default 1000), so we page through with .range().
     const PAGE_SIZE = 1000;
@@ -123,7 +128,7 @@ export default function Products() {
         Sentry.captureException(error);
         // A silent reload's caller keeps the rows on screen and explains the failure itself.
         if (reportError) toast('error', 'Failed to load products. Please try again.');
-        if (reportError) setLoadError(true);
+        if (reportError) failLoad();
         setLoading(false);
         return false;
       }
@@ -139,7 +144,7 @@ export default function Products() {
       Sentry.captureException(costError);
       if (seq !== loadSeqRef.current) return false;
       if (reportError) toast('error', 'Failed to load products. Please try again.');
-      if (reportError) setLoadError(true);
+      if (reportError) failLoad();
       setLoading(false);
       return false;
     }
@@ -341,6 +346,8 @@ export default function Products() {
   };
 
   const handleDeactivate = async () => {
+    // The selection is hidden behind a failed load, so it cannot be confirmed.
+    if (loadError) return;
     const ids = selectedRows.map((p) => p.id);
 
     // H22: Block deactivation if any selected product has open PO lines

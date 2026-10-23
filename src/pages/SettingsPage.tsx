@@ -217,11 +217,21 @@ export default function SettingsPage() {
   const [usersLoadError, setUsersLoadError] = useState(false);
   // Only the newest users read may change the list or its error state (Try again can overlap a slower read).
   const usersLoadSeqRef = useRef(0);
+  // The settings read failed: the forms would show blank defaults, and saving them would overwrite the
+  // real values, so they are replaced by the failed state and every save is refused (To-Do 10.5).
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
+  // True once a settings read has succeeded: until then the forms hold defaults, not saved values.
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const settingsLoadSeqRef = useRef(0);
 
   const fetchSettings = async () => {
+    const seq = ++settingsLoadSeqRef.current;
     const { data, error } = await supabase.from('app_settings').select('*');
-    if (error) {
+    if (seq !== settingsLoadSeqRef.current) return;
+    // No list is not a load: the forms would show defaults that a save writes over the real values.
+    if (error || !Array.isArray(data)) {
       toast('error', 'Failed to load settings');
+      setSettingsLoadError(true);
       return;
     }
     const settings = (data || []) as AppSetting[];
@@ -246,6 +256,8 @@ export default function SettingsPage() {
     setPreNoticeTemplate(parsePreNotificationTemplate(map['pre_application_notice_template']));
     // #41: blank/absent => the seeded default post-notification wording.
     setPostNoticeTemplate(parsePostNotificationTemplate(map['post_application_notice_template']));
+    setSettingsLoadError(false);
+    setSettingsLoaded(true);
   };
 
   const fetchUsers = async () => {
@@ -280,6 +292,7 @@ export default function SettingsPage() {
   }, [role, navigate]);
 
   const saveSetting = async (key: string, value: string) => {
+    if (settingsLoadError || !settingsLoaded) throw new Error('Settings did not load. Press Try again before saving.');
     const result = await supabase
       .from('app_settings')
       .upsert(
@@ -734,6 +747,14 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <SplitHeading title="App" accent="Settings" />
 
+      {settingsLoadError ? (
+        <Card>
+          <LoadFailedState
+            title="Settings could not be loaded"
+            onRetry={() => void fetchSettings()}
+          />
+        </Card>
+      ) : !settingsLoaded ? null : (
       <Card>
         <CardHeader
           title="Company"
@@ -756,6 +777,7 @@ export default function SettingsPage() {
           <Input label="Address" value={companyAddress} onChange={(e) => setCompanyAddress(e.target.value)} />
         </div>
       </Card>
+      )}
 
       <Card>
         <CardHeader
@@ -839,6 +861,8 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {!settingsLoadError && settingsLoaded && (
+      <>
       <Card>
         <CardHeader
           title="Default"
@@ -1286,6 +1310,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+      </>
+      )}
 
       <Modal open={userModalOpen} onClose={() => setUserModalOpen(false)} title="Add" accent="User">
         <div className="space-y-4">
