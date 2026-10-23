@@ -122,6 +122,8 @@ const DRY_PRODUCT = {
   // $1.50 / lb — the exact live shape that bills 16× when the quantity counts ounces.
   cost_cents: 150,
   tier1_price_cents: 150,
+  // The real column (dollars): a stated price, so a $0 line on it is not the unpriced-$0 defect.
+  tier1_price: 1.5,
   is_active: true,
   max_label_rate: null,
   max_label_rate_unit: null,
