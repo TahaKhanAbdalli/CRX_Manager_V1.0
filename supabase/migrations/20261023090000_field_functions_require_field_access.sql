@@ -18,7 +18,15 @@
 --     check_customer_credit_limit        any customer's credit limit and outstanding balance
 --     get_dashboard_action_items         company-wide overdue invoices, deliveries, jobs, stock, quotes
 --     global_search                      customer names and contacts, order/invoice/delivery numbers
---     get_notes_for_entity               every team note on any record, by id
+--     get_notes_for_entity               every team note on any record, by id (through this function;
+--                                        team_notes' own policy still admits every active profile,
+--                                        and the Team Board reads it directly: not changed here)
+--   Found by the part A review, same class and no caller in the app or the database (live read
+--   2026-10-23), so made office-only here too:
+--     _check_credit_limit                its error text names a customer's credit limit and AR
+--                                        balance, and the caller picks the added amount
+--     get_customer_delivery_remainders   every customer's undelivered remainders, orders, products
+--     check_duplicate_delivery           an order's open delivery numbers and dates
 --
 -- HOW:
 --   * New helper public._can_see_field(field_id): true for an active admin or sales rep; for the
@@ -33,7 +41,7 @@
 --   * get_fields_with_geojson, get_field_polygons, get_field_dashboard,
 --     derive_customer_shares_from_fields, get_customer_farm_group, both
 --     get_field_billing_splits_for_*, get_customer_summary, check_customer_credit_limit and
---     get_dashboard_action_items start with require_admin_or_sales_rep() (active admin or sales rep,
+--     get_dashboard_action_items, and the three above, start with require_admin_or_sales_rep() (active admin or sales rep,
 --     else 'Permission denied: requires admin or sales_rep role'). The three SQL-language ones become
 --     plpgsql so the gate runs before the query; #variable_conflict use_column keeps their
 --     unqualified column names meaning the columns, as they did in SQL. Every screen that calls them
@@ -47,15 +55,20 @@
 --     linked record under that record's own table row security (customers, orders, deliveries, jobs,
 --     purchase_orders, quotes, invoices, products); an unknown type is office-only. team_notes' own
 --     policy (active profile) now applies too. Job Detail and Delivery Detail keep showing notes to
---     the applicator or driver who can open that job or delivery.
+--     the applicator or driver who can open that job or delivery. One narrowing for office staff:
+--     a sales rep no longer gets notes on an invoice invoices_select hides from them (another rep's);
+--     no screen shows invoice notes (RelatedNotes is mounted only on customer, order, delivery, job
+--     and purchase-order pages).
 --   * operational_dashboard_summary is re-emitted byte-for-byte as live has it. Live refuses anyone
---     but an active admin or sales rep, but its newest migration file (20260323100000) has no such
---     check, so a rebuild from the files would lose it. No behavior change.
+--     but an active admin or sales rep; the 2026-07-27 baseline carries that check, but its newest
+--     pre-baseline migration file (20260323100000) has none, so this puts the live body back in the
+--     migration files. No behavior change.
 --
 -- SOURCE OF THE BODIES: live, as pinned below (each pinned md5 also matches the body a replay of the
 --   checked-in baseline and migrations produces). Only the gate lines above were added.
 --
--- NOT CHANGED: what an active admin or sales rep gets from any of these; return types, owner
+-- NOT CHANGED: what an active admin or sales rep gets from any of these (except the invoice-notes
+--   narrowing above); return types, owner
 --   (postgres), ACLs, search_path; no rows change. CREATE OR REPLACE keeps each OID.
 --   Tables are part B (fields_select and its followers, job_fields dispatchee rows, fbd/arf, the
 --   field rows of get_job_fields_with_geojson, get_dispatch_board_jobs and the billed-customer
@@ -67,7 +80,7 @@ CREATE TEMP TABLE field_functions_require_field_access_tx ON COMMIT DROP AS
 SELECT pg_current_xact_id()::text AS transaction_id;
 
 CREATE TEMP TABLE field_functions_require_field_access_attrs ON COMMIT DROP AS
-SELECT p.oid::regprocedure::text AS sig, pg_get_userbyid(p.proowner) AS owner, p.proacl::text AS acl,
+SELECT p.oid AS fn_oid, pg_get_userbyid(p.proowner) AS owner, p.proacl::text AS acl,
        p.proconfig, p.prorettype, p.provolatile
   FROM pg_proc p
  WHERE false;
@@ -106,6 +119,9 @@ BEGIN
       ('public.get_customer_summary(uuid)',                        '0c62f7918b943433e972dd7885a64249'),
       ('public.check_customer_credit_limit(uuid)',                 '3adc17f7fa1612df87264a4702d72858'),
       ('public.get_dashboard_action_items(integer)',               '7098f5204a98631d48b0018559af19f7'),
+      ('public._check_credit_limit(uuid,bigint)',                  'a2dabc88b5b048aac831663c483df8bb'),
+      ('public.get_customer_delivery_remainders(uuid)',            '5114589c721170e7e3496309a664af51'),
+      ('public.check_duplicate_delivery(uuid)',                    '475c6d2c251ef31637a2f5df3e8c02a2'),
       ('public.global_search(text,integer)',                       '8b52e155e2d36ac7e83001c02e943822'),
       ('public.get_notes_for_entity(text,uuid)',                   '53ff9cf1f416bb8eac2875ccda300a70'),
       ('public.operational_dashboard_summary()',                   '77655108c73c1a98d826a21d55d7739d')
@@ -122,7 +138,7 @@ BEGIN
       RAISE EXCEPTION 'FIELD_ACCESS_BASELINE_DRIFT: % is %', v_pin.sig, v_md5;
     END IF;
     INSERT INTO pg_temp.field_functions_require_field_access_attrs
-    SELECT p.oid::regprocedure::text, pg_get_userbyid(p.proowner), p.proacl::text, p.proconfig, p.prorettype, p.provolatile
+    SELECT p.oid, pg_get_userbyid(p.proowner), p.proacl::text, p.proconfig, p.prorettype, p.provolatile
       FROM pg_proc p WHERE p.oid = to_regprocedure(v_pin.sig);
   END LOOP;
 END;
@@ -907,6 +923,103 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION public._check_credit_limit(p_customer_id uuid, p_additional_cents bigint DEFAULT 0)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_customer    record;
+  v_ar_balance  bigint;
+BEGIN
+  -- Office staff only (active admin or sales rep); every other account is refused (row 11.4).
+  PERFORM public.require_admin_or_sales_rep();
+  SELECT credit_limit_cents, farm_name INTO v_customer FROM customers WHERE id = p_customer_id;
+  IF COALESCE(v_customer.credit_limit_cents, 0) = 0 THEN RETURN; END IF;
+
+  SELECT COALESCE(SUM(balance_cents), 0) INTO v_ar_balance
+  FROM invoices WHERE customer_id = p_customer_id AND status IN ('draft', 'posted', 'overdue');
+
+  v_ar_balance := v_ar_balance + p_additional_cents;
+
+  IF v_ar_balance >= v_customer.credit_limit_cents THEN
+    RAISE EXCEPTION 'Credit limit exceeded for customer "%": limit $%, current AR balance $%',
+      v_customer.farm_name, (v_customer.credit_limit_cents / 100.0)::numeric(12,2), (v_ar_balance / 100.0)::numeric(12,2);
+  END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.get_customer_delivery_remainders(p_customer_id uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_result jsonb;
+BEGIN
+  -- Office staff only (active admin or sales rep); every other account is refused (row 11.4).
+  PERFORM public.require_admin_or_sales_rep();
+  SELECT COALESCE(jsonb_agg(row_to_json(r)), '[]'::jsonb) INTO v_result
+  FROM (
+    SELECT
+      dr.id,
+      dr.original_delivery_id,
+      dr.order_id,
+      dr.order_item_id,
+      dr.customer_id,
+      dr.product_id,
+      dr.quantity_remaining,
+      dr.unit_size,
+      dr.status,
+      dr.followup_delivery_id,
+      dr.notes,
+      dr.created_at,
+      c.farm_name AS customer_name,
+      p.product_name,
+      d.delivery_number AS original_delivery_number,
+      d.scheduled_date AS original_delivery_date,
+      o.order_number
+    FROM delivery_remainders dr
+    JOIN customers c ON c.id = dr.customer_id
+    JOIN products p ON p.id = dr.product_id
+    JOIN deliveries d ON d.id = dr.original_delivery_id
+    JOIN orders o ON o.id = dr.order_id
+    WHERE (p_customer_id IS NULL OR dr.customer_id = p_customer_id)
+    ORDER BY dr.created_at DESC
+  ) r;
+
+  RETURN v_result;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.check_duplicate_delivery(p_order_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_result jsonb;
+BEGIN
+  -- Office staff only (active admin or sales rep); every other account is refused (row 11.4).
+  PERFORM public.require_admin_or_sales_rep();
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'delivery_id', d.id,
+    'delivery_number', d.delivery_number,
+    'status', d.status,
+    'scheduled_date', d.scheduled_date
+  )), '[]'::jsonb)
+  INTO v_result
+  FROM deliveries d
+  WHERE d.order_id = p_order_id
+    AND d.status IN ('scheduled', 'in_progress');
+
+  RETURN v_result;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.global_search(p_query text, p_limit integer DEFAULT 5)
  RETURNS TABLE(entity_type text, id uuid, primary_text text, secondary_text text)
  LANGUAGE plpgsql
@@ -1412,12 +1525,17 @@ BEGIN
       ('public.get_customer_summary(uuid)',                        'bf700aa02e7df78c79f02a0dc425e583'),
       ('public.check_customer_credit_limit(uuid)',                 'fb3f50390b8354225714fe169aa579e2'),
       ('public.get_dashboard_action_items(integer)',               '7f919a8d0189478cbe1e023a6c7a7e5a'),
+      ('public._check_credit_limit(uuid,bigint)',                  'ad51c24c9ffb4f0bb8f405520415a121'),
+      ('public.get_customer_delivery_remainders(uuid)',            'bebc8009b2afb99f9dc1160af415d0a7'),
+      ('public.check_duplicate_delivery(uuid)',                    'c3ddc5cd4118281a5240390e2e7bb11d'),
       ('public.global_search(text,integer)',                       '521ab818601d81960eb96ddadd8e0922'),
       ('public.get_notes_for_entity(text,uuid)',                   '3aff5d6775914808e15bccac72e92ec1'),
       ('public.operational_dashboard_summary()',                   '77655108c73c1a98d826a21d55d7739d')
       ) AS t(sig, new_md5)
       LEFT JOIN pg_proc p ON p.oid = to_regprocedure(t.sig)
-      LEFT JOIN pg_temp.field_functions_require_field_access_attrs a ON a.sig = replace(t.sig, 'public.', '')
+      -- CREATE OR REPLACE keeps each OID, so the preflight snapshot is matched by OID (not by the
+      -- printed signature, which depends on the session search_path).
+      LEFT JOIN pg_temp.field_functions_require_field_access_attrs a ON a.fn_oid = p.oid
   LOOP
     IF v_fn.body_md5 IS DISTINCT FROM v_fn.new_md5
        OR v_fn.was_owner IS NULL
@@ -1431,7 +1549,7 @@ BEGIN
       RAISE EXCEPTION 'POSTFLIGHT_FAIL: % is not the expected body/attributes (md5 %)', v_fn.sig, v_fn.body_md5;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_temp.field_functions_require_field_access_attrs) <> 15 THEN
+  IF (SELECT count(*) FROM pg_temp.field_functions_require_field_access_attrs) <> 18 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAIL: not every pinned function was snapshotted';
   END IF;
   IF NOT EXISTS (

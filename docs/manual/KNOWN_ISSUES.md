@@ -93,7 +93,9 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 **Status 2026-10-23: part A written, NOT applied.** `20261023090000_field_functions_require_field_access.sql`
 adds `_can_see_field`, filters `get_fields_geojson_by_ids` and `get_field_geojson` by it, makes the other
-field and money functions in findings 1 and 2 office-only, makes `global_search` return nothing to field roles,
+field and money functions in findings 1 and 2 office-only (plus three more unchecked ones its review found, none
+with a caller: `_check_credit_limit`, `get_customer_delivery_remainders`, `check_duplicate_delivery`), makes
+`global_search` return nothing to field roles,
 turns `get_notes_for_entity` into a SECURITY INVOKER function that returns notes only for a record the caller
 can read, and re-emits `operational_dashboard_summary` with its live check. Proof in a disposable database:
 `scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs` (before: every field role, an inactive
@@ -102,7 +104,10 @@ note; after: each applicator sees only the fields assigned to them, everyone els
 Findings 1 and 2 stay open until it is applied live and re-checked read-only; findings 3–5 wait on parts B and C.
 One thing part A does not change: `team_notes` itself (`tnotes_select`) admits every active profile, and the Team
 Board shows field roles every note, so the notes gate closes the unchecked function, not field roles' view of
-notes on the Team Board (Mason's call whether to narrow that).
+notes on the Team Board (Mason's call whether to narrow that). Until part B narrows `job_fields`, an applicator
+sent to one field of a split job still sees the job's other field rows, so Job Detail's weather capture (which
+reads the first field's centroid through `get_field_geojson`) is blank for them when that first field is not
+theirs (0 split assignments live, 2026-10-22); part B fixes it by hiding the other rows.
 
 A read-only audit of row 11.4 ("an applicator sees only the fields for their assigned jobs, by every route, and loses
 access when the assignment ends") read the live policies, functions, grants, storage rules and views on 2026-10-22

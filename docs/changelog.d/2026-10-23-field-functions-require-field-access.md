@@ -7,7 +7,7 @@ Part A of the row 11.4 fix plan in `docs/manual/KNOWN_ISSUES.md`. One new migrat
 
 ### What was wrong
 
-Fifteen `SECURITY DEFINER` functions (they run with the owner's rights, so row security never applies
+Eighteen `SECURITY DEFINER` functions (they run with the owner's rights, so row security never applies
 inside them) checked nothing, so any signed-in account (applicators, drivers, an `entity_recipient`
 profile, a deactivated user with a live token) could read every customer's fields, boundaries and
 owner names, field billing splits with price overrides, accounts-receivable balances, credit limits,
@@ -24,7 +24,9 @@ the company-wide overdue-invoice list, global search results and every team note
 * Office-only (`require_admin_or_sales_rep()`): `get_fields_with_geojson`, `get_field_polygons`,
   `get_field_dashboard`, `derive_customer_shares_from_fields`, `get_customer_farm_group`, both
   `get_field_billing_splits_for_*`, `get_customer_summary`, `check_customer_credit_limit`,
-  `get_dashboard_action_items`. Every screen that calls them is office-only.
+  `get_dashboard_action_items`. Every screen that calls them is office-only. The review found three
+  more unchecked functions of the same kind with no caller anywhere (`_check_credit_limit`,
+  `get_customer_delivery_remainders`, `check_duplicate_delivery`); they are office-only too.
 * `global_search` returns nothing to anyone but office staff.
 * `get_notes_for_entity` runs as the caller and returns notes only for a record the caller can
   already read.

@@ -9,8 +9,9 @@
  * route (per-field dispatch, whole-job, ground crew), a driver, an entity_recipient profile and an
  * inactive applicator, nine fields and the dispatches that do and do not reach them, then, each call
  * made as that signed-in user (role authenticated, JWT claims) and rolled back:
- *   0. FIDELITY: the fifteen replayed bodies are the live ones the preflight pins;
- *   1. BEFORE: every field role, the entity_recipient and the inactive applicator read all nine
+ *   0. FIDELITY: the eighteen replayed bodies are the live ones the preflight pins;
+ *   1. BEFORE: every field role, the entity_recipient, the inactive applicator and a signed-in
+ *      caller with no profile read all nine
  *      fields, every office-only function, global search and every team note; the container chain
  *      smoke-field-functions-require-field-access.sql fails;
  *   2. AUTOCOMMIT: run statement by statement the file stops at its preflight, nothing changed;
@@ -187,6 +188,9 @@ const FNS = [
   ['get_customer_summary(uuid)', '0c62f7918b943433e972dd7885a64249'],
   ['check_customer_credit_limit(uuid)', '3adc17f7fa1612df87264a4702d72858'],
   ['get_dashboard_action_items(integer)', '7098f5204a98631d48b0018559af19f7'],
+  ['_check_credit_limit(uuid,bigint)', 'a2dabc88b5b048aac831663c483df8bb'],
+  ['get_customer_delivery_remainders(uuid)', '5114589c721170e7e3496309a664af51'],
+  ['check_duplicate_delivery(uuid)', '475c6d2c251ef31637a2f5df3e8c02a2'],
   ['global_search(text,integer)', '8b52e155e2d36ac7e83001c02e943822'],
   ['get_notes_for_entity(text,uuid)', '53ff9cf1f416bb8eac2875ccda300a70'],
   ['operational_dashboard_summary()', '77655108c73c1a98d826a21d55d7739d'],
@@ -200,6 +204,7 @@ const U = {
   DRIVER: id(6), ENTITY: id(7),
   IN_APP: id(8), // inactive applicator with an open dispatch
   APP_X: id(9), // active applicator assigned nothing
+  NO_PROFILE: id(99), // a signed-in JWT with no profile row
 };
 const C = { PARENT: id(101), CHILD: id(102), OTHER: id(103) };
 const F = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`F${n}`, id(200 + n)]));
@@ -322,6 +327,10 @@ const CALLS = {
   summary: `SELECT public.get_customer_summary('${C.PARENT}')->>'ar_balance_cents'`,
   credit: `SELECT public.check_customer_credit_limit('${C.PARENT}')->>'outstanding_ar'`,
   actions: 'SELECT md5(public.get_dashboard_action_items(10)::text)',
+  // The child farm has no credit limit, so the check returns (void) instead of raising.
+  creditCheck: `SELECT public._check_credit_limit('${C.CHILD}', 0)::text`,
+  remainders: 'SELECT jsonb_array_length(public.get_customer_delivery_remainders(NULL))',
+  dupDelivery: `SELECT jsonb_array_length(public.check_duplicate_delivery('${ORDER}'))`,
   opsSummary: "SELECT md5((public.operational_dashboard_summary() - 'generated_at')::text)",
   // Returns nothing to field roles.
   search: "SELECT count(*) FROM public.global_search('PROVER', 5)",
@@ -335,14 +344,14 @@ const CALLS = {
   noteOther: `SELECT count(*) FROM public.get_notes_for_entity('other', '${C.PARENT}')`,
 };
 const FIELD_CALLS = ['byIds', 'geo'];
-const OFFICE_CALLS = ['withGeo', 'polygons', 'dashboard', 'derive', 'farmGroup', 'splitsOrder', 'splitsTicket', 'summary', 'credit', 'actions'];
+const OFFICE_CALLS = ['withGeo', 'polygons', 'dashboard', 'derive', 'farmGroup', 'splitsOrder', 'splitsTicket', 'summary', 'credit', 'actions', 'creditCheck', 'remainders', 'dupDelivery'];
 const NOTE_CALLS = ['noteJ1', 'noteJ2', 'noteJ6', 'noteDel', 'noteCust', 'noteOrder', 'noteOther'];
 const OFFICE = ['ADMIN', 'REP'];
-const FIELD_ROLES = ['APP_A', 'APP_W', 'APP_C', 'DRIVER', 'ENTITY', 'IN_APP', 'APP_X'];
+const FIELD_ROLES = ['APP_A', 'APP_W', 'APP_C', 'DRIVER', 'ENTITY', 'IN_APP', 'APP_X', 'NO_PROFILE'];
 const ALL_FIELDS = 'F1,F2,F3,F4,F5,F6,F7,F8,F9';
 const OFFICE_REFUSAL = /Permission denied: requires admin or sales_rep role/;
 // After the candidate: the fields each field role may see.
-const SEES = { APP_A: 'F1,F8', APP_W: 'F3', APP_C: 'F5', DRIVER: '', ENTITY: '', IN_APP: '', APP_X: '' };
+const SEES = { APP_A: 'F1,F8', APP_W: 'F3', APP_C: 'F5', DRIVER: '', ENTITY: '', IN_APP: '', APP_X: '', NO_PROFILE: '' };
 // After the candidate: which notes each field role still reads (1) or no longer reads (0).
 const NOTES_AFTER = {
   //        J1   J2   J6   Del  Cust Order Other
@@ -355,6 +364,7 @@ const NOTES_AFTER = {
   ENTITY: [0,   0,   0,   0,   0,   0,   0],
   IN_APP: [0,   0,   0,   0,   0,   0,   0],
   APP_X:  [0,   0,   0,   0,   0,   0,   0],
+  NO_PROFILE: [0, 0,   0,   0,   0,   0,   0],
 };
 
 /** Everything office staff get; must be identical before and after. */
@@ -481,6 +491,8 @@ function main() {
     ['get_field_dashboard without the office gate', () => candidateFunction('CREATE OR REPLACE FUNCTION public.get_field_dashboard('), 'APP_A', 'dashboard', null,
       (b) => b.replace('  PERFORM public.require_admin_or_sales_rep();\n', '')],
     ['get_customer_farm_group without the office gate', () => candidateFunction('CREATE OR REPLACE FUNCTION public.get_customer_farm_group('), 'DRIVER', 'farmGroup', '[PROVER] Child Farm,[PROVER] Parent Farm',
+      (b) => b.replace('  PERFORM public.require_admin_or_sales_rep();\n', '')],
+    ['check_duplicate_delivery without the office gate', () => candidateFunction('CREATE OR REPLACE FUNCTION public.check_duplicate_delivery('), 'DRIVER', 'dupDelivery', '1',
       (b) => b.replace('  PERFORM public.require_admin_or_sales_rep();\n', '')],
     ['global_search without the office test', () => candidateFunction('CREATE OR REPLACE FUNCTION public.global_search('), 'DRIVER', 'search', null,
       (b) => b.replace('  IF NOT (public.is_admin() OR public.is_sales_rep()) THEN\n    RETURN;\n  END IF;\n', '')],
