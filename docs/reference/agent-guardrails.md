@@ -171,6 +171,21 @@
 > (`docs/reference/coderabbit-native-review.md`). (5) `.github/workflows/daily-landing-summary.yml` posts Mason a
 > read-only daily summary. See `docs/manual/DECISION_LOG.md`, 2026-09-26.
 >
+> **Native `apply_patch` carries its patch under `tool_input.command` (2026-10-23).** Codex's native patch tool reached the Codex
+> `production-action-guard.mjs` with the patch text in `command`, so the shell inspection read `*** Begin Patch` as a wildcard command
+> word and refused every ordinary source edit (the older bare-string shape never reached shell inspection). The guard now takes a
+> payload off the shell route only when the tool name is exactly `apply_patch`, the patch sits in exactly one of `command`/`cmd` as
+> text, no second payload field (`patch`/`diff`/`input`/`changes`) is present, and the WHOLE text parses under the patch grammar
+> (`parseNativePatch`: Begin line, Add/Update/Delete sections with correctly prefixed lines, `Move to` only straight after an Update
+> header, End line, nothing after it). Every path the patch touches — add, update, delete and both ends of a move — is then held to
+> the same protected-harness and review-proof checks as any other file write, resolved from the event `cwd` and a nested `workdir`.
+> A malformed, trailing-text, ambiguous or conflicting `apply_patch` envelope is denied, and any other tool (`Bash`, `PowerShell`,
+> `Edit`, `mcp__…__apply_patch`) that carries patch-looking text stays under shell inspection. The bare-string and `patch`-field shapes
+> are unchanged. **Still open (not repaired here):** a read-only `rg`/`Select-String` of a PROTECTED file whose quoted pattern holds a
+> `|` (for example `"foo|bar"`) or a mutation-verb word (`apply_patch`, `move`, `copy`) is still refused — the shell heuristics split
+> or scan the quoted text; searching the same pattern over ordinary source files is unaffected. Workaround: one plain pattern per search,
+> or read the file with `Get-Content`/the Grep tool.
+>
 > Last reconciled against `.claude/settings.json` and `.codex/hooks.json` hook wiring on 2026-09-26 (docs fact pass: the `Write|Edit|MultiEdit` matcher from PR #593, Codex `mcp__.*` parity in the MCP-guard and live-testdata rows, `actor-binding-check`'s post-#593 splice, the `pr-merge-guard` Codex GitHub App gate from PR #563, and corrected `stop-verify`, `stop-wrap`, `posttooluse-migration`, `registry-freshness` and `mcp-tool-guard` rows). Previous reconciliation 2026-09-04 (lean instruction review: the startup-reminder row now documents task-routed loading, and an accidental duplicate of the hook reference was removed). Previous reconciliation 2026-08-27 (first harness-simplification tranche:
 > the UserPromptSubmit and PostToolUse commands now enter through one event router apiece while preserving the existing rule modules;
 > Codex's MCP-only guards now use `mcp__.*` matcher parity with Claude; and Codex's `production-action-guard.mjs` deliberately remains

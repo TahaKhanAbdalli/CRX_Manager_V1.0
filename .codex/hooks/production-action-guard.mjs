@@ -1441,6 +1441,115 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
   return null;
 }
 
+// ── Native patch tool (Codex `apply_patch`) ────────────────────────────────────
+// Codex hands its native patch tool to hooks with the patch text under
+// `tool_input.command` (observed 2026-10-23: that text reached the SHELL
+// inspection below, which read `*** Begin Patch` as a wildcard command word and
+// refused every ordinary source edit). Older builds sent a bare string, which
+// never reached shell inspection. A patch is not a shell command, so a payload
+// is taken off the shell route only when ALL of these hold:
+//   1. the tool is exactly `apply_patch` (an MCP tool that merely ends in that
+//      name, or any shell tool carrying patch-looking text, stays on the shell
+//      route and is inspected as a shell command);
+//   2. the patch sits in exactly one field (`command` or `cmd`), as a string,
+//      with no second payload field that could be what the tool really applies;
+//   3. the WHOLE text parses under the patch grammar below.
+// Anything else from `apply_patch` is refused. Every path the parsed patch
+// touches (add, update, delete, move target) then goes through the same
+// protected-harness and review-proof checks as any other file write.
+const NATIVE_PATCH_TOOL_RE = /^apply_patch$/;
+const NATIVE_PATCH_OTHER_PAYLOAD_FIELDS = ["patch", "diff", "input", "changes"];
+const NATIVE_PATCH_FILE_HEADER_RE = /^\*\*\* (Add|Update|Delete) File: (.+)$/;
+const NATIVE_PATCH_MOVE_RE = /^\*\*\* Move to: (.+)$/;
+
+// Parses a whole native patch. `{ ok: true, paths }` lists every file path the
+// patch touches; `{ ok: false, reason }` names the first line the grammar
+// rejects. Strict on purpose: a refusal costs one retry, a mis-parse could hide
+// a destination from the path checks.
+export function parseNativePatch(text) {
+  if (typeof text !== "string") return { ok: false, reason: "the patch is not text" };
+  if (text.includes("\0")) return { ok: false, reason: "the patch contains a NUL character" };
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  if (lines[0] !== "*** Begin Patch") return { ok: false, reason: "the first line is not `*** Begin Patch`" };
+  if (lines.length < 2 || lines.at(-1) !== "*** End Patch") return { ok: false, reason: "the last line is not `*** End Patch`" };
+  const paths = [];
+  let kind = null; // the file operation whose body is being read
+  let bodyLines = 0;
+  let sawMoveWindow = false; // `*** Move to:` is legal only straight after an Update header
+  const finishFile = (index) => {
+    if (kind === "Update" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Update File section has no hunk` };
+    if (kind === "Add" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Add File section has no content` };
+    return null;
+  };
+  for (let i = 1; i < lines.length - 1; i += 1) {
+    const line = lines[i];
+    const header = NATIVE_PATCH_FILE_HEADER_RE.exec(line);
+    if (header) {
+      const unfinished = finishFile(i + 1);
+      if (unfinished) return unfinished;
+      const filePath = header[2].trim();
+      if (!filePath) return { ok: false, reason: `line ${i + 1}: a file header has no path` };
+      paths.push(filePath);
+      kind = header[1];
+      bodyLines = 0;
+      sawMoveWindow = kind === "Update";
+      continue;
+    }
+    const move = NATIVE_PATCH_MOVE_RE.exec(line);
+    if (move) {
+      if (!sawMoveWindow) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` is only valid straight after an Update File header` };
+      const target = move[1].trim();
+      if (!target) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` has no path` };
+      paths.push(target);
+      sawMoveWindow = false;
+      continue;
+    }
+    sawMoveWindow = false;
+    if (kind === null) return { ok: false, reason: `line ${i + 1}: content before any file header` };
+    if (kind === "Delete") return { ok: false, reason: `line ${i + 1}: a Delete File section takes no content` };
+    if (kind === "Add") {
+      if (!line.startsWith("+")) return { ok: false, reason: `line ${i + 1}: an Add File line must start with \`+\`` };
+      bodyLines += 1;
+      continue;
+    }
+    // Update File body: @@ hunk markers, ' ' / '+' / '-' lines, a bare empty
+    // line (context), or the end-of-file marker.
+    if (line.startsWith("@@") || line === "*** End of File" || line === "" || /^[ +-]/.test(line)) {
+      bodyLines += 1;
+      continue;
+    }
+    return { ok: false, reason: `line ${i + 1}: not a valid patch line` };
+  }
+  const unfinished = finishFile(lines.length);
+  if (unfinished) return unfinished;
+  if (kind === null) return { ok: false, reason: "the patch names no file" };
+  return { ok: true, paths };
+}
+
+// The native patch envelope of one tool call: `null` when this is not the
+// native patch tool or it carries no `command`/`cmd` payload (the older bare-
+// string and `patch`-field shapes keep their existing destination checks);
+// otherwise `{ denial }` for a malformed or conflicting envelope, or `{ paths }`
+// (every file the patch touches) for a payload that parsed completely.
+export function nativePatchEnvelope(toolName, toolInput) {
+  if (!NATIVE_PATCH_TOOL_RE.test(String(toolName))) return null;
+  if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return null;
+  const carriers = ["command", "cmd"].filter((field) => toolInput[field] !== undefined && toolInput[field] !== null);
+  if (carriers.length === 0) return null;
+  const refuse = (why) => ({
+    denial: "CODEX PRODUCTION GATE: this apply_patch call could not be verified as a well-formed native patch " +
+      `(${why}), so it is refused (fail closed). Send one complete patch from \`*** Begin Patch\` to \`*** End Patch\` ` +
+      "in a single `command` string.",
+  });
+  if (carriers.length > 1) return refuse("it carries both `command` and `cmd`");
+  const conflicting = NATIVE_PATCH_OTHER_PAYLOAD_FIELDS.filter((field) => toolInput[field] !== undefined && toolInput[field] !== null);
+  if (conflicting.length > 0) return refuse(`it also carries \`${conflicting.join("`, `")}\``);
+  const parsed = parseNativePatch(toolInput[carriers[0]]);
+  if (!parsed.ok) return refuse(parsed.reason);
+  return { paths: parsed.paths };
+}
+
 export function evaluateProductionAction({
   toolName = "",
   toolInput = {},
@@ -1488,8 +1597,15 @@ export function evaluateProductionAction({
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
   const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+  // The native patch tool's `command`/`cmd` payload (see nativePatchEnvelope):
+  // a malformed or conflicting envelope is refused before any path check, and a
+  // fully parsed one contributes every path it touches (the grammar admits no
+  // other destination), then skips the shell inspection further down.
+  const nativePatch = nativePatchEnvelope(name, toolInput);
+  if (nativePatch?.denial) return denied(nativePatch.denial);
   const patchDestinations = [rawPatchBody, input.patch, input.diff, input.input, input.changes]
-    .flatMap((payloadText) => extractPatchDestinations(payloadText));
+    .flatMap((payloadText) => extractPatchDestinations(payloadText))
+    .concat(nativePatch?.paths ?? []);
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
@@ -1592,7 +1708,9 @@ export function evaluateProductionAction({
   }
 
   // Measured BEFORE the trim, so the trim never runs over unbounded input.
-  const untrimmedCommand = String(toolInput.command ?? toolInput.cmd ?? "");
+  // A native patch that parsed completely is not a shell command: its paths were
+  // gated above, and reading its text as shell is what refused every source edit.
+  const untrimmedCommand = nativePatch ? "" : String(toolInput.command ?? toolInput.cmd ?? "");
   const command = untrimmedCommand.length > MAX_INSPECTABLE_COMMAND_LENGTH ? untrimmedCommand : untrimmedCommand.trim();
   if (!command) return { blocked: false };
 

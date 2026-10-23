@@ -16,6 +16,8 @@ import {
   globCouldMatchProtectedHarnessPath,
   isClearlyReadOnlySql,
   mutatingSegmentWithComputedText,
+  nativePatchEnvelope,
+  parseNativePatch,
   protectedBasenameMentioned,
   pullRequestChecksGreen,
   shellSegmentHead,
@@ -3331,6 +3333,172 @@ try {
   assert.equal(ordinaryMoveEntrypoint.status, 0, "ordinary move entrypoint exits cleanly");
   assert.equal(ordinaryMoveEntrypoint.stderr, "", "ordinary move entrypoint emits no stderr");
   assert.equal(ordinaryMoveEntrypoint.stdout, "", "ordinary move mentioning protected prose stays allowed through JSON/stdin");
+
+  // ── Native apply_patch with the patch under tool_input.command (2026-10-23) ─
+  // Codex's native patch tool reached shell inspection with its patch text as the
+  // "command", so `*** Begin Patch` read as a wildcard command word and EVERY
+  // ordinary source edit was refused. The observed event: tool_name apply_patch,
+  // tool_input { command: <patch text> }. These pin that a COMPLETE, well-formed
+  // patch is gated by its destinations (like the other shapes) while everything
+  // else keeps its old treatment.
+  const nativePatch = (...sections) => `*** Begin Patch\n${sections.join("\n")}\n*** End Patch\n`;
+  const addProbe = nativePatch("*** Add File: src/hook-routing-probe.ts", "+export const hookRoutingProbe = true;");
+  const ordinaryNativePatches = {
+    add: addProbe,
+    "add with absolute path": nativePatch(`*** Add File: ${path.join(projectRoot, "src", "hook-routing-probe.ts").replaceAll("\\", "/")}`, "+export const a = 1;"),
+    update: nativePatch("*** Update File: src/lib/money.ts", "@@ export function f()", " context", "-old", "+new", "*** End of File"),
+    delete: nativePatch("*** Delete File: src/old-file.ts"),
+    move: nativePatch("*** Update File: src/old-name.ts", "*** Move to: src/new-name.ts", "@@", "-a", "+b"),
+    "several files": nativePatch("*** Add File: src/a.ts", "+a", "*** Update File: src/b.ts", "@@", " keep", "+more", "*** Delete File: src/c.ts"),
+    "prose naming protected paths": nativePatch(
+      "*** Update File: docs/reference/agent-guardrails.md", "@@",
+      "+The guard is .codex/hooks/production-action-guard.mjs and writes .claude/session-state/claude-review-push.json.",
+      "+A line saying *** Add File: .codex/hooks/production-action-guard.mjs is only prose when it follows a plus sign.",
+    ),
+    "CRLF line endings": addProbe.replaceAll("\n", "\r\n"),
+  };
+  for (const [label, patch] of Object.entries(ordinaryNativePatches)) {
+    for (const field of ["command", "cmd"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: "apply_patch", toolInput: { [field]: patch } }).blocked,
+        false,
+        `ordinary native patch (${label}) in tool_input.${field} is not read as a shell command`,
+      );
+    }
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: addProbe, workdir: "src" }, eventCwd: projectRoot }).blocked,
+    false,
+    "an ordinary patch keeps working with a nested workdir",
+  );
+  const nativeEnvelopeEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: projectRoot, tool_name: "apply_patch", tool_input: { command: addProbe } }),
+    encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
+  });
+  assert.equal(nativeEnvelopeEntrypoint.error, undefined, "native command-envelope entrypoint starts without a process error");
+  assert.equal(nativeEnvelopeEntrypoint.status, 0, "native command-envelope entrypoint exits cleanly");
+  assert.equal(nativeEnvelopeEntrypoint.stderr, "", "native command-envelope entrypoint emits no stderr");
+  assert.equal(nativeEnvelopeEntrypoint.stdout, "", "an ordinary native edit is silent (allow) through the real JSON/stdin entrypoint");
+
+  // Protected destinations stay denied in every operation, however spelled.
+  const protectedNativePatches = {
+    "add guard": nativePatch("*** Add File: .codex/hooks/production-action-guard.mjs", "+weaken()"),
+    "update guard": nativePatch("*** Update File: .codex/hooks/production-action-guard.mjs", "@@", "-old", "+weaken()"),
+    "delete guard": nativePatch("*** Delete File: .codex/hooks/production-action-guard.mjs"),
+    "update shared push lib": nativePatch("*** Update File: .claude/hooks/codex-push-lib.mjs", "@@", "-old", "+weaken()"),
+    "move onto guard": nativePatch("*** Update File: docs/a.md", "*** Move to: .codex/hooks/production-action-guard.mjs", "@@", "-a", "+b"),
+    "move away from guard": nativePatch("*** Update File: .codex/hooks/production-action-guard.mjs", "*** Move to: docs/a.md", "@@", "-a", "+b"),
+    "dot-segment spelling": nativePatch("*** Update File: .claude/hooks/../hooks/codex-push-lib.mjs", "@@", "-a", "+b"),
+    "backslash and case spelling": nativePatch("*** Update File: .CLAUDE\\HOOKS\\CODEX-PUSH-LIB.MJS", "@@", "-a", "+b"),
+    "hook registration": nativePatch("*** Update File: .codex/hooks.json", "@@", "-a", "+b"),
+    "claude settings": nativePatch("*** Update File: .claude/settings.json", "@@", "-a", "+b"),
+    "second file protected": nativePatch("*** Add File: src/ok.ts", "+ok", "*** Update File: .codex/hooks/codex-hook-adapter.mjs", "@@", "-a", "+b"),
+    "claude review proof": nativePatch("*** Add File: .claude/session-state/claude-review-push.json", "+{}"),
+    "codex review proof": nativePatch(`*** Add File: .claude/session-state/codex-review-${"a".repeat(40)}.json`, "+{}"),
+    "move onto proof": nativePatch("*** Update File: docs/a.md", "*** Move to: .claude/session-state/claude-review-push.json", "@@", "-a", "+b"),
+    "delete proof": nativePatch("*** Delete File: .claude/session-state/claude-review-push.json"),
+  };
+  for (const [label, patch] of Object.entries(protectedNativePatches)) {
+    for (const field of ["command", "cmd"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: "apply_patch", toolInput: { [field]: patch } }).blocked,
+        true,
+        `protected native patch (${label}) in tool_input.${field} is denied`,
+      );
+    }
+  }
+  // Relative destinations resolve from the event cwd and a nested workdir.
+  for (const [eventCwd, workdir, header] of [
+    [".codex/hooks", undefined, "*** Update File: production-action-guard.mjs"],
+    [".codex", "hooks", "*** Update File: production-action-guard.mjs"],
+    ["", ".claude/hooks", "*** Update File: codex-push-lib.mjs"],
+    [".claude", "session-state", "*** Add File: claude-review-push.json"],
+  ]) {
+    assert.equal(
+      evaluateProductionAction({
+        toolName: "apply_patch",
+        eventCwd,
+        toolInput: { command: nativePatch(header, "@@", "-a", "+b"), ...(workdir ? { workdir } : {}) },
+      }).blocked,
+      true,
+      `relative protected destination resolves from cwd ${JSON.stringify(eventCwd)} + workdir ${JSON.stringify(workdir)}`,
+    );
+  }
+  const protectedEnvelopeEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", cwd: path.join(projectRoot, ".codex", "hooks"), tool_input: { command: nativePatch("*** Update File: production-action-guard.mjs", "@@", "-a", "+b") } }),
+    encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
+  });
+  assert.equal(protectedEnvelopeEntrypoint.status, 0, "protected command-envelope entrypoint exits cleanly after denial");
+  assert.equal(JSON.parse(protectedEnvelopeEntrypoint.stdout).hookSpecificOutput?.permissionDecision, "deny", "a protected destination in tool_input.command is denied through the real JSON/stdin entrypoint");
+  assert.match(String(JSON.parse(protectedEnvelopeEntrypoint.stdout).hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "it reaches the harness-boundary denial, not a parse error");
+
+  // Malformed, trailing, ambiguous or conflicting payloads are refused outright.
+  const malformedNativePatches = {
+    "no Begin line": "*** Add File: src/a.ts\n+a\n*** End Patch\n",
+    "no End line": "*** Begin Patch\n*** Add File: src/a.ts\n+a\n",
+    "text after End": `${addProbe}echo done\n`,
+    "shell after End": `${addProbe}; Remove-Item src -Recurse\n`,
+    "text before Begin": `echo hi\n${addProbe}`,
+    "heredoc wrapper": `apply_patch <<'EOF'\n${addProbe}EOF\n`,
+    "no files": "*** Begin Patch\n*** End Patch\n",
+    "content before a file header": "*** Begin Patch\n+orphan\n*** Add File: src/a.ts\n+a\n*** End Patch\n",
+    "Add line without plus": "*** Begin Patch\n*** Add File: src/a.ts\nexport const a = 1;\n*** End Patch\n",
+    "Add with no content": "*** Begin Patch\n*** Add File: src/a.ts\n*** End Patch\n",
+    "Delete with a body": "*** Begin Patch\n*** Delete File: src/a.ts\n+x\n*** End Patch\n",
+    "Update with no hunk": "*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch\n",
+    "Move not after Update": "*** Begin Patch\n*** Add File: src/a.ts\n*** Move to: src/b.ts\n+a\n*** End Patch\n",
+    "Move after a hunk": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n+a\n*** Move to: src/b.ts\n*** End Patch\n",
+    "unknown header": "*** Begin Patch\n*** Rename File: src/a.ts\n*** End Patch\n",
+    "header with no path": "*** Begin Patch\n*** Add File: \n+a\n*** End Patch\n",
+    "NUL byte": addProbe.replace("probe", "pro\0be"),
+    "empty text": "",
+  };
+  for (const [label, patch] of Object.entries(malformedNativePatches)) {
+    const verdict = evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: patch } });
+    assert.equal(verdict.blocked, true, `malformed native patch (${label}) is denied`);
+  }
+  for (const [label, toolInput] of Object.entries({
+    "command and cmd both present": { command: addProbe, cmd: addProbe },
+    "command and cmd disagree": { command: addProbe, cmd: nativePatch("*** Add File: src/b.ts", "+b") },
+    "command plus patch": { command: addProbe, patch: protectedNativePatches["add guard"] },
+    "command plus diff": { command: addProbe, diff: "x" },
+    "command plus input": { command: addProbe, input: "x" },
+    "command plus changes": { command: addProbe, changes: "x" },
+    "command is an array": { command: ["apply_patch", addProbe] },
+    "command is an object": { command: { patch: addProbe } },
+    "command is a number": { command: 7 },
+  })) {
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput }).blocked, true, `conflicting or unknown native envelope (${label}) is denied`);
+  }
+  // The hook-input cap (16 MiB) already bounds a payload and the grammar is a
+  // single linear pass, so a large generated file is an ordinary edit, not a refusal.
+  const largePatch = nativePatch("*** Add File: src/big.ts", `+${"x".repeat(400_000)}`);
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: largePatch } }).blocked, false, "a large ordinary native patch is allowed");
+  assert.equal(nativePatchEnvelope("apply_patch", { command: addProbe })?.paths?.[0], "src/hook-routing-probe.ts", "a parsed envelope reports its destination paths");
+  assert.equal(nativePatchEnvelope("apply_patch", "raw string"), null, "a bare-string input keeps its existing route");
+  assert.equal(nativePatchEnvelope("apply_patch", { patch: addProbe }), null, "the patch-field shape keeps its existing route");
+
+  // Only the exact native tool is taken off the shell route.
+  for (const toolName of ["Bash", "PowerShell", "shell", "exec_command", "Edit", "Write", "mcp__x__apply_patch", "apply_patch_extra", "Apply_Patch", "functions.apply_patch"]) {
+    for (const field of ["command", "cmd"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName, toolInput: { [field]: addProbe } }).blocked,
+        true,
+        `${toolName} carrying patch-looking text in ${field} is still inspected as a shell command`,
+      );
+    }
+  }
+
+  // The grammar itself.
+  assert.deepEqual(parseNativePatch(addProbe), { ok: true, paths: ["src/hook-routing-probe.ts"] }, "parses an Add");
+  assert.deepEqual(
+    parseNativePatch(ordinaryNativePatches.move),
+    { ok: true, paths: ["src/old-name.ts", "src/new-name.ts"] },
+    "a move reports both the source and the target",
+  );
+  assert.equal(parseNativePatch(undefined).ok, false, "non-text is not a patch");
 
   // ── Codex round-4 regressions (2026-07-13) ────────────────────────────────
   // R4-1: comment markers inside string literals cannot hide a mutation.
