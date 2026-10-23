@@ -134,6 +134,27 @@ async function loadRecipe() {
   fireEvent.click(screen.getByRole('button', { name: /Load Recipe/ }));
 }
 
+async function openChemicalLine() {
+  const router = createMemoryRouter(
+    [{ path: '/jobs/:id', element: <JobDetail /> }],
+    { initialEntries: ['/jobs/job-1?tab=chemicals'] },
+  );
+  render(<RouterProvider router={router} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Add Chemical/ }));
+}
+
+async function pickProduct(name: RegExp) {
+  const box = screen.getByPlaceholderText('Select product...');
+  fireEvent.click(box);
+  fireEvent.change(box, { target: { value: name.source.split(' ')[0] } });
+  fireEvent.click(await screen.findByRole('option', { name }));
+}
+
+// The price input follows its (unassociated) "Price ¢/unit" label.
+function priceInput() {
+  return screen.getByText('Price ¢/unit').nextElementSibling as HTMLInputElement;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   customerByIdReads = 0;
@@ -183,25 +204,101 @@ describe('JobDetail recipe pricing tier', () => {
     // Free Sample has no tier-3 price and a $0 tier-1 price: the line must not keep Herbicide X's.
     const FREE = { ...PRODUCT, id: 'prod-free', product_name: 'Free Sample', tier1_price: 0, tier2_price: null, tier3_price: null };
     serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [FREE]);
-    const router = createMemoryRouter(
-      [{ path: '/jobs/:id', element: <JobDetail /> }],
-      { initialEntries: ['/jobs/job-1?tab=chemicals'] },
-    );
-    render(<RouterProvider router={router} />);
-    fireEvent.click(await screen.findByRole('button', { name: /Add Chemical/ }));
+    await openChemicalLine();
 
-    const pick = async (name: RegExp) => {
-      const box = screen.getByPlaceholderText('Select product...');
-      fireEvent.click(box);
-      fireEvent.change(box, { target: { value: name.source.split(' ')[0] } });
-      fireEvent.click(await screen.findByRole('option', { name }));
-    };
-    await pick(/Herbicide X/);
+    await pickProduct(/Herbicide X/);
     // Tier 3 is $7.00.
-    expect(await screen.findByDisplayValue('700')).toBeInTheDocument();
+    await waitFor(() => expect(priceInput().value).toBe('700'));
 
-    await pick(/Free Sample/);
-    await waitFor(() => expect(screen.queryByDisplayValue('700')).not.toBeInTheDocument());
+    await pickProduct(/Free Sample/);
+    await waitFor(() => expect(priceInput().value).toBe('0'));
+  });
+
+  it('MONEY: a product that states no price blanks the previous product\'s price, and the line cannot be saved', async () => {
+    const UNPRICED = { ...PRODUCT, id: 'prod-unpriced', product_name: 'Unpriced Adjuvant', tier1_price: null, tier2_price: null, tier3_price: null };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [UNPRICED]);
+    await openChemicalLine();
+
+    await pickProduct(/Herbicide X/);
+    await waitFor(() => expect(priceInput().value).toBe('700'));
+
+    await pickProduct(/Unpriced Adjuvant/);
+    await waitFor(() => expect(priceInput().value).toBe(''));
+    expect(screen.getByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+
+    // A customer-supplied line is never billed, so its blank price no longer blocks the save.
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    await waitFor(() => expect(screen.queryByText(/its price is blank, negative, or not a whole number of cents/)).not.toBeInTheDocument());
+  });
+
+  it('MONEY: un-ticking customer supplied on an unpriced product at $0 blanks the price, so it cannot bill $0', async () => {
+    const UNPRICED = { ...PRODUCT, id: 'prod-unpriced', product_name: 'Unpriced Adjuvant', tier1_price: null, tier2_price: null, tier3_price: null };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [UNPRICED]);
+    await openChemicalLine();
+    await pickProduct(/Unpriced Adjuvant/);
+    // As if reloaded after a customer-supplied save: ticked, price stored as 0.
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    fireEvent.change(priceInput(), { target: { value: '0' } });
+    expect(priceInput().value).toBe('0');
+
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    await waitFor(() => expect(priceInput().value).toBe(''));
+    expect(screen.getByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+  });
+
+  it('MONEY: un-ticking customer supplied on a $0 line re-prices it from the catalog at the customer tier', async () => {
+    // As if saved customer-supplied at $0 when the product had no price, and it has one now.
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null });
+    await openChemicalLine();
+    await pickProduct(/Herbicide X/);
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    fireEvent.change(priceInput(), { target: { value: '0' } });
+    expect(priceInput().value).toBe('0');
+
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    // Tier 3 is $7.00.
+    await waitFor(() => expect(priceInput().value).toBe('700'));
+  });
+
+  it('MONEY: un-ticking customer supplied re-prices a price written as 0.0', async () => {
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null });
+    await openChemicalLine();
+    await pickProduct(/Herbicide X/);
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    fireEvent.change(priceInput(), { target: { value: '0.0' } });
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    await waitFor(() => expect(priceInput().value).toBe('700'));
+  });
+
+  it('un-ticking customer supplied leaves a malformed price for the save check, not the catalog price', async () => {
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null });
+    await openChemicalLine();
+    await pickProduct(/Herbicide X/);
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    fireEvent.change(priceInput(), { target: { value: '0.5' } });
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    expect(priceInput().value).toBe('0.5');
+  });
+
+  it('MONEY: a typed $0 on a billable line whose product states no price cannot be saved (mirrors the server trigger)', async () => {
+    const UNPRICED = { ...PRODUCT, id: 'prod-unpriced', product_name: 'Unpriced Adjuvant', tier1_price: null, tier2_price: null, tier3_price: null };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [UNPRICED]);
+    await openChemicalLine();
+    await pickProduct(/Unpriced Adjuvant/);
+    fireEvent.change(screen.getByText('Total Applied').nextElementSibling as HTMLInputElement, { target: { value: '5' } });
+    fireEvent.change(priceInput(), { target: { value: '0' } });
+    expect(await screen.findByText(/its product has no price for this customer's tier, so it would bill \$0/)).toBeInTheDocument();
+  });
+
+  it('un-ticking customer supplied keeps a priced product\'s $0 price', async () => {
+    const FREE = { ...PRODUCT, id: 'prod-free', product_name: 'Free Sample', tier1_price: 0, tier2_price: null, tier3_price: null };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [FREE]);
+    await openChemicalLine();
+    await pickProduct(/Free Sample/);
+    await waitFor(() => expect(priceInput().value).toBe('0'));
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
+    expect(priceInput().value).toBe('0');
   });
 
   it('MONEY: drops a recipe load whose customer changed while its products were loading', async () => {
