@@ -3012,11 +3012,11 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * is applied and the high-water moves past it. `notify_team_note_assignment`
  * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
  * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
- * anything, they are simply no longer discovered.
+ * anything, they are simply no longer discovered. `_lock_invoice_post_inputs`
+ * (20261022022000, a lock-only posting helper with no API-role EXECUTE) was
+ * pruned on 2026-10-22, when that migration applied live.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
-  _lock_invoice_post_inputs:
-    'internal row-lock helper of post_invoice / post_invoice_group (20261022022000); takes FOR UPDATE/FOR SHARE locks only, writes nothing, and every application-role EXECUTE is revoked; the required-key posting wrappers own idempotency',
   _close_undelivered_order_remainder_20260718:
     'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
   _post_deleted_delivery_recovery_invoice_20260719:

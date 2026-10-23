@@ -57,6 +57,7 @@ DECLARE
   v_ar        record;
   v_n         int;
   v_rc        int;
+  v_versioned boolean := to_regprocedure('public.post_invoice(uuid,text,text)') IS NOT NULL;  -- 20261022022000 applied
 BEGIN
   -- ----------------------------------------------------------------- actor
   SELECT id INTO v_admin FROM profiles WHERE role = 'admin' AND is_active = true
@@ -227,7 +228,12 @@ BEGIN
   END IF;
 
   -- =================================================== 5) post_invoice
-  PERFORM post_invoice(v_invoice, public._invoice_post_version(v_invoice), '[SMOKE] pi-' || v_sfx);
+  -- An older container proof replays only up to its own candidate: call the signature the database has.
+  IF v_versioned THEN
+    PERFORM post_invoice(v_invoice, public._invoice_post_version(v_invoice), '[SMOKE] pi-' || v_sfx);
+  ELSE
+    PERFORM post_invoice(v_invoice, '[SMOKE] pi-' || v_sfx);
+  END IF;
   SELECT * INTO v_inv FROM invoices WHERE id = v_invoice;
   IF v_inv.status <> 'posted' THEN RAISE EXCEPTION 'FAIL: not posted (status %)', v_inv.status; END IF;
   IF v_inv.posted_by <> v_admin OR v_inv.posted_at IS NULL THEN

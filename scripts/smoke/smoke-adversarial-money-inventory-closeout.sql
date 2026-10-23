@@ -36,6 +36,7 @@ DECLARE
   v_intent text;
   v_vendor_reference text;
   v_other_invoice_key text;
+  v_versioned boolean := to_regprocedure('public.post_invoice(uuid,text,text)') IS NOT NULL;  -- 20261022022000 applied
 BEGIN
   SELECT id INTO v_admin
     FROM public.profiles
@@ -114,12 +115,14 @@ BEGIN
   END;
 
   BEGIN
-    -- Since 20261022022000 the own-name check runs before the version check, so any version works here.
-    PERFORM public.post_invoice(
-      v_other_invoice,
-      'v1:smoke',
-      'smk-post-other-' || v_suffix
-    );
+    -- Since 20261022022000 the own-name check runs before the version check, so any version works
+    -- here. An older container proof replays only up to its own candidate, so call the signature
+    -- the database has.
+    IF v_versioned THEN
+      PERFORM public.post_invoice(v_other_invoice, 'v1:smoke', 'smk-post-other-' || v_suffix);
+    ELSE
+      PERFORM public.post_invoice(v_other_invoice, 'smk-post-other-' || v_suffix);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL: sales rep posted an invoice not under their own name';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;

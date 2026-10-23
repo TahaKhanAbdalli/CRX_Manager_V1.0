@@ -1,7 +1,7 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-10-22 (America/Chicago) against the live migration ledger** (read-only
-`execute_sql`, 2026-10-22 16:35 UTC (11:35 AM Central): 1049 rows, `max(version)` `20261022163441` = `20261022021000_order_invoice_refuses_field_split` (row 967, PR #1006 merged as `afe1dadb5`), and before it `20261022155943` = `20261022020000_blend_invoice_binding_lows` (row 966, PR #1020); at 12:03 UTC (7:03 AM Central): 1047 rows, `max(version)` `20261022115547` = `20261021155000_split_payer_return_credit` and before it `20261022114024` = `20261021150000_split_invoice_cross_customer_lineage` (rows 965 and 964, PR #1010 merged as `d8dd88a6d`; both applied on Mason's in-chat `I approve`); effective ordering high-water `20261021155000`; the read before it, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); rows 964 and 965 (PR #1010) were then still pending; the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
+`execute_sql`, 2026-10-23 00:55 UTC (7:55 PM Central, 2026-10-22): 1050 rows, `max(version)` `20261023004246` = `20261022022000_post_binds_reviewed_invoice_version` (row 968, PR #1018 merged as `3ab57a80c`, applied on Mason's in-chat `I approve`); at 2026-10-22 16:35 UTC (11:35 AM Central): 1049 rows, `max(version)` `20261022163441` = `20261022021000_order_invoice_refuses_field_split` (row 967, PR #1006 merged as `afe1dadb5`), and before it `20261022155943` = `20261022020000_blend_invoice_binding_lows` (row 966, PR #1020); at 12:03 UTC (7:03 AM Central): 1047 rows, `max(version)` `20261022115547` = `20261021155000_split_payer_return_credit` and before it `20261022114024` = `20261021150000_split_invoice_cross_customer_lineage` (rows 965 and 964, PR #1010 merged as `d8dd88a6d`; both applied on Mason's in-chat `I approve`); effective ordering high-water `20261021155000`; the read before it, 2026-10-22 00:27 UTC (7:27 PM Central, 2026-10-21): 1045 rows, `max(version)` `20261022002748` = `20261021141000_po_cost_columns_admin_only` and before it `20261021224056` = `20261021140000_po_cost_admin_only_and_corrections` (purchase-order cost is admin-only, PR #980 merged as `8399309dc`; both applied on Mason's in-chat `I approve`); rows 964 and 965 (PR #1010) were then still pending; the read before it, 2026-10-21 20:44 UTC (3:44 PM Central): 1043 rows, `max(version)` `20261021204100` = `20261021070000_blend_invoice_approval_binding` (PR #995); before it `20261021200526` = `20261021050000_from_scratch_invoices_charge_lines_only` (Goal 3 "invoices made from scratch take charge lines only", PR #983 merged as `454ae3831`, applied 20:05:26 UTC under the autonomous-landing rule) and `20261021191058` = `20261021030000` (PR #987); earlier reads: 13:52 UTC and 05:13 UTC,
 at 05:13 UTC still 0 `split_invoice_provenance` rows; at 04:01 UTC (11:01 PM Central, 2026-10-20): 1040 rows; the one change since the 02:43 UTC read is that
 Goal 3 blend-ticket pricing `20261020210000` (ledger `20261021040052`, PR #982 merged as `948f238ad`) is now applied; at
 02:43 UTC: 1039 rows / 1032 names; the changes since the 2026-10-19
@@ -799,7 +799,25 @@ leave these open:
 - **The never-posted draft CS-2026-0055** (ORD-2026-0186's May delivery DEL-00074) is left as is; its
   order's other delivery was recorded as billed in Chem Man.
 
-## OPEN 2026-10-09 — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
+## OPEN 2026-10-22 — Smoke chains rotted by the PO cost lock: `adversarial_money_inventory_closeout` fails live at its bulk-PO step
+
+**What it is.** Running `scripts/smoke/smoke-adversarial-money-inventory-closeout.sql` live on
+2026-10-22 (after row 968 applied) failed at file line 376: an admin re-importing the same vendor
+document a sales rep already imported gets `BULK_PO_DOCUMENT_CONTENT_CONFLICT` instead of
+`already_imported`. Row 962 (`20261021140000_po_cost_admin_only_and_corrections`) now strips
+`unit_cost`/`unit_cost_cents` from a non-admin's purchase-order lines. As a result, the rep's import
+is fingerprinted without cost, and the admin's identical document with cost no longer matches. The
+chain rolled back, so nothing was kept. Its posting step (a rep refused for an invoice not under their
+name) ran before the failure and passed. The later assertions in the chain that expect the rep's line
+costs (`3372` / `333` cents) would fail for the same reason.
+
+**Open question for the fix (business behaviour, not just the test):** should a rep's import and an
+admin's import of the same vendor document count as one document? Today they do not, so an admin
+re-entering a rep's bulk import is refused rather than told it already exists. The fix is either a
+smoke update (rep imports without cost, admin sets cost through `set_purchase_order_item_costs`) or a
+fingerprint that ignores cost for non-admins. Logged with the coordinator 2026-10-22.
+
+## RESOLVED 2026-10-22 (opened 2026-10-09) — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
 
 **What it is.** On the regular invoice editor (`src/pages/InvoiceDetail.tsx`: chemical sales, misc
 charges, job/blend field invoices) the **Post** button stays clickable while there are unsaved edits on
@@ -811,7 +829,7 @@ the on-screen lines. (A split group's RUP check already reads the saved siblings
 has no leave-page warning, so a sidebar link, Back, or closing the tab drops unsaved edits silently.
 Found by the 2026-10-08 overnight bug hunt.
 
-**Why it is still open.** PR #892 first carried an app-side fix (Post greyed out while there are
+**Why it stayed open until 2026-10-22.** PR #892 first carried an app-side fix (Post greyed out while there are
 unsaved edits, plus a re-read of the saved invoice before the Post confirm). The final Codex Sol review
 of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what is posted, because
 another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
@@ -819,12 +837,13 @@ fix was taken out of PR #892, so the editor's Post behaves exactly as before. Th
 (`src/lib/invoicePostRecheck.ts`, the `InvoiceDetail.tsx` changes and two tests) is recoverable at
 `3507b92c5^` on PR #892's kept branch `claude/invoice-screen-safety-20261009`; it is absent from `main`.
 
-**Fix built 2026-10-21, not live yet (Goal 3, migration `20261022022000`).** Both parts below are
-built: posting takes the `invoice_post_version` the screen loaded and refuses
+**Fixed and live 2026-10-22 (Goal 3, migration `20261022022000`, ledger `20261023004246`, PR #1018
+merged as `3ab57a80c`; the app deploy finished at 7:53 PM Central).** Live check the same evening: on
+a draft invoice, one unsaved edit greys out Post with "Save your changes before posting"; nothing was
+saved or posted. Both parts below are live: posting takes the `invoice_post_version` the screen loaded and refuses
 `INVOICE_CHANGED_SINCE_LOADED` inside the posting transaction; the editor greys out Post while
 there are unsaved edits, runs the credit and RUP warnings on the saved invoice, and warns before
-leaving. Every list and editor that posts sends its loaded version. This entry closes when the
-migration is applied and the app is live. **Precondition for Goal 1 step 3 (cost-column lock):**
+leaving. Every list and editor that posts sends its loaded version. **Precondition for Goal 1 step 3 (cost-column lock):**
 `invoice_post_version` is a computed field, which receives the whole `invoices` row; revoking any
 `invoices` column from `authenticated` makes every select of it fail, so posting would stop (it
 cannot mis-post). Step 3 must move the version to a column-safe form in the same change (Codex Sol
