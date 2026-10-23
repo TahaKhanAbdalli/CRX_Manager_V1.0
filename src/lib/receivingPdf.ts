@@ -211,32 +211,3 @@ export async function downloadReceivingPdf(data: PdfReceivingData) {
   const doc = await generateReceivingPdf(data);
   doc.save(`${data.po_number}_receiving_receipt.pdf`);
 }
-
-/**
- * Generate a combined multi-page PDF for multiple receiving receipts.
- * Each receipt gets its own page.
- */
-export async function generateBatchReceivingPdf(dataList: PdfReceivingData[]) {
-  if (dataList.length === 0) {
-    throw new Error('No receiving receipts to generate');
-  }
-
-  const { default: jsPDF } = await import('jspdf');
-  const { default: autoTable } = await import('jspdf-autotable');
-
-  if (dataList.length === 1) {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
-    renderReceivingPage(doc, dataList[0], autoTable);
-    doc.save(`${dataList[0].po_number}_receiving_receipt.pdf`);
-    return;
-  }
-
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
-
-  for (let i = 0; i < dataList.length; i++) {
-    if (i > 0) doc.addPage();
-    renderReceivingPage(doc, dataList[i], autoTable);
-  }
-
-  doc.save(`receiving_receipts_batch_${dataList.length}.pdf`);
-}

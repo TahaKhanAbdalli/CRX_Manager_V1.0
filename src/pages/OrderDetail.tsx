@@ -43,7 +43,7 @@ import { validateInventoryPositionShape } from '../lib/inventoryPositionValidato
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { activeInvoiceCoversOrder } from '../lib/deliveryInvoiceCoverage';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
-import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE, ORDER_COLUMNS, ORDER_ITEM_COLUMNS, PRODUCT_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -293,7 +293,7 @@ export default function OrderDetail() {
 
       // Load linked invoices (AR single source of truth)
       const { data: invoiceData } = await supabase
-        .from('invoices')
+        .from(INVOICES_POSTABLE)
         // invoice_post_version: "Post all drafts" refuses an invoice changed since this page loaded.
         .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
         .eq('order_id', id!)

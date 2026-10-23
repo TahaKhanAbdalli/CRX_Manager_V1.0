@@ -109,7 +109,6 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 
 ## Inventory & Delivery Improvements Tests
 
-- `src/lib/loadSheetPdf.test.ts` — 6 tests: save filename, product summary table, quantity aggregation across stops, per-stop tables, custom filename, empty stops error
 - `src/components/inventory/TransactionLedgerModal.test.ts` — 4 tests: unknown future transaction type, authoritative inventory rows for the selected product, zeroes when no inventory row exists, and rendering of authoritative stock totals plus review-required transactions
 - `src/components/inventory/BatchAdjustModal.test.ts` — 4 tests: RPC call creation per item, zero-delta filtering, reason inclusion, per-row idempotency key
 - jsPDF mock pattern: must use `function JsPDFMock() { return mockDoc; }` (not arrow functions — arrow functions can't be `new`'d)
