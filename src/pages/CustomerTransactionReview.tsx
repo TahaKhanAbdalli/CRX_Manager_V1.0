@@ -11,7 +11,7 @@ import Badge from '../components/ui/Badge';
 import ReportShell from '../components/reports/ReportShell';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
-import { fetchAllRows, PAGE_SIZE } from '../lib/pagedRead';
+import { fetchAllRows, PAGE_SIZE, pageWithList } from '../lib/pagedRead';
 import { isLedgerContinuous, isSameTransaction } from '../lib/transactionLedger';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
@@ -27,24 +27,39 @@ export default function CustomerTransactionReview() {
   const [customerId, setCustomerId] = useState(searchParams.get('customer') || '');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [data, setData] = useState<CustomerTransactionRow[]>([]);
+  const [loadedRows, setData] = useState<CustomerTransactionRow[]>([]);
+  // The customer and range the last finished read was for (rows or failure).
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // A failed read must not look like a customer with no transactions.
   const [loadFailed, setLoadFailed] = useState(false);
+  // The customer list failed to load: say so rather than offer an empty dropdown.
+  const [customersFailed, setCustomersFailed] = useState(false);
+  // Bumped by Try again to read the customer list once more.
+  const [customersAttempt, setCustomersAttempt] = useState(0);
 
   useEffect(() => {
-    fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
+    let cancelled = false;
+    fetchAllRows<{ id: string; farm_name: string }>((from, to) => pageWithList(supabase
       .from('customers')
       .select('id, farm_name', { count: 'exact' })
       .eq('is_active', true)
       .order('farm_name')
       .order('id')
-      .range(from, to))
+      .range(from, to)))
       .then(({ data: rows, error }) => {
-        if (error) toast('error', 'Failed to load the customer list. Reload to try again.');
-        setCustomers(rows || []);
+        if (cancelled) return;
+        if (error || !rows) {
+          toast('error', 'Failed to load the customer list');
+          setCustomers([]);
+          setCustomersFailed(true);
+          return;
+        }
+        setCustomers(rows);
+        setCustomersFailed(false);
       });
-  }, [toast]);
+    return () => { cancelled = true; };
+  }, [toast, customersAttempt]);
 
   // A multi-page read can finish after a newer one started for another customer
   // or date range; only the latest request may set the rows and totals.
@@ -61,13 +76,13 @@ export default function CustomerTransactionReview() {
     let loaded: CustomerTransactionRow[] | null = null;
     let failure: string | null = null;
     for (let attempt = 1; attempt <= 2 && loaded === null; attempt += 1) {
-      const result = await fetchAllRows<CustomerTransactionRow>((from, to) => supabase
+      const result = await fetchAllRows<CustomerTransactionRow>((from, to) => pageWithList(supabase
         .rpc('get_customer_transaction_review', {
           p_customer_id: customerId,
           p_start_date: startDate,
           p_end_date: endDate,
         }, { count: 'exact' })
-        .range(from, to));
+        .range(from, to)));
       if (seq !== fetchSeq.current) return;
       if (result.error) {
         failure = result.error.message;
@@ -90,8 +105,8 @@ export default function CustomerTransactionReview() {
           }, { count: 'exact' })
           .range(rows.length - 1, rows.length - 1);
         if (seq !== fetchSeq.current) return;
-        if (tail.error) {
-          failure = tail.error.message;
+        if (tail.error || !tail.data) {
+          failure = tail.error?.message ?? 'the read returned no list';
           break;
         }
         const tailRows = assertRpcResult<CustomerTransactionRow[]>(tail.data, 'get_customer_transaction_review');
@@ -110,12 +125,23 @@ export default function CustomerTransactionReview() {
       setLoadFailed(false);
       setData(loaded);
     }
+    setLoadedKey(`${customerId}|${startDate}|${endDate}`);
     setLoading(false);
   }, [customerId, startDate, endDate, toast]);
 
+  const ready = Boolean(customerId && startDate && endDate);
   useEffect(() => {
-    if (customerId && startDate && endDate) fetchData();
-  }, [customerId, startDate, endDate, fetchData]);
+    if (ready) fetchData();
+    // A cleared customer or date: a read still running for the old choice must not land.
+    else fetchSeq.current += 1;
+  }, [ready, fetchData]);
+
+  // Rows and totals only for a finished read of the current customer and range: never the
+  // previous customer's money under this one's name, in the totals or in an export, even in
+  // the render between picking a customer and its read starting.
+  const current = ready && !loading && loadedKey === `${customerId}|${startDate}|${endDate}`;
+  const data = current ? loadedRows : [];
+  const failed = current && loadFailed;
 
   const customerName = customers.find((c) => c.id === customerId)?.farm_name || '';
 
@@ -228,6 +254,18 @@ export default function CustomerTransactionReview() {
                 <option key={c.id} value={c.id}>{c.farm_name}</option>
               ))}
             </select>
+            {customersFailed && (
+              <p role="alert" className="mt-1 text-xs text-red-600">
+                The customer list could not be loaded.{' '}
+                <button
+                  type="button"
+                  className="underline font-medium"
+                  onClick={() => { setCustomersFailed(false); setCustomersAttempt((n) => n + 1); }}
+                >
+                  Try again
+                </button>
+              </p>
+            )}
           </div>
         }
       >
@@ -256,11 +294,12 @@ export default function CustomerTransactionReview() {
             <DataTable
               data={data as unknown as Record<string, unknown>[]}
               columns={columns as unknown as Column<Record<string, unknown>>[]}
-              emptyTitle={loadFailed ? 'Transactions could not be loaded' : 'No transactions'}
-              emptyDescription={loadFailed
-                ? 'The totals are not shown because the read did not finish. Change the dates or reload to try again.'
-                : !customerId ? 'Select a customer and date range' : undefined}
-              loading={loading}
+              emptyTitle="No transactions"
+              emptyDescription={!customerId ? 'Select a customer and date range' : undefined}
+              // A read left running for a cleared customer never finishes its loading state.
+              loading={ready && loading}
+              loadError={failed}
+              onRetry={ready ? () => { void fetchData(); } : undefined}
             />
           </div>
         </Card>

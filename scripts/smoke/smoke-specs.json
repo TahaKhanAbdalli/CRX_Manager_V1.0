@@ -1455,6 +1455,19 @@
         "idempotency",
         "security"
       ]
+    },
+    "upsert_product_brand": {
+      "chain": "smoke-upsert-product-brand.sql",
+      "description": "Product brands (20261022086500): auth probes P1 no-auth, P2 anon, P3 non-admin refused with nothing written (no actor parameter, so no forged-actor probe); an active admin adds a brand; the exact retry replays the same row with its receipt bound to the admin; an edit with the version it read bumps row_version; a stale edit is refused (BRAND_CHANGED); the same name in another case is refused (BRAND_NAME_TAKEN). Container proof of the migration itself: prove-product-brands.mjs.",
+      "covers": [
+        "upsert_product_brand",
+        "product_brands"
+      ],
+      "area": [
+        "pricing",
+        "security",
+        "idempotency"
+      ]
     }
   }
 }

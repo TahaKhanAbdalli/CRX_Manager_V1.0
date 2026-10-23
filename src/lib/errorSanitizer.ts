@@ -297,6 +297,10 @@ export function sanitizeError(error: unknown): string {
   if (/^INVOICE_CHANGED_SINCE_LOADED$/.test(message)) {
     return 'Nothing was posted. This invoice was changed after this screen loaded it. Reload it, check it, then post again.';
   }
+  // job_chemicals trigger (20261022087000): a billable job line whose product states no price was sent at $0.
+  // The server sentence names the product and says what to do, so it is kept.
+  const chemPriceRequired = message.match(/^CHEM_PRICE_REQUIRED:\s*(.+)$/s);
+  if (chemPriceRequired) return `Nothing was saved. ${chemPriceRequired[1].trim()}`;
   if (/^INVOICE_POSTED_LOCKED(?::|$)/.test(message)) {
     return 'This invoice was posted, so its lines, billing shares and field locations cannot change. Unpost it first, then edit.';
   }

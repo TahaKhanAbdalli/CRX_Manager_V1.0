@@ -117,6 +117,10 @@ a different target gives a false "success" on the wrong record. Fixed on `main`:
 PR #942), batch 2 (`20261016140000`, PR #951), batch 3a (`20261019200000`, PR #954), batch 3b (`20261019235000`,
 PR #967). Remaining: `unpost_invoice`, `price_order`, `update_order_items`, `save_field_app_invoice`, rebate
 claims, `close_accounting_period`, notification RPCs and about 55 MED/LOW functions (batch 4). No open PR.
+Batch 4 includes `mark_inventory_row_verified` (MED, added 2026-10-23, PR #1042 follow-up 3; Mason: "batch it"):
+it matches its saved result on key and operation only, so a reused key with a different `p_inventory_id`, or from
+another admin, returns the first call's result. `IntegrityCleanupPanel.tsx` mints a fresh key per click, so no
+screen reaches it today. Fix with the batch wrapper as in `20261016140000`, with a real-schema prover.
 
 ### KI-11 — Browser screens throw away or share their retry key (double-apply risk)
 **HIGH on money paths · PARTIAL · money · unassigned**
@@ -414,11 +418,9 @@ server-side ruleset is the boundary).
 These sub-items belong to the numbered entries above. They were found missing or blurred when a second reviewer
 (Luna) compared this file with the old one. Each is an open or accepted limitation as the old file recorded it.
 
-### KI-72 — Two fixes merged on `main` whose last steps are still pending (moved here from "closed")
-**MED · PARTIAL · security/money · Mason (item b)**
-(a) A driver's completion receipt skipped when the customer row is hidden: code merged (PR #1024, migration
-`20261022075000`), but the live-apply record (history row 973) exists only in draft PR #1061; the old file keeps the
-item open until that is recorded. (b) CRX-LIFE-001, reps creating a `field_application` invoice through the order
+### KI-72 — A fix merged on `main` whose last steps are still pending (moved here from "closed")
+**MED · PARTIAL · security/money · Mason**
+CRX-LIFE-001, reps creating a `field_application` invoice through the order
 pipeline: fix merged (PR #885, `20261006200000`, applied live per the old record). Two proof gates remain: the 29th
 live-sweep predicate (`quote-versions-rpc-owned`) was declined at its prompt, and the live smoke chains need
 Mason's REAL-DATA-OK.

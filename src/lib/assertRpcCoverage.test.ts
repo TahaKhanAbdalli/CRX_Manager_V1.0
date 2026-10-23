@@ -40,9 +40,11 @@ const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*
 // call is a real capture, and matching more call sites only tightens the guard.
 // The runner may carry a type argument and its arrow several parameters:
 // `fetchAllRows<Row>((from, to) => supabase.rpc(...).range(from, to))` pages an
-// RPC and resolves to its rows, so it is a capture too (2026-10-18).
+// RPC and resolves to its rows, so it is a capture too (2026-10-18). Its page may
+// be wrapped in `pageWithList(...)` (src/lib/pagedRead.ts, 2026-10-23), which
+// resolves to the same page, so it is still a capture.
 const RPC_WRAPPED_CAPTURE_PATTERN =
-  /=\s*await\s+\w+\s*(?:<[^>()]*>)?\s*\(\s*(?:async\s*)?\(?\s*\w+(?:\s*,\s*\w+)*\s*\)?\s*=>\s*supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+  /=\s*await\s+\w+\s*(?:<[^>()]*>)?\s*\(\s*(?:async\s*)?\(?\s*\w+(?:\s*,\s*\w+)*\s*\)?\s*=>\s*(?:pageWithList\s*\(\s*)?supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
 
 // The same wrapped capture, but with a BLOCK-bodied callback:
 // `= await someRunner((reason) => { …guard…; return supabase.rpc('name', …) })`.

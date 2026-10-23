@@ -1,0 +1,7 @@
+## 2026-10-23 — Product brands migration renumbered to 20261022086500 (step 1, PR A)
+
+**What changed.** #1050 kept being reviewed after #1066 applied `20261022086000` live (migration-history row 979), so `20261022085000` would now sort below the live high-water and be refused. On Mason's order, #1050 lands next. The CRX Coordinator assigned `20261022086500`: right after #1066 and ahead of #1060 (`20261022087000`, not yet applied). The not-yet-applied product brands migration moves from `20261022085000` to `20261022086500`. Its SQL is unchanged. Only the file name, its header comment, and every reference carry the new number: migration history row 975 (still row 975, listed after row 979; the header stays "latest entry 979"), the reference docs, the smoke chain and its Docker proof, `src/lib/db.ts`, the live-function snapshot note and the earlier product brands changelog entries.
+
+**Live ordering evidence.** The pre-apply migration-drift review held the apply because migration history had no live capture newer than #1024's (12:47 UTC), while #1066's row 979 still read NOT APPLIED. A fresh read-only capture of the full live ledger (17:46 UTC: 1055 rows, high-water `20261022086000`, 0 rows at or after `20261022086500`) is now recorded at the top of `docs/reference/migration-history.md`.
+
+**Proof.** No reference to `20261022085000` remains outside the earlier renumbering entry. The documentation check and the affected tests pass, and `node scripts/smoke/prove-product-brands.mjs` passes against the renamed file.

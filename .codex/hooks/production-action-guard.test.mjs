@@ -1503,7 +1503,9 @@ try {
   writeProof(risky.repo, valid);
   assert.equal(evaluatePush(risky.repo, now).blocked, false, "risky main push allowed with valid proof");
 
-  writeProof(risky.repo, { ...valid, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() });
+  writeProof(risky.repo, { ...valid, timestamp: new Date(now - 31 * 60 * 1000).toISOString() });
+  assert.equal(evaluatePush(risky.repo, now).blocked, false, "a 31-minute-old proof on the same head and base is still allowed (24-hour window)");
+  writeProof(risky.repo, { ...valid, timestamp: new Date(now - 24 * 60 * 60 * 1000 - 1).toISOString() });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "stale proof denied");
 
   writeProof(risky.repo, { ...valid, timestamp: new Date(now + 1).toISOString() });
