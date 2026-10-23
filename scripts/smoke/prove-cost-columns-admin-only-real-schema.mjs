@@ -64,6 +64,8 @@ const PARKED = new Set([
   '20260914100700_customer_document_bytes_server_only.sql',
   '20261015230000_staff_photo_storage_access.sql',
   '20261016030000_staff_photo_buckets_private.sql',
+  // Needs storage.objects.metadata and a delivery-signatures bucket this container's storage stub lacks.
+  '20261022075000_delivery_completion_evidence.sql',
 ]);
 // PR #889's data migrations rewrite live rows this disposable database does not have; they are
 // recorded in the ledger (as live has them) instead of replayed.
