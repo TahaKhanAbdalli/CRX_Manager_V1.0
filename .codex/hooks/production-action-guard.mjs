@@ -1459,7 +1459,10 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
 // protected-harness and review-proof checks as any other file write.
 const NATIVE_PATCH_TOOL_RE = /^apply_patch$/;
 const NATIVE_PATCH_OTHER_PAYLOAD_FIELDS = ["patch", "diff", "input", "changes"];
-const NATIVE_PATCH_FILE_HEADER_RE = /^\*\*\* (Add|Update|Delete) File: (.+)$/;
+const NATIVE_PATCH_MAX_PATHS = 200;
+const NATIVE_PATCH_MAX_PATH_LENGTH = 1024;
+const NATIVE_PATCH_MAX_PATH_SEGMENTS = 48;
+const NATIVE_PATCH_FILE_HEADER_RE =/^\*\*\* (Add|Update|Delete) File: (.+)$/;
 const NATIVE_PATCH_MOVE_RE = /^\*\*\* Move to: (.+)$/;
 
 // Spellings that name a DIFFERENT file than the path matchers compare on Windows
@@ -1470,6 +1473,11 @@ const NATIVE_PATCH_MOVE_RE = /^\*\*\* Move to: (.+)$/;
 // is not plain is refused here rather than judged by a matcher that may not
 // know the alias. Returns the reason, or "" for a plain path.
 function nativePatchPathProblem(filePath) {
+  // Bounds the filesystem work of resolving every destination (a lookup per
+  // path component) so the hook finishes inside its time limit; a hook killed
+  // at the limit allows the action.
+  if (filePath.length > NATIVE_PATCH_MAX_PATH_LENGTH) return `a path longer than ${NATIVE_PATCH_MAX_PATH_LENGTH} characters`;
+  if (filePath.split(/[\\/]/).length > NATIVE_PATCH_MAX_PATH_SEGMENTS) return `a path with more than ${NATIVE_PATCH_MAX_PATH_SEGMENTS} segments`;
   if (/[\x00-\x1f*?"<>|]/.test(filePath)) return "a path with a wildcard or control character";
   if (filePath.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return "a path with a stream or drive separator (`:`)";
   for (const segment of filePath.split(/[\\/]/)) {
@@ -1557,6 +1565,7 @@ export function parseNativePatch(text) {
   const unfinished = finishFile(lines.length);
   if (unfinished) return unfinished;
   if (kind === null) return { ok: false, reason: "the patch names no file" };
+  if (paths.length > NATIVE_PATCH_MAX_PATHS) return { ok: false, reason: `the patch touches more than ${NATIVE_PATCH_MAX_PATHS} paths; split it` };
   return { ok: true, paths };
 }
 
@@ -1693,6 +1702,9 @@ export function evaluateProductionAction({
   // symlink or junction (`src/notes.ts` linked to a guard file). Only this
   // route follows links, because only this route's destinations are all known.
   for (const destination of nativePatch?.paths ?? []) {
+    // The caps above bound the work; this is the backstop: a hook killed at its
+    // time limit allows the action, so past the deadline the answer is no.
+    if (clock() >= hardGateDeadlineMs) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
     const landed = realPathThroughLinks(destination, actionRepoDir);
     if (landed === null) {
       return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} could not be resolved to the file it would really write (a link that does not resolve, or an unreadable directory), so it is refused (fail closed).`);

@@ -3492,6 +3492,29 @@ try {
     rmSync(linkRoot, { recursive: true, force: true });
   }
 
+  // Resolving destinations touches the filesystem once per path component, and a hook killed at its
+  // time limit ALLOWS the action (Codex App P1, PR #1083). The patch is therefore bounded in path
+  // count, path length and depth, and past the deadline the answer is no.
+  const manyAdds = (count, deep) => nativePatch(...Array.from({ length: count }, (_, n) =>
+    [`*** Add File: ${Array.from({ length: deep }, (__, d) => `d${n}x${d}`).join("/")}/f.ts`, "+a"]).flat());
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(200, 3) } }).blocked, false, "200 ordinary paths are allowed");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(201, 3) } }).blocked, true, "more than 200 paths are refused");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(1, 46) } }).blocked, false, "a deep but bounded path is allowed");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(1, 60) } }).blocked, true, "a path with too many segments is refused");
+  assert.equal(
+    evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: nativePatch(`*** Add File: ${"a".repeat(1100)}.ts`, "+a") } }).blocked,
+    true,
+    "an over-long path is refused",
+  );
+  const worstCaseStart = Date.now();
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: manyAdds(200, 46) } }).blocked, false, "the worst case the caps admit is still allowed");
+  assert.ok(Date.now() - worstCaseStart < 5000, `the worst case the caps admit resolves well inside the hook limit (took ${Date.now() - worstCaseStart} ms)`);
+  assert.equal(
+    evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: addProbe }, hardGateDeadlineMs: Date.now() - 1 }).blocked,
+    true,
+    "past the hook deadline a native patch is refused instead of allowed",
+  );
+
   const protectedEnvelopeEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", cwd: path.join(projectRoot, ".codex", "hooks"), tool_input: { command: nativePatch("*** Update File: production-action-guard.mjs", "@@", "-a", "+b") } }),
     encoding: "utf8",
