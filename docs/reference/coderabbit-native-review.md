@@ -105,6 +105,36 @@
 > PR, so two open PRs with the identical head could share one "Review completed" (CodeRabbit's
 > status carries no PR link to bind it to).
 >
+> **Mason can skip it for one named PR: `skip coderabbit #<PR>` (Mason, 2026-10-22: "allow me to
+> tell the session to skip coderabbit even if it is money and the LLM accept my command", then "make
+> sure we set that up for the Per PR version before merge, dont grant that session 24 free on any
+> other pr").** When Mason sends a message that STARTS with `skip coderabbit` followed straight away by
+> a PR number (`skip coderabbit #1018`, `skip coderabbit on PR 1018`; a short list such as
+> `#1018 #1020` names each, up to five; any case, "code rabbit" works too), the
+> `coderabbit-skip-prompt.mjs` message hook records one waiver per named PR, for that session only,
+> valid for 24 hours (`coderabbit-skip-<session>-pr<N>.json`, written by `coderabbit-skip-lib.mjs`
+> into the MAIN checkout's `.claude/session-state`, found through git's shared folder, so every
+> worktree records, finds and cancels the same file; a folder outside a git checkout holds none). `skip coderabbit` with no PR number records nothing; the agent asks
+> which PR. Both merge gates and the migration landing gate accept a waiver only for the PR it names
+> (the number GitHub returns for the PR being merged or applied, and only a PR in
+> `masonwells1/CRX_Manager_V1.0`: a merge in any other repository gets no waiver), and only when that
+> merge or apply runs FROM THAT SESSION; every other qualifying PR still needs its review, and the agent requests no
+> review for a waived PR. A message starting with `use coderabbit` (or `require coderabbit`) cancels
+> every waiver the session holds. The waiver covers only the missing review: the exact-SHA Sol
+> review, every required check, and the rule that every CodeRabbit thread already on the PR is
+> replied to and resolved still apply, and a requirement read that fails still refuses. Before
+> merging a waived PR that had no CodeRabbit review, the agent posts one PR comment saying so (a
+> written duty; the gates do not check it). A message that does not START with the words ("don't
+> skip coderabbit"), a relayed or peer message (it arrives inside an envelope), a handoff, or a
+> waiver from another session never counts. Like the `I approve` reply, it cannot stop an agent that
+> deliberately forges the file or runs the hook by hand with a made-up message: agents run on
+> Mason's PC with his permissions (the final Sol review rated this HIGH; naming the PR limits a
+> forged waiver to that one PR). In a Codex session the gate reads the session id from Codex's hook
+> input; if Codex sends none, no waiver is found and the review stays required. The Codex gate's
+> protected-harness list covers `coderabbit-skip-lib.mjs`. **Hooks load from the main
+> `C:/CRX_Manager` checkout** in worktree sessions, so the command works only once that checkout is
+> fast-forwarded to a main that contains it.
+>
 > Every other PR keeps the advisory rule above: no `@coderabbitai` commands, and no waiting for a
 > review that has not arrived.
 >

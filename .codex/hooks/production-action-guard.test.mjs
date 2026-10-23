@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -459,6 +459,49 @@ try {
     false, "a money PR CodeRabbit completed a review of merges");
   assert.equal(moneyMerge(() => { throw new Error("gh down"); }).blocked, true,
     "a failed requirement read refuses (fail closed)");
+  // Mason's "skip coderabbit" (2026-10-22): main() binds the waiver to the
+  // hook's session; here it is injected directly.
+  {
+    // `gh pr view` here answers PR 1 in THIS repository: the gate must use
+    // GitHub's resolved number, not text from the command (which says 5).
+    const waiver = { sessionId: "codex-session-01", pullRequest: 1, said: "skip coderabbit #1", recordedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
+    const asked = [];
+    const forPr = (n) => (pr) => { asked.push(pr); return pr === n ? waiver : null; };
+    const inRepo = (repo, answer) => (args, ...rest) => (Array.isArray(args) && args.includes("number,url")
+      ? JSON.stringify({ number: 1, url: `https://github.com/${repo}/pull/1` })
+      : withRequirement(answer)(args, ...rest));
+    const skippedMerge = (answer, findCodeRabbitSkip, repo = "masonwells1/CRX_Manager_V1.0") => evaluateProductionAction({
+      toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo,
+      nowMs: Date.now(), runGh: inRepo(repo, answer), findCodeRabbitSkip,
+    });
+    assert.equal(skippedMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }), forPr(1)).blocked,
+      false, "a money PR with no CodeRabbit review merges when Mason skipped CodeRabbit for THIS PR in this session");
+    assert.deepEqual(asked, [1], "the gate asks for the waiver of the PR GitHub resolved");
+    // Codex App P2 on #1035: the same number in another repository gets no waiver.
+    asked.length = 0;
+    assert.equal(skippedMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }), forPr(1), "other/repo").blocked,
+      true, "a waiver for #1 here does not let other/repo#1 merge");
+    assert.deepEqual(asked, [null], "and the gate does not even pass the other repository's number to the lookup");
+    assert.equal(skippedMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }), forPr(5)).blocked,
+      true, "a waiver for another PR (even the number typed in the command) does not let this one merge (Mason, 2026-10-22: per PR)");
+    assert.equal(skippedMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }), () => null).blocked,
+      true, "no waiver in this session: still refused");
+    assert.equal(skippedMerge(requirementJson({ head: ordinary.sha, files: ["src/lib/invoiceMath.ts"] }), () => { throw new Error("disk"); }).blocked,
+      true, "a waiver lookup that throws reads as no waiver");
+    assert.equal(skippedMerge(() => { throw new Error("gh down"); }, () => waiver).blocked,
+      true, "the waiver does not excuse an unreadable requirement read");
+    // Luna round 1: the injected lookup above cannot show that the real hook binds it
+    // to its own session, so pin main()'s wiring to the payload's session id.
+    const guardSource = readFileSync(new URL("./production-action-guard.mjs", import.meta.url), "utf8");
+    assert.match(guardSource,
+      /findCodeRabbitSkip: \(pullRequest, budget\) => findCodeRabbitSkip\(\{\s*dirs: skipStateDirs\(\[payload\.cwd, process\.env\.CODEX_PROJECT_DIR, process\.cwd\(\)\], undefined, budget\),\s*sessionId: payload\.session_id \?\? payload\.sessionId,\s*pullRequest,/,
+      "main() binds the waiver lookup to the hook payload's own session id, the PR being merged, and the caller's time budget");
+    assert.match(guardSource, /try \{ skip = findSkip\(reviewedPr, \{ deadlineMs, now: clock \}\); \}/,
+      "the advisory asks for the waiver of the PR it read, inside its own deadline (Codex App P2 on #1035)");
+    assert.match(guardSource, /coderabbitReview = verdict;\s*(?:\/\/[^\n]*\n\s*)*reviewedPr = skipPullRequestFor\(meta\.url, meta\.number\);/,
+      "reviewedPr is GitHub's number for a PR in this repository, set only with the trusted requirement answer");
+    assert.equal((guardSource.match(/findSkip \}\)/g) || []).length, 2, "both advisory call sites pass the lookup through");
+  }
   assert.equal(moneyMerge(requirementJson({ files: ["src/lib/invoiceMath.ts"], statuses: crDone(), head: "e".repeat(40) })).blocked,
     true, "a requirement answer for a different head than the thread answer is not trusted");
   // Sol HIGH, round 3: the same merge-ready PR without the head pin is refused —
@@ -1086,7 +1129,26 @@ try {
       `every listed protected file is protected by the regex too: ${file}`,
     );
   }
-  assert.equal(PROTECTED_HARNESS_FILES.length, 16, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  assert.equal(PROTECTED_HARNESS_FILES.length, 17, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  // coderabbit-skip-lib decides whether Mason waived a money PR's CodeRabbit review
+  // and is imported at startup (Codex App P1 on #1035): Codex may not edit it.
+  for (const file of [".claude/hooks/coderabbit-skip-lib.mjs", ".claude\\hooks\\coderabbit-skip-lib.mjs", ".claude/hooks/../hooks/coderabbit-skip-lib.mjs"]) {
+    assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: file } }).blocked, true,
+      `Codex may not write the CodeRabbit-skip module: ${file}`);
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: `*** Begin Patch\n*** Update File: ${file}\n@@\n-a\n+b\n*** End Patch` }).blocked, true,
+      `nor patch it: ${file}`);
+  }
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "Set-Content .claude/hooks/coderabbit-skip-lib.mjs -Value ''" } }).blocked, true,
+    "nor overwrite the CodeRabbit-skip module from the shell");
+  // Every module the guard imports at startup must be protected (or a Node built-in).
+  {
+    const imports = [...readFileSync(new URL("./production-action-guard.mjs", import.meta.url), "utf8")
+      .matchAll(/^import [^;]*? from "\.\.\/\.\.\/(\.claude\/hooks\/[^"]+)";/gm)].map((m) => m[1]);
+    for (const file of imports) {
+      assert.ok(PROTECTED_HARNESS_FILES.includes(file), `startup import ${file} is on the protected harness list`);
+    }
+    assert.ok(imports.includes(".claude/hooks/coderabbit-skip-lib.mjs"), "the import scan sees the skip module");
+  }
   // sol-exempt-lib decides whether a merge needs Sol and is imported at startup
   // (Mason's documentation-only exemption, 2026-10-07): Codex may not edit it.
   for (const file of [".claude/hooks/sol-exempt-lib.mjs", ".claude\\hooks\\sol-exempt-lib.mjs", ".claude/hooks/../hooks/sol-exempt-lib.mjs"]) {

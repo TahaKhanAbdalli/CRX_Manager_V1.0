@@ -55,7 +55,12 @@
 > hook, refuses (rules: `docs/reference/coderabbit-native-review.md`). The guidance check pins the trigger sentence in `AGENTS.md`
 > and, in that reference, the timing, the in-progress wait, the `docs(` title step, the stated wait and the retry cap. A failed CodeRabbit pre-merge check (all `warning` mode since 2026-10-19) is a finding, not a
 > blocker; accepted loss: its "edit to an already-applied migration" check no longer blocks (the mandatory Sol review
-> of any migration change and the CI migration check remain). Mentions of CodeRabbit APPROVED below are history.
+> of any migration change and the CI migration check remain). Mason's per-PR waiver (2026-10-22): a message that STARTS with
+> `skip coderabbit #<PR>` records, through `coderabbit-skip-prompt.mjs` / `coderabbit-skip-lib.mjs`, a 24-hour waiver
+> bound to that session AND that PR; the three gates accept a missing CodeRabbit review only for the PR the waiver
+> names (GitHub's number for the PR being merged or applied), run from that session (`use coderabbit` cancels; a
+> skip naming no PR records nothing). It waives nothing else: Sol, checks, the thread rules and the fail-closed read
+> stay. Mentions of CodeRabbit APPROVED below are history.
 >
 > **Documentation-only exemption (Mason, 2026-10-07) — amends point (1) of the autonomous-landing block below.**
 > A pull request whose every changed file is documentation as defined in `docs/reference/sol-exempt-paths.md`

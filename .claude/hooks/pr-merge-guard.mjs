@@ -70,6 +70,7 @@ import {
   readCodeRabbitRequirement,
 } from "./codex-bot-review-lib.mjs";
 import { solExemptionOnGitHub } from "./sol-exempt-lib.mjs";
+import { coderabbitSkipNotice, findCodeRabbitSkip, skipPullRequestFor, skipStateDirs } from "./coderabbit-skip-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -269,6 +270,23 @@ if (requests.some((request) => request?.admin)) {
   );
 }
 
+// Mason's live "skip coderabbit" waiver for THIS pull request (the number GitHub
+// returned for the PR being merged) in the session running this merge, or null.
+// Any failure reads as no waiver, so the review is still required.
+// Its git lookups stay inside the caller's `deadlineMs` (Codex App P2 on #1035).
+function coderabbitSkipFor(hookPayload, pullRequest, deadlineMs) {
+  try {
+    return findCodeRabbitSkip({
+      dirs: skipStateDirs([hookPayload?.cwd, process.env.CLAUDE_PROJECT_DIR, process.cwd()], undefined, { deadlineMs }),
+      // Same id the prompt hook records under (Luna round 4).
+      sessionId: hookPayload?.session_id ?? hookPayload?.sessionId,
+      pullRequest,
+    });
+  } catch {
+    return null;
+  }
+}
+
 // ── resolve the PR (fail closed) ─────────────────────────────────────────────
 const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
@@ -363,6 +381,7 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
   let codexVerdict = null;
   let coderabbitOpen = null; // null = not read completely → fail closed below
   let coderabbitReview = null; // null = not read → fail closed below
+  let reviewedPr = null; // the PR number GitHub answered for, which a skip waiver must name
   try {
     const metaArgs = ["pr", "view"];
     if (request.selector) metaArgs.push(String(request.selector));
@@ -402,6 +421,8 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
       // Both reads must describe the same head, or neither is trusted.
       if (verdict.headOid && verdict.headOid === String(node.headRefOid || "").trim().toLowerCase()) {
         coderabbitReview = verdict;
+        // A waiver covers this repository's PRs only (Codex App P2 on #1035).
+        reviewedPr = skipPullRequestFor(meta.url, meta.number);
       }
     }
   } catch {
@@ -424,7 +445,12 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
     deny(coderabbitRequirementUnreadableDenial("PR MERGE GATE", request.selector));
   }
   if (coderabbitReview.status === "missing") {
-    deny(coderabbitReviewMissingDenial("PR MERGE GATE", request.selector, coderabbitReview.why, coderabbitReview.headOid));
+    // Mason's "skip coderabbit #<this PR>" in THIS session waives only the missing
+    // review of this PR (coderabbit-skip-lib.mjs, 2026-10-22); the thread rules
+    // above still applied.
+    const skip = coderabbitSkipFor(payload, reviewedPr, deadlineMs);
+    if (!skip) deny(coderabbitReviewMissingDenial("PR MERGE GATE", request.selector, coderabbitReview.why, coderabbitReview.headOid));
+    process.stderr.write(coderabbitSkipNotice("PR MERGE GATE", request.selector, skip));
   }
 
   // The one blocking case: it flagged THIS commit and nobody answered. Not
