@@ -688,8 +688,10 @@ export function reconcileChemAutofillUnits(
     pricePerUnitCents,
     // The tolerance absorbs float noise only (1/2000 for tons is not exact in binary): the finest
     // step in the unit tables is 1/32000 (ton → oz), so a lost fraction is never under 3e-5 cents.
-    // A positive price that comes out at 0 is never exact, whatever the factor.
-    priceIsExact: Math.abs(pricePerBase - pricePerUnitCents) < 1e-6
+    // A positive price that comes out at 0 is never exact, whatever the factor; nor is one past
+    // 2^53, where the stated cents were already rounded before this ran.
+    priceIsExact: Number.isSafeInteger(pricePerStockCents)
+      && Math.abs(pricePerBase - pricePerUnitCents) < 1e-6
       && (pricePerStockCents === 0 || pricePerUnitCents !== 0),
   };
 }

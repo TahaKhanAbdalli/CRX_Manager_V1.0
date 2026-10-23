@@ -310,6 +310,8 @@ describe('chemCalculator — autofillPriceText', () => {
     const tonOz = reconcileChemAutofillUnits('ton', 'oz/ac', 0, 1, 'dry');
     expect(tonOz.priceIsExact).toBe(false);
     expect(autofillPriceText(1, tonOz)).toBe('');
+    // Past 2^53 the stated cents are already rounded, so no conversion of them counts as exact.
+    expect(reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 2 ** 53 + 128, 'liquid').priceIsExact).toBe(false);
   });
   it('keeps a price that converts to whole cents, a stated $0, and an unconverted price', () => {
     // 1280 / 128 = 10¢/oz exactly; 128 oz bills $12.80 = 1 GAL.
