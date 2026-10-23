@@ -1490,10 +1490,14 @@ function nativePatchPathProblem(filePath) {
 export function parseNativePatch(text) {
   if (typeof text !== "string") return { ok: false, reason: "the patch is not text" };
   if (text.includes("\0")) return { ok: false, reason: "the patch contains a NUL character" };
-  // Only `\n` / `\r\n` end a line here. Any other line break (a lone CR, VT, FF,
-  // NEL, U+2028, U+2029) could be read as one by a different parser, hiding a
-  // header inside what this one sees as a single path or content line.
-  if (/\r(?!\n)|[\v\f\x85]/.test(text) || text.includes(String.fromCharCode(0x2028)) || text.includes(String.fromCharCode(0x2029))) return { ok: false, reason: "the patch contains a line break other than LF or CRLF" };
+  // Only `\n` / `\r\n` end a line here. Any other control character (a lone CR,
+  // VT, FF, the FS/GS/RS/US separators, NEL and the rest of C1) or Unicode line
+  // or paragraph separator could be read as a line break by a different parser,
+  // hiding a header inside what this one sees as a single path or content line.
+  // Tab is the only control character source text legitimately carries.
+  if (/\r(?!\n)|[\x01-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text) || text.includes(String.fromCharCode(0x2028)) || text.includes(String.fromCharCode(0x2029))) {
+    return { ok: false, reason: "the patch contains a control character or line break other than LF or CRLF" };
+  }
   const lines = text.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
   if (lines[0] !== "*** Begin Patch") return { ok: false, reason: "the first line is not `*** Begin Patch`" };

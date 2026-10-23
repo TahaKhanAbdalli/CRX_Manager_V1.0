@@ -3357,7 +3357,8 @@ try {
       "+A line saying *** Add File: .codex/hooks/production-action-guard.mjs is only prose when it follows a plus sign.",
     ),
     "CRLF line endings": addProbe.replaceAll("\n", "\r\n"),
-    "dotted names": nativePatch("*** Add File: src/.hidden.config.ts", "+a", "*** Update File: docs/a.b.md", "@@", "-a", "+b"),
+    "tabs in content": nativePatch("*** Add File: src/tabbed.ts", "+\tconst a = 1;"),
+    "dotted names":nativePatch("*** Add File: src/.hidden.config.ts", "+a", "*** Update File: docs/a.b.md", "@@", "-a", "+b"),
   };
   for (const [label, patch] of Object.entries(ordinaryNativePatches)) {
     for (const field of ["command", "cmd"]) {
@@ -3533,6 +3534,12 @@ try {
     "U+2029 in content": nativePatch("*** Add File: src/a.ts", `+a${String.fromCharCode(0x2029)}*** Add File: .codex/hooks/production-action-guard.mjs`),
     "U+2028 in content": nativePatch("*** Add File: src/a.ts", `+a${String.fromCharCode(0x2028)}b`),
     "NEL in content": nativePatch("*** Add File: src/a.ts", "+a\u0085b"),
+    "file separator hiding a header": nativePatch("*** Add File: src/ok.ts", "+ok\u001c*** Add File: .codex/hooks/production-action-guard.mjs"),
+    "group separator in content": nativePatch("*** Add File: src/a.ts", "+a\u001db"),
+    "record separator in content": nativePatch("*** Add File: src/a.ts", "+a\u001eb"),
+    "unit separator in content": nativePatch("*** Add File: src/a.ts", "+a\u001fb"),
+    "DEL in content": nativePatch("*** Add File: src/a.ts", "+a\u007fb"),
+    "bell in content": nativePatch("*** Add File: src/a.ts", "+a\u0007b"),
     "form feed in a path": nativePatch("*** Add File: src/a\fb.ts", "+a"),
     "vertical tab in content": nativePatch("*** Add File: src/a.ts", "+a\u000bb"),
     "lone carriage return": "*** Begin Patch\n*** Add File: src/a.ts\r+a\n*** End Patch\n",
