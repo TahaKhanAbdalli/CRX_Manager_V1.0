@@ -414,6 +414,15 @@ export const RpcErrorCodes = {
   // already removed" (before 20261013220000 also "a customer not assigned to
   // this rep"; reps may now remove documents of any customer).
   CUSTOMER_DOCUMENT_NOT_FOUND: 'CUSTOMER_DOCUMENT_NOT_FOUND',
+  // upsert_product_brand (20261022086500_product_brands).
+  BRAND_NAME_TAKEN: 'BRAND_NAME_TAKEN',
+  BRAND_CHANGED: 'BRAND_CHANGED',
+  BRAND_NAME_REQUIRED: 'BRAND_NAME_REQUIRED',
+  BRAND_TEXT_TOO_LONG: 'BRAND_TEXT_TOO_LONG',
+  BRAND_NOT_FOUND: 'BRAND_NOT_FOUND',
+  EPA_REGISTRATION_INVALID: 'EPA_REGISTRATION_INVALID',
+  NOT_AUTHORIZED: 'NOT_AUTHORIZED',
+  PRODUCT_NOT_FOUND: 'PRODUCT_NOT_FOUND',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];
