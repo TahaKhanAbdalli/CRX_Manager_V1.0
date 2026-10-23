@@ -4709,6 +4709,8 @@ export default function QuoteBuilder() {
                                     });
                                   }}
                                   aria-label="Price per unit"
+                                  // A stated $0 tier price shows as 0.00, not as a missing price.
+                                  placeholder={prod ? '0.00' : undefined}
                                   className={`w-20 px-2 py-1 text-sm font-mono border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
                                     item.price_override != null
                                       ? 'border-amber-400 bg-amber-50'

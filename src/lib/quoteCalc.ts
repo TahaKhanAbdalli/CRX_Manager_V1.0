@@ -9,6 +9,8 @@
  * display math. They are NOT imported by QuoteBuilder's save payload, and new
  * code must NOT route persisted values through them — read the server-returned
  * values after save instead. (Foundation audit P2-E, 2026-05-28.)
+ * One exception: QuoteBuilder compares a typed price with getQuoteTierPrice to decide
+ * whether it is a price_override, which save_quote stores.
  */
 import type { Product, UnitConversion } from '../types';
 import { parseDollarsToCents } from './parseCents';
