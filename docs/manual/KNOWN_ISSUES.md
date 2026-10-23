@@ -438,7 +438,7 @@ Mason's REAL-DATA-OK.
   farm names; `get_notes_for_entity` lets any signed-in user with a record ID read its team notes (HIGH).
   Part A (PR #1065, not applied) closes both: search returns nothing to field roles and notes follow the linked
   record. `team_notes` itself still admits every active profile, so the Team Board shows field roles every note;
-  Mason decided 2026-10-23 to keep that for now (To-Do row 11.9, `DECISION_LOG.md`).
+  Mason decided 2026-10-23 to keep that for now (To-Do row 11.11, `DECISION_LOG.md`).
 - Every active account reads every `customer_addresses` row (To-Do row 11.7; HIGH).
 - Drivers can read every customer's billing splits and spray-record field/acres data through
   `field_billing_defaults` and `application_record_fields` (MED).
