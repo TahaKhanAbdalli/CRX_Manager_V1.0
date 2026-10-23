@@ -818,11 +818,16 @@ same and the admin gets `already_imported`; the admin then prices the line with
 `SMOKE_PASS_ROLLBACK` live the same evening and in a disposable copy of the real schema with every
 migration replayed.
 
-The app behaviour stays as it is: when an admin's import of a document a rep already imported carries
-costs, it is refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT` instead of being told it already exists.
-That is safe (no second purchase order is made). The admin's path is to open the rep's purchase order
-and set its costs. Making the message friendlier would need a fingerprint that ignores cost, which is
-a migration on the import path for a rare case; not planned unless it causes confusion in use.
+**Friendlier message (Mason asked for it, 2026-10-22, late evening).** Until then an admin's import of
+a document a rep already imported, carrying costs, was refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`
+instead of being told it already exists. That was safe (no second purchase order was ever made), only
+unfriendly. Migration `20261022100000_bulk_po_fingerprint_ignores_cost` (migration-history row 978;
+**NOT APPLIED yet**) leaves cost (`unit_cost`, `unit_cost_cents`) out of the import's content
+fingerprint for everyone, so the admin now gets `already_imported`, pointing at the rep's purchase
+order, which stays the only one. Cost is not part of the document's identity: the admin sets the cost
+on that purchase order (`set_purchase_order_item_costs`), and a re-import with a different cost
+changes nothing; the bulk-import screen's "already imported" message tells an admin so. A real content change (another quantity, product, unit or invoice date) is still
+refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`. The smoke chain now checks both.
 
 ## RESOLVED 2026-10-22 (opened 2026-10-09) — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
 
