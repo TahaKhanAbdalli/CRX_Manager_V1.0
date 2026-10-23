@@ -621,7 +621,10 @@ export default function QuoteBuilder() {
   useLayoutEffect(() => {
     routeQuoteIdRef.current = id ?? null;
   }, [id]);
-  const blocker = useUnsavedChanges(isDirty);
+  // Set right before a navigate() that follows a committed save, so the router's
+  // stale "dirty" check cannot show a false Unsaved Changes prompt (see useUnsavedChanges).
+  const skipUnsavedPromptRef = useRef(false);
+  const blocker = useUnsavedChanges(isDirty, skipUnsavedPromptRef);
 
   // Status-based guards
   const currentStatus = status || 'draft';
@@ -702,7 +705,7 @@ export default function QuoteBuilder() {
     if (!initialLoadDone.current) return;
     if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
-  }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+  }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit, isPlanned]);
 
   // Release initial-load dirty suppression only after React has committed the
   // complete installed snapshot. Timer/frame releases can run before that
@@ -2273,48 +2276,63 @@ export default function QuoteBuilder() {
 
   const handleSaveDraft = async () => {
     setSaving(true);
-    const result = await saveQuote('draft');
-    if (result) {
-      setIsDirty(false);
-      toast('success', 'Quote saved as draft');
-      trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
-        message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
-        data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
-      });
-      // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
-      // A frontend logActivity() here would double-log every save.
-      // Planned program hold management
-      if (isPlanned && profile) {
-        const holdIdemKey = plannedHoldsIdem.getKey();
-        const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
-          p_quote_id: result,
-          p_performed_by: profile.id,
-          p_idempotency_key: holdIdemKey,
+    // Always unlock the form (it is locked while saving), whatever the steps below throw.
+    try {
+      const result = await saveQuote('draft');
+      if (result) {
+        setIsDirty(false);
+        toast('success', 'Quote saved as draft');
+        trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
+          message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
+          data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
         });
-        if (holdError) {
-          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
-          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
-          const bindingRejection = getIdempotencyBindingRejection(holdError);
-          if (bindingRejection === 'intent' || bindingRejection === 'actor') plannedHoldsIdem.resetKey();
-          Sentry.captureException(holdError, { tags: { source: 'mutation', action: 'create_planned_holds' } });
-          toast('error', `Failed to create inventory holds: ${sanitizeError(holdError)}`);
+        // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
+        // A frontend logActivity() here would double-log every save.
+        // Planned program hold management
+        if (isPlanned && profile) {
+          // The quote is already saved, so a hold failure must not stop the steps below: a new
+          // quote still has to open its saved page, or the next save would create a second quote.
+          try {
+            const holdIdemKey = plannedHoldsIdem.getKey();
+            const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
+              p_quote_id: result,
+              p_performed_by: profile.id,
+              p_idempotency_key: holdIdemKey,
+            });
+            if (holdError) {
+              // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+              // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+              const bindingRejection = getIdempotencyBindingRejection(holdError);
+              if (bindingRejection === 'intent' || bindingRejection === 'actor') plannedHoldsIdem.resetKey();
+              Sentry.captureException(holdError, { tags: { source: 'mutation', action: 'create_planned_holds' } });
+              toast('error', `Failed to create inventory holds: ${sanitizeError(holdError)}`);
+            }
+            else {
+              assertRpcResult(holdData, 'create_planned_holds');
+              plannedHoldsIdem.resetKey();
+              toast('success', 'Inventory holds created for planned program');
+              await loadActivePlannedHolds(result);
+            }
+          } catch (holdErr) {
+            // An unconfirmed reply keeps the retry key, so the next save replays instead of holding twice.
+            Sentry.captureException(holdErr, { tags: { source: 'mutation', action: 'create_planned_holds' } });
+            toast('error', `The quote was saved, but its inventory holds could not be confirmed: ${sanitizeError(holdErr)}`);
+          }
+        } else if (!isPlanned && wasPlanned) {
+          // save_quote synchronizes planned holds in the same database transaction;
+          // no second client-side table mutation or not-yet-live RPC is needed.
+          setWasPlanned(false);
+          setActivePlannedHolds([]);
         }
-        else {
-          assertRpcResult(holdData, 'create_planned_holds');
-          plannedHoldsIdem.resetKey();
-          toast('success', 'Inventory holds created for planned program');
-          await loadActivePlannedHolds(result);
-        }
-      } else if (!isPlanned && wasPlanned) {
-        // save_quote synchronizes planned holds in the same database transaction;
-        // no second client-side table mutation or not-yet-live RPC is needed.
-        setWasPlanned(false);
-        setActivePlannedHolds([]);
-      }
 
-      if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
+        if (!isEditing) {
+          skipUnsavedPromptRef.current = true;
+          navigate(`/quotes/${result}`, { replace: true });
+        }
+      }
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   // Save as template handler
@@ -3203,6 +3221,7 @@ export default function QuoteBuilder() {
       sendOrderConfirmedEmail(result.order_id!);
       setIsDirty(false);
       setShowDrawModal(false);
+      skipUnsavedPromptRef.current = true;
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
@@ -3319,6 +3338,9 @@ export default function QuoteBuilder() {
 
     // Duplicate order warning: check for recent orders for same customer
     if (customerId) {
+      // Lock the form (and the confirm dialog's Cancel) from the click: this handler converts
+      // from the quote as it is now, so nothing may change or be cancelled during the lookup.
+      setConverting(true);
       try {
         const sevenDaysAgo = localDatePlusDays(-7);
         const { data: recentOrders } = await supabase
@@ -3335,6 +3357,7 @@ export default function QuoteBuilder() {
           const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
           setDuplicateOrderMsg(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
           setDuplicateOrderConfirmOpen(true);
+          setConverting(false);
           return;
         }
       } catch { /* ignore — don't block conversion if check fails */ }
@@ -3470,6 +3493,7 @@ export default function QuoteBuilder() {
 
       // Bug #31 fix: Clear dirty state before navigate to prevent unsaved changes dialog
       setIsDirty(false);
+      skipUnsavedPromptRef.current = true;
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
@@ -3523,6 +3547,7 @@ export default function QuoteBuilder() {
         if (createdOrderId) {
           toast('success', 'The order was created — opening it');
           setIsDirty(false);
+          skipUnsavedPromptRef.current = true;
           navigate(`/orders/${createdOrderId}`);
         } else {
           toast('warning', 'The quote was accepted, but its order could not be found — check the Orders page');
@@ -3659,6 +3684,10 @@ export default function QuoteBuilder() {
     );
   }
 
+  // The quote cannot be edited while a save or order creation runs: an edit made then
+  // would not be in what was written, and the page usually moves on afterwards.
+  const formLocked = saving || converting || drawing;
+
   return (
     <div className="space-y-4">
       <Breadcrumbs items={[
@@ -3695,7 +3724,7 @@ export default function QuoteBuilder() {
               checked={isPlanned}
               onChange={(e) => setIsPlanned(e.target.checked)}
               className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
-              disabled={!canEdit && isEditing}
+              disabled={formLocked || (!canEdit && isEditing)}
             />
             <span className="font-medium">Planned Program</span>
             <HelpTip text="Mark as Planned if the customer intends to buy but hasn't committed yet. This reserves inventory with a hold so it's not sold to someone else. Set the Needed By date so you can forecast when product will move." className="ml-1" />
@@ -4327,6 +4356,7 @@ export default function QuoteBuilder() {
         </Card>
       )}
 
+      <fieldset disabled={formLocked} aria-busy={formLocked} className="space-y-4 min-w-0">
       {!id && quoteTemplates.length > 0 && (
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
           <label className="text-sm font-medium">Start from Template:</label>
@@ -4913,6 +4943,7 @@ export default function QuoteBuilder() {
           />
         </div>
       </Card>
+      </fieldset>
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />
@@ -5024,7 +5055,7 @@ export default function QuoteBuilder() {
 
       <Modal
         open={confirmConvertOpen}
-        onClose={() => setConfirmConvertOpen(false)}
+        onClose={() => { if (!converting) setConfirmConvertOpen(false); }}
         title="Convert to"
         accent="Order"
       >
@@ -5040,6 +5071,7 @@ export default function QuoteBuilder() {
               variant="secondary"
               showChevron={false}
               onClick={() => setConfirmConvertOpen(false)}
+              disabled={converting}
             >
               Cancel
             </Button>
@@ -5223,7 +5255,8 @@ export default function QuoteBuilder() {
                               max={row.remaining}
                               step="any"
                               value={row.qty}
-                              disabled={row.remaining <= 0}
+                              // Locked while the order is created: a later change would not be in it.
+                              disabled={drawing || row.remaining <= 0}
                               onChange={(e) => {
                                 const next = [...drawRows];
                                 next[idx] = { ...row, qty: e.target.value };

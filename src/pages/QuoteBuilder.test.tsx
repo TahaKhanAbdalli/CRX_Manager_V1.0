@@ -2800,6 +2800,85 @@ describe('QuoteBuilder', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/orders/order-1');
   });
 
+  it('locks the quote and the Cancel button while Convert checks for a recent order', async () => {
+    const fixture = makeQuoteFixture('draft', 7);
+    const quote = { ...fixture.quote, status: 'sent', created_at: new Date().toISOString() };
+    mockFrom.mockImplementation((table: string) => (table === 'orders'
+      // The recent-order lookup never answers, so the test sees the page mid-lookup.
+      ? buildPendingChain()
+      : buildChain({
+        data: table === 'quotes' ? quote
+          : table === 'quote_sections' ? [fixture.section]
+            : table === 'quote_items' ? [fixture.item]
+              : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+                : table === 'products' ? [fixture.product]
+                  : [],
+        error: null,
+      })));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? { data: { quote_id: quote.id, row_version: 8, item_ids: {} }, error: null }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    const opener = await screen.findByRole('button', { name: 'Create Order ▾' });
+    await waitFor(() => expect(opener).toBeEnabled());
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
+    const dialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    const convertButton = within(dialog).getByRole('button', { name: 'Create Order' });
+    await waitFor(() => expect(convertButton).toBeEnabled());
+    fireEvent.click(convertButton);
+
+    // Convert works from the quote as it was clicked, so it cannot be edited or cancelled now.
+    await waitFor(() => expect(screen.getByDisplayValue(quote.header_notes)).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
+  });
+
+  it('locks the quote while it converts to an order, then opens the order', async () => {
+    const fixture = makeQuoteFixture('draft', 7);
+    const quote = { ...fixture.quote, status: 'sent', created_at: new Date().toISOString() };
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes' ? quote
+        : table === 'quote_sections' ? [fixture.section]
+          : table === 'quote_items' ? [fixture.item]
+            : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products' ? [fixture.product]
+                : [],
+      error: null,
+    }));
+    let releaseConvert!: () => void;
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'save_quote') {
+        return Promise.resolve({ data: { quote_id: quote.id, row_version: 8, item_ids: {} }, error: null });
+      }
+      if (name === 'convert_quote_to_order') {
+        return new Promise((resolve) => {
+          releaseConvert = () => resolve({ data: { status: 'converted', order_id: 'order-2', order_number: 'O-2', warnings: [] }, error: null });
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    const opener = await screen.findByRole('button', { name: 'Create Order ▾' });
+    await waitFor(() => expect(opener).toBeEnabled());
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
+    const dialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    const convertButton = within(dialog).getByRole('button', { name: 'Create Order' });
+    await waitFor(() => expect(convertButton).toBeEnabled());
+    fireEvent.click(convertButton);
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('convert_quote_to_order', expect.anything()));
+
+    // An edit made now would not be in the order, and the page leaves for it afterwards.
+    expect(screen.getByDisplayValue(quote.header_notes)).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /Planned Program/ })).toBeDisabled();
+    releaseConvert();
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/orders/order-2'));
+  });
+
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     let quoteReads = 0;
