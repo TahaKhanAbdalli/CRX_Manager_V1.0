@@ -326,6 +326,14 @@ APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Ma
 
 ## Recent production deployments
 
+- **2026-10-23 (Create User activates the new user in one step):** the `create-user` Edge Function
+  was deployed live as v25 on Mason's in-chat approval (ACTIVE; the preflight answers the production
+  origin, a call with no login is refused with 401, and the deployed files match the reviewed ones); the
+  Settings page change merged in PR #1056 (`b92d6f19a`, 14:06 UTC; production deploys from `main`). The
+  function now sets the new user's name, role and phone and activates them through
+  `admin_update_profile`, called with the requesting admin's own login. Not yet done: a live Create User
+  through Settings on v25 — Mason deferred it on 2026-10-23; the existing test accounts predate v25 and
+  cannot prove it.
 - **2026-10-14 (sales reps work with any customer):** migration
   `20261013220000_reps_work_any_customer` applied 13:14:50 UTC on Mason’s in-chat approval
   (ledger `20261014131450`); PR #907 merged as `395bdcd9a` at 13:16 UTC (production deploys from

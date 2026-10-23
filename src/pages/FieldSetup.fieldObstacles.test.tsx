@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import FieldSetup from './FieldSetup';
 
@@ -191,12 +191,12 @@ function configureSupabase(obstacleReadError: unknown = null, measuredAcres: num
     if (table === 'fields') {
       return {
         select: () => ({
-          eq: () => ({
+          eq: (_column: string, value?: string) => ({
             // Duplicate-name check run when an owner is picked.
             ilike: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }),
             maybeSingle: () => Promise.resolve({
               data: {
-                id: 'field-1',
+                id: value ?? 'field-1',
                 customer_id: 'customer-1',
                 field_name: 'North 40',
                 state: 'IL',
@@ -380,5 +380,87 @@ describe('FieldSetup field obstacles', () => {
     expect(await screen.findByText(/West well/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add obstacle' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete obstacle West well' })).not.toBeInTheDocument();
+  });
+});
+
+describe('FieldSetup load failure (To-Do 10.5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseParams.mockReturnValue({ id: 'field-1' });
+    mockUseAuth.mockReturnValue({ profile: { id: 'user-1', role: 'admin' } });
+    configureSupabase();
+  });
+
+  it('a failed billing-split read shows the load error, not a form whose Save would drop the splits', async () => {
+    const base = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => (
+      table === 'field_billing_defaults' ? listChain(null, { message: 'unavailable' }) : base(table)
+    ));
+    render(<FieldSetup />);
+    expect(await screen.findByText('This field could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Changes' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Field not found')).not.toBeInTheDocument();
+  });
+
+  it('moving to a field with no billing splits clears the previous field\'s splits (Save sends the whole list)', async () => {
+    const base = mockFrom.getMockImplementation()!;
+    let splits: unknown[] = [{ customer_id: 'customer-9', customer: { farm_name: 'Leftover Split Farm' }, split_pct: 100, is_primary: true }];
+    mockFrom.mockImplementation((table: string) => (
+      table === 'field_billing_defaults' ? listChain(splits) : base(table)
+    ));
+    const { rerender } = render(<FieldSetup />);
+    expect(await screen.findByText('Leftover Split Farm')).toBeInTheDocument();
+
+    splits = [];
+    mockUseParams.mockReturnValue({ id: 'field-2' });
+    rerender(<FieldSetup />);
+    // The new field's form must have loaded, so the check is not passing on the loading screen.
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+    expect(screen.queryByText('Leftover Split Farm')).not.toBeInTheDocument();
+  });
+
+  it('opening New Field after a field with billing splits starts an empty form', async () => {
+    const base = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => (
+      table === 'field_billing_defaults'
+        ? listChain([{ customer_id: 'customer-9', customer: { farm_name: 'Leftover Split Farm' }, split_pct: 100, is_primary: true }])
+        : base(table)
+    ));
+    const { rerender } = render(<FieldSetup />);
+    expect(await screen.findByText('Leftover Split Farm')).toBeInTheDocument();
+
+    mockUseParams.mockReturnValue({ id: 'new' });
+    rerender(<FieldSetup />);
+    expect(await screen.findByRole('button', { name: 'Create Field' })).toBeInTheDocument();
+    expect(screen.queryByText('Leftover Split Farm')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('North 40')).not.toBeInTheDocument();
+  });
+
+  it('a read for the field left behind that fails late does not report a failure on the next field', async () => {
+    const base = mockFrom.getMockImplementation()!;
+    let failFirstRead: (() => void) | null = null;
+    mockFrom.mockImplementation((table: string) => {
+      const chain = base(table);
+      if (table !== 'fields' || failFirstRead) return chain;
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () => new Promise((resolve) => {
+              failFirstRead = () => resolve({ data: null, error: { message: 'timeout' } });
+            }),
+          }),
+        }),
+      };
+    });
+    const { rerender } = render(<FieldSetup />);
+    await waitFor(() => expect(failFirstRead).not.toBeNull());
+
+    mockUseParams.mockReturnValue({ id: 'field-2' });
+    rerender(<FieldSetup />);
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+
+    await act(async () => { failFirstRead!(); });
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Failed to load field');
+    expect(screen.queryByText('This field could not be loaded')).not.toBeInTheDocument();
   });
 });

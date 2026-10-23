@@ -513,7 +513,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 ### Auth & Security
 - `_is_admin_override()` — internal admin check for RLS policies
-- `handle_new_user()` — triggered on `auth.users` INSERT, auto-creates `profiles` row. Since `20261022023000` a user the Auth service creates (signup or the `create-user` admin API) gets an inactive, login-banned `driver` named `Pending user <id>`, ignoring metadata role and name; Settings → Create User then sets name, role and active through `admin_update_profile`. Only direct `postgres`/`supabase_admin` SQL with no `SET ROLE` in effect keeps the metadata role and name
+- `handle_new_user()` — triggered on `auth.users` INSERT, auto-creates `profiles` row. Since `20261022023000` a user the Auth service creates (signup or the `create-user` admin API) gets an inactive, login-banned `driver` named `Pending user <id>`, ignoring metadata role and name; the `create-user` Edge Function then sets name, role and active through `admin_update_profile` in the same request, called as the requesting admin (Settings → Create User repeats the call only when the reply says `activated: false`). Only direct `postgres`/`supabase_admin` SQL with no `SET ROLE` in effect keeps the metadata role and name
 - `check_idempotency(p_key, p_operation)` — check if an idempotency key has been used. **LIVE (`20260714230000`, 2026-07-15):** takes a key-only transaction advisory lock so same-operation retries serialize and cross-operation reuse fails before business mutation. A trigger forces legacy inline-key concurrent losers to roll back.
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check

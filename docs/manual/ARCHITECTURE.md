@@ -203,7 +203,7 @@ Current functions, one line each:
 
 | Function | Purpose |
 |---|---|
-| `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key. |
+| `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key, then activates it with the chosen name and role through `admin_update_profile`, called as the requesting admin (reply field `activated`). |
 | `customer-document-files` | The only byte path for customer documents: issues single-path upload tokens, and streams downloads after re-checking the document row (removed documents, and any path not in the server-issued shape, are refused). Admins and sales reps reach every customer (2026-10-13, matching `20261013220000`; live since the v2 deploy on 2026-10-14 UTC, after that migration applied). First deployed live as v1 on 2026-09-22 UTC with Mason's approval; the customer Documents tab calls it (merged in PR #764, 2026-09-22), and migration `20260914100700` (applied 2026-09-26) removed every browser Storage policy on the bucket. |
 | `epa-lookup` | Looks up an EPA pesticide registration number against the public EPA registry and normalizes/caches the result (added 2026-07 for label data quality). |
 | `process-blend-ticket` | OCR/text parsing of a photographed blend ticket into structured fields (date, customer, driver, acres, rate, etc.). |

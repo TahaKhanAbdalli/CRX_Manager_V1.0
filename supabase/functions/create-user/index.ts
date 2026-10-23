@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
 import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
+import { activateNewUser } from "./logic.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -134,22 +135,30 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    if (phone) {
-      const { error: phoneError } = await adminClient
-        .from("profiles")
-        .update({ phone })
-        .eq("id", newUser.user.id);
-      if (phoneError) {
-        await captureEdgeException(phoneError, {
-          function: "create-user",
-          level: "warning",
-          extra: { context: "profile_phone_update", user_id: newUser.user.id },
-        });
-      }
+    // Activate in the same request, as the calling admin (see logic.ts). On
+    // failure the login still exists but stays blocked; `activated: false`
+    // tells the page to retry the step itself or say so. The reason goes to
+    // Sentry only, never into the reply.
+    const newUserId = newUser.user.id;
+    const activationError = await activateNewUser(callerClient, {
+      userId: newUserId,
+      fullName: full_name,
+      role: role || "sales_rep",
+      phone,
+    });
+    if (activationError) {
+      await captureEdgeException(new Error(activationError), {
+        function: "create-user",
+        level: "warning",
+        extra: { context: "activate_new_user", user_id: newUserId },
+      });
     }
 
     return new Response(
-      JSON.stringify({ user: { id: newUser.user.id, email } }),
+      JSON.stringify({
+        user: { id: newUserId, email },
+        activated: activationError === null,
+      }),
       {
         status: 201,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
