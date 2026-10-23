@@ -312,6 +312,9 @@ ok(isMachineGenerated(`\n  ${BARE_HANDBACK}`), "bare hand-back with leading whit
 ok(!isMachineGenerated(`stop.\n${BARE_HANDBACK}`), "Mason's text BEFORE a hand-back frame is not swallowed");
 ok(!isMachineGenerated("[Subagent hand-back] stop"), "a typed bracket tag without the frame sentence is not machine content");
 ok(!isMachineGenerated("[Subagent hand-back]\nstop now"), "a typed bracket tag on its own line is not machine content");
+ok(!isMachineGenerated(`${BARE_HANDBACK}stop`), "the full frame followed by an unindented stop is not machine content");
+ok(!isMachineGenerated("[Subagent hand-back] The text below is the final report of a subagent this session delegated to.\nstop"),
+  "the frame sentence typed with stop on the next line is not machine content");
 const handbackProj = mkdtempSync(path.join(tmpdir(), "crx-handback-"));
 for (const hook of PHRASE_HOOKS) {
   const r = spawnSync(process.execPath, [path.join(__dirname, hook)], {

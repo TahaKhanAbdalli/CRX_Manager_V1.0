@@ -15,9 +15,10 @@
 // session-state with a fresh mtime: one 2026-10-19 marker had been copied into
 // 13 worktrees and switched every rule off, TRUNCATE and DDL included (2026-10-23).
 //
-// FAIL-OPEN: any error → emit nothing (normal flow).
-// The settings registration sets onFailure "block", so a crash or timeout of this
-// process refuses the call.
+// FAIL-CLOSED (2026-10-23): an unreadable event or a classifier error denies the
+// call, and the settings registration sets onFailure "block", so a crash or
+// timeout of this process refuses it too.
+// @proven-by guards.test.mjs ("unreadable execute_sql event is denied")
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -35,27 +36,39 @@ function markerIsFresh(markerPath) {
   const m = LEADING_UTC_TIME_RE.exec(body);
   if (!m) return false;
   const age = Date.now() - Date.parse(m[1]);
-  return age >= -CLOCK_SKEW_MS && age <= REAL_DATA_OK_MAX_AGE_MS;
+  return age >= -CLOCK_SKEW_MS && age < REAL_DATA_OK_MAX_AGE_MS;
 }
 
 function nothing() { process.exit(0); }
 
+function deny(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: `LIVE-DATA GUARD: ${reason}`,
+    },
+  }));
+  process.exit(0);
+}
+
+// The registration matches execute_sql only, so an event this process cannot
+// read, or a classifier crash, is refused: onFailure "block" never sees a clean exit.
 let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
+try { payload = JSON.parse(readFileSync(0, "utf8")); } catch {
+  deny("the tool call could not be read, so it is refused rather than assumed harmless.");
+}
 
 const toolName = String(payload?.tool_name || "");
 if (!/execute_sql/i.test(toolName)) nothing();
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const markerPath = path.join(projectDir, ".claude", "session-state", "REAL-DATA-OK");
-const verdict = classifySql(payload?.tool_input?.query, { realDataOk: markerIsFresh(markerPath) });
+let verdict;
+try {
+  verdict = classifySql(payload?.tool_input?.query, { realDataOk: markerIsFresh(markerPath) });
+} catch {
+  deny("the SQL could not be checked, so it is refused rather than assumed harmless.");
+}
 if (!verdict.block) nothing();
-
-process.stdout.write(JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: `LIVE-DATA GUARD: ${verdict.reason}`,
-  },
-}));
-process.exit(0);
+deny(verdict.reason);

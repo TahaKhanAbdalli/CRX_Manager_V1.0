@@ -14,8 +14,12 @@ actions through and guards that blocked harmless ones. This change does the firs
   first line is the UTC time it was written and that time is under 2 hours old, and it relaxes only real
   inserts/updates, money-column updates and RPC calls. The marker never unlocks audit-log writes,
   TRUNCATE, DDL/GRANT, sequence changes, deletes or cancels/voids, including later in the same batch.
-  Unchanged and deferred: a batch containing `[E2E]` anywhere still skips the insert, update, delete and
-  cancel/void checks (Luna round 1).
+  Nor does it unlock an RPC named for deleting, cancelling, voiding or reversing (`cancel_order`,
+  `void_invoice`). Deletes and cancels/voids now honour `[E2E]` per statement and only in the SQL, not
+  a comment, so `DELETE FROM invoices WHERE id = 7; -- [E2E]` is refused; before, one marker anywhere
+  exempted the whole batch. Unchanged and deferred: a batch-wide `[E2E]`, a comment included, still
+  exempts ordinary inserts and updates. The guard now denies an event it cannot read or a classifier
+  error instead of allowing it (Luna rounds 1–2).
 - Vercel: 36 current connector tools that change live settings had no deny entry (DNS records,
   redirects, domain verification, sandboxes that run commands, team access/SSO, toolbar comments,
   `get_project_deletion_link`, which only reads but hands out a link that deletes the project). Added to

@@ -71,15 +71,23 @@ const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
 // session where Mason never said stop (replayed: the bare body latches, the
 // wrapped form does not). The harness indents every line of the report itself,
 // so only the harness can put that frame at the very start of the prompt. The
-// match requires the frame's own opening sentence, not just the bracket tag, so
-// a typed "[Subagent hand-back] stop" still reaches the hold latch.
+// match needs both the frame's own opening sentence and that indentation: a
+// typed "[Subagent hand-back] stop", or the whole frame sentence followed by
+// "stop" at column zero, still reaches the hold latch. All four real reports
+// have every line after the frame line indented.
 const STARTS_WITH_HANDBACK_FRAME_RE = /^\[Subagent hand-back\] The text below is the final report of a subagent this session delegated to\./;
+
+function isBareHandback(text) {
+  const lines = text.trimStart().split(/\r?\n/);
+  if (!STARTS_WITH_HANDBACK_FRAME_RE.test(lines[0])) return false;
+  return lines.slice(1).every((line) => line.trim() === "" || /^[ \t]/.test(line));
+}
 
 export function isMachineGenerated(prompt) {
   const text = String(prompt || "");
   if (!text) return false;
   if (CONTAINS_MACHINE_TAG_RE.test(text)) return true;
-  if (STARTS_WITH_HANDBACK_FRAME_RE.test(text.trimStart())) return true;
+  if (isBareHandback(text)) return true;
   return STARTS_WITH_MACHINE_TAG_RE.test(text.trim());
 }
 

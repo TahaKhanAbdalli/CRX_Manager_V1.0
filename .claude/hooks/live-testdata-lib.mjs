@@ -331,6 +331,19 @@ const schemaBefore = (word) => new RegExp(`(?:^|[^${IDENT_CHAR}."])(?:${caseless
 const AUTH_SCHEMA_BEFORE_RE = schemaBefore("auth");
 const PG_CATALOG_BEFORE_RE = schemaBefore("pg_catalog");
 
+// A called function whose name has a delete/cancel/void/reverse-type word as a
+// whole underscore-separated part (cancel_order, batch_void, delete_invoices,
+// reverse_write_off). A match inside a string literal also counts: refusing is
+// the safe direction.
+const DESTRUCTIVE_FN_CALL_RE = /\b([a-z_][a-z0-9_]*)\s*\(/gi;
+const DESTRUCTIVE_FN_WORD_RE = /(?:^|_)(?:delete|void|cancel|remove|purge|reverse|refund|undo|wipe|drop|truncate)(?:_|$)/i;
+export function findDestructiveFunctionCall(sqlText) {
+  for (const m of String(sqlText || "").matchAll(DESTRUCTIVE_FN_CALL_RE)) {
+    if (DESTRUCTIVE_FN_WORD_RE.test(m[1])) return m[1];
+  }
+  return null;
+}
+
 export function findNonReadFunctionCall(sqlText) {
   // Comments go first (quote-aware, each becomes one space): `evil./*x*/fn(1)`
   // hid its schema and `fn/**/(1)` hid the call itself (Codex connector, PR #882),
@@ -737,10 +750,61 @@ function classifySqlInner(query, realDataOk) {
     }
   }
 
-  // 4. Clearly-fake test data is fine for ordinary data writes.
-  if (t.includes("[E2E]")) return { block: false };
+  // Comments removed, so `-- [E2E]` or `/* [E2E] */` cannot exempt anything below.
+  const code = stripCommentsQuoteAware(t);
+
+  // 3c. A fresh REAL-DATA-OK relaxes RPC calls, but never one whose name says it
+  //     deletes, cancels, voids or reverses (cancel_order, void_invoice,
+  //     delete_invoices, reverse_write_off): the delete/cancel rules below cannot
+  //     see inside a function body (Luna, 2026-10-23).
+  if (realDataOk) {
+    const destructive = findDestructiveFunctionCall(code);
+    if (destructive) {
+      return {
+        block: true,
+        kind: "destructive-rpc",
+        reason: `This calls "${destructive}()", whose name says it deletes, cancels, voids or reverses records. REAL-DATA-OK does not cover deletes, cancels or voids; do it in the app or surface the IDs to Mason.`,
+      };
+    }
+  }
 
   let m;
+
+  // 4. Deletes and cancels/voids. The [E2E] exemption is judged PER STATEMENT:
+  //    a statement is exempt only when its own code (not a comment) carries the
+  //    marker. Before 2026-10-23 one [E2E] anywhere in the batch exempted every
+  //    statement, so `DELETE FROM invoices WHERE id = 7; -- [E2E]` was allowed
+  //    (Luna). Splitting on every `;` can cut a string literal; the piece then
+  //    lacks the marker and is refused, which is the safe direction.
+  for (const stmt of code.split(";")) {
+    if (stmt.includes("[E2E]")) continue;
+    if ((m = DELETE_RE.exec(stmt))) {
+      return {
+        block: true,
+        kind: "financial-delete",
+        reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
+      };
+    }
+    if ((m = CANCEL_VOID_RE.exec(stmt))) {
+      return {
+        block: true,
+        kind: "financial-cancel",
+        reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. REAL-DATA-OK does not cover cancels or voids.`,
+      };
+    }
+    if ((m = DELETE_ANY_RE.exec(stmt))) {
+      return {
+        block: true,
+        kind: "real-delete",
+        reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
+      };
+    }
+  }
+
+  // 4b. Clearly-fake test data is fine for ordinary data writes. (Unchanged: a
+  //     batch-wide marker, a comment included, still exempts inserts/updates.)
+  if (t.includes("[E2E]")) return { block: false };
+
   if (!realDataOk && (m = INSERT_RE.exec(t))) {
     return {
       block: true,
@@ -748,21 +812,6 @@ function classifySqlInner(query, realDataOk) {
       reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${REAL_WRITE_OVERRIDE_HINT}`,
     };
   }
-  if ((m = DELETE_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "financial-delete",
-      reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
-    };
-  }
-  if ((m = CANCEL_VOID_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "financial-cancel",
-      reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. REAL-DATA-OK does not cover cancels or voids.`,
-    };
-  }
-
   // 5. Money-amount edits on financial tables (SET clause only, not the WHERE part).
   if (!realDataOk && (m = FIN_UPDATE_RE.exec(t))) {
     const afterSet = t.slice(m.index).match(/\bset\b([\s\S]*)/i);
@@ -774,16 +823,6 @@ function classifySqlInner(query, realDataOk) {
         reason: `This UPDATEs a money column on the live financial table "${m[1]}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead.`,
       };
     }
-  }
-
-  // 5b. DELETE catch-all: any DELETE against a real (non-[E2E]) business table,
-  //     not just the financial subset (rule 4 above already handled those).
-  if ((m = DELETE_ANY_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "real-delete",
-      reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
-    };
   }
 
   // 6. FIX 5 catch-all: any OTHER UPDATE against a real (non-[E2E]) business

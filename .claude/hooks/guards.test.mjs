@@ -435,6 +435,30 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
   ok(sql("INSERT INTO financial_audit_log (note) VALUES ('x')").includes("deny"), "fresh marker: audit-log write still denied");
   ok(sql("INSERT INTO customers (name) VALUES ('Real Farm'); DELETE FROM customers WHERE id = 2").includes("deny"),
     "fresh marker: a DELETE after an allowed insert in the same batch is still denied");
+  {
+    const res = spawnSync(process.execPath, [path.join(__dirname, "live-testdata-guard.mjs")], {
+      input: "{not json", encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    eq(res.status, 0, "unreadable event: guard exits 0");
+    ok(res.stdout.includes("deny"), "unreadable execute_sql event is denied");
+  }
+  for (const call of ["SELECT cancel_order(123)", "SELECT void_invoice(1)", "SELECT delete_invoices(ARRAY[1])",
+    "SELECT public.batch_void('{}')", "SELECT reverse_write_off(5)"]) {
+    ok(sql(call).includes("deny"), `fresh marker: destructive RPC still denied (${call})`);
+  }
+  // [E2E] is judged per statement, and a comment never carries it (Luna round 2).
+  fs.rmSync(marker);
+  for (const query of [
+    "DELETE FROM invoices WHERE id = 7; -- [E2E]",
+    "DELETE FROM invoices WHERE id = 1 /* [E2E] */",
+    "DELETE FROM customers WHERE name = '[E2E] X'; DELETE FROM customers WHERE id = 2",
+    "UPDATE customers SET name = '[E2E] Y' WHERE id = 1; UPDATE orders SET status = 'cancelled' WHERE id = 3",
+  ]) {
+    ok(sql(query).includes("deny"), `no marker: [E2E] in a comment or another statement does not exempt a delete/cancel (${query.slice(0, 50)})`);
+  }
+  eq(sql("DELETE FROM customers WHERE name LIKE '[E2E]%'").trim(), "", "no marker: [E2E] cleanup delete still allowed");
+  eq(sql("INSERT INTO customers (name) VALUES ('[E2E] Z'); DELETE FROM customers WHERE name = '[E2E] Z'").trim(), "",
+    "no marker: [E2E] insert then [E2E] delete allowed");
   fs.rmSync(proj, { recursive: true, force: true });
 }
 // codex-push-guard: a non-push command → silent passthrough (plain git push of a
