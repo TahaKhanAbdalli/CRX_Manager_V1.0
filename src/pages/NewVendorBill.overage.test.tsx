@@ -148,15 +148,25 @@ describe('NewVendorBill PO-overage handling', { timeout: 30_000 }, () => {
     expect(screen.queryByText(/pending request for this bill could not be cleared/i)).toBeNull();
 
     mockRpc.mockResolvedValue({ data: 'bill-1', error: null });
-    fireEvent.change(screen.getByPlaceholderText(/Why should cumulative billing exceed/i), {
-      target: { value: 'Freight surcharge approved by the owner' },
+    // ReasonModal clears its reason in an effect when it opens. Under CI load that
+    // effect can still be pending when the prompt text appears, and it then wipes
+    // the typed reason inside the same render, so the click is refused as too short
+    // and no retry is sent (run 39958101798; reproduced 3 in 328 loaded runs).
+    // Type again until the reason sticks, and click in the same step that saw it in
+    // the box, so nothing can run between the check and the click. The callback
+    // throws before clicking until then, and waitFor stops calling it once it clicks.
+    const reason = 'Freight surcharge approved by the owner';
+    await waitFor(() => {
+      const box = screen.getByPlaceholderText(/Why should cumulative billing exceed/i);
+      if ((box as HTMLTextAreaElement).value !== reason) fireEvent.change(box, { target: { value: reason } });
+      expect(box).toHaveValue(reason);
+      fireEvent.click(screen.getAllByRole('button', { name: /^Create Bill$/ }).slice(-1)[0]);
     });
-    fireEvent.click(screen.getAllByRole('button', { name: /^Create Bill$/ }).slice(-1)[0]);
 
     await waitFor(() => expect(mockRpc.mock.calls.length).toBeGreaterThan(1));
     const retryArgs = mockRpc.mock.calls[mockRpc.mock.calls.length - 1][1];
     expect(retryArgs.p_confirm_po_overage).toBe(true);
-    expect(retryArgs.p_po_overage_reason).toBe('Freight surcharge approved by the owner');
+    expect(retryArgs.p_po_overage_reason).toBe(reason);
   });
 
   it('shows a blocking banner and opens no reason prompt when the pending record survives', async () => {
