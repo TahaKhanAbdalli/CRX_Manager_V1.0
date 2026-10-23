@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileText, Printer, Layers } from 'lucide-react';
 import Card from '../ui/Card';
@@ -10,6 +10,10 @@ import { runCriticalAction } from '../../lib/criticalAction';
 import { formatCents as fmt } from '../../lib/money';
 import { localToday, parseLocalDate } from '../../lib/dateUtils';
 import { SkeletonTable } from '../ui/Skeleton';
+import CustomerSearchPicker, {
+  CUSTOMER_SEARCH_SELECT,
+  type CustomerSearchResult,
+} from '../customers/CustomerSearchPicker';
 import {
   buildCustomerInvoiceSummary,
   type SummaryInvoiceRow,
@@ -39,9 +43,10 @@ import { downloadCustomerInvoiceSummaryPdf } from '../../lib/invoiceSummaryPdf';
 const SUMMARY_SELECT =
   'id, invoice_number, invoice_type, status, invoice_date, total_amount_cents, paid_amount_cents, prepay_applied_cents, write_off_cents, discount_earned_cents, balance_cents';
 
-interface CustomerOption {
-  id: string;
-  farm_name: string;
+// The picker's own columns plus the address and terms the report prints.
+const CUSTOMER_SUMMARY_SELECT = `${CUSTOMER_SEARCH_SELECT}, billing_address, zip, payment_terms`;
+
+interface CustomerOption extends CustomerSearchResult {
   account_number: string | null;
   billing_address: string | null;
   city: string | null;
@@ -54,55 +59,37 @@ export default function CustomerInvoiceSummaryPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  // The picker searches every customer; the chosen row (with its address and
+  // terms columns) is kept here, so no customer list is loaded.
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
+  const selectedCustomerId = selectedCustomer?.id ?? '';
   const [headingDate, setHeadingDate] = useState(localToday());
   const [discountDate, setDiscountDate] = useState('');
   const [terms, setTerms] = useState('');
   const [comment, setComment] = useState('');
 
   const [rows, setRows] = useState<SummaryInvoiceRow[] | null>(null);
-  const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [printing, setPrinting] = useState(false);
+  // Bumped on every customer change and every load, so only the newest load for the
+  // current customer may fill the table: a late reply never shows another customer's invoices.
+  const summaryRequestRef = useRef(0);
 
-  // Load customers once for the selector.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const { data, error } = await supabase
-        .from('customers')
-        .select('id, farm_name, account_number, billing_address, city, state, zip, payment_terms')
-        .order('farm_name');
-      if (cancelled) return;
-      if (error) {
-        Sentry.captureException(error, { tags: { source: 'fetch', page: 'customer-invoice-summary' } });
-        toast('error', 'Failed to load customers');
-        setLoadingCustomers(false);
-        return;
-      }
-      setCustomers((data || []) as CustomerOption[]);
-      setLoadingCustomers(false);
-    })();
-    return () => { cancelled = true; };
-  }, [toast]);
-
-  const selectedCustomer = useMemo(
-    () => customers.find((c) => c.id === selectedCustomerId) || null,
-    [customers, selectedCustomerId]
-  );
-
-  // Default the Terms input to the customer's payment terms when they're picked
-  // (the user can override; still report-only). Only seeds an empty Terms box so
-  // we never clobber what the user typed.
-  useEffect(() => {
-    if (selectedCustomer && terms.trim() === '' && selectedCustomer.payment_terms) {
-      setTerms(selectedCustomer.payment_terms);
+  const handleSelectCustomer = (customer: CustomerOption | null) => {
+    summaryRequestRef.current += 1;
+    setSelectedCustomer(customer);
+    setRows(null);
+    setLoadingSummary(false);
+    // Default the Terms input to the customer's payment terms when they're picked
+    // (the user can override; still report-only). Only seeds an empty Terms box so
+    // we never clobber what the user typed.
+    if (customer && terms.trim() === '' && customer.payment_terms) {
+      setTerms(customer.payment_terms);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCustomerId]);
+  };
 
   const loadSummary = useCallback(async (customerId: string) => {
+    const requestId = ++summaryRequestRef.current;
     setLoadingSummary(true);
     const { data, error } = await supabase
       .from('invoices')
@@ -112,6 +99,7 @@ export default function CustomerInvoiceSummaryPanel() {
       .in('status', ['draft', 'unposted'])
       .is('deleted_at', null)
       .order('invoice_date', { ascending: true });
+    if (requestId !== summaryRequestRef.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch_summary', page: 'customer-invoice-summary' } });
@@ -200,18 +188,17 @@ export default function CustomerInvoiceSummaryPanel() {
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           <div className="w-full min-w-0 sm:min-w-[14rem] sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-customer">Customer</label>
-            <select
+            <CustomerSearchPicker<CustomerOption>
               id="cis-customer"
               value={selectedCustomerId}
-              onChange={(e) => { setSelectedCustomerId(e.target.value); setRows(null); }}
-              disabled={loadingCustomers}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select customer…</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.farm_name}</option>
-              ))}
-            </select>
+              selectedLabel={selectedCustomer?.farm_name ?? ''}
+              onSelect={handleSelectCustomer}
+              select={CUSTOMER_SUMMARY_SELECT}
+              activeOnly={false}
+              placeholder="Select customer…"
+              ariaLabel="Summary customer"
+              className="w-full"
+            />
           </div>
           <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-heading-date">Heading Date</label>
@@ -259,7 +246,7 @@ export default function CustomerInvoiceSummaryPanel() {
             variant="primary"
             icon={<FileText className="w-4 h-4" />}
             onClick={handleViewReport}
-            disabled={!selectedCustomerId || loadingCustomers}
+            disabled={!selectedCustomerId}
           >
             View Report
           </Button>

@@ -1131,6 +1131,7 @@ export function evaluateMigrationApply({
     try {
       landing = (landingGate || evaluateLandingGate)({
         checkoutDir: hookCwd, migName, queryHash: currentHash, now, listWorktrees, deadlineMs: landingDeadlineMs,
+        sessionId: ownerSessionId,
       });
     } catch (error) {
       landing = { ok: false, reason: `MIGRATION LANDING GATE: the check itself failed (${error?.message || error}); fail closed.` };
@@ -1138,6 +1139,9 @@ export function evaluateMigrationApply({
     if (!landing || landing.ok !== true) {
       return block(landing?.reason || "MIGRATION LANDING GATE: the pull-request landing check did not pass (fail closed).");
     }
+    // Carried on the allow verdict so the apply says CodeRabbit was SKIPPED on
+    // Mason's waiver, never that its review is clean (Codex App P2 on #1035).
+    const skipped = landing.coderabbitSkippedBy ? { coderabbitSkippedBy: landing.coderabbitSkippedBy } : {};
     // LAST OF ALL, for a parked migration: Mason's `I approve` reply, bound
     // to this exact SQL and to the PR and head the landing gate just confirmed.
     if (ownerApprovalCandidates) {
@@ -1173,6 +1177,7 @@ export function evaluateMigrationApply({
         if (verdict.ok) {
           return {
             decision: "allow",
+            ...skipped,
             ownerApproval: {
               file: candidate.file,
               dir: candidate.dir,
@@ -1189,7 +1194,7 @@ export function evaluateMigrationApply({
         `Ask Mason again: run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\` for a fresh request. ` +
         `Do NOT edit or copy an approval file; only his own reply counts.`);
     }
-    return allow();
+    return { ...allow(), ...skipped };
   }
 
   // No valid proof — block with explicit instructions.

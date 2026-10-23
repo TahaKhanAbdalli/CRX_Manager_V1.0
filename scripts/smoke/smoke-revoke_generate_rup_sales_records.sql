@@ -79,6 +79,7 @@ DECLARE
   v_product  uuid;
   v_order    uuid;
   v_invoice  uuid;
+  v_version  text;
   v_lic_num  text;
   v_n        int;
   v_status   text;
@@ -203,9 +204,11 @@ BEGIN
   --     Its SECDEF body runs as owner postgres, so the internal
   --     generate_rup_sales_records call must still work post-revoke.
   -- --------------------------------------------------------------------
+  -- Read as owner: the version helper is not executable by authenticated (20261022022000).
+  v_version := public._invoice_post_version(v_invoice);
   BEGIN
     SET LOCAL ROLE authenticated;
-    PERFORM public.post_invoice(v_invoice, NULL);
+    PERFORM public.post_invoice(v_invoice, v_version, 'smoke-rup-revoke-post-' || v_suffix);
   EXCEPTION WHEN OTHERS THEN
     RAISE EXCEPTION 'SMOKE_FAIL: S3 post_invoice as authenticated/admin failed post-revoke: % (%)', SQLERRM, SQLSTATE;
   END;

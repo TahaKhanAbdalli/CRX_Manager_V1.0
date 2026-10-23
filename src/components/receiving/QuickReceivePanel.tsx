@@ -38,6 +38,7 @@ import type {
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
 import { PRODUCT_COLUMNS } from '../../lib/costFields';
+import { fetchAllRows } from '../../lib/pagedRead';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -115,6 +116,10 @@ export default function QuickReceivePanel() {
   const [items, setItems] = useState<QuickReceiveItem[]>([]);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [products, setProducts] = useState<PickerProduct[]>([]);
+  // The product list failed to load: no item can be added or matched until a reload.
+  const [productsFailed, setProductsFailed] = useState(false);
+  // Until the catalog read finishes, picking would search an empty list (CodeRabbit, #1017).
+  const [productsLoading, setProductsLoading] = useState(true);
   const [vendors, setVendors] = useState<string[]>([]);
 
   /* ─── product search modal ─── */
@@ -147,16 +152,30 @@ export default function QuickReceivePanel() {
   /* ─── load products + vendors ─── */
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase
+      // Every active product, page by page: the product search filters this list
+      // locally and the vendor list is built from it, so a read cut off at the
+      // server's 1,000-row cap would hide products and vendors.
+      const { data, error } = await fetchAllRows((from, to) => supabase
         .from('products')
-        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
         .eq('is_active', true)
-        .order('product_name');
+        .order('product_name')
+        .order('id')
+        .range(from, to));
       if (error) {
         Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quick_receive_products' } });
         toast('error', 'Failed to load Products. Retry before receiving inventory.');
+        // No list rather than a short one; adding and matching items stay blocked.
+        setProducts([]);
+        setVendors([]);
+        setProductsFailed(true);
+        setProductsLoading(false);
+        // An open picker would show "No products found" over the failure; close it.
+        setProductSearchOpen(null);
         return;
       }
+      setProductsFailed(false);
+      setProductsLoading(false);
       const prods = (data || []) as unknown as PickerProduct[];
       setProducts(prods);
       const uv = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
@@ -625,10 +644,14 @@ export default function QuickReceivePanel() {
                 icon={<Plus className="w-4 h-4" />}
                 showChevron={false}
                 onClick={addItem}
+                disabled={productsFailed || productsLoading}
               >
-                Add Product
+                {productsLoading ? 'Loading products...' : 'Add Product'}
               </Button>
             </div>
+            {productsFailed && (
+              <p role="alert" className="mb-3 text-sm text-red-600">Products could not be loaded, so items cannot be added or matched. Reload the page to try again.</p>
+            )}
 
             {items.length === 0 ? (
               <div className="text-center py-12">
@@ -638,8 +661,9 @@ export default function QuickReceivePanel() {
                   icon={<Plus className="w-4 h-4" />}
                   showChevron={false}
                   onClick={addItem}
+                  disabled={productsFailed || productsLoading}
                 >
-                  Add First Product
+                  {productsLoading ? 'Loading products...' : 'Add First Product'}
                 </Button>
               </div>
             ) : (
@@ -674,10 +698,11 @@ export default function QuickReceivePanel() {
                               setProductSearchOpen(item.key);
                               setProductQuery('');
                             }}
-                            className="flex items-center gap-2 text-crx-green hover:underline font-medium text-sm"
+                            disabled={productsFailed || productsLoading}
+                            className="flex items-center gap-2 text-crx-green hover:underline font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
                           >
                             <Search className="w-4 h-4" />
-                            Select Product
+                            {productsLoading ? 'Loading products...' : 'Select Product'}
                           </button>
                         )}
                       </div>
@@ -773,7 +798,7 @@ export default function QuickReceivePanel() {
               <div className="mt-6 flex justify-end">
                 <Button
                   onClick={handleReview}
-                  disabled={matching || validItems.length === 0}
+                  disabled={matching || validItems.length === 0 || productsFailed}
                   icon={<PackageCheck className="w-4 h-4" />}
                 >
                   {matching ? 'Matching...' : `Review & Match (${validItems.length} item${validItems.length !== 1 ? 's' : ''})`}

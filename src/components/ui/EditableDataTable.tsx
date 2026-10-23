@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, type ReactNode } from 'react';
 import { Search, ArrowUpDown, ArrowUp, ArrowDown, Pencil, X, Save } from 'lucide-react';
-import EmptyState from './EmptyState';
+import EmptyState, { LoadFailedState } from './EmptyState';
 import Button from './Button';
 
 export interface EditableColumn<T> {
@@ -44,6 +44,9 @@ interface EditableDataTableProps<T> {
   emptyAction?: ReactNode;
   filters?: ReactNode;
   loading?: boolean;
+  /** The rows failed to load: say so (with Try again when onRetry is set) instead of the empty message. */
+  loadError?: boolean;
+  onRetry?: () => void;
   /**
    * Called with a map of rowId -> changed fields when user clicks Save.
    * Return false to keep edit mode and dirty rows intact; true/undefined closes edit mode.
@@ -69,6 +72,8 @@ export default function EditableDataTable<T extends Record<string, any>>({
   emptyAction,
   filters,
   loading = false,
+  loadError = false,
+  onRetry,
   onSave,
   canEdit = false,
   headerActions,
@@ -163,7 +168,8 @@ export default function EditableDataTable<T extends Record<string, any>>({
   };
 
   const handleSave = async () => {
-    if (!onSave || dirtyCount === 0) return;
+    // Never save edits to rows a failed load has hidden from view.
+    if (!onSave || dirtyCount === 0 || loadError) return;
     setSaving(true);
     try {
       const shouldCloseEditMode = await onSave(dirtyRows);
@@ -280,7 +286,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
         {/* Edit mode controls */}
         <div className="flex gap-2 items-center shrink-0">
           {headerActions}
-          {canEdit && !editMode && (
+          {canEdit && !editMode && !loadError && (
             <Button
               variant="secondary"
               size="sm"
@@ -305,7 +311,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
                 icon={<Save className="w-4 h-4" />}
                 onClick={handleSave}
                 loading={saving}
-                disabled={dirtyCount === 0}
+                disabled={dirtyCount === 0 || loadError}
               >
                 Save{dirtyCount > 0 ? ` (${dirtyCount})` : ''}
               </Button>
@@ -320,6 +326,8 @@ export default function EditableDataTable<T extends Record<string, any>>({
             <div key={i} className="h-12 bg-gray-100 rounded animate-pulse" />
           ))}
         </div>
+      ) : loadError ? (
+        <LoadFailedState onRetry={onRetry} />
       ) : filtered.length === 0 ? (
         <EmptyState
           title={emptyTitle}

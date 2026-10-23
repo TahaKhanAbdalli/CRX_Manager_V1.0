@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer, Map as MapIcon, Info } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -258,6 +258,7 @@ export default function Jobs() {
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   // Reference lists for the multi-select pickers.
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [customersFailed, setCustomersFailed] = useState(false);
   const [applicators, setApplicators] = useState<{ id: string; full_name: string }[]>([]);
   const [vehicles, setVehicles] = useState<{ id: string; vehicle_name: string }[]>([]);
   const [appServices, setAppServices] = useState<{ id: string; name: string }[]>([]);
@@ -329,19 +330,36 @@ export default function Jobs() {
   // one shot (customers, applicators, vehicles, application-service "types").
   const fetchReferenceLists = useCallback(async () => {
     const [custRes, applRes, vehRes, svcRes] = await Promise.all([
-      supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name'),
+      // Every active customer, page by page: the Customers filter is a multi-select
+      // over this list, and one read stops silently at the server's 1,000-row cap.
+      fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
+        .from('customers')
+        .select('id, farm_name', { count: 'exact' })
+        .eq('is_active', true)
+        .order('farm_name')
+        .order('id')
+        .range(from, to)),
       // Applicator picker only uses id + full_name; safe via the public profile view.
       supabase.from('profile_public_view').select('id, full_name')
         .in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('vehicles').select('id, vehicle_name').eq('status', 'active').order('vehicle_name'),
       supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
     ]);
-    setCustomers((custRes.data || []) as { id: string; farm_name: string }[]);
+    if (custRes.error) {
+      // No list rather than a short one: the filter then offers no customers and says why.
+      Sentry.captureException(custRes.error, { tags: { source: 'fetch', action: 'load_jobs_customer_filter_list' } });
+      toast('error', 'Failed to load customers for the filter');
+      setCustomers([]);
+      setCustomersFailed(true);
+    } else {
+      setCustomers(custRes.data ?? []);
+      setCustomersFailed(false);
+    }
     setApplicators(((applRes.data || []) as { id: string | null; full_name: string | null }[])
       .filter((a) => a.id).map((a) => ({ id: a.id as string, full_name: a.full_name ?? '—' })));
     setVehicles((vehRes.data || []) as { id: string; vehicle_name: string }[]);
     setAppServices((svcRes.data || []) as { id: string; name: string }[]);
-  }, []);
+  }, [toast]);
 
   // Field-app parity #6: ground crews drive the Ground Crew filter + manager.
   const fetchCrews = useCallback(async () => {
@@ -433,7 +451,12 @@ export default function Jobs() {
     void persistListSettings(next);
   }, [persistListSettings]);
 
+  // Only the newest load may write the list: a filter change or an action's refresh
+  // can start a load while an older one (now several paged reads long) is in flight.
+  const jobsLoadRef = useRef(0);
   const fetchJobs = useCallback(async () => {
+    const loadId = ++jobsLoadRef.current;
+    const superseded = () => loadId !== jobsLoadRef.current;
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
     // Field-app parity #6: county/state pulled on the joined field so the
@@ -476,6 +499,7 @@ export default function Jobs() {
         .eq('dispatch_status', 'dispatched')
         .order('id')
         .range(from, to));
+      if (superseded()) return;
       if (dispError) {
         Sentry.captureException(dispError, { tags: { source: 'fetch', action: 'load_jobs_applicator_filter' } });
         // Clear the list: the last one loaded does not match the filters now applied.
@@ -507,6 +531,7 @@ export default function Jobs() {
         .in('customer_id', applied.customerIds)
         .order('id')
         .range(from, to));
+      if (superseded()) return;
       if (shareError) {
         Sentry.captureException(shareError, { tags: { source: 'fetch', action: 'load_jobs_customer_filter' } });
         // Clear the list: the last one loaded does not match the filters now applied.
@@ -523,6 +548,7 @@ export default function Jobs() {
     }
 
     const { data, error } = await query;
+    if (superseded()) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_jobs' } });
@@ -702,6 +728,7 @@ export default function Jobs() {
         needs_dispatch: needsDispatch,
       };
     });
+    if (superseded()) return;
     setJobs(rows);
     setLoading(false);
   }, [applied, toast]);
@@ -1830,7 +1857,7 @@ export default function Jobs() {
               selected={draft.customerIds}
               onChange={(v) => patchDraft('customerIds', v)}
               placeholder="All Customers"
-              emptyText="No customers"
+              emptyText={customersFailed ? 'Customers could not be loaded. Reload to try again.' : 'No customers'}
             />
             <MultiSelectDropdown
               label="Applicators"

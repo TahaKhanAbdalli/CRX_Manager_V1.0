@@ -2,7 +2,7 @@
 
 - Posting an invoice now posts exactly the version the screen showed. Before, a save from a second
   tab or by another person just before Post was posted unseen (KNOWN_ISSUES "OPEN 2026-10-09").
-- Migration `20261021200000_post_binds_reviewed_invoice_version` (not applied yet): a new computed
+- Migration `20261022022000_post_binds_reviewed_invoice_version` (not applied yet): a new computed
   field `invoice_post_version` (a fingerprint of the saved invoice, its lines, shares, allocations,
   field locations and the customer's payment terms, with every cost column left out) that screens
   read with the invoice row. `post_invoice`, `post_invoice_group` and `batch_post_invoices` now
@@ -44,5 +44,18 @@
   version map normalized and checked for duplicate ids before the retry check; the rep's
   own-name check before the version check; SHA-256 instead of md5; batch items must carry a
   version. The cost-column lock (Goal 1 step 3) must rework this field; see KNOWN_ISSUES.
+- A sales rep who posts an invoice under another salesperson's name is told "You can only change
+  or post invoices under your own name" instead of "reload" (Codex GitHub App P2 on PR #1018): the
+  version field is withheld from them, so the screens send the placeholder `withheld` for a row
+  loaded with no version and the server, which checks the own-name rule first, gives the reason.
+  Anyone allowed to post the invoice gets "changed, reload". Prover P9 and G5.
+- The version and the post lock also cover a payment allocation linked only to one of the
+  invoice's lines (`invoice_line_allocations.invoice_item_id`; `ila_target_check` allows it and
+  admins and reps can insert one directly), not just those linked to the invoice or a split
+  invoice (Codex Sol on PR #1018). Prover P5c.
+- A field location that names both an invoice and a split group (`fal_requires_parent` allows it;
+  no RPC writes one, but admins and reps can directly) now counts for the group in the version and
+  the post lock, and is refused once the group is posted even if its invoice is still a draft;
+  before, only its invoice was checked (Codex GitHub App P1 on PR #1018). Prover G7d.
 - Deploy order: until the new app is live, the old screens get "function not found" when posting;
   nothing posts unseen.

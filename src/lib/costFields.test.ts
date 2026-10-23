@@ -229,7 +229,7 @@ describe('admin cost helpers', () => {
 });
 
 // The posting version is a computed field: it receives the whole row, so it may only be selected from
-// invoices_postable (migration 20261022025000), whose row has no cost column. On `invoices` it fails
+// invoices_postable (migration 20261022090000), whose row has no cost column. On `invoices` it fails
 // for everyone once the cost column lock revokes total_cost_cents.
 const VERSION_TOKEN = /\binvoice_post_version\b|\bINVOICE_POST_VERSION_COLUMNS\b/;
 

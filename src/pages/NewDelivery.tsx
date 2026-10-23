@@ -21,7 +21,9 @@ import { checkRUPCompliance } from '../lib/rupCompliance';
 import { localToday } from '../lib/dateUtils';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { ORDER_COLUMNS, ORDER_ITEM_COLUMNS } from '../lib/costFields';
-import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
+import OrderSearchPicker, { type OrderSearchResult } from '../components/orders/OrderSearchPicker';
+import { orderSearchLabel } from '../lib/recordLabels';
+import type { Order, OrderItem, OrderStatus, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
   order_item_id: string;
@@ -43,6 +45,9 @@ function isValidDateParam(value: string | null): value is string {
     && parsed.getMonth() + 1 === Number(value.slice(5, 7))
     && parsed.getDate() === Number(value.slice(8, 10));
 }
+
+// Orders that can get a new delivery (the order picker's status filter).
+const DELIVERABLE_ORDER_STATUSES: readonly OrderStatus[] = ['confirmed', 'partially_fulfilled'];
 
 export default function NewDelivery() {
   const navigate = useNavigate();
@@ -66,8 +71,15 @@ export default function NewDelivery() {
   const customerIdParam = searchParams.get('customer_id') || '';
   const scheduledDateParam = searchParams.get('date');
 
-  const [orders, setOrders] = useState<(Order & { customer_name: string })[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState(preselectedOrderId);
+  const [orderLabel, setOrderLabel] = useState('');
+  // The selected order as read by id. Saving uses only this, and only once it matches
+  // selectedOrderId, so a failed, stale or ineligible read blocks the save.
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [orderProblem, setOrderProblem] = useState<string | null>(null);
+  // Only a failed read can be retried; an ineligible order stays blocked.
+  const [orderLoadFailed, setOrderLoadFailed] = useState(false);
+  const orderLoadSeqRef = useRef(0);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
@@ -102,7 +114,6 @@ export default function NewDelivery() {
   }, [intentHash]);
 
   const [saving, setSaving] = useState(false);
-  const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [inventoryWarnings, setInventoryWarnings] = useState<string[]>([]);
@@ -112,33 +123,6 @@ export default function NewDelivery() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
-
-  const fetchOrders = useCallback(async () => {
-    let orderQuery = supabase
-      .from('orders')
-      .select(`${ORDER_COLUMNS}, customer:customers(farm_name)`)
-      .in('status', ['confirmed', 'partially_fulfilled'])
-      .is('deleted_at', null);
-
-    if (customerIdParam) {
-      orderQuery = orderQuery.eq('customer_id', customerIdParam);
-    }
-
-    const { data, error } = await orderQuery.order('order_date', { ascending: false });
-
-    if (error) {
-      toast('error', 'Failed to load orders: ' + error.message);
-      setLoadingOrders(false);
-      return;
-    }
-
-    const rows = ((data || []) as Array<Omit<Order, 'customer'> & { customer: { farm_name: string } | null }>).map((o) => ({
-      ...o,
-      customer_name: o.customer?.farm_name || 'Unknown',
-    }));
-    setOrders(rows as (Order & { customer_name: string })[]);
-    setLoadingOrders(false);
-  }, [customerIdParam, toast]);
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver picker only uses d.id + d.full_name + d.role; safe via view.
@@ -156,20 +140,47 @@ export default function NewDelivery() {
   }, [toast]);
 
   const fetchOrderDetails = useCallback(async (orderId: string) => {
+    const seq = ++orderLoadSeqRef.current;
     setLoadingDetails(true);
-    const { data: orderData, error: orderErr } = await supabase
+    setSelectedOrder(null);
+    setOrderProblem(null);
+    setOrderLoadFailed(false);
+    setOrderItems([]);
+    setCustomer(null);
+    setAddresses([]);
+    setSelectedAddressId('');
+    setDeliveryItems([]);
+    const { data: orderRow, error: orderErr } = await supabase
       .from('orders')
-      .select(ORDER_COLUMNS)
+      .select(`${ORDER_COLUMNS}, customer:customers(farm_name)`)
       .eq('id', orderId)
       .maybeSingle();
+    // A newer pick replaced this one while it loaded.
+    if (seq !== orderLoadSeqRef.current) return;
 
     if (orderErr) {
       toast('error', 'Failed to load order: ' + orderErr.message);
+      setOrderProblem('The order could not be loaded.');
+      setOrderLoadFailed(true);
       setLoadingDetails(false);
       return;
     }
 
-    if (!orderData) {
+    if (!orderRow) {
+      setOrderProblem('That order was not found.');
+      setLoadingDetails(false);
+      return;
+    }
+
+    const orderData = orderRow as unknown as Order & { customer: { farm_name: string | null } | null };
+    setOrderLabel(orderSearchLabel(orderData));
+    // The order search's own rule, for an order that arrived by link.
+    if (orderData.deleted_at || !DELIVERABLE_ORDER_STATUSES.includes(orderData.status)
+      || (customerIdParam && orderData.customer_id !== customerIdParam)) {
+      const state = orderData.deleted_at ? 'deleted' : orderData.status.replace('_', ' ');
+      setOrderProblem(customerIdParam && orderData.customer_id !== customerIdParam
+        ? `Order ${orderData.order_number} belongs to another customer.`
+        : `Order ${orderData.order_number} is ${state} and cannot get a new delivery.`);
       setLoadingDetails(false);
       return;
     }
@@ -178,6 +189,7 @@ export default function NewDelivery() {
       supabase.from('customers').select('*').eq('id', orderData.customer_id).maybeSingle(),
       supabase.from('order_items').select(ORDER_ITEM_COLUMNS).eq('order_id', orderId).order('section_name'),
     ]);
+    if (seq !== orderLoadSeqRef.current) return;
 
     if (custRes.error) {
       Sentry.captureException(custRes.error, { tags: { source: 'fetch', action: 'load_customer' } });
@@ -186,6 +198,15 @@ export default function NewDelivery() {
     if (itemsRes.error) {
       Sentry.captureException(itemsRes.error, { tags: { source: 'fetch', action: 'load_order_items' } });
       toast('error', 'Failed to load order items.');
+    }
+    // Without its items and customer (RUP and inventory checks, driver notice) the order cannot be delivered.
+    if (custRes.error || itemsRes.error || !custRes.data) {
+      setOrderProblem(custRes.error || itemsRes.error
+        ? 'The order details could not be loaded.'
+        : 'The order\'s customer could not be loaded.');
+      setOrderLoadFailed(true);
+      setLoadingDetails(false);
+      return;
     }
 
     const cust = custRes.data as Customer | null;
@@ -199,6 +220,7 @@ export default function NewDelivery() {
         .select('*')
         .eq('customer_id', cust.id)
         .order('is_default', { ascending: false });
+      if (seq !== orderLoadSeqRef.current) return;
       if (addrErr) {
         Sentry.captureException(addrErr, { tags: { source: 'fetch', action: 'load_addresses' } });
       }
@@ -221,8 +243,10 @@ export default function NewDelivery() {
         notes: item.notes || null,
       }));
     setDeliveryItems(drafts);
+    // Items and customer failures were reported above; the order itself is good to deliver.
+    setSelectedOrder(orderData);
     setLoadingDetails(false);
-  }, [toast]);
+  }, [customerIdParam, toast]);
 
   useEffect(() => {
     if (!initialLoadDone.current) return;
@@ -230,15 +254,19 @@ export default function NewDelivery() {
   }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
 
   useEffect(() => {
-    fetchOrders();
     fetchDrivers();
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [fetchOrders, fetchDrivers]);
+  }, [fetchDrivers]);
 
   useEffect(() => {
     if (selectedOrderId) {
       fetchOrderDetails(selectedOrderId);
     } else {
+      orderLoadSeqRef.current += 1;
+      setSelectedOrder(null);
+      setOrderProblem(null);
+      setOrderLoadFailed(false);
+      setLoadingDetails(false);
       setOrderItems([]);
       setCustomer(null);
       setAddresses([]);
@@ -407,9 +435,9 @@ export default function NewDelivery() {
     setSaving(true);
     // No idempotency key — see comment at top of component
 
-    const order = orders.find((o) => o.id === selectedOrderId);
+    const order = selectedOrder?.id === selectedOrderId ? selectedOrder : null;
     if (!order) {
-      toast('error', 'Order not found');
+      toast('error', orderProblem ?? 'The order is still loading. Try again in a moment.');
       setSaving(false);
       return;
     }
@@ -478,21 +506,30 @@ export default function NewDelivery() {
         <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">Order</label>
-            {loadingOrders ? (
-              <div className="h-10 bg-gray-100 rounded-lg animate-pulse" />
-            ) : (
-              <select
-                value={selectedOrderId}
-                onChange={(e) => setSelectedOrderId(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">Select an order...</option>
-                {orders.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.order_number} - {o.customer_name} ({o.status.replace('_', ' ')})
-                  </option>
-                ))}
-              </select>
+            <OrderSearchPicker<OrderSearchResult>
+              value={selectedOrderId}
+              selectedLabel={orderLabel}
+              onSelect={(order) => {
+                setSelectedOrderId(order?.id ?? '');
+                setOrderLabel(order ? orderSearchLabel(order) : '');
+              }}
+              statuses={DELIVERABLE_ORDER_STATUSES}
+              customerId={customerIdParam || null}
+              ariaLabel="Order"
+            />
+            {orderProblem && (
+              <p role="alert" className="mt-1 text-sm text-red-600">
+                {orderProblem}
+                {orderLoadFailed && (
+                  <button
+                    type="button"
+                    onClick={() => fetchOrderDetails(selectedOrderId)}
+                    className="ml-2 font-medium text-red-700 underline hover:text-red-800"
+                  >
+                    Retry
+                  </button>
+                )}
+              </p>
             )}
           </div>
 
@@ -671,7 +708,7 @@ export default function NewDelivery() {
         <Button variant="secondary" onClick={() => navigate('/deliveries')}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={saving || !selectedOrderId}>
+        <Button onClick={handleSave} disabled={saving || !selectedOrderId || selectedOrder?.id !== selectedOrderId}>
           {saving ? 'Scheduling...' : 'Schedule Delivery'}
         </Button>
       </div>

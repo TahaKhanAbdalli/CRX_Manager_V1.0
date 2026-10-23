@@ -25,15 +25,20 @@ const SHARED_FILES = ['lib/reconciliation.ts', 'lib/customerStatement.ts', 'hook
 // Components (under src/components) that page with fetchAllRows: Goal 4 part 2's
 // money, check, compliance and lookup panels. A file listed here must still exist.
 const COMPONENT_FILES = [
+  'blendtickets/ManualTicketCreate.tsx',
   'customers/CustomerContacts.tsx',
+  'deliveries/QuickDeliveryModal.tsx',
+  'field-app/SelectLocationsModal.tsx',
   'field-invoices/FieldInvoicesListPanel.tsx',
   'field-invoices/FieldInvoicesPostedPanel.tsx',
   'field-invoices/FieldInvoicesUnpostedPanel.tsx',
+  'fields/BulkFieldImport.tsx',
   'integrity/IntegrityCleanupPanel.tsx',
   'inventory/TransactionLedgerModal.tsx',
   'invoices/FinanceChargePreviewModal.tsx',
   'prepay/PrepaymentManagerPanel.tsx',
   'prepay/PrepayWorkspacePanel.tsx',
+  'receiving/QuickReceivePanel.tsx',
   'reports/LogbookReport.tsx',
 ];
 const COMPONENTS_DIR = join(__dirname, '..', 'components');

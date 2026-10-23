@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckSquare, ChevronDown, ChevronRight } from 'lucide-react';
 import Card from '../components/ui/Card';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
@@ -42,21 +43,30 @@ export default function ProgramTracker() {
   const { toast } = useToast();
   const [programs, setPrograms] = useState<ProgramRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [season, setSeason] = useState(currentSeason());
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [customerFilter, setCustomerFilter] = useState<string>('');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
+  // Only the newest read (e.g. the last season picked) may change the list or its error state.
+  const loadSeqRef = useRef(0);
   const fetchPrograms = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     try {
       const { data, error } = await supabase.rpc('get_program_completion', { p_season: season });
       if (error) throw error;
       const result = assertRpcResult<ProgramRow[]>(data, 'get_program_completion');
+      if (seq !== loadSeqRef.current) return;
       setPrograms(result);
+      setLoadError(false);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
+      if (seq !== loadSeqRef.current) return;
       toast('error', 'Failed to load program data');
+      setPrograms([]);
+      setLoadError(true);
     }
     setLoading(false);
   }, [season, toast]);
@@ -72,6 +82,7 @@ export default function ProgramTracker() {
   const uniqueCustomers = [...new Map(programs.map((p) => [p.customer_id, p.customer_name])).entries()]
     .sort((a, b) => a[1].localeCompare(b[1]));
 
+  // A failed load shows dashes in the summary cards, never zeroes that read as "no programs".
   const total = filtered.length;
   const avgPct = total > 0 ? Math.round(filtered.reduce((s, p) => s + Math.min(p.completion_pct, 100), 0) / total) : 0;
   const inProgress = filtered.filter((p) => p.status === 'in_progress').length;
@@ -115,16 +126,18 @@ export default function ProgramTracker() {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Card><div className="text-center"><p className="text-2xl font-bold text-nav-dark">{total}</p><p className="text-xs text-secondary">Total Programs</p></div></Card>
-        <Card><div className="text-center"><p className="text-2xl font-bold text-crx-green">{avgPct}%</p><p className="text-xs text-secondary">Avg Completion</p></div></Card>
-        <Card><div className="text-center"><p className="text-2xl font-bold text-amber-600">{inProgress}</p><p className="text-xs text-secondary">In Progress</p></div></Card>
-        <Card><div className="text-center"><p className="text-2xl font-bold text-gray-500">{notStarted}</p><p className="text-xs text-secondary">Not Started</p></div></Card>
+        <Card><div className="text-center"><p className="text-2xl font-bold text-nav-dark">{loadError ? '—' : total}</p><p className="text-xs text-secondary">Total Programs</p></div></Card>
+        <Card><div className="text-center"><p className="text-2xl font-bold text-crx-green">{loadError ? '—' : `${avgPct}%`}</p><p className="text-xs text-secondary">Avg Completion</p></div></Card>
+        <Card><div className="text-center"><p className="text-2xl font-bold text-amber-600">{loadError ? '—' : inProgress}</p><p className="text-xs text-secondary">In Progress</p></div></Card>
+        <Card><div className="text-center"><p className="text-2xl font-bold text-gray-500">{loadError ? '—' : notStarted}</p><p className="text-xs text-secondary">Not Started</p></div></Card>
       </div>
 
       <Card padding={false}>
         <div className="p-5">
           {loading ? (
             <div className="space-y-3">{[1,2,3].map((i) => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>
+          ) : loadError ? (
+            <LoadFailedState onRetry={() => void fetchPrograms()} />
           ) : filtered.length === 0 ? (
             <div className="text-center py-12">
               <CheckSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />

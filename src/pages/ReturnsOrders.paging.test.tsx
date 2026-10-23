@@ -38,7 +38,11 @@ vi.mock('../lib/db', async () => {
     ...actual,
     supabase: {
       from: (table: string) => (H.failing.has(table) ? failingQuery() : buildInMemoryQuery(H.tables[table] ?? [])),
-      rpc: vi.fn(async () => ({ data: null, error: null })),
+      // The Returns screen's read-only lookups (20261021155000) answer with empty lists here.
+      rpc: vi.fn(async (name: string) => ({
+        data: name === 'get_split_payer_return_orders' || name === 'get_return_line_allowances' ? [] : null,
+        error: null,
+      })),
     },
   };
 });

@@ -125,7 +125,7 @@ Counts live in `docs/reference/`, so compare against those files, **not** agains
 
 ```bash
 # Actual counts, for comparison against docs/reference/
-echo "Pages: $(grep -c 'lazy(' src/App.tsx)"
+echo "Pages: $(cat src/appPages.tsx src/App.tsx | grep -c 'lazy(')"
 echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
 echo "Edge Functions: $(find supabase/functions -mindepth 1 -maxdepth 1 -type d ! -name _shared | wc -l)"
 echo "Unit test files: $(find src -name '*.test.ts' -o -name '*.test.tsx' | wc -l)"

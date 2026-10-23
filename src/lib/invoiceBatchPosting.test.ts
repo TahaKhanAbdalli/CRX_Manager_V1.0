@@ -58,7 +58,7 @@ describe('buildInvoicePostTargets', () => {
   });
 });
 
-describe('versions posting binds (Goal 3, migration 20261021200000)', () => {
+describe('versions posting binds (Goal 3, migration 20261022022000)', () => {
   it('a standalone target carries the version its row was loaded with', () => {
     const [target] = buildInvoicePostTargets([
       { id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: null, invoice_post_version: 'v1:a' },

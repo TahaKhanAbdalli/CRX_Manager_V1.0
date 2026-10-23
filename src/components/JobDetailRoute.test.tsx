@@ -216,15 +216,15 @@ describe('JobDetailRoute remounts per record', () => {
     expect(mockRpc).not.toHaveBeenCalledWith('complete_job', expect.anything());
   });
 
-  it('is the element App.tsx routes jobs/:id through', () => {
+  it('is the element the router routes jobs/:id through', () => {
     // The key inside JobDetailRoute is now the only thing standing between the two defects
-    // above and production. The tests above would keep passing if App.tsx were quietly pointed
-    // back at JobDetail, so pin the wiring itself rather than trusting a comment. App.tsx
-    // builds its router at module scope, which is why this reads the source instead of
-    // importing it.
-    const app = readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
-    const routeLine = app.split(/\r?\n/).find((l) => l.includes("path: 'jobs/:id'"));
-    expect(routeLine, "App.tsx has no `jobs/:id` route line").toBeTruthy();
+    // above and production. The tests above would keep passing if the route were quietly pointed
+    // back at JobDetail, so pin the wiring itself rather than trusting a comment. The route lives
+    // in the shared page list, src/appPages.tsx (App.tsx builds the router from it); this reads
+    // the source rather than importing it, as before.
+    const pages = readFileSync(join(process.cwd(), 'src', 'appPages.tsx'), 'utf8');
+    const routeLine = pages.split(/\r?\n/).find((l) => l.includes("path: 'jobs/:id'"));
+    expect(routeLine, "src/appPages.tsx has no `jobs/:id` route line").toBeTruthy();
     expect(routeLine).toContain('<JobDetailRoute />');
     expect(routeLine).not.toContain('<JobDetail />');
   });

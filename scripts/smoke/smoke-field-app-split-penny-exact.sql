@@ -25,7 +25,7 @@
 -- ============================================================================
 DO $smoke$
 DECLARE
-  v_versioned boolean;  -- 20261021200000 applied: posting takes the loaded invoice version
+  v_versioned boolean;  -- 20261022022000 applied: posting takes the loaded invoice version
   v_admin uuid;
   v_sfx   text := substr(gen_random_uuid()::text,1,8);
   v_cust_a uuid; v_cust_b uuid;
@@ -242,7 +242,7 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the save lock wrapper';
   END IF;
-  -- Since 20261021200000 posting takes the invoice version the screen loaded. This chain also runs
+  -- Since 20261022022000 posting takes the invoice version the screen loaded. This chain also runs
   -- in an older container proof that replays only up to its own candidate, so it checks whichever
   -- signature the database has.
   v_versioned := to_regprocedure('public.post_invoice_group(uuid,uuid,jsonb,text)') IS NOT NULL;

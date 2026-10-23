@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-07-16 (portal-doc pointer corrected 2026-09-26; current-direction pointer updated 2026-10-14) | **Owner:** Mason Wells
 >
-> ⭐ **Current direction lives in `docs/plans/2026-10-13-direction-and-goals.md`** (October 2026; it replaces the priority order in `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`, whose north star and ticket board still stand), and the combined open-items list lives in root `TODO.md`. Where an item below disagrees with the direction doc, the direction doc is newer. This file remains the item-by-item historical backlog (strategic IDs A1–F3, portal G1–G15, March priorities); its done/TODO statuses were spot-verified against code on 2026-07-16.
+> ⭐ **Current direction lives in `docs/plans/2026-10-13-direction-and-goals.md`** (October 2026; it replaces the priority order in `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`, whose north star and ticket board still stand), and the to-do list lives in `docs/manual/TO_DO_LIST.md` (the CRX Manager To-Do List; the root `TODO.md` now only points there). Where an item below disagrees with the direction doc, the direction doc is newer. This file remains the item-by-item historical backlog (strategic IDs A1–F3, portal G1–G15, March priorities); its done/TODO statuses were spot-verified against code on 2026-07-16.
 >
 > _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `docs/manual/CURRENT_STATE.md`._
 

@@ -20,7 +20,8 @@ const read = (relative) => readFileSync(path.join(ROOT, relative), "utf8");
 const migrations = readdirSync(path.join(ROOT, "supabase", "migrations")).filter((name) => name.endsWith(".sql"));
 const history = read("docs/reference/migration-history.md");
 const routes = read("docs/reference/pages-routes.md");
-const app = read("src/App.tsx");
+// Lazy pages are declared in the shared page list; App.tsx keeps the dev gallery's.
+const app = read("src/App.tsx") + "\n" + read("src/appPages.tsx");
 const databaseSchema = read("docs/reference/database-schema.md");
 const schemaRegistry = JSON.parse(read(".claude/schema-registry.json"));
 

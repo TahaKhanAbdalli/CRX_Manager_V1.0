@@ -34,9 +34,10 @@ The step-by-step procedures live in `DEPLOYMENT.md` and `.claude/commands/ship.m
 Vercel builds a preview for every PR and deploys production when a PR merges into `main`.
 Nobody pushes to `main` directly — the `protect-main` ruleset rejects it.
 
-1. Open a PR as a draft; CI runs the required checks. Mark it ready once the head is frozen:
-   CodeRabbit then reviews it once, as advice only (since 2026-10-19 it never approves or blocks,
-   and it skips PRs whose title contains `docs(`). Fix or answer its comments if they arrive before the merge.
+1. Open a PR as a draft; CI runs the required checks. Mark it ready once the head is frozen
+   (the Codex GitHub App reviews it then). CodeRabbit is advice only (since 2026-10-19 it never
+   approves or blocks) and makes no automatic reviews since 2026-10-21: it reviews a money or
+   Mason-named PR when the agent requests it. Fix or answer any comments that arrive before the merge.
 2. The PR merges only through the protected path in `.claude/commands/ship.md` Step 8:
    every check green, no `CHANGES_REQUESTED`, a fresh exact-SHA Sol review
    (except a documentation-only change, `docs/reference/sol-exempt-paths.md`), then
@@ -136,15 +137,20 @@ git checkout HEAD -- supabase/functions/<fn-name>/
 
 | Copy | Where | Covers | Does NOT cover |
 |---|---|---|---|
-| Weekly encrypted `pg_dump` | Private repo `masonwells1/CRX_Backups`, workflow `.github/workflows/offsite-backup.yml` (this repo has no backup workflow). Sundays 08:00 UTC, newest 8 kept. | Database rows. | Uploaded files. Whether the `auth` schema (logins) is included is **unverified** until a drill decrypts one. |
+| Weekly encrypted `pg_dump` | Private repo `masonwells1/CRX_Backups`, workflow `.github/workflows/offsite-backup.yml` (this repo has no backup workflow). Sundays 08:00 UTC, newest 8 kept. Since 2026-10-22 the connection string and passphrase never appear on a command line (first such run: [39783918681](https://github.com/masonwells1/CRX_Backups/actions/runs/39783918681), 13.4 MB). | Database rows. | Uploaded files. Whether the `auth` schema (logins) is included is **unverified** until a drill decrypts one. |
 | Weekly in-database snapshot | `pg_cron` job `weekly-db-backup` into `backup_snapshots`, 8 weeks. | Bad-data mistakes in a table that still exists. | Losing the project (same database). |
-| Storage files (photos, signatures, documents; nine buckets) | **Nothing.** | n/a | Everything. Delivery photos and signatures are staff evidence, not re-obtainable from the customer. |
+| Storage files (photos, signatures, documents; nine buckets) | **Live since 2026-10-22.** Workflow `.github/workflows/storage-backup.yml` in `CRX_Backups` ([PR #1](https://github.com/masonwells1/CRX_Backups/pull/1), [PR #2](https://github.com/masonwells1/CRX_Backups/pull/2)), Sundays 08:30 UTC, newest 8 kept in `storage-backups/`. Secrets `SUPABASE_S3_ACCESS_KEY_ID` and `SUPABASE_S3_SECRET_ACCESS_KEY`. First successful run 2026-10-22 13:04 UTC ([run 39783666922](https://github.com/masonwells1/CRX_Backups/actions/runs/39783666922)): 9 buckets, 38 files, 9,614,070 bytes, equal to live `storage.objects`; MD5 matched for all 38; the decrypted archive was re-checked file by file. A `drop-one-file` break test the same day ([run 39783806291](https://github.com/masonwells1/CRX_Backups/actions/runs/39783806291)) failed red, named the missing file and saved nothing. | Every file in every bucket (the bucket list is read live, so new buckets are included). Each run compares its manifest of names, sizes and MD5 contents with `storage.objects`; any difference fails the run and saves nothing. A drop of more than 20% in file count or total size since the previous backup also fails and saves nothing. That only catches a large drop in one week: smaller deletions, or one spread over several weeks, pass, and after 8 weekly copies the pre-deletion copies are pruned. | Files uploaded after the newest weekly copy. Uploading files back into a project has not been rehearsed (4.9). Delivery photos and signatures are staff evidence, not re-obtainable from the customer. |
 | Edge Function source, app code | Git. | Code. | n/a |
 | Vercel deployments | About 30 days; any past deployment can be promoted. | Frontend. | n/a |
 | **AFTER PRO + PITR:** point-in-time recovery | Supabase. | Database to any minute inside the window. PITR is a paid add-on and needs at least Small compute. | Uploaded files (neither Pro nor PITR backs up Storage bytes). |
 
-Until the file backup exists (Goal 6, agent step 2), a lost Storage bucket cannot be recovered.
-Say so plainly if it happens; do not promise a restore.
+Files restore from
+the newest `storage-backups/crx-storage-<UTC timestamp>.tar.gpg` (steps: `CRX_Backups/restore.md`,
+"Restoring Storage files"); a file uploaded after that copy is lost. The file copy and the database dump are
+scheduled separately (08:30 and 08:00 UTC Sundays), but GitHub delays each run independently, so they
+can be hours apart or run in either order. Pick the file archive by the capture time in its name and
+marker, closest to the chosen dump; a file added or deleted between the two can be missing from the pair; uploading the
+files back into a project has not been rehearsed yet (restore drill, 4.9).
 
 ### 4.2 Who runs recovery
 
@@ -160,7 +166,7 @@ access and Vercel access. Replace the backup person with a second human the day 
 | A few wrong rows, table intact | 4.4 Compensating fix from a snapshot |
 | A bad change just wrote wrong data across many rows | **AFTER PRO + PITR:** 4.5 Rewind. Until then: 4.4 for small damage, 4.6 for large. |
 | Project lost or corrupted | 4.6 Restore into a new project |
-| A Storage bucket lost | Not recoverable today (no file backup). Tell Mason. |
+| A Storage bucket lost | Tell Mason. Restore from the newest weekly file copy (4.1) with `CRX_Backups/restore.md`, "Restoring Storage files", into a throwaway project first; files uploaded after that copy are lost. |
 | Site down but data fine | Section 6.1, not this section |
 
 **First, always:** stop the damage and tell Mason in plain words what is wrong. Pause anything that
@@ -261,7 +267,21 @@ per step, whether validation matched, whether logins were present, and problems.
 
 Design (draft): `docs/plans/2026-10-19-goal6-backup-health-alert-design.md`. As of 2026-10-19 a **failed** Sunday run sends a GitHub
 email, but a run that **never starts has no alert at all**: the missed-run watchdog is designed, not built.
-Until it is, every Monday check the date of the newest file in `CRX_Backups/backups/`. That confirms
+
+**Live since 2026-10-22** (same `CRX_Backups` [PR #1](https://github.com/masonwells1/CRX_Backups/pull/1); its first run that day reported both copies fresh): the in-repository
+layer, `.github/workflows/backup-freshness.yml`. Daily at 20:00 UTC it fails when the newest database
+dump or the newest validated storage marker is older than the most recent Sunday 08:00 UTC, allowing 10 hours because
+GitHub has started the Sunday runs 4 to 6.5 hours late. It needs no secret. A failed run is only a red mark in GitHub:
+it reaches Mason by email **only if** his GitHub notification settings send Actions failure emails for `CRX_Backups`
+(the design doc's caveat). **Confirmed 2026-10-22:** Mason received the GitHub failure email for that day's deliberately failed storage
+break test. Keep the Monday check below anyway: a run that never starts sends no email. It is a second layer only: if GitHub Actions
+is switched off it does not run either, so the outside watchdog (design part B, needs a credential Mason approves) and
+the stronger dump checks (design part A) are still owed.
+
+Until an outside watchdog covers each backup, every Monday check the date of the newest file in
+`CRX_Backups/backups/` and `CRX_Backups/storage-backups/`. The designed watchdog
+covers the database dump only, so keep the `storage-backups/` check even after it is built, until a watchdog
+outside GitHub Actions also checks the storage marker. That confirms
 freshness only; it does **not** prove the dump is complete (a truncated dump over 10 KB passes today's
 workflow). So also, once a month, decrypt the newest dump and run a full restore into a throwaway
 database (4.6) to prove it works, and save the Monday row-count list described in the draft procedure (step 5).

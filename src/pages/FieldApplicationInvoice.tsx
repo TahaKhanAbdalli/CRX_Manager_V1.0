@@ -1237,14 +1237,17 @@ export default function FieldApplicationInvoice() {
       cents && cents > 0 ? (cents / 100).toFixed(2) : '';
 
     // If grouped, load sibling invoices for the banner
+    let sibsError: unknown = null;
     if (groupId) {
-      const { data: sibs } = await supabase
+      const { data: sibs, error: sibsReadError } = await supabase
         .from(INVOICES_POSTABLE)
         .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (!isCurrentLoad()) return;
+      // A failed sibling read leaves the group map incomplete, so Post stays unauthorized below.
+      sibsError = sibsReadError;
       if (sibs) {
         // Post sends every member this load saw; this invoice keeps the version read with its row.
         for (const s of sibs as Array<{ id: string; invoice_post_version?: string | null }>) {
@@ -1460,8 +1463,8 @@ export default function FieldApplicationInvoice() {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
-    if (locsError || itemsError || sharesError) {
-      Sentry.captureException(locsError || itemsError || sharesError, { tags: { context: 'field_app_invoice_load' } });
+    if (sibsError || locsError || itemsError || sharesError) {
+      Sentry.captureException(sibsError || locsError || itemsError || sharesError, { tags: { context: 'field_app_invoice_load' } });
       toast('error', 'Some invoice details did not load. Reload the page before posting.');
     } else {
       postVersionsRef.current = loadedVersions;

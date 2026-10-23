@@ -276,12 +276,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Post loading
   const [posting, setPosting] = useState(false);
+  // True while Post's pre-checks run, before the confirm opens. With `posting` it locks the form, so
+  // nothing typed during the post flow can be lost to the reload that follows it.
+  const [postChecking, setPostChecking] = useState(false);
+  const postFlowBusy = posting || postChecking;
   const [showPostConfirm, setShowPostConfirm] = useState(false);
   // B1 (deep-dive H1): RUP warning surfaced in the post-confirm when the buyer
   // has no valid applicator license — posting is the legal point of sale.
   const [rupPostWarning, setRupPostWarning] = useState<string | null>(null);
 
-  // ── Post binds the saved, reviewed invoice (Goal 3, migration 20261021200000) ──────────────
+  // ── Post binds the saved, reviewed invoice (Goal 3, migration 20261022022000) ──────────────
   // post_invoice / post_invoice_group post what is SAVED, and refuse if the saved invoice (or a
   // split sibling, or the group's membership) changed since this screen loaded it. So everything
   // Post sends or checks comes from the last load, never from the form: the version, and the
@@ -340,6 +344,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const unsavedBlocker = useUnsavedChanges(isNew ? newInvoiceHasInput : hasUnsavedChanges, skipUnsavedPromptRef);
 
   const openPostConfirm = async () => {
+    setPostChecking(true);
+    try {
+      await checkThenOpenPostConfirm();
+    } finally {
+      setPostChecking(false);
+    }
+  };
+
+  const checkThenOpenPostConfirm = async () => {
     if (hasUnsavedChanges) {
       toast('error', UNSAVED_POST_MESSAGE);
       return;
@@ -1175,9 +1188,20 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // Credit-limit check on the SAVED customer and total — the account and amount post_invoice
     // posts. Limitation (unchanged): for a split group this checks THIS invoice's total only,
     // although post_invoice_group posts every sibling; it is a dismissible warning, not a gate.
-    const creditOk = await checkCreditLimit({ customerId: saved.customerId!, newAmountCents: saved.totalCents });
-    if (!creditOk && !creditWarning?.dismissed) return;
+    // `posting` is set before the check so the form stays locked from the confirm to the end.
     setPosting(true);
+    let creditOk: boolean;
+    try {
+      creditOk = await checkCreditLimit({ customerId: saved.customerId!, newAmountCents: saved.totalCents });
+    } catch (err) {
+      // The check fails closed on its own; this only guarantees the form is never left locked.
+      setPosting(false);
+      throw err;
+    }
+    if (!creditOk && !creditWarning?.dismissed) {
+      setPosting(false);
+      return;
+    }
     try {
       const idemKey = postIdem.getKey();
       // Phase 1 (2026-04-29): when the invoice belongs to a split group, route
@@ -1790,7 +1814,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         </div>
         <div className="flex gap-2 flex-wrap">
           {editable && (
-            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={addingProduct}>
+            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={addingProduct || postFlowBusy}>
               Save
             </Button>
           )}
@@ -1805,7 +1829,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               variant="secondary"
               icon={<Send className="w-4 h-4" />}
               onClick={openPostConfirm}
-              loading={posting}
+              loading={postFlowBusy}
               disabled={hasUnsavedChanges}
               title={hasUnsavedChanges ? UNSAVED_POST_MESSAGE : undefined}
               aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
@@ -1945,6 +1969,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         />
       )}
 
+      {/* A disabled fieldset locks every input and button in the invoice info and lines while
+          Post runs; it draws nothing itself. */}
+      <fieldset disabled={postFlowBusy} className="m-0 min-w-0 space-y-4 border-0 p-0">
       {/* Invoice Info */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <Card className="md:col-span-2">
@@ -2336,6 +2363,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           </div>
         )}
       </Card>
+      </fieldset>
 
       {/* Write-Offs */}
       {writeOffs.length > 0 && (

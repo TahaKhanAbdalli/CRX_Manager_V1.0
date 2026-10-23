@@ -246,6 +246,12 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // exact inventory reversal. Both layers deliberately share the one public
   // cancel_return cache namespace so retries cannot create divergent receipts.
   _cancel_return_intent_impl_20260812: ['cancel_return'],
+  // Same shape: 20260812130145 renamed these bodies behind their public wrappers, and the split-payer
+  // returns migration 20261021155000 re-emits them (postgres-only EXECUTE). Each shares its public
+  // wrapper's cache namespace, as installed live.
+  _create_return_intent_impl_20260812: ['create_return'],
+  _receive_return_intent_impl_20260812: ['receive_return'],
+  _issue_return_credit_intent_impl_20260812: ['issue_return_credit'],
   // Direct EXECUTE is revoked (postgres-only). Replay-binding batch 2 (20261016140000) renamed the
   // live batch_cancel_deliveries body to this name with ALTER FUNCTION ... RENAME TO, so it kept the
   // public operation literal, and the public wrapper binds that same receipt. Batch 3b
@@ -272,6 +278,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // completed invoice. Migration 20260827041400 only re-emits the established
   // implementation to tighten return-credit order gates.
   _create_invoice_from_order_impl_20260718: ['create_invoice_from_order'],
+  // Direct EXECUTE is revoked (postgres-only, live 2026-10-21). The idempotency layer between the
+  // public create_invoice_from_order wrapper and the implementation above owns that wrapper's
+  // receipts (it is the only layer the wrapper's key reaches). 20261022021000 re-emits its live body
+  // only to add the field-split refusal; changing the literal would orphan every existing receipt.
+  _create_invoice_from_order_idem_impl_20260721: ['create_invoice_from_order'],
   // Direct EXECUTE is revoked (postgres-only). 20261016140000 renamed the original
   // create_order_from_blend_ticket body to this name behind a same-signature wrapper (ALTER
   // FUNCTION ... RENAME TO), so the body kept the public operation literal and both layers share

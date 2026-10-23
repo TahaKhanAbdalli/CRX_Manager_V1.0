@@ -394,13 +394,13 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps the supplier pricing route aligned with admin-only cost access', () => {
-    const app = source('src', 'App.tsx');
-    expect(app).toContain(
-      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}>",
-    );
-    expect(app).not.toContain(
-      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}>",
-    );
+    // The route and its role gate come from the page's entry in the shared page list,
+    // src/appPages.tsx; App.tsx wraps every route in ProtectedRoute with those roles.
+    const pages = source('src', 'appPages.tsx').split(/\r?\n/);
+    const entry = pages.find((line) => line.includes("key: 'supplier-pricing'"));
+    expect(entry).toContain("roles: ['admin'],");
+    const route = pages.find((line) => line.includes("path: 'supplier-pricing'"));
+    expect(route).toBe("    routes: [{ path: 'supplier-pricing', element: <SupplierPricing /> }],");
   });
 
   it('keeps payment-rejection E2E assertions on the thrown RPC error path', () => {

@@ -17,7 +17,9 @@ import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
   purchaseOrderUnitCostCents,
+  isWholeCentPurchaseOrderCost,
 } from '../../lib/purchaseOrderMoney';
+import { isWholeCentDollarInput, MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { PRODUCT_COLUMNS, withAdminCosts } from '../../lib/costFields';
 import {
   buildBulkPOIntentKey,
@@ -44,6 +46,9 @@ interface ParsedPOItem {
   match_confidence: number;
   quantity_ordered: number;
   unit_cost: number;
+  // What the admin typed, kept because a number can silently shorten an over-precise
+  // entry (10.0000000000000001 becomes 10); the text is what gets checked.
+  unit_cost_text?: string;
   unit_size: string;
   notes: string;
 }
@@ -84,11 +89,62 @@ function buildParsedPOIntentKey(po: ParsedPO): string | null {
     items: po.items.map((item) => ({
       productId: item.matched_product?.id ?? null,
       quantityOrdered: item.quantity_ordered,
-      unitCostCents: purchaseOrderUnitCostCents(item.unit_cost),
+      unitCostCents: unitCostCentsOf(item),
       unitSize: item.unit_size,
       notes: item.notes,
     })),
   });
+}
+
+// Purchase cost must be exact whole cents. OCR can read $10.006 off a vendor
+// document; that is refused for the admin to fix, never rounded (Mason's rule).
+const UNIT_COST_REQUIRED_MESSAGE = 'Enter a unit cost (type 0 for no cost).';
+const UNIT_COST_NEGATIVE_MESSAGE = 'Unit cost cannot be negative.';
+const UNIT_COST_TOO_LARGE_MESSAGE = 'This unit cost is too large to save exactly.';
+
+// Why this line's cost cannot be saved, or null when it can. A cleared box is
+// missing, not $0: clearing a refused OCR cost must not import it at zero.
+function unitCostError(item: ParsedPOItem): string | null {
+  if (item.unit_cost_text !== undefined) {
+    const typed = item.unit_cost_text.trim();
+    if (!typed) return UNIT_COST_REQUIRED_MESSAGE;
+    if (typed.startsWith('-')) return UNIT_COST_NEGATIVE_MESSAGE;
+    if (!isWholeCentDollarInput(typed)) return MONEY_PRECISION_MESSAGE;
+    // save_purchase_order receives dollars beside cents and refuses a pair that disagree
+    // (PO_UNIT_COST_CENTS_MISMATCH), so an amount whose dollar number cannot carry its exact
+    // cents (from about $90 billion up, e.g. 90071992547409.91) is refused here, not at save.
+    const typedCents = parseDollarsToCents(typed);
+    if (typedCents === null
+      || purchaseOrderUnitCostCents(purchaseOrderCentsToDollars(typedCents)) !== typedCents) {
+      return UNIT_COST_TOO_LARGE_MESSAGE;
+    }
+  }
+  if (item.unit_cost < 0) return UNIT_COST_NEGATIVE_MESSAGE;
+  return isWholeCentPurchaseOrderCost(item.unit_cost) ? null : MONEY_PRECISION_MESSAGE;
+}
+
+function hasWholeCentUnitCost(item: ParsedPOItem): boolean {
+  return unitCostError(item) === null;
+}
+
+// The cents a line saves and totals. A typed cost comes from its exact text, never from a
+// binary float; unitCostError has already refused any text that is not a plain amount with at
+// most two decimals whose cents its dollar number carries exactly.
+function unitCostCentsOf(item: ParsedPOItem): number {
+  if (item.unit_cost_text !== undefined) {
+    const typedCents = parseDollarsToCents(item.unit_cost_text.trim());
+    if (typedCents !== null) return typedCents;
+  }
+  return purchaseOrderUnitCostCents(item.unit_cost);
+}
+
+// Only a matched, positive-quantity line is saved, so only its cost can block the PO.
+function costBlocksImport(item: ParsedPOItem): boolean {
+  return Boolean(item.matched_product) && item.quantity_ordered > 0 && !hasWholeCentUnitCost(item);
+}
+
+function savedLinesHaveWholeCentCosts(po: ParsedPO): boolean {
+  return !po.items.some(costBlocksImport);
 }
 
 function fuzzyMatchProductWithScore(
@@ -321,7 +377,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const updateItemField = (
     poIdx: number,
     itemIdx: number,
-    field: 'quantity_ordered' | 'unit_cost' | 'unit_size' | 'notes',
+    field: 'quantity_ordered' | 'unit_cost' | 'unit_cost_text' | 'unit_size' | 'notes',
     value: string | number,
   ) => {
     setParsedPOs((prev) => {
@@ -343,7 +399,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         ...items[itemIdx],
         matched_product: product,
         match_confidence: 1,
-        unit_cost: items[itemIdx].unit_cost || product.current_cost || 0,
+        // A cost the admin typed (an explicit 0, or a cleared box still to fill) is never replaced by
+        // the catalog cost; only an untouched OCR line without a cost takes it.
+        unit_cost: items[itemIdx].unit_cost_text !== undefined
+          ? items[itemIdx].unit_cost
+          : items[itemIdx].unit_cost || product.current_cost || 0,
         unit_size: items[itemIdx].unit_size || product.unit_size || '',
       };
       copy[poIdx] = { ...copy[poIdx], items };
@@ -407,6 +467,13 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           failedCount++;
           continue;
         }
+        // Only an admin sends cost; a rep's import never carries the OCR cost.
+        if (isAdmin && !savedLinesHaveWholeCentCosts(po)) {
+          const reason = unitCostError(po.items.find(costBlocksImport)!);
+          toast('error', `${po.source_file}: fix the unit cost. ${reason}`);
+          failedCount++;
+          continue;
+        }
         const validItems = po.items.filter((i) => i.matched_product && i.quantity_ordered > 0);
         if (validItems.length === 0) {
           failedCount++;
@@ -448,12 +515,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             notes: item.notes || null,
           };
           if (!isAdmin) return line;
-          const unitCostCents = purchaseOrderUnitCostCents(item.unit_cost);
+          const unitCostCents = unitCostCentsOf(item);
           return {
             ...line,
-            // OCR may return extra decimal places. Send one canonical whole-cent
-            // value in both representations so the database never sees a raw,
-            // fractional-cent dollar amount that disagrees with our cents math.
+            // savedLinesHaveWholeCentCosts refused any cost past two decimals
+            // above, so this conversion is exact; both representations agree.
             unit_cost: purchaseOrderCentsToDollars(unitCostCents),
             unit_cost_cents: unitCostCents,
           };
@@ -580,7 +646,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     const positiveItems = po.items.filter((item) => item.quantity_ordered > 0);
     return intentKey !== null
       && positiveItems.length > 0
-      && positiveItems.every((item) => item.matched_product);
+      && positiveItems.every((item) => item.matched_product)
+      && (!isAdmin || savedLinesHaveWholeCentCosts(po));
   }).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
@@ -676,8 +743,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             {/* Parsed POs accordion */}
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
               {parsedPOs.map((po, poIdx) => {
+                // The total sums every line, so any invalid cost makes it meaningless.
+                const poTotalValid = po.items.every(hasWholeCentUnitCost);
                 const poTotal = purchaseOrderCentsToDollars(po.items.reduce(
-                  (sum, item) => sum + purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                  (sum, item) => sum + purchaseOrderLineTotalCents(item.quantity_ordered, purchaseOrderCentsToDollars(unitCostCentsOf(item))),
                   0,
                 ));
                 const hasErrors = po.parse_errors.length > 0;
@@ -709,7 +778,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                           {po.vendor_name || 'No vendor'} &middot;{' '}
                           {po.invoice_number || 'No ref #'} &middot;{' '}
                           {po.items.length} item{po.items.length !== 1 ? 's' : ''}
-                          {isAdmin && <> &middot;{' '}{fmt(poTotal)}</>}
+                          {isAdmin && <> &middot;{' '}{poTotalValid ? fmt(poTotal) : '—'}</>}
                         </p>
                       </div>
                       {alreadyImported && (
@@ -890,14 +959,25 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                     <td className="px-3 py-2">
                                       <input
                                         type="number"
-                                        value={item.unit_cost || ''}
-                                        onChange={(e) =>
-                                          updateItemField(poIdx, itemIdx, 'unit_cost', parseFloat(e.target.value) || 0)
-                                        }
+                                        value={item.unit_cost_text || item.unit_cost || ''}
+                                        onChange={(e) => {
+                                          updateItemField(poIdx, itemIdx, 'unit_cost_text', e.target.value);
+                                          updateItemField(poIdx, itemIdx, 'unit_cost', parseFloat(e.target.value) || 0);
+                                        }}
                                         min="0"
                                         step="0.01"
-                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                        aria-label={`Unit cost for ${item.matched_product?.product_name ?? item.extracted_name}`}
+                                        aria-invalid={costBlocksImport(item)}
+                                        aria-describedby={costBlocksImport(item) ? `po-${poIdx}-item-${itemIdx}-cost-error` : undefined}
+                                        className={`w-full px-2 py-1 text-sm border rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
+                                          costBlocksImport(item) ? 'border-red-400' : 'border-gray-200'
+                                        }`}
                                       />
+                                      {costBlocksImport(item) && (
+                                        <p id={`po-${poIdx}-item-${itemIdx}-cost-error`} className="mt-1 text-xs text-red-600">
+                                          {unitCostError(item)}
+                                        </p>
+                                      )}
                                     </td>
                                     )}
                                     <td className="px-3 py-2">
@@ -911,9 +991,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                     </td>
                                     {isAdmin && (
                                     <td className="px-3 py-2 font-mono text-sm text-nav-dark">
-                                      {fmt(purchaseOrderCentsToDollars(
-                                        purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
-                                      ))}
+                                      {hasWholeCentUnitCost(item)
+                                        ? fmt(purchaseOrderCentsToDollars(
+                                          purchaseOrderLineTotalCents(item.quantity_ordered, purchaseOrderCentsToDollars(unitCostCentsOf(item))),
+                                        ))
+                                        : '—'}
                                     </td>
                                     )}
                                     <td className="px-3 py-2">
@@ -935,7 +1017,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                     PO Total
                                   </td>
                                   <td className="px-3 py-2 font-mono text-sm font-semibold text-nav-dark">
-                                    {fmt(poTotal)}
+                                    {poTotalValid ? fmt(poTotal) : '—'}
                                   </td>
                                   <td />
                                 </tr>

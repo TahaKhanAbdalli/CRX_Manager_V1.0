@@ -349,13 +349,22 @@ const ownerApproval = verdict.ownerApproval || null;
 if (ownerApproval) {
   console.log(`OWNER APPROVAL: an approval recorded from Mason's reply in this session covers this exact file, pull request and head (valid until ${ownerApproval.expiresAt}; one use).`);
 }
+// Mason's per-PR "skip coderabbit" waiver stood in for the review: say so,
+// never "clean" (Codex App P2 on #1035).
+const coderabbitSkip = verdict.coderabbitSkippedBy || null;
+if (coderabbitSkip) {
+  console.log(`CODERABBIT SKIPPED: PR #${coderabbitSkip.pullRequest} has no CodeRabbit review; Mason waived it in this session at ${coderabbitSkip.recordedAt} ("${coderabbitSkip.said}"; valid until ${coderabbitSkip.expiresAt}).`);
+}
 
 if (!confirm) {
   console.log("");
   console.log("DRY RUN — nothing was transmitted. Re-run with --confirm to apply for real.");
+  const reviews = coderabbitSkip
+    ? "whose PR's final Sol review is clean and whose CodeRabbit review Mason skipped"
+    : "whose PR's final Sol and CodeRabbit reviews are clean";
   console.log(ownerApproval
     ? "Gate passed with the recorded chat-reply approval. --confirm uses it up; it expires 30 minutes after the reply."
-    : "Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
+    : `Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, ${reviews}, may now be applied with --confirm.`);
   process.exit(0);
 }
 

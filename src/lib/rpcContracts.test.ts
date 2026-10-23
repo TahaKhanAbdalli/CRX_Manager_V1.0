@@ -2438,7 +2438,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('batch_post_invoices binds replay and forwards a deterministic key to every child post', () => {
     const body = latestFunctionBody('batch_post_invoices');
     expect(body).not.toBeNull();
-    // v3 (20261021200000): each row carries the invoice version the screen loaded, the request
+    // v3 (20261022022000): each row carries the invoice version the screen loaded, the request
     // binding covers them, and every child post forwards it.
     expect(body).toContain("v_contract CONSTANT text := 'batch_post_invoices_v3'");
     expect(body).toContain('public._claim_bound_lifecycle_idempotency(');
@@ -3012,11 +3012,11 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * is applied and the high-water moves past it. `notify_team_note_assignment`
  * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
  * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
- * anything, they are simply no longer discovered.
+ * anything, they are simply no longer discovered. `_lock_invoice_post_inputs`
+ * (20261022022000, a lock-only posting helper with no API-role EXECUTE) was
+ * pruned on 2026-10-22, when that migration applied live.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
-  _lock_invoice_post_inputs:
-    'internal row-lock helper of post_invoice / post_invoice_group (20261021200000); takes FOR UPDATE/FOR SHARE locks only, writes nothing, and every application-role EXECUTE is revoked; the required-key posting wrappers own idempotency',
   _close_undelivered_order_remainder_20260718:
     'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
   _post_deleted_delivery_recovery_invoice_20260719:
@@ -3083,6 +3083,12 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   record_commission_settlement_event:
     'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
+  // Prune once 20261022023000 is in the applied-name snapshot (it is re-emitted there, so it is
+  // discovered until then).
+  handle_new_user:
+    'local signup-role candidate 20261022023000 re-emits this AFTER INSERT ON auth.users trigger (RETURNS trigger, so no direct call); it inserts the new profile and bans the login once per new auth user inside the Auth service transaction',
+  // Pruned 2026-10-22: guard_invoice_terminal_order, re-emitted by 20261021150000, which is now in
+  //   the applied-name snapshot (registry regenerated from live in PR #1033), so it left the inventory.
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

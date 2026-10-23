@@ -74,6 +74,10 @@ try {
     projectDir,
     cwd: payload?.cwd || input.cwd || process.cwd(),
     landingDeadlineMs: hookDeadlineMs(HOOK_TIMEOUT_MS, HOOK_RESERVE_MS),
+    // This session's id, so Mason's "skip coderabbit" waiver reaches the landing
+    // gate here too (Codex App P2 on #1035). It cannot approve a parked migration:
+    // that also needs ownerApprovalDoor, which only apply-migration-file.mjs sets.
+    ownerSessionId: payload?.session_id ?? payload?.sessionId,
   });
 } catch (err) {
   // A crash in the rule book must not wave a live migration through.

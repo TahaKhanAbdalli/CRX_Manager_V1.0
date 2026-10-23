@@ -22,6 +22,7 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { fetchAllRows } from '../lib/pagedRead';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCurrency } from '../lib/money';
 import type { ApplicatorLicense, RUPSalesRecord } from '../types';
@@ -99,9 +100,10 @@ export default function Compliance() {
     fsa_field_number: string | null;
   }
   const [fieldListings, setFieldListings] = useState<FieldWithFSA[]>([]);
+  const [fieldsFailed, setFieldsFailed] = useState(false);
 
-  // Customers for dropdowns
-  const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // The license modal's customer picker searches every customer; this is the chosen one's name.
+  const [customerLabel, setCustomerLabel] = useState('');
   // Staff for staff-held licenses (B5 license gates)
   const [staff, setStaff] = useState<{ id: string; full_name: string; role: string }[]>([]);
 
@@ -167,12 +169,6 @@ export default function Compliance() {
     setLicenses(mapped);
   }, [toast]);
 
-  const fetchCustomers = useCallback(async () => {
-    const { data, error } = await supabase.from('customers').select('id, farm_name').order('farm_name');
-    if (error) toast('error', 'Failed to load customers');
-    setCustomers(data || []);
-  }, [toast]);
-
   const fetchRUPProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
@@ -222,18 +218,30 @@ export default function Compliance() {
     setRupFailed(false);
   }, [rupStartDate, rupEndDate, rupComplianceFilter, toast]);
 
+  const fieldListingSeqRef = useRef(0);
   const fetchFieldListings = useCallback(async () => {
-    const { data, error } = await supabase
+    const seq = ++fieldListingSeqRef.current;
+    // Every field, page by page: the counts and the Total Acres card add up this
+    // list, and one read stops silently at the server's 1,000-row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('fields')
-      .select('id, field_name, county, state, total_acres, crop_type, fsa_farm_number, fsa_tract_number, fsa_field_number, customer:customers(farm_name)')
+      .select('id, field_name, county, state, total_acres, crop_type, fsa_farm_number, fsa_tract_number, fsa_field_number, customer:customers(farm_name)', { count: 'exact' })
       .eq('is_active', true)
-      .order('field_name');
+      .order('field_name')
+      .order('id')
+      .range(from, to));
+    // A slower read from an earlier visit must not overwrite this one.
+    if (seq !== fieldListingSeqRef.current) return;
 
     if (error) {
       toast('error', 'Failed to load fields');
       Sentry.captureException(error);
+      // Never leave an earlier (or partial) list's counts and acre total up.
+      setFieldListings([]);
+      setFieldsFailed(true);
       return;
     }
+    setFieldsFailed(false);
 
     const mapped = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string } }>).map((f) => ({
       ...f,
@@ -245,7 +253,7 @@ export default function Compliance() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     if (tab === 'licenses') {
-      await Promise.all([fetchLicenses(), fetchCustomers()]);
+      await fetchLicenses();
     } else if (tab === 'rup_products') {
       await fetchRUPProducts();
     } else if (tab === 'rup_sales') {
@@ -254,7 +262,7 @@ export default function Compliance() {
       await fetchFieldListings();
     }
     setLoading(false);
-  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts, fetchRUPSales, fetchFieldListings]);
+  }, [tab, fetchLicenses, fetchRUPProducts, fetchRUPSales, fetchFieldListings]);
 
   useEffect(() => {
     fetchData();
@@ -295,11 +303,14 @@ export default function Compliance() {
       certification_categories: '',
       notes: '',
     });
+    setCustomerLabel('');
     setModalOpen(true);
   };
 
   const openEdit = (lic: LicenseWithCustomer) => {
     setEditId(lic.id);
+    // The license read already joined its customer's name.
+    setCustomerLabel(lic.profile_id ? '' : (lic.customer as { farm_name?: string } | null | undefined)?.farm_name ?? '');
     setForm({
       holder_type: lic.profile_id ? 'staff' : 'customer',
       customer_id: lic.customer_id || '',
@@ -829,7 +840,13 @@ export default function Compliance() {
       )}
 
       {/* ========== FIELD LISTING / FSA TAB ========== */}
-      {tab === 'field_listing' && (
+      {/* A failed load shows no counts or list: "0 acres" or "No fields found" would be wrong. */}
+      {tab === 'field_listing' && fieldsFailed && (
+        <Card>
+          <p role="alert" className="text-center text-red-600 py-8 text-sm">Fields could not be loaded. Reload to try again.</p>
+        </Card>
+      )}
+      {tab === 'field_listing' && !fieldsFailed && (
         <>
           {/* Summary */}
           {fieldListings.length > 0 && (
@@ -947,7 +964,7 @@ export default function Compliance() {
               </button>
               <button
                 type="button"
-                onClick={() => setForm({ ...form, holder_type: 'staff', customer_id: '' })}
+                onClick={() => { setForm({ ...form, holder_type: 'staff', customer_id: '' }); setCustomerLabel(''); }}
                 className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${form.holder_type === 'staff' ? 'bg-crx-green text-white border-crx-green' : 'bg-white text-nav-dark border-gray-200 hover:border-crx-green/40'}`}
               >
                 Staff member
@@ -957,19 +974,20 @@ export default function Compliance() {
 
           {form.holder_type === 'customer' ? (
             <div>
-              <label className="text-sm font-medium text-nav-dark">Customer *</label>
-              <select
+              <label htmlFor="license-customer" className="text-sm font-medium text-nav-dark">Customer *</label>
+              <CustomerSearchPicker
+                id="license-customer"
                 value={form.customer_id}
-                onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">Select customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.farm_name}
-                  </option>
-                ))}
-              </select>
+                selectedLabel={customerLabel}
+                onSelect={(customer) => {
+                  setForm((prev) => ({ ...prev, customer_id: customer?.id ?? '' }));
+                  setCustomerLabel(customer?.farm_name ?? '');
+                }}
+                activeOnly={false}
+                placeholder="Select customer..."
+                ariaLabel="License customer"
+                className="mt-1 w-full"
+              />
             </div>
           ) : (
             <div>

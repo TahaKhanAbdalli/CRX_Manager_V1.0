@@ -38,7 +38,7 @@ vi.mock('../lib/db', () => {
   const chain = (table: string) => {
     const value: Record<string, unknown> = {};
     const self = () => value;
-    for (const method of ['select', 'is', 'eq', 'in', 'gte', 'lte', 'ilike', 'or', 'order', 'limit']) value[method] = self;
+    for (const method of ['select', 'is', 'eq', 'in', 'gte', 'lte', 'ilike', 'or', 'order', 'limit', 'range']) value[method] = self;
     value.maybeSingle = () => Promise.resolve({ data: null, error: null });
     value.then = (resolve: (result: { data: unknown[]; error: null }) => unknown) => resolve({ data: dataFor(table), error: null });
     return value;

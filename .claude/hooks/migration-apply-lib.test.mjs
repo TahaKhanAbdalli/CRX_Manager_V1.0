@@ -23,6 +23,7 @@ import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 import { evaluateLandingGate } from "./migration-landing-gate-lib.mjs";
+import { cancelCodeRabbitSkip, recordCodeRabbitSkip } from "./coderabbit-skip-lib.mjs";
 import { generateKeyPairSync } from "node:crypto";
 import {
   OWNER_APPROVAL_MAX_AGE_MS,
@@ -185,6 +186,22 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({ landingGate: land
 
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
 allows(evaluate(fixture()), "known-good UNARMED fixture (both reviewers + fresh Sol proof) is allowed — no per-migration ask since 2026-09-26");
+
+// Mason's "skip coderabbit" waiver counts only in the applying session, so the
+// apply must hand the landing gate THIS session's id (Luna round 1).
+{
+  const seen = [];
+  const spy = (args) => { seen.push(args.sessionId); return landingOk(args); };
+  allows(evaluate(fixture(), { landingGate: spy, ownerSessionId: "apply-session-0001" }), "an apply with a session id still passes");
+  ok(seen.length > 0 && seen.every((id) => id === "apply-session-0001"), "the landing gate receives the applying session's id");
+  // Codex App P2 on #1035: a waiver the landing gate used rides on the allow
+  // verdict, so the apply reports CodeRabbit SKIPPED, not clean.
+  const waived = { pullRequest: 900, said: "skip coderabbit #900", recordedAt: "2026-10-22T15:00:00.000Z", expiresAt: "2026-10-23T15:00:00.000Z" };
+  const withSkip = evaluate(fixture(), { landingGate: (args) => ({ ...landingOk(args), coderabbitSkippedBy: waived }) });
+  allows(withSkip, "an apply on a waived PR still passes");
+  ok(withSkip.coderabbitSkippedBy?.pullRequest === 900, "and its verdict says CodeRabbit was skipped for #900");
+  ok(evaluate(fixture()).coderabbitSkippedBy === undefined, "a reviewed PR's verdict carries no skip marker");
+}
 
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
@@ -1582,7 +1599,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     head_sha: HEAD_SHA, base_sha: BASE_SHA, timestamp: new Date().toISOString() };
   writeFileSync(path.join(gateDir, ".claude", "session-state", `codex-review-${HEAD_SHA}.json`), JSON.stringify(goodProof));
   const readyPr = {
-    number: 900, state: "OPEN", baseRefName: "main", baseRefOid: BASE_SHA, headRefOid: HEAD_SHA,
+    number: 900, url: "https://github.com/masonwells1/CRX_Manager_V1.0/pull/900",
+    state: "OPEN", baseRefName: "main", baseRefOid: BASE_SHA, headRefOid: HEAD_SHA,
     mergeStateStatus: "CLEAN", reviewDecision: "APPROVED",
     reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: HEAD_SHA }, submittedAt: new Date().toISOString() }],
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
@@ -1600,8 +1618,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     commits: { totalCount: 1, nodes: [{ commit: { oid: head, parents: { totalCount: 1 }, status: { contexts: statuses } } }] },
   } } } });
   const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH, threads = [], threadsError = null, threadsMore = false, threadsHead = HEAD_SHA,
-    crStatuses = crDone, crError = null, crHead = HEAD_SHA } = {}) => evaluateLandingGate({
-    checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
+    crStatuses = crDone, crError = null, crHead = HEAD_SHA, sessionId = undefined } = {}) => evaluateLandingGate({
+    checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "", sessionId,
     runGit: (args) => {
       const key = args.join(" ");
       if (key in git) { if (git[key] instanceof Error) throw git[key]; return git[key]; }
@@ -1609,6 +1627,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature\n";
       if (key.startsWith("show HEAD:")) return SQL;
       if (key.startsWith("status --porcelain")) return "";
+      // git's shared folder: this fixture is its own main checkout.
+      if (key === "rev-parse --path-format=absolute --git-common-dir") return `${path.join(gateDir, ".git")}\n`;
       throw new Error(`unexpected git ${key}`);
     },
     runGh: (args) => {
@@ -1698,6 +1718,53 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "a rate-limited CodeRabbit status is not a review");
   refused(gate({ crStatuses: [{ ...crDone[0], creator: { login: "masonwells1" } }] }), "needs a clean CodeRabbit review",
     "a completed status posted by anyone but CodeRabbit does not count");
+  // Mason's "skip coderabbit" (2026-10-22) waives the missing review for the
+  // session he said it in, and nothing else.
+  {
+    const stateDirs = [path.join(gateDir, ".claude", "session-state")];
+    const skipSession = "skip-session-0001";
+    ok(recordCodeRabbitSkip({ dirs: stateDirs, sessionId: skipSession, pullRequest: 901, said: "skip coderabbit #901" }) !== null,
+      "a waiver for ANOTHER PR is recorded");
+    refused(gate({ crStatuses: [], sessionId: skipSession }), "needs a clean CodeRabbit review",
+      "a waiver naming another PR does not let this PR's migration apply (Mason, 2026-10-22: per PR)");
+    ok(recordCodeRabbitSkip({ dirs: stateDirs, sessionId: skipSession, pullRequest: 900, said: "skip coderabbit #900" }) !== null,
+      "the waiver for this PR is recorded");
+    const skipped = gate({ crStatuses: [], sessionId: skipSession });
+    ok(skipped.ok === true && skipped.coderabbitSkippedBy?.pullRequest === 900,
+      `a migration PR with no CodeRabbit review applies when Mason said skip coderabbit #900 in this session (${skipped.reason || ""})`);
+    refused(gate({ crStatuses: [], sessionId: "other-session-0002" }), "needs a clean CodeRabbit review",
+      "the waiver does not carry to another session");
+    refused(gate({ crStatuses: [] }), "needs a clean CodeRabbit review", "an apply with no session id gets no waiver");
+    refused(gate({ crStatuses: [], sessionId: skipSession, threads: [crThread(false)] }), "unresolved CodeRabbit comment thread",
+      "the waiver does not excuse an unanswered CodeRabbit thread");
+    refused(gate({ crError: new Error("HTTP 502"), sessionId: skipSession }), "fail closed",
+      "the waiver does not excuse an unreadable requirement answer");
+    ok(gate({ sessionId: skipSession }).coderabbitSkippedBy === undefined, "a reviewed PR is not marked as skipped");
+    // Codex App P2 on #1035: the same number in another repository gets no waiver.
+    refused(gate({ crStatuses: [], sessionId: skipSession, pr: { url: "https://github.com/other/repo/pull/900" } }),
+      "needs a clean CodeRabbit review", "a waiver for #900 here does not cover other/repo#900");
+    refused(gate({ crStatuses: [], sessionId: skipSession, pr: { url: undefined } }),
+      "needs a clean CodeRabbit review", "a PR whose repository cannot be read gets no waiver");
+    cancelCodeRabbitSkip({ dirs: stateDirs, sessionId: skipSession });
+    refused(gate({ crStatuses: [], sessionId: skipSession }), "needs a clean CodeRabbit review", "a cancelled waiver no longer counts");
+    // Codex App P2 and the final Sol review on #1035: waivers live in the MAIN
+    // checkout's state folder (found through git's shared folder), so an apply
+    // from a subfolder or another worktree finds the same one.
+    const mainDir = mkdtempSync(path.join(os.tmpdir(), "crx-skip-main-"));
+    const COMMON = "rev-parse --path-format=absolute --git-common-dir";
+    try {
+      mkdirSync(path.join(mainDir, ".claude"), { recursive: true });
+      recordCodeRabbitSkip({ dirs: [path.join(mainDir, ".claude", "session-state")], sessionId: skipSession, pullRequest: 900, said: "skip coderabbit #900" });
+      ok(gate({ crStatuses: [], sessionId: skipSession, git: { [COMMON]: `${path.join(mainDir, ".git")}\n` } }).ok === true,
+        "a waiver in the main checkout's state folder is found from a worktree");
+      refused(gate({ crStatuses: [], sessionId: skipSession, git: { [COMMON]: new Error("not a repo") } }),
+        "needs a clean CodeRabbit review", "a failed shared-folder lookup finds no waiver");
+      refused(gate({ crStatuses: [], sessionId: skipSession, git: { [COMMON]: `${path.join(mainDir, "bare.git")}\n` } }),
+        "needs a clean CodeRabbit review", "a shared folder that is not <checkout>/.git finds no waiver");
+    } finally {
+      rmSync(mainDir, { recursive: true, force: true });
+    }
+  }
   refused(gate({ crError: new Error("HTTP 502") }), "fail closed", "an unreadable requirement answer refuses the apply");
   refused(gate({ crHead: "d".repeat(40) }), "could not be read for this exact head",
     "a requirement answer for a different head refuses the apply");

@@ -54,7 +54,7 @@ vi.mock('../lib/costFields', async (importOriginal) => ({
 }));
 
 vi.mock('../lib/db', () => ({
-  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  // The version-bearing reads use the invoices_postable view (20261022090000): same rows as invoices here.
   supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc },
   assertRpcResult: <T,>(data: T) => data,
   checkMutationResult: () => {},
@@ -1116,6 +1116,27 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       p_expected_versions: { 'inv-grp-1': 'v1:header', 'inv-grp-2': 'v1:sibling-2' },
       p_idempotency_key: 'test-idem-key',
     });
+  });
+
+  it('keeps Post unauthorized when the sibling read fails', async () => {
+    setupGroup(['draft', 'draft']);
+    const base = mockFrom.getMockImplementation()!;
+    const failing = makeFromMock({ invoices: { data: null, error: { message: 'sibling read failed' } } });
+    // Only the sibling list (the read that joins the customer name) fails; the invoice row loads.
+    mockFrom.mockImplementation((table: string) => {
+      const chain = base(table);
+      if (table !== 'invoices') return chain;
+      const select = chain.select;
+      chain.select = vi.fn((cols: string) => (cols.includes('customer:customers') ? failing('invoices') : select(cols)));
+      return chain;
+    });
+    await renderPage();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some invoice details did not load. Reload the page before posting.'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Post Group/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Post Group$/i }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('could not read the invoice version')));
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('post_invoice_group');
   });
 
   it('locks edit (no Save / Post / Delete buttons) when any sibling is posted', async () => {

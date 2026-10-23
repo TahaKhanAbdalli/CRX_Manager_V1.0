@@ -20,14 +20,29 @@ const H = vi.hoisted(() => ({
   tables: {} as Record<string, Row[]>,
   functions: {} as Record<string, unknown>,
   toast: vi.fn(),
+  customerSearches: [] as string[],
+  customerFilters: [] as string[],
 }));
+
+// The statement's customer picker searches by name (an ilike .or() the in-memory
+// table does not parse): record each search and answer with every customer row.
+function customerSearch(rows: Row[]) {
+  const chain: Record<string, unknown> = {};
+  for (const m of ['select', 'order', 'not']) chain[m] = () => chain;
+  chain.eq = (column: string) => { H.customerFilters.push(column); return chain; };
+  chain.or = (expr: string) => { H.customerSearches.push(expr); return chain; };
+  chain.limit = () => Promise.resolve({ data: rows, error: null });
+  return chain;
+}
 
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
   return {
     ...actual,
     supabase: {
-      from: (table: string) => buildInMemoryQuery(H.tables[table] ?? []),
+      from: (table: string) => (table === 'customers'
+        ? customerSearch(H.tables.customers ?? [])
+        : buildInMemoryQuery(H.tables[table] ?? [])),
       rpc: (name: string) => pagedRpcReply({ data: H.functions[name] ?? [], error: null }),
     },
   };
@@ -62,17 +77,33 @@ beforeEach(() => {
   vi.clearAllMocks();
   H.tables = { customers: [{ id: 'c1', farm_name: 'Big Farm' }] };
   H.functions = {};
+  H.customerSearches = [];
+  H.customerFilters = [];
 });
 afterEach(cleanup);
 
 async function loadStatement() {
   render(<MemoryRouter><ARaging /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: 'Customer Statement' }));
-  const picker = await screen.findByDisplayValue('Select customer...');
-  await waitFor(() => expect(picker.querySelectorAll('option')).toHaveLength(2));
-  fireEvent.change(picker, { target: { value: 'c1' } });
+  const picker = await screen.findByRole('combobox', { name: 'Statement customer' });
+  fireEvent.focus(picker);
+  fireEvent.change(picker, { target: { value: 'Big' } });
+  fireEvent.click(await screen.findByRole('option', { name: /Big Farm/ }));
   fireEvent.click(screen.getByRole('button', { name: /Load Transactions/ }));
 }
+
+describe('AR Aging statement customer picker (Goal 4 part 3)', () => {
+  it('searches every customer, inactive included, instead of loading a capped list', async () => {
+    H.functions.get_customer_statement = statement(3);
+    await loadStatement();
+
+    await waitFor(() => expect(screen.getByText('Ending Balance').parentElement!).toHaveTextContent('$3.00'));
+    expect(H.customerSearches).toContain('farm_name.ilike."%Big%",account_number.ilike."%Big%"');
+    // The old list read every customer, so the search keeps inactive ones too.
+    expect(H.customerFilters).not.toContain('is_active');
+    expect(screen.getByRole('combobox', { name: 'Statement customer' })).toHaveValue('Big Farm');
+  });
+});
 
 describe('AR Aging customer statement past the 1,000-row server cap (M57)', () => {
   it('shows all 1,205 rows in order and the true ending balance', async () => {

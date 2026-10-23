@@ -500,21 +500,22 @@ function readStrictYamlSubset(text) {
   return values;
 }
 
-// Mason, 2026-10-19 (DECISION_LOG, "cut coderabbit volume"): CodeRabbit reviews
-// a non-draft PR ONCE, on open or when marked ready, not on later pushes, skips
-// "docs(" titles, and never approves or requests changes. (2026-09-26 to
-// 2026-10-19 it reviewed every push.) The EFFECTIVE settings
+// Mason, 2026-10-21 ("Yes turn off auto review"): CodeRabbit makes NO automatic
+// reviews; it reviews only when an agent posts `@coderabbitai full review` on a
+// money or Mason-named PR, and never approves or requests changes. (2026-10-19
+// to 2026-10-21 it reviewed a non-draft PR once, on open or when marked ready;
+// 2026-09-26 to 2026-10-19 it reviewed every push.) The EFFECTIVE settings
 // are pinned, not the first matching text (CodeRabbit and Luna, PR #841): the
 // auto_review block must hold exactly these keys and values, so switching it
-// off, pausing it, narrowing it (a `labels:` list, `ignore_usernames`, ...) or
-// overriding a value in a form a regex would miss all fail this test.
+// back on, or changing any other value in a form a regex would miss, fails
+// this test.
 function assertAutomaticReviewPinned(config) {
   const settings = readStrictYamlSubset(config);
   const autoReview = Object.fromEntries(
     [...settings].filter(([key]) => key.startsWith('reviews.auto_review.')),
   );
   assert.deepEqual(autoReview, {
-    'reviews.auto_review.enabled': 'true',
+    'reviews.auto_review.enabled': 'false',
     'reviews.auto_review.auto_incremental_review': 'false',
     'reviews.auto_review.auto_pause_after_reviewed_commits': '0',
     'reviews.auto_review.drafts': 'false',
@@ -528,7 +529,7 @@ function assertAutomaticReviewPinned(config) {
 
 const CODERABBIT_CONFIG = path.join(__dirname, '..', '..', '.coderabbit.yaml');
 
-test('CodeRabbit reviews each non-draft PR once, automatically, and stays advisory', () => {
+test('CodeRabbit makes no automatic reviews and stays advisory', () => {
   assertAutomaticReviewPinned(fs.readFileSync(CODERABBIT_CONFIG, 'utf8'));
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
@@ -544,40 +545,51 @@ test('CodeRabbit reviews each non-draft PR once, automatically, and stays adviso
 // fail the pin.
 test('the automatic-review pin fails on every form that could change a setting unseen', () => {
   const config = fs.readFileSync(CODERABBIT_CONFIG, 'utf8');
-  const afterEnabled = /^( {4}enabled: true)$/m;
+  const afterEnabled = /^( {4}enabled: false)$/m;
   const afterKeyword = /^( {4}description_keyword: "")$/m;
   const firstBlockText = /^( {6}instructions: >-)$/m;
   const mutations = {
-    'a quoted duplicate "enabled": false': [afterEnabled, '$1\n    "enabled": false'],
-    'a single-quoted duplicate enabled': [afterEnabled, "$1\n    'enabled': false"],
-    'a plain duplicate enabled: false': [afterEnabled, '$1\n    enabled: false'],
-    'a second quoted "auto_review" block': [afterKeyword, '$1\n  "auto_review":\n    enabled: false'],
-    'a second plain auto_review block': [afterKeyword, '$1\n  auto_review:\n    enabled: false'],
-    'a merge key': [afterEnabled, '$1\n    <<: {enabled: false}'],
-    'a flow mapping': [/^( {2}auto_review:)$/m, '$1 {enabled: false}'],
-    'a tagged value': [afterEnabled, '    enabled: !!str true'],
-    'an anchored value': [afterEnabled, '    enabled: &on true'],
-    'a quoted true': [afterEnabled, '    enabled: "true"'],
-    'a deeper-indented override': [afterEnabled, '$1\n      enabled: false'],
-    'a tab-indented override': [afterEnabled, '$1\n\tenabled: false'],
-    'an override behind a lone CR in a comment': [afterEnabled, '$1\n    # note\r    enabled: false'],
+    'a quoted duplicate "enabled": true': [afterEnabled, '$1\n    "enabled": true'],
+    'a single-quoted duplicate enabled': [afterEnabled, "$1\n    'enabled': true"],
+    'a plain duplicate enabled: true': [afterEnabled, '$1\n    enabled: true'],
+    'a second quoted "auto_review" block': [afterKeyword, '$1\n  "auto_review":\n    enabled: true'],
+    'a second plain auto_review block': [afterKeyword, '$1\n  auto_review:\n    enabled: true'],
+    'a merge key': [afterEnabled, '$1\n    <<: {enabled: true}'],
+    'a flow mapping': [/^( {2}auto_review:)$/m, '$1 {enabled: true}'],
+    // Value unchanged: these prove the construct itself is refused, whatever it carries.
+    'a tagged value (value unchanged)': [afterEnabled, '    enabled: !!str false'],
+    'an anchored value (value unchanged)': [afterEnabled, '    enabled: &off false'],
+    'a tagged value that switches reviews on': [afterEnabled, '    enabled: !!str true'],
+    'an anchored value that switches reviews on': [afterEnabled, '    enabled: &on true'],
+    'a quoted false': [afterEnabled, '    enabled: "false"'],
+    'a deeper-indented override': [afterEnabled, '$1\n      enabled: true'],
+    'a tab-indented override': [afterEnabled, '$1\n\tenabled: true'],
+    'an override behind a lone CR in a comment': [afterEnabled, '$1\n    # note\r    enabled: true'],
     // Inside a comment, so only the character rule can catch them: YAML 1.1
     // parsers treat U+2028 and NEL as line breaks and would read the override.
-    'an override behind a line separator in a comment': [afterEnabled, '$1\n    # note     enabled: false'],
-    'an override behind a NEL in a comment': [afterEnabled, '$1\n    # note\x85    enabled: false'],
+    'an override behind a line separator in a comment': [afterEnabled, '$1\n    # note     enabled: true'],
+    'an override behind a NEL in a comment': [afterEnabled, '$1\n    # note\x85    enabled: true'],
     'a byte that was not valid UTF-8': [afterEnabled, '$1\n    # �'],
     'a C1 control character': [afterEnabled, '$1\n    # \x9b'],
     'an over-indented blank line opening block text': [firstBlockText, `$1\n${' '.repeat(12)}`],
     'block text indented less than its first line': [firstBlockText, '$1\n          deeper first line'],
     'a labels allowlist': [afterKeyword, '$1\n    labels:\n      - ready'],
     'an ignored author': [afterKeyword, '$1\n    ignore_usernames:\n      - masonwells1'],
-    'a second document': [/^(chat:)$/m, '---\nreviews:\n  auto_review:\n    enabled: false\n$1'],
-    'a complex key': [afterEnabled, '$1\n    ? enabled\n    : false'],
+    'a second document': [/^(chat:)$/m, '---\nreviews:\n  auto_review:\n    enabled: true\n$1'],
+    'a complex key': [afterEnabled, '$1\n    ? enabled\n    : true'],
   };
   for (const [label, [pattern, replacement]] of Object.entries(mutations)) {
     const mutated = config.replace(pattern, replacement);
     assert.notEqual(mutated, config, `${label}: the mutation applied`);
     assert.throws(() => assertAutomaticReviewPinned(mutated), assert.AssertionError, label);
+    if (label.endsWith('(value unchanged)')) {
+      // The effective value is still false, so only the strict reader can refuse it.
+      assert.throws(
+        () => assertAutomaticReviewPinned(mutated),
+        /not a value this strict reader accepts/,
+        `${label}: refused for the construct, not the value`,
+      );
+    }
   }
 });
 

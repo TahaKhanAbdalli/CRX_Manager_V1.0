@@ -366,7 +366,15 @@ describe('money and inventory gauntlet fixes', () => {
       'src/components/purchase-orders/BulkPOImport.tsx',
     ]) {
       const writer = source(path);
-      expect(writer).toContain('const unitCostCents = purchaseOrderUnitCostCents(');
+      if (path.endsWith('BulkPOImport.tsx')) {
+        // Bulk import takes a typed cost's cents from its exact text (PR #1021), through one helper
+        // that falls back to the same integer-cents conversion for an OCR number.
+        expect(writer).toContain('const unitCostCents = unitCostCentsOf(item);');
+        expect(writer).toContain('const typedCents = parseDollarsToCents(item.unit_cost_text.trim());');
+        expect(writer).toContain('return purchaseOrderUnitCostCents(item.unit_cost);');
+      } else {
+        expect(writer).toContain('const unitCostCents = purchaseOrderUnitCostCents(');
+      }
       expect(writer).toContain('unit_cost: purchaseOrderCentsToDollars(unitCostCents)');
       expect(writer).toContain('unit_cost_cents: unitCostCents');
     }

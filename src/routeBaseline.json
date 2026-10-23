@@ -1,0 +1,4369 @@
+{
+  "routes": {
+    "/ (index)": {
+      "url": "/",
+      "pageKey": null,
+      "page": {
+        "type": "RoleLanding"
+      },
+      "access": {
+        "admin": "/ shows / (index)",
+        "sales_rep": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "driver": "/ shows / (index)"
+      }
+    },
+    "/*": {
+      "url": "/no-such-page",
+      "pageKey": null,
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/"
+        }
+      },
+      "access": {
+        "admin": "/no-such-page shows /*",
+        "sales_rep": "/no-such-page shows /*",
+        "applicator": "/no-such-page shows /*",
+        "driver": "/no-such-page shows /*"
+      }
+    },
+    "/accounts-payable": {
+      "url": "/accounts-payable",
+      "pageKey": "accounts-payable",
+      "page": {
+        "type": "lazy pages/AccountsPayable"
+      },
+      "access": {
+        "admin": "/accounts-payable shows /accounts-payable",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, accounts-payable denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, accounts-payable denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, accounts-payable denied": "/ shows / (index)"
+      }
+    },
+    "/accounts-payable/bills": {
+      "url": "/accounts-payable/bills",
+      "pageKey": "accounts-payable",
+      "page": {
+        "type": "lazy pages/VendorBills"
+      },
+      "access": {
+        "admin": "/accounts-payable/bills shows /accounts-payable/bills",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, accounts-payable denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, accounts-payable denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, accounts-payable denied": "/ shows / (index)"
+      }
+    },
+    "/accounts-payable/bills/:id": {
+      "url": "/accounts-payable/bills/id-123",
+      "pageKey": "accounts-payable",
+      "page": {
+        "type": "lazy pages/VendorBillDetail"
+      },
+      "access": {
+        "admin": "/accounts-payable/bills/id-123 shows /accounts-payable/bills/:id",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, accounts-payable denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, accounts-payable denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, accounts-payable denied": "/ shows / (index)"
+      }
+    },
+    "/accounts-payable/bills/new": {
+      "url": "/accounts-payable/bills/new",
+      "pageKey": "accounts-payable",
+      "page": {
+        "type": "lazy pages/NewVendorBill"
+      },
+      "access": {
+        "admin": "/accounts-payable/bills/new shows /accounts-payable/bills/new",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, accounts-payable denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, accounts-payable denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, accounts-payable denied": "/ shows / (index)"
+      }
+    },
+    "/accounts-receivable": {
+      "url": "/accounts-receivable",
+      "pageKey": "accounts-receivable",
+      "page": {
+        "type": "lazy pages/AccountsReceivable"
+      },
+      "access": {
+        "admin": "/accounts-receivable shows /accounts-receivable",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, accounts-receivable denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, accounts-receivable denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, accounts-receivable denied": "/ shows / (index)"
+      }
+    },
+    "/application-records": {
+      "url": "/application-records",
+      "pageKey": "application-records",
+      "page": {
+        "type": "lazy pages/ApplicationRecords"
+      },
+      "access": {
+        "admin": "/application-records shows /application-records",
+        "sales_rep": "/application-records shows /application-records",
+        "sales_rep, application-records denied": "/ shows / (index)",
+        "applicator": "/application-records shows /application-records",
+        "applicator, application-records denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, application-records denied": "/ shows / (index)"
+      }
+    },
+    "/application-services": {
+      "url": "/application-services",
+      "pageKey": "application-services",
+      "page": {
+        "type": "lazy pages/ApplicationServices"
+      },
+      "access": {
+        "admin": "/application-services shows /application-services",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, application-services denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, application-services denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, application-services denied": "/ shows / (index)"
+      }
+    },
+    "/application-services/:id": {
+      "url": "/application-services/id-123",
+      "pageKey": "application-services",
+      "page": {
+        "type": "lazy pages/ApplicationServiceDetail"
+      },
+      "access": {
+        "admin": "/application-services/id-123 shows /application-services/:id",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, application-services denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, application-services denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, application-services denied": "/ shows / (index)"
+      }
+    },
+    "/ar-aging": {
+      "url": "/ar-aging",
+      "pageKey": "ar-aging",
+      "page": {
+        "type": "lazy pages/ARaging"
+      },
+      "access": {
+        "admin": "/ar-aging shows /ar-aging",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, ar-aging denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, ar-aging denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, ar-aging denied": "/ shows / (index)"
+      }
+    },
+    "/blend-tickets": {
+      "url": "/blend-tickets",
+      "pageKey": "blend-tickets",
+      "page": {
+        "type": "lazy pages/BlendTickets (export BlendTickets)"
+      },
+      "access": {
+        "admin": "/blend-tickets shows /blend-tickets",
+        "sales_rep": "/blend-tickets shows /blend-tickets",
+        "sales_rep, blend-tickets denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, blend-tickets denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, blend-tickets denied": "/ shows / (index)"
+      }
+    },
+    "/blend-tickets/:id": {
+      "url": "/blend-tickets/id-123",
+      "pageKey": "blend-tickets",
+      "page": {
+        "type": "lazy pages/BlendTicketDetail (export BlendTicketDetail)"
+      },
+      "access": {
+        "admin": "/blend-tickets/id-123 shows /blend-tickets/:id",
+        "sales_rep": "/blend-tickets/id-123 shows /blend-tickets/:id",
+        "sales_rep, blend-tickets denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, blend-tickets denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, blend-tickets denied": "/ shows / (index)"
+      }
+    },
+    "/brand-vs-generic": {
+      "url": "/brand-vs-generic",
+      "pageKey": "brand-vs-generic",
+      "page": {
+        "type": "lazy pages/BrandVsGeneric"
+      },
+      "access": {
+        "admin": "/brand-vs-generic shows /brand-vs-generic",
+        "sales_rep": "/brand-vs-generic shows /brand-vs-generic",
+        "sales_rep, brand-vs-generic denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, brand-vs-generic denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, brand-vs-generic denied": "/ shows / (index)"
+      }
+    },
+    "/call-lists": {
+      "url": "/call-lists",
+      "pageKey": "call-lists",
+      "page": {
+        "type": "lazy pages/CallLists"
+      },
+      "access": {
+        "admin": "/call-lists shows /call-lists",
+        "sales_rep": "/call-lists shows /call-lists",
+        "sales_rep, call-lists denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, call-lists denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, call-lists denied": "/ shows / (index)"
+      }
+    },
+    "/commission-payments": {
+      "url": "/commission-payments",
+      "pageKey": "commission-payments",
+      "page": {
+        "type": "lazy pages/CommissionPayments"
+      },
+      "access": {
+        "admin": "/commission-payments shows /commission-payments",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, commission-payments denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, commission-payments denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, commission-payments denied": "/ shows / (index)"
+      }
+    },
+    "/compliance": {
+      "url": "/compliance",
+      "pageKey": "compliance",
+      "page": {
+        "type": "lazy pages/Compliance"
+      },
+      "access": {
+        "admin": "/compliance shows /compliance",
+        "sales_rep": "/compliance shows /compliance",
+        "sales_rep, compliance denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, compliance denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, compliance denied": "/ shows / (index)"
+      }
+    },
+    "/crop-programs": {
+      "url": "/crop-programs",
+      "pageKey": "crop-programs",
+      "page": {
+        "type": "lazy pages/CropPrograms"
+      },
+      "access": {
+        "admin": "/crop-programs shows /crop-programs",
+        "sales_rep": "/crop-programs shows /crop-programs",
+        "sales_rep, crop-programs denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, crop-programs denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, crop-programs denied": "/ shows / (index)"
+      }
+    },
+    "/customer-transactions": {
+      "url": "/customer-transactions",
+      "pageKey": "customer-transactions",
+      "page": {
+        "type": "lazy pages/CustomerTransactionReview"
+      },
+      "access": {
+        "admin": "/customer-transactions shows /customer-transactions",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, customer-transactions denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, customer-transactions denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, customer-transactions denied": "/ shows / (index)"
+      }
+    },
+    "/customers": {
+      "url": "/customers",
+      "pageKey": "customers",
+      "page": {
+        "type": "lazy pages/Customers"
+      },
+      "access": {
+        "admin": "/customers shows /customers",
+        "sales_rep": "/customers shows /customers",
+        "sales_rep, customers denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, customers denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, customers denied": "/ shows / (index)"
+      }
+    },
+    "/customers/:id": {
+      "url": "/customers/id-123",
+      "pageKey": "customers",
+      "page": {
+        "type": "lazy pages/CustomerDetail"
+      },
+      "access": {
+        "admin": "/customers/id-123 shows /customers/:id",
+        "sales_rep": "/customers/id-123 shows /customers/:id",
+        "sales_rep, customers denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, customers denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, customers denied": "/ shows / (index)"
+      }
+    },
+    "/cycle-counts": {
+      "url": "/cycle-counts",
+      "pageKey": "cycle-counts",
+      "page": {
+        "type": "lazy pages/CycleCounts"
+      },
+      "access": {
+        "admin": "/cycle-counts shows /cycle-counts",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, cycle-counts denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, cycle-counts denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, cycle-counts denied": "/ shows / (index)"
+      }
+    },
+    "/dashboard": {
+      "url": "/dashboard",
+      "pageKey": "dashboard",
+      "page": {
+        "type": "lazy pages/Dashboard"
+      },
+      "access": {
+        "admin": "/dashboard shows /dashboard",
+        "sales_rep": "/dashboard shows /dashboard",
+        "sales_rep, dashboard denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, dashboard denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, dashboard denied": "/ shows / (index)"
+      }
+    },
+    "/deliveries": {
+      "url": "/deliveries",
+      "pageKey": "deliveries",
+      "page": {
+        "type": "lazy pages/Deliveries"
+      },
+      "access": {
+        "admin": "/deliveries shows /deliveries",
+        "sales_rep": "/deliveries shows /deliveries",
+        "sales_rep, deliveries denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, deliveries denied": "/ shows / (index)",
+        "driver": "/deliveries shows /deliveries",
+        "driver, deliveries denied": "/ shows / (index)"
+      }
+    },
+    "/deliveries/:id": {
+      "url": "/deliveries/id-123",
+      "pageKey": "deliveries",
+      "page": {
+        "type": "lazy pages/DeliveryDetail"
+      },
+      "access": {
+        "admin": "/deliveries/id-123 shows /deliveries/:id",
+        "sales_rep": "/deliveries/id-123 shows /deliveries/:id",
+        "sales_rep, deliveries denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, deliveries denied": "/ shows / (index)",
+        "driver": "/deliveries/id-123 shows /deliveries/:id",
+        "driver, deliveries denied": "/ shows / (index)"
+      }
+    },
+    "/deliveries/new": {
+      "url": "/deliveries/new",
+      "pageKey": "deliveries",
+      "page": {
+        "type": "lazy pages/NewDelivery"
+      },
+      "access": {
+        "admin": "/deliveries/new shows /deliveries/new",
+        "sales_rep": "/deliveries/new shows /deliveries/new",
+        "sales_rep, deliveries denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, deliveries denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, deliveries denied": "/ shows / (index)"
+      }
+    },
+    "/delivery-remainders": {
+      "url": "/delivery-remainders",
+      "pageKey": "delivery-remainders",
+      "page": {
+        "type": "lazy pages/DeliveryRemainders"
+      },
+      "access": {
+        "admin": "/delivery-remainders shows /delivery-remainders",
+        "sales_rep": "/delivery-remainders shows /delivery-remainders",
+        "sales_rep, delivery-remainders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, delivery-remainders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, delivery-remainders denied": "/ shows / (index)"
+      }
+    },
+    "/design-preview": {
+      "url": "/design-preview",
+      "pageKey": null,
+      "page": {
+        "type": "Suspense",
+        "children": {
+          "type": "lazy pages/DesignPreview"
+        }
+      },
+      "access": {
+        "admin": "/design-preview shows /design-preview",
+        "sales_rep": "/design-preview shows /design-preview",
+        "applicator": "/design-preview shows /design-preview",
+        "driver": "/design-preview shows /design-preview"
+      }
+    },
+    "/dispatch": {
+      "url": "/dispatch",
+      "pageKey": "dispatch",
+      "page": {
+        "type": "lazy pages/DispatchBoard"
+      },
+      "access": {
+        "admin": "/dispatch shows /dispatch",
+        "sales_rep": "/dispatch shows /dispatch",
+        "sales_rep, dispatch denied": "/ shows / (index)",
+        "applicator": "/dispatch shows /dispatch",
+        "applicator, dispatch denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, dispatch denied": "/ shows / (index)"
+      }
+    },
+    "/field": {
+      "url": "/field",
+      "pageKey": "field",
+      "page": {
+        "type": "lazy pages/FieldView"
+      },
+      "access": {
+        "admin": "/field shows /field",
+        "sales_rep": "/field shows /field",
+        "sales_rep, field denied": "/ shows / (index)",
+        "applicator": "/field shows /field",
+        "applicator, field denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices": {
+      "url": "/field-invoices",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "lazy pages/FieldInvoices"
+      },
+      "access": {
+        "admin": "/field-invoices shows /field-invoices",
+        "sales_rep": "/field-invoices shows /field-invoices",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices/:id": {
+      "url": "/field-invoices/id-123",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "lazy pages/InvoiceDetail",
+        "props": {
+          "routeArea": "field"
+        }
+      },
+      "access": {
+        "admin": "/field-invoices/id-123 shows /field-invoices/:id",
+        "sales_rep": "/field-invoices/id-123 shows /field-invoices/:id",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices/posted": {
+      "url": "/field-invoices/posted",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/field-invoices?tab=posted"
+        }
+      },
+      "access": {
+        "admin": "/field-invoices/posted shows /field-invoices/posted",
+        "sales_rep": "/field-invoices/posted shows /field-invoices/posted",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices/summary": {
+      "url": "/field-invoices/summary",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/field-invoices?tab=customer"
+        }
+      },
+      "access": {
+        "admin": "/field-invoices/summary shows /field-invoices/summary",
+        "sales_rep": "/field-invoices/summary shows /field-invoices/summary",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices/unbilled": {
+      "url": "/field-invoices/unbilled",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/field-invoices?tab=unbilled"
+        }
+      },
+      "access": {
+        "admin": "/field-invoices/unbilled shows /field-invoices/unbilled",
+        "sales_rep": "/field-invoices/unbilled shows /field-invoices/unbilled",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-invoices/unposted": {
+      "url": "/field-invoices/unposted",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/field-invoices?tab=drafts"
+        }
+      },
+      "access": {
+        "admin": "/field-invoices/unposted shows /field-invoices/unposted",
+        "sales_rep": "/field-invoices/unposted shows /field-invoices/unposted",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/field-profitability": {
+      "url": "/field-profitability",
+      "pageKey": "field-profitability",
+      "page": {
+        "type": "lazy pages/FieldProfitability"
+      },
+      "access": {
+        "admin": "/field-profitability shows /field-profitability",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, field-profitability denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-profitability denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-profitability denied": "/ shows / (index)"
+      }
+    },
+    "/fields": {
+      "url": "/fields",
+      "pageKey": "fields",
+      "page": {
+        "type": "lazy pages/Fields"
+      },
+      "access": {
+        "admin": "/fields shows /fields",
+        "sales_rep": "/fields shows /fields",
+        "sales_rep, fields denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, fields denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, fields denied": "/ shows / (index)"
+      }
+    },
+    "/fields/:id": {
+      "url": "/fields/id-123",
+      "pageKey": "fields",
+      "page": {
+        "type": "lazy pages/FieldSetup"
+      },
+      "access": {
+        "admin": "/fields/id-123 shows /fields/:id",
+        "sales_rep": "/fields/id-123 shows /fields/:id",
+        "sales_rep, fields denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, fields denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, fields denied": "/ shows / (index)"
+      }
+    },
+    "/fields/:id/dashboard": {
+      "url": "/fields/id-123/dashboard",
+      "pageKey": "fields",
+      "page": {
+        "type": "lazy pages/FieldDashboard"
+      },
+      "access": {
+        "admin": "/fields/id-123/dashboard shows /fields/:id/dashboard",
+        "sales_rep": "/fields/id-123/dashboard shows /fields/:id/dashboard",
+        "sales_rep, fields denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, fields denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, fields denied": "/ shows / (index)"
+      }
+    },
+    "/financial-dashboard": {
+      "url": "/financial-dashboard",
+      "pageKey": "financial-dashboard",
+      "page": {
+        "type": "lazy pages/FinancialDashboard"
+      },
+      "access": {
+        "admin": "/financial-dashboard shows /financial-dashboard",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, financial-dashboard denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, financial-dashboard denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, financial-dashboard denied": "/ shows / (index)"
+      }
+    },
+    "/forgot-password": {
+      "url": "/forgot-password",
+      "pageKey": null,
+      "page": {
+        "type": "ForgotPasswordPage"
+      },
+      "access": {
+        "admin": "/forgot-password shows /forgot-password",
+        "sales_rep": "/forgot-password shows /forgot-password",
+        "applicator": "/forgot-password shows /forgot-password",
+        "driver": "/forgot-password shows /forgot-password"
+      }
+    },
+    "/getting-started": {
+      "url": "/getting-started",
+      "pageKey": "getting-started",
+      "page": {
+        "type": "lazy pages/GettingStarted"
+      },
+      "access": {
+        "admin": "/getting-started shows /getting-started",
+        "sales_rep": "/getting-started shows /getting-started",
+        "sales_rep, getting-started denied": "/ shows / (index)",
+        "applicator": "/getting-started shows /getting-started",
+        "applicator, getting-started denied": "/ shows / (index)",
+        "driver": "/getting-started shows /getting-started",
+        "driver, getting-started denied": "/ shows / (index)"
+      }
+    },
+    "/integrity": {
+      "url": "/integrity",
+      "pageKey": "integrity",
+      "page": {
+        "type": "lazy pages/Integrity"
+      },
+      "access": {
+        "admin": "/integrity shows /integrity",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, integrity denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, integrity denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, integrity denied": "/ shows / (index)"
+      }
+    },
+    "/integrity-cleanup": {
+      "url": "/integrity-cleanup",
+      "pageKey": "integrity",
+      "page": {
+        "type": "LegacyTabRedirect",
+        "props": {
+          "tab": "cleanup",
+          "to": "/integrity"
+        }
+      },
+      "access": {
+        "admin": "/integrity-cleanup shows /integrity-cleanup",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, integrity denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, integrity denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, integrity denied": "/ shows / (index)"
+      }
+    },
+    "/integrity-report": {
+      "url": "/integrity-report",
+      "pageKey": "integrity",
+      "page": {
+        "type": "LegacyTabRedirect",
+        "props": {
+          "tab": "report",
+          "to": "/integrity"
+        }
+      },
+      "access": {
+        "admin": "/integrity-report shows /integrity-report",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, integrity denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, integrity denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, integrity denied": "/ shows / (index)"
+      }
+    },
+    "/inventory": {
+      "url": "/inventory",
+      "pageKey": "inventory",
+      "page": {
+        "type": "lazy pages/InventoryPage"
+      },
+      "access": {
+        "admin": "/inventory shows /inventory",
+        "sales_rep": "/inventory shows /inventory",
+        "sales_rep, inventory denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, inventory denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, inventory denied": "/ shows / (index)"
+      }
+    },
+    "/invoices": {
+      "url": "/invoices",
+      "pageKey": "invoices",
+      "page": {
+        "type": "lazy pages/Invoices"
+      },
+      "access": {
+        "admin": "/invoices shows /invoices",
+        "sales_rep": "/invoices shows /invoices",
+        "sales_rep, invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, invoices denied": "/ shows / (index)"
+      }
+    },
+    "/invoices/:id": {
+      "url": "/invoices/id-123",
+      "pageKey": "invoices",
+      "page": {
+        "type": "lazy pages/InvoiceDetail",
+        "props": {
+          "routeArea": "chemical"
+        }
+      },
+      "access": {
+        "admin": "/invoices/id-123 shows /invoices/:id",
+        "sales_rep": "/invoices/id-123 shows /invoices/:id",
+        "sales_rep, invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, invoices denied": "/ shows / (index)"
+      }
+    },
+    "/invoices/field-app/:id": {
+      "url": "/invoices/field-app/id-123",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "lazy components/FieldApplicationInvoiceRoute"
+      },
+      "access": {
+        "admin": "/invoices/field-app/id-123 shows /invoices/field-app/:id",
+        "sales_rep": "/invoices/field-app/id-123 shows /invoices/field-app/:id",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/invoices/field-app/new": {
+      "url": "/invoices/field-app/new",
+      "pageKey": "field-invoices",
+      "page": {
+        "type": "lazy components/FieldApplicationInvoiceRoute"
+      },
+      "access": {
+        "admin": "/invoices/field-app/new shows /invoices/field-app/new",
+        "sales_rep": "/invoices/field-app/new shows /invoices/field-app/new",
+        "sales_rep, field-invoices denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, field-invoices denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, field-invoices denied": "/ shows / (index)"
+      }
+    },
+    "/jobs": {
+      "url": "/jobs",
+      "pageKey": "jobs",
+      "page": {
+        "type": "lazy pages/Jobs"
+      },
+      "access": {
+        "admin": "/jobs shows /jobs",
+        "sales_rep": "/jobs shows /jobs",
+        "sales_rep, jobs denied": "/ shows / (index)",
+        "applicator": "/jobs shows /jobs",
+        "applicator, jobs denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, jobs denied": "/ shows / (index)"
+      }
+    },
+    "/jobs/:id": {
+      "url": "/jobs/id-123",
+      "pageKey": "jobs",
+      "page": {
+        "type": "lazy components/JobDetailRoute"
+      },
+      "access": {
+        "admin": "/jobs/id-123 shows /jobs/:id",
+        "sales_rep": "/jobs/id-123 shows /jobs/:id",
+        "sales_rep, jobs denied": "/ shows / (index)",
+        "applicator": "/jobs/id-123 shows /jobs/:id",
+        "applicator, jobs denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, jobs denied": "/ shows / (index)"
+      }
+    },
+    "/label-data-quality": {
+      "url": "/label-data-quality",
+      "pageKey": "label-data-quality",
+      "page": {
+        "type": "lazy pages/LabelDataQuality"
+      },
+      "access": {
+        "admin": "/label-data-quality shows /label-data-quality",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, label-data-quality denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, label-data-quality denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, label-data-quality denied": "/ shows / (index)"
+      }
+    },
+    "/label-review": {
+      "url": "/label-review",
+      "pageKey": "label-review",
+      "page": {
+        "type": "lazy pages/LabelReview"
+      },
+      "access": {
+        "admin": "/label-review shows /label-review",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, label-review denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, label-review denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, label-review denied": "/ shows / (index)"
+      }
+    },
+    "/login": {
+      "url": "/login",
+      "pageKey": null,
+      "page": {
+        "type": "LoginPage"
+      },
+      "access": {
+        "admin": "/login shows /login",
+        "sales_rep": "/login shows /login",
+        "applicator": "/login shows /login",
+        "driver": "/login shows /login"
+      }
+    },
+    "/lot-trace": {
+      "url": "/lot-trace",
+      "pageKey": "lot-trace",
+      "page": {
+        "type": "lazy pages/LotTrace"
+      },
+      "access": {
+        "admin": "/lot-trace shows /lot-trace",
+        "sales_rep": "/lot-trace shows /lot-trace",
+        "sales_rep, lot-trace denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, lot-trace denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, lot-trace denied": "/ shows / (index)"
+      }
+    },
+    "/month-end": {
+      "url": "/month-end",
+      "pageKey": "month-end",
+      "page": {
+        "type": "lazy pages/MonthEndClose"
+      },
+      "access": {
+        "admin": "/month-end shows /month-end",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, month-end denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, month-end denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, month-end denied": "/ shows / (index)"
+      }
+    },
+    "/my-route": {
+      "url": "/my-route",
+      "pageKey": "my-route",
+      "page": {
+        "type": "lazy pages/FieldRoute"
+      },
+      "access": {
+        "admin": "/my-route shows /my-route",
+        "sales_rep": "/my-route shows /my-route",
+        "sales_rep, my-route denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, my-route denied": "/ shows / (index)",
+        "driver": "/my-route shows /my-route",
+        "driver, my-route denied": "/ shows / (index)"
+      }
+    },
+    "/my-route/:id": {
+      "url": "/my-route/id-123",
+      "pageKey": "my-route",
+      "page": {
+        "type": "lazy pages/FieldStop"
+      },
+      "access": {
+        "admin": "/my-route/id-123 shows /my-route/:id",
+        "sales_rep": "/my-route/id-123 shows /my-route/:id",
+        "sales_rep, my-route denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, my-route denied": "/ shows / (index)",
+        "driver": "/my-route/id-123 shows /my-route/:id",
+        "driver, my-route denied": "/ shows / (index)"
+      }
+    },
+    "/notifications": {
+      "url": "/notifications",
+      "pageKey": null,
+      "page": {
+        "type": "lazy pages/Notifications"
+      },
+      "access": {
+        "admin": "/notifications shows /notifications",
+        "sales_rep": "/notifications shows /notifications",
+        "applicator": "/notifications shows /notifications",
+        "driver": "/notifications shows /notifications"
+      }
+    },
+    "/office-cockpit": {
+      "url": "/office-cockpit",
+      "pageKey": "office-cockpit",
+      "page": {
+        "type": "lazy pages/OfficeCockpit"
+      },
+      "access": {
+        "admin": "/office-cockpit shows /office-cockpit",
+        "sales_rep": "/office-cockpit shows /office-cockpit",
+        "sales_rep, office-cockpit denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, office-cockpit denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, office-cockpit denied": "/ shows / (index)"
+      }
+    },
+    "/offline-work-review": {
+      "url": "/offline-work-review",
+      "pageKey": "offline-work-review",
+      "page": {
+        "type": "lazy pages/OfflineWorkReview"
+      },
+      "access": {
+        "admin": "/offline-work-review shows /offline-work-review",
+        "sales_rep": "/offline-work-review shows /offline-work-review",
+        "sales_rep, offline-work-review denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, offline-work-review denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, offline-work-review denied": "/ shows / (index)"
+      }
+    },
+    "/orders": {
+      "url": "/orders",
+      "pageKey": "orders",
+      "page": {
+        "type": "lazy pages/Orders"
+      },
+      "access": {
+        "admin": "/orders shows /orders",
+        "sales_rep": "/orders shows /orders",
+        "sales_rep, orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, orders denied": "/ shows / (index)"
+      }
+    },
+    "/orders/:id": {
+      "url": "/orders/id-123",
+      "pageKey": "orders",
+      "page": {
+        "type": "lazy pages/OrderDetail"
+      },
+      "access": {
+        "admin": "/orders/id-123 shows /orders/:id",
+        "sales_rep": "/orders/id-123 shows /orders/:id",
+        "sales_rep, orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, orders denied": "/ shows / (index)"
+      }
+    },
+    "/orders/new": {
+      "url": "/orders/new",
+      "pageKey": "orders",
+      "page": {
+        "type": "lazy pages/NewOrder"
+      },
+      "access": {
+        "admin": "/orders/new shows /orders/new",
+        "sales_rep": "/orders/new shows /orders/new",
+        "sales_rep, orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, orders denied": "/ shows / (index)"
+      }
+    },
+    "/payment-history": {
+      "url": "/payment-history",
+      "pageKey": "payment-history",
+      "page": {
+        "type": "lazy pages/PaymentHistory"
+      },
+      "access": {
+        "admin": "/payment-history shows /payment-history",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, payment-history denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, payment-history denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, payment-history denied": "/ shows / (index)"
+      }
+    },
+    "/payments": {
+      "url": "/payments",
+      "pageKey": "payments",
+      "page": {
+        "type": "lazy pages/PaymentAllocation"
+      },
+      "access": {
+        "admin": "/payments shows /payments",
+        "sales_rep": "/payments shows /payments",
+        "sales_rep, payments denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, payments denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, payments denied": "/ shows / (index)"
+      }
+    },
+    "/prepay": {
+      "url": "/prepay",
+      "pageKey": "prepay",
+      "page": {
+        "type": "lazy pages/Prepay"
+      },
+      "access": {
+        "admin": "/prepay shows /prepay",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, prepay denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, prepay denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, prepay denied": "/ shows / (index)"
+      }
+    },
+    "/prepay-workspace": {
+      "url": "/prepay-workspace",
+      "pageKey": "prepay",
+      "page": {
+        "type": "LegacyTabRedirect",
+        "props": {
+          "tab": "workspace",
+          "to": "/prepay"
+        }
+      },
+      "access": {
+        "admin": "/prepay-workspace shows /prepay-workspace",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, prepay denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, prepay denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, prepay denied": "/ shows / (index)"
+      }
+    },
+    "/prepayments": {
+      "url": "/prepayments",
+      "pageKey": "prepay",
+      "page": {
+        "type": "LegacyTabRedirect",
+        "props": {
+          "tab": "manager",
+          "to": "/prepay"
+        }
+      },
+      "access": {
+        "admin": "/prepayments shows /prepayments",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, prepay denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, prepay denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, prepay denied": "/ shows / (index)"
+      }
+    },
+    "/products": {
+      "url": "/products",
+      "pageKey": "products",
+      "page": {
+        "type": "lazy pages/Products"
+      },
+      "access": {
+        "admin": "/products shows /products",
+        "sales_rep": "/products shows /products",
+        "sales_rep, products denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, products denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, products denied": "/ shows / (index)"
+      }
+    },
+    "/products/:id": {
+      "url": "/products/id-123",
+      "pageKey": "products",
+      "page": {
+        "type": "lazy pages/ProductDetail"
+      },
+      "access": {
+        "admin": "/products/id-123 shows /products/:id",
+        "sales_rep": "/products/id-123 shows /products/:id",
+        "sales_rep, products denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, products denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, products denied": "/ shows / (index)"
+      }
+    },
+    "/program-tracker": {
+      "url": "/program-tracker",
+      "pageKey": "program-tracker",
+      "page": {
+        "type": "lazy pages/ProgramTracker"
+      },
+      "access": {
+        "admin": "/program-tracker shows /program-tracker",
+        "sales_rep": "/program-tracker shows /program-tracker",
+        "sales_rep, program-tracker denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, program-tracker denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, program-tracker denied": "/ shows / (index)"
+      }
+    },
+    "/purchase-orders": {
+      "url": "/purchase-orders",
+      "pageKey": "purchase-orders",
+      "page": {
+        "type": "lazy pages/PurchaseOrders"
+      },
+      "access": {
+        "admin": "/purchase-orders shows /purchase-orders",
+        "sales_rep": "/purchase-orders shows /purchase-orders",
+        "sales_rep, purchase-orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, purchase-orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, purchase-orders denied": "/ shows / (index)"
+      }
+    },
+    "/purchase-orders/:id": {
+      "url": "/purchase-orders/id-123",
+      "pageKey": "purchase-orders",
+      "page": {
+        "type": "lazy pages/PurchaseOrderDetail"
+      },
+      "access": {
+        "admin": "/purchase-orders/id-123 shows /purchase-orders/:id",
+        "sales_rep": "/purchase-orders/id-123 shows /purchase-orders/:id",
+        "sales_rep, purchase-orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, purchase-orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, purchase-orders denied": "/ shows / (index)"
+      }
+    },
+    "/purchase-orders/new": {
+      "url": "/purchase-orders/new",
+      "pageKey": "purchase-orders",
+      "page": {
+        "type": "lazy pages/NewPurchaseOrder"
+      },
+      "access": {
+        "admin": "/purchase-orders/new shows /purchase-orders/new",
+        "sales_rep": "/purchase-orders/new shows /purchase-orders/new",
+        "sales_rep, purchase-orders denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, purchase-orders denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, purchase-orders denied": "/ shows / (index)"
+      }
+    },
+    "/quotes": {
+      "url": "/quotes",
+      "pageKey": "quotes",
+      "page": {
+        "type": "lazy pages/Quotes"
+      },
+      "access": {
+        "admin": "/quotes shows /quotes",
+        "sales_rep": "/quotes shows /quotes",
+        "sales_rep, quotes denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, quotes denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, quotes denied": "/ shows / (index)"
+      }
+    },
+    "/quotes/:id": {
+      "url": "/quotes/id-123",
+      "pageKey": "quotes",
+      "page": {
+        "type": "lazy pages/QuoteBuilder"
+      },
+      "access": {
+        "admin": "/quotes/id-123 shows /quotes/:id",
+        "sales_rep": "/quotes/id-123 shows /quotes/:id",
+        "sales_rep, quotes denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, quotes denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, quotes denied": "/ shows / (index)"
+      }
+    },
+    "/quotes/new": {
+      "url": "/quotes/new",
+      "pageKey": "quotes",
+      "page": {
+        "type": "lazy pages/QuoteBuilder"
+      },
+      "access": {
+        "admin": "/quotes/new shows /quotes/new",
+        "sales_rep": "/quotes/new shows /quotes/new",
+        "sales_rep, quotes denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, quotes denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, quotes denied": "/ shows / (index)"
+      }
+    },
+    "/rebates": {
+      "url": "/rebates",
+      "pageKey": "rebates",
+      "page": {
+        "type": "lazy pages/Rebates"
+      },
+      "access": {
+        "admin": "/rebates shows /rebates",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, rebates denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, rebates denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, rebates denied": "/ shows / (index)"
+      }
+    },
+    "/receiving": {
+      "url": "/receiving",
+      "pageKey": "receiving",
+      "page": {
+        "type": "lazy pages/Receiving"
+      },
+      "access": {
+        "admin": "/receiving shows /receiving",
+        "sales_rep": "/receiving shows /receiving",
+        "sales_rep, receiving denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, receiving denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, receiving denied": "/ shows / (index)"
+      }
+    },
+    "/receiving-hub": {
+      "url": "/receiving-hub",
+      "pageKey": "receiving",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/receiving?tab=hub"
+        }
+      },
+      "access": {
+        "admin": "/receiving-hub shows /receiving-hub",
+        "sales_rep": "/receiving-hub shows /receiving-hub",
+        "sales_rep, receiving denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, receiving denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, receiving denied": "/ shows / (index)"
+      }
+    },
+    "/receiving/quick": {
+      "url": "/receiving/quick",
+      "pageKey": "receiving",
+      "page": {
+        "type": "Navigate",
+        "props": {
+          "replace": true,
+          "to": "/receiving?tab=quick"
+        }
+      },
+      "access": {
+        "admin": "/receiving/quick shows /receiving/quick",
+        "sales_rep": "/receiving/quick shows /receiving/quick",
+        "sales_rep, receiving denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, receiving denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, receiving denied": "/ shows / (index)"
+      }
+    },
+    "/recipes": {
+      "url": "/recipes",
+      "pageKey": "recipes",
+      "page": {
+        "type": "lazy pages/BlendRecipes"
+      },
+      "access": {
+        "admin": "/recipes shows /recipes",
+        "sales_rep": "/recipes shows /recipes",
+        "sales_rep, recipes denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, recipes denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, recipes denied": "/ shows / (index)"
+      }
+    },
+    "/reports": {
+      "url": "/reports",
+      "pageKey": "reports",
+      "page": {
+        "type": "lazy pages/Reports"
+      },
+      "access": {
+        "admin": "/reports shows /reports",
+        "sales_rep": "/reports shows /reports",
+        "sales_rep, reports denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, reports denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, reports denied": "/ shows / (index)"
+      }
+    },
+    "/reset-password": {
+      "url": "/reset-password",
+      "pageKey": null,
+      "page": {
+        "type": "ResetPasswordPage"
+      },
+      "access": {
+        "admin": "/reset-password shows /reset-password",
+        "sales_rep": "/reset-password shows /reset-password",
+        "applicator": "/reset-password shows /reset-password",
+        "driver": "/reset-password shows /reset-password"
+      }
+    },
+    "/returns": {
+      "url": "/returns",
+      "pageKey": "returns",
+      "page": {
+        "type": "lazy pages/Returns"
+      },
+      "access": {
+        "admin": "/returns shows /returns",
+        "sales_rep": "/returns shows /returns",
+        "sales_rep, returns denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, returns denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, returns denied": "/ shows / (index)"
+      }
+    },
+    "/sales-reports": {
+      "url": "/sales-reports",
+      "pageKey": "sales-reports",
+      "page": {
+        "type": "lazy pages/SalesReports"
+      },
+      "access": {
+        "admin": "/sales-reports shows /sales-reports",
+        "sales_rep": "/sales-reports shows /sales-reports",
+        "sales_rep, sales-reports denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, sales-reports denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, sales-reports denied": "/ shows / (index)"
+      }
+    },
+    "/settings": {
+      "url": "/settings",
+      "pageKey": null,
+      "page": {
+        "type": "lazy pages/SettingsPage"
+      },
+      "access": {
+        "admin": "/settings shows /settings",
+        "sales_rep": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "driver": "/ shows / (index)"
+      }
+    },
+    "/split-billing/:id": {
+      "url": "/split-billing/id-123",
+      "pageKey": "split-billing",
+      "page": {
+        "type": "lazy pages/FieldAppSplitInvoiceEditor"
+      },
+      "access": {
+        "admin": "/split-billing/id-123 shows /split-billing/:id",
+        "sales_rep": "/split-billing/id-123 shows /split-billing/:id",
+        "sales_rep, split-billing denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, split-billing denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, split-billing denied": "/ shows / (index)"
+      }
+    },
+    "/split-billing/new": {
+      "url": "/split-billing/new",
+      "pageKey": "split-billing",
+      "page": {
+        "type": "lazy pages/FieldAppSplitInvoiceEditor"
+      },
+      "access": {
+        "admin": "/split-billing/new shows /split-billing/new",
+        "sales_rep": "/split-billing/new shows /split-billing/new",
+        "sales_rep, split-billing denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, split-billing denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, split-billing denied": "/ shows / (index)"
+      }
+    },
+    "/supplier-pricing": {
+      "url": "/supplier-pricing",
+      "pageKey": "supplier-pricing",
+      "page": {
+        "type": "lazy pages/SupplierPricing"
+      },
+      "access": {
+        "admin": "/supplier-pricing shows /supplier-pricing",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, supplier-pricing denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, supplier-pricing denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, supplier-pricing denied": "/ shows / (index)"
+      }
+    },
+    "/team-board": {
+      "url": "/team-board",
+      "pageKey": null,
+      "page": {
+        "type": "lazy pages/TeamBoard"
+      },
+      "access": {
+        "admin": "/team-board shows /team-board",
+        "sales_rep": "/team-board shows /team-board",
+        "applicator": "/team-board shows /team-board",
+        "driver": "/team-board shows /team-board"
+      }
+    },
+    "/to-ship": {
+      "url": "/to-ship",
+      "pageKey": "to-ship",
+      "page": {
+        "type": "lazy pages/ToShip"
+      },
+      "access": {
+        "admin": "/to-ship shows /to-ship",
+        "sales_rep": "/to-ship shows /to-ship",
+        "sales_rep, to-ship denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, to-ship denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, to-ship denied": "/ shows / (index)"
+      }
+    },
+    "/vehicles": {
+      "url": "/vehicles",
+      "pageKey": "vehicles",
+      "page": {
+        "type": "lazy pages/Vehicles"
+      },
+      "access": {
+        "admin": "/vehicles shows /vehicles",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, vehicles denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, vehicles denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, vehicles denied": "/ shows / (index)"
+      }
+    },
+    "/vehicles/:id": {
+      "url": "/vehicles/id-123",
+      "pageKey": "vehicles",
+      "page": {
+        "type": "lazy pages/VehicleDetail"
+      },
+      "access": {
+        "admin": "/vehicles/id-123 shows /vehicles/:id",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, vehicles denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, vehicles denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, vehicles denied": "/ shows / (index)"
+      }
+    },
+    "/vendors": {
+      "url": "/vendors",
+      "pageKey": "vendors",
+      "page": {
+        "type": "lazy pages/Vendors"
+      },
+      "access": {
+        "admin": "/vendors shows /vendors",
+        "sales_rep": "/ shows / (index)",
+        "sales_rep, vendors denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, vendors denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, vendors denied": "/ shows / (index)"
+      }
+    },
+    "/watchdog": {
+      "url": "/watchdog",
+      "pageKey": "watchdog",
+      "page": {
+        "type": "lazy pages/WatchdogExceptions"
+      },
+      "access": {
+        "admin": "/watchdog shows /watchdog",
+        "sales_rep": "/watchdog shows /watchdog",
+        "sales_rep, watchdog denied": "/ shows / (index)",
+        "applicator": "/ shows / (index)",
+        "applicator, watchdog denied": "/ shows / (index)",
+        "driver": "/ shows / (index)",
+        "driver, watchdog denied": "/ shows / (index)"
+      }
+    }
+  },
+  "sidebar": {
+    "admin": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "Cycle Counts -> /cycle-counts",
+      "[Money]",
+      "Record Payments -> /payments",
+      "A/R Workspace -> /accounts-receivable",
+      "Prepay -> /prepay",
+      "A/P & Vendor Bills -> /accounts-payable",
+      "Commissions -> /commission-payments",
+      "Rebates -> /rebates",
+      "Month-End Close -> /month-end",
+      "Data Integrity -> /integrity",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Label Review -> /label-review",
+      "Label Data Quality -> /label-data-quality",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Vehicles -> /vehicles",
+      "Application Services (fees) -> /application-services",
+      "Vendors -> /vendors",
+      "Getting Started (help) -> /getting-started",
+      "Settings -> /settings",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "admin, split billing on": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "Split Billing (per line) -> /split-billing/new",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "Cycle Counts -> /cycle-counts",
+      "[Money]",
+      "Record Payments -> /payments",
+      "A/R Workspace -> /accounts-receivable",
+      "Prepay -> /prepay",
+      "A/P & Vendor Bills -> /accounts-payable",
+      "Commissions -> /commission-payments",
+      "Rebates -> /rebates",
+      "Month-End Close -> /month-end",
+      "Data Integrity -> /integrity",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Label Review -> /label-review",
+      "Label Data Quality -> /label-data-quality",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Vehicles -> /vehicles",
+      "Application Services (fees) -> /application-services",
+      "Vendors -> /vendors",
+      "Getting Started (help) -> /getting-started",
+      "Settings -> /settings",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, split billing on": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "Split Billing (per line) -> /split-billing/new",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, quotes denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, orders denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, deliveries denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, my-route denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, delivery-remainders denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, invoices denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, returns denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, to-ship denied": [
+      "Today -> /office-cockpit",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, jobs denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, dispatch denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, field-invoices denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, application-records denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, program-tracker denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, recipes denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, field denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, customers denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, call-lists denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, fields denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, crop-programs denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, inventory denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, products denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /brand-vs-generic",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, purchase-orders denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, receiving denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, payments denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, compliance denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, lot-trace denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, watchdog denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, offline-work-review denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, blend-tickets denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, dashboard denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /reports",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /reports",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, office-cockpit denied": [
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "[Setup & Admin]",
+      "Getting Started (help) -> /getting-started",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "button Expand Setup & Admin navigation",
+      "Team Board -> /team-board"
+    ],
+    "sales_rep, getting-started denied": [
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "[Sell & Deliver]",
+      "Quotes & Bookings -> /quotes",
+      "Orders -> /orders",
+      "Deliveries -> /deliveries",
+      "My Route (field mode) -> /my-route",
+      "Remainders -> /delivery-remainders",
+      "Invoices — Chemical -> /invoices",
+      "Returns -> /returns",
+      "[Spray Fields]",
+      "Job Schedule -> /jobs",
+      "Dispatch Board -> /dispatch",
+      "Field Invoices -> /field-invoices",
+      "Record Book (Applications) -> /application-records",
+      "Program Tracker -> /program-tracker",
+      "Blend Recipes -> /recipes",
+      "Field View (phone preview) -> /field",
+      "[Customers & Fields]",
+      "Customers -> /customers",
+      "Call Lists -> /call-lists",
+      "Fields & Maps -> /fields",
+      "Crop Programs -> /crop-programs",
+      "[Inventory & Buying]",
+      "Inventory -> /inventory",
+      "Products & Pricing -> /products",
+      "Purchase Orders -> /purchase-orders",
+      "Receiving -> /receiving",
+      "[Money]",
+      "Record Payments -> /payments",
+      "[Compliance & Records]",
+      "Licenses & RUP Register -> /compliance",
+      "Lot Trace (recall lookup) -> /lot-trace",
+      "Watchdog Flags -> /watchdog",
+      "Offline Work Review -> /offline-work-review",
+      "Blend Tickets (OCR) -> /blend-tickets",
+      "Insights -> /dashboard",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "Today -> /office-cockpit",
+      "To-Ship (Load-Out Board) -> /to-ship",
+      "button Expand Sell & Deliver navigation",
+      "button Expand Spray Fields navigation",
+      "button Expand Customers & Fields navigation",
+      "button Expand Inventory & Buying navigation",
+      "button Expand Money navigation",
+      "button Expand Compliance & Records navigation",
+      "Insights -> /dashboard",
+      "Team Board -> /team-board"
+    ],
+    "applicator": [
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "applicator, split billing on": [
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "applicator, jobs denied": [
+      "My Day -> /field",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Day -> /field",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "applicator, application-records denied": [
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "applicator, field denied": [
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "applicator, getting-started denied": [
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "My Day -> /field",
+      "My Jobs -> /jobs",
+      "Record Book -> /application-records",
+      "Team Board -> /team-board"
+    ],
+    "driver": [
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "driver, split billing on": [
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "driver, deliveries denied": [
+      "My Route -> /my-route",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "My Route -> /my-route",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "driver, my-route denied": [
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started",
+      "-- desktop --",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "Help -> /getting-started"
+    ],
+    "driver, getting-started denied": [
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board",
+      "-- desktop --",
+      "My Route -> /my-route",
+      "Deliveries -> /deliveries",
+      "Team Board -> /team-board"
+    ]
+  },
+  "permissions": {
+    "pages": [
+      {
+        "key": "quotes",
+        "path": "/quotes",
+        "label": "Quotes & Bookings",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "orders",
+        "path": "/orders",
+        "label": "Orders",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "deliveries",
+        "path": "/deliveries",
+        "label": "Deliveries",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "driver"
+        ]
+      },
+      {
+        "key": "my-route",
+        "path": "/my-route",
+        "label": "My Route",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "driver"
+        ]
+      },
+      {
+        "key": "delivery-remainders",
+        "path": "/delivery-remainders",
+        "label": "Remainders",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "invoices",
+        "path": "/invoices",
+        "label": "Invoices — Chemical",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "returns",
+        "path": "/returns",
+        "label": "Returns",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "to-ship",
+        "path": "/to-ship",
+        "label": "To-Ship (Load-Out Board)",
+        "category": "Sell & Deliver",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "jobs",
+        "path": "/jobs",
+        "label": "Job Schedule",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "applicator"
+        ]
+      },
+      {
+        "key": "dispatch",
+        "path": "/dispatch",
+        "label": "Dispatch Board",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "applicator"
+        ]
+      },
+      {
+        "key": "field-invoices",
+        "path": "/field-invoices",
+        "label": "Field Invoices",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "split-billing",
+        "path": "/split-billing/new",
+        "label": "Split Billing",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "application-records",
+        "path": "/application-records",
+        "label": "Record Book (Applications)",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "applicator"
+        ]
+      },
+      {
+        "key": "program-tracker",
+        "path": "/program-tracker",
+        "label": "Program Tracker",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "recipes",
+        "path": "/recipes",
+        "label": "Blend Recipes",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "field",
+        "path": "/field",
+        "label": "Field View (phone preview)",
+        "category": "Spray Fields",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "applicator"
+        ]
+      },
+      {
+        "key": "customers",
+        "path": "/customers",
+        "label": "Customers",
+        "category": "Customers & Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "call-lists",
+        "path": "/call-lists",
+        "label": "Call Lists",
+        "category": "Customers & Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "fields",
+        "path": "/fields",
+        "label": "Fields & Maps",
+        "category": "Customers & Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "crop-programs",
+        "path": "/crop-programs",
+        "label": "Crop Programs",
+        "category": "Customers & Fields",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "inventory",
+        "path": "/inventory",
+        "label": "Inventory",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "products",
+        "path": "/products",
+        "label": "Products",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "supplier-pricing",
+        "path": "/supplier-pricing",
+        "label": "Supplier Pricing",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "brand-vs-generic",
+        "path": "/brand-vs-generic",
+        "label": "Brand vs Generic",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "purchase-orders",
+        "path": "/purchase-orders",
+        "label": "Purchase Orders",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "receiving",
+        "path": "/receiving",
+        "label": "Receiving",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "cycle-counts",
+        "path": "/cycle-counts",
+        "label": "Cycle Counts",
+        "category": "Inventory & Buying",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "payments",
+        "path": "/payments",
+        "label": "Record Payments",
+        "category": "Money",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "accounts-receivable",
+        "path": "/accounts-receivable",
+        "label": "A/R Workspace",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "ar-aging",
+        "path": "/ar-aging",
+        "label": "A/R Aging",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "prepay",
+        "path": "/prepay",
+        "label": "Prepay",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "customer-transactions",
+        "path": "/customer-transactions",
+        "label": "Customer Transactions",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "accounts-payable",
+        "path": "/accounts-payable",
+        "label": "A/P & Vendor Bills",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "commission-payments",
+        "path": "/commission-payments",
+        "label": "Commissions",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "rebates",
+        "path": "/rebates",
+        "label": "Rebates",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "month-end",
+        "path": "/month-end",
+        "label": "Month-End Close",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "integrity",
+        "path": "/integrity",
+        "label": "Data Integrity",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "payment-history",
+        "path": "/payment-history",
+        "label": "Payment History",
+        "category": "Money",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "compliance",
+        "path": "/compliance",
+        "label": "Licenses & RUP Register",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "lot-trace",
+        "path": "/lot-trace",
+        "label": "Lot Trace (recall lookup)",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "watchdog",
+        "path": "/watchdog",
+        "label": "Watchdog Flags",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "offline-work-review",
+        "path": "/offline-work-review",
+        "label": "Offline Work Review",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "label-review",
+        "path": "/label-review",
+        "label": "Label Review",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "label-data-quality",
+        "path": "/label-data-quality",
+        "label": "Label Data Quality",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "blend-tickets",
+        "path": "/blend-tickets",
+        "label": "Blend Tickets (OCR)",
+        "category": "Compliance & Records",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "dashboard",
+        "path": "/dashboard",
+        "label": "Overview (KPI Dashboard)",
+        "category": "Insights",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "office-cockpit",
+        "path": "/office-cockpit",
+        "label": "Today",
+        "category": "Insights",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "reports",
+        "path": "/reports",
+        "label": "Reports Library",
+        "category": "Insights",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "field-profitability",
+        "path": "/field-profitability",
+        "label": "Field Profitability",
+        "category": "Insights",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "sales-reports",
+        "path": "/sales-reports",
+        "label": "Sales Reports",
+        "category": "Insights",
+        "roles": [
+          "admin",
+          "sales_rep"
+        ]
+      },
+      {
+        "key": "financial-dashboard",
+        "path": "/financial-dashboard",
+        "label": "Financial Dashboard",
+        "category": "Insights",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "vehicles",
+        "path": "/vehicles",
+        "label": "Vehicles",
+        "category": "Setup & Admin",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "application-services",
+        "path": "/application-services",
+        "label": "Application Services (fees)",
+        "category": "Setup & Admin",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "vendors",
+        "path": "/vendors",
+        "label": "Vendors",
+        "category": "Setup & Admin",
+        "roles": [
+          "admin"
+        ]
+      },
+      {
+        "key": "getting-started",
+        "path": "/getting-started",
+        "label": "Getting Started (help)",
+        "category": "Setup & Admin",
+        "roles": [
+          "admin",
+          "sales_rep",
+          "driver",
+          "applicator"
+        ]
+      }
+    ],
+    "exempt": [
+      "forgot-password",
+      "login",
+      "notifications",
+      "reset-password",
+      "settings",
+      "team-board"
+    ],
+    "byRole": {
+      "admin": {
+        "keys": [
+          "quotes",
+          "orders",
+          "deliveries",
+          "my-route",
+          "delivery-remainders",
+          "invoices",
+          "returns",
+          "to-ship",
+          "jobs",
+          "dispatch",
+          "field-invoices",
+          "split-billing",
+          "application-records",
+          "program-tracker",
+          "recipes",
+          "field",
+          "customers",
+          "call-lists",
+          "fields",
+          "crop-programs",
+          "inventory",
+          "products",
+          "supplier-pricing",
+          "brand-vs-generic",
+          "purchase-orders",
+          "receiving",
+          "cycle-counts",
+          "payments",
+          "accounts-receivable",
+          "ar-aging",
+          "prepay",
+          "customer-transactions",
+          "accounts-payable",
+          "commission-payments",
+          "rebates",
+          "month-end",
+          "integrity",
+          "payment-history",
+          "compliance",
+          "lot-trace",
+          "watchdog",
+          "offline-work-review",
+          "label-review",
+          "label-data-quality",
+          "blend-tickets",
+          "dashboard",
+          "office-cockpit",
+          "reports",
+          "field-profitability",
+          "sales-reports",
+          "financial-dashboard",
+          "vehicles",
+          "application-services",
+          "vendors",
+          "getting-started"
+        ],
+        "categories": [
+          "Sell & Deliver",
+          "Spray Fields",
+          "Customers & Fields",
+          "Inventory & Buying",
+          "Money",
+          "Compliance & Records",
+          "Insights",
+          "Setup & Admin"
+        ]
+      },
+      "sales_rep": {
+        "keys": [
+          "quotes",
+          "orders",
+          "deliveries",
+          "my-route",
+          "delivery-remainders",
+          "invoices",
+          "returns",
+          "to-ship",
+          "jobs",
+          "dispatch",
+          "field-invoices",
+          "split-billing",
+          "application-records",
+          "program-tracker",
+          "recipes",
+          "field",
+          "customers",
+          "call-lists",
+          "fields",
+          "crop-programs",
+          "inventory",
+          "products",
+          "brand-vs-generic",
+          "purchase-orders",
+          "receiving",
+          "payments",
+          "compliance",
+          "lot-trace",
+          "watchdog",
+          "offline-work-review",
+          "blend-tickets",
+          "dashboard",
+          "office-cockpit",
+          "reports",
+          "sales-reports",
+          "getting-started"
+        ],
+        "categories": [
+          "Sell & Deliver",
+          "Spray Fields",
+          "Customers & Fields",
+          "Inventory & Buying",
+          "Money",
+          "Compliance & Records",
+          "Insights",
+          "Setup & Admin"
+        ]
+      },
+      "applicator": {
+        "keys": [
+          "jobs",
+          "dispatch",
+          "application-records",
+          "field",
+          "getting-started"
+        ],
+        "categories": [
+          "Spray Fields",
+          "Setup & Admin"
+        ]
+      },
+      "driver": {
+        "keys": [
+          "deliveries",
+          "my-route",
+          "getting-started"
+        ],
+        "categories": [
+          "Sell & Deliver",
+          "Setup & Admin"
+        ]
+      }
+    }
+  }
+}

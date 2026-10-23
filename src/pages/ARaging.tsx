@@ -22,6 +22,7 @@ import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { fetchAllRows } from '../lib/pagedRead';
 import { fetchCustomerStatement } from '../lib/customerStatement';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
@@ -82,8 +83,9 @@ export default function ARaging() {
   const [asOfDate, setAsOfDate] = useState(() => todayInBusinessTz());
 
   // Statement
-  const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // The picker searches every customer; the page keeps the chosen one's name.
   const [selectedCustomer, setSelectedCustomer] = useState('');
+  const [selectedCustomerName, setSelectedCustomerName] = useState('');
   const [stmtStart, setStmtStart] = useState(() => localDatePlusDays(-90));
   const [stmtEnd, setStmtEnd] = useState(localToday());
   const [statementData, setStatementData] = useState<CustomerStatementRow[]>([]);
@@ -94,18 +96,6 @@ export default function ARaging() {
   const [seasonA, setSeasonA] = useState(currentSeason);
   const [seasonB, setSeasonB] = useState(currentSeason - 1);
   const [seasonData, setSeasonData] = useState<SeasonComparisonRow[]>([]);
-
-  const fetchCustomers = async () => {
-    const { data, error } = await supabase
-      .from('customers')
-      .select('id, farm_name')
-      .order('farm_name');
-    if (error) {
-      toast('error', 'Failed to load customers: ' + error.message);
-      return;
-    }
-    setCustomers(data || []);
-  };
 
   const fetchAging = useCallback(async () => {
     const seq = ++agingLoadSeq.current;
@@ -156,11 +146,6 @@ export default function ARaging() {
   }, [seasonA, seasonB, toast]);
 
   useEffect(() => {
-    fetchCustomers();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     if (tab === 'aging') fetchAging();
     if (tab === 'season') fetchSeasonComparison();
   }, [tab, asOfDate, seasonA, seasonB, fetchAging, fetchSeasonComparison]);
@@ -172,8 +157,7 @@ export default function ARaging() {
     }
     const seq = ++statementLoadSeq.current;
     setLoading(true);
-    const cust = customers.find((c) => c.id === selectedCustomer);
-    setStmtCustomerName(cust?.farm_name || 'Customer');
+    setStmtCustomerName(selectedCustomerName || 'Customer');
 
     // Every row, page by page (src/lib/customerStatement.ts).
     const { data, error } = await fetchCustomerStatement(selectedCustomer, stmtStart, stmtEnd);
@@ -231,7 +215,6 @@ export default function ARaging() {
           className="font-medium text-crx-green hover:underline text-left"
           onClick={(e) => {
             e.stopPropagation();
-            setSelectedCustomer(r.customer_id);
             fetchStatementForCustomer(r.customer_id, r.farm_name);
           }}
         >
@@ -412,6 +395,7 @@ export default function ARaging() {
     setLoading(true);
     setStmtCustomerName(custName);
     setSelectedCustomer(custId);
+    setSelectedCustomerName(custName);
     // Every row, page by page (src/lib/customerStatement.ts).
     const { data, error } = await fetchCustomerStatement(custId, stmtStart, stmtEnd);
     if (seq !== statementLoadSeq.current) return;
@@ -1012,19 +996,20 @@ export default function ARaging() {
                 </button>
               )}
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">Customer</label>
-                <select
+                <label htmlFor="ar-statement-customer" className="block text-xs font-medium text-secondary mb-1">Customer</label>
+                <CustomerSearchPicker
+                  id="ar-statement-customer"
                   value={selectedCustomer}
-                  onChange={(e) => setSelectedCustomer(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
-                >
-                  <option value="">Select customer...</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.farm_name}
-                    </option>
-                  ))}
-                </select>
+                  selectedLabel={selectedCustomerName}
+                  onSelect={(customer) => {
+                    setSelectedCustomer(customer?.id ?? '');
+                    setSelectedCustomerName(customer?.farm_name ?? '');
+                  }}
+                  activeOnly={false}
+                  placeholder="Select customer..."
+                  ariaLabel="Statement customer"
+                  className="min-w-[200px]"
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">From</label>
@@ -1052,8 +1037,7 @@ export default function ARaging() {
                   variant="secondary"
                   icon={<Printer className="w-4 h-4" />}
                   onClick={() => {
-                    const cust = customers.find((c) => c.id === selectedCustomer);
-                    openStatementDialog(selectedCustomer, cust?.farm_name || 'Customer', stmtEnd);
+                    openStatementDialog(selectedCustomer, selectedCustomerName || 'Customer', stmtEnd);
                   }}
                   loading={printingStatement}
                 >

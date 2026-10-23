@@ -69,8 +69,9 @@ BEGIN
   v_prefix := 'smk-vogs-' || v_suffix || '-';
 
   -- One farm with two fields; each order's one line is allocated across both fields (split
-  -- evidence), so the order is billed through the governed split engine. Every split invoice
-  -- belongs to the order's own customer (INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID otherwise).
+  -- evidence), so the order is billed through the governed split engine. Both fields belong to the
+  -- order's own customer, so every split invoice does too (a split onto another customer's field
+  -- needs 20261021150000; smoke-split-invoice-cross-customer-lineage.sql covers that).
   INSERT INTO public.customers (farm_name, account_number)
   VALUES ('[SMOKE] Split Void Farm ' || v_suffix, '[SMOKE]-VOGS-' || v_suffix)
   RETURNING id INTO v_customer;

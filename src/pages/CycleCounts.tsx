@@ -79,6 +79,8 @@ export default function CycleCounts() {
   // New count modal
   const [showNew, setShowNew] = useState(false);
   const [newWarehouse, setNewWarehouse] = useState('Main Warehouse');
+  // A count starts only from a location list that loaded; never while it loads or after it failed.
+  const [locationsLoad, setLocationsLoad] = useState<'loading' | 'loaded' | 'failed'>('loading');
   const [newNotes, setNewNotes] = useState('');
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -185,16 +187,29 @@ export default function CycleCounts() {
   }, [toast]);
 
   const fetchWarehouses = useCallback(async () => {
-    // Pull unique locations from inventory + warehouses table
+    // Pull unique locations from inventory + warehouses table. Inventory is read whole, page by
+    // page (Goal 4, N6): one request stops at the row cap and could miss a location.
     const [invRes, whRes] = await Promise.all([
-      supabase.from('inventory').select('location'),
+      fetchAllRows<{ id: string; location: string | null }>((from, to) => supabase
+        .from('inventory')
+        .select('id, location', { count: 'exact' })
+        .order('id')
+        .range(from, to)),
       supabase.from('warehouses').select('name').eq('is_active', true),
     ]);
-    const invLocs = [...new Set((invRes.data || []).map((r: { location: string | null }) => r.location).filter(Boolean) as string[])];
+    if (invRes.error || whRes.error) {
+      Sentry.captureException(invRes.error ?? whRes.error, { tags: { source: 'fetch', action: 'load_cycle_count_locations' } });
+      toast('error', 'Failed to load locations. Refresh before starting a count.');
+      setWarehouses([]);
+      setLocationsLoad('failed');
+      return;
+    }
+    const invLocs = [...new Set((invRes.data || []).map((r) => r.location).filter(Boolean) as string[])];
     const whLocs = (whRes.data || []).map((r: { name: string }) => r.name);
     const all = [...new Set([...invLocs, ...whLocs])].sort();
     setWarehouses(all);
-  }, []);
+    setLocationsLoad('loaded');
+  }, [toast]);
 
   useEffect(() => {
     fetchCounts();
@@ -1064,6 +1079,9 @@ export default function CycleCounts() {
                 <option key={w} value={w}>{w}</option>
               ))}
             </select>
+            {locationsLoad === 'failed' && (
+              <p role="alert" className="mt-1 text-sm text-red-600">Locations could not be loaded. Refresh the page to try again.</p>
+            )}
           </div>
           <Input
             label="Notes (Optional)"
@@ -1076,7 +1094,7 @@ export default function CycleCounts() {
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setShowNew(false)}>Cancel</Button>
-            <Button onClick={handleCreate} loading={creating}>
+            <Button onClick={handleCreate} loading={creating} disabled={locationsLoad !== 'loaded'}>
               Start Count
             </Button>
           </div>

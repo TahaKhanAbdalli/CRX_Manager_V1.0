@@ -79,7 +79,7 @@ node scripts/verify-deps.mjs
 ## Step 4: Quick doc-drift check
 
 ```bash
-echo "Pages: $(grep -c 'lazy(' src/App.tsx)" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
+echo "Pages: $(cat src/appPages.tsx src/App.tsx | grep -c 'lazy(')" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
 ```
 
 `node scripts/check-doc-drift.mjs` (already run in Step 3b) is the authoritative drift check — always-loaded agent files intentionally carry no counts. Flag any mismatch it reports.

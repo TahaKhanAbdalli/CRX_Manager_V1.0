@@ -1,5 +1,11 @@
 # Product Data Model — Master Record
 
+> **UPDATE 2026-10-22 — the brand part comes first, refreshed.** Mason chose to build delivery-time brand
+> capture before receiving (`docs/manual/DECISION_LOG.md`, 2026-10-22 generic-products entry). The refreshed
+> step 1 is `docs/plans/2026-10-22-product-brands-step1-PLAN.md`. It replaces the brand layer described
+> here (T-6, T-7, D-13, D-14) and WP-3 in `2026-08-19-product-data-model-BUILD-PLAN.md`, and its section 9
+> lists every difference. The rest of this record is unchanged and still not started.
+
 > **STATUS 2026-09-26 — ACTIVE project; build not started.** The planning decisions were taken after
 > this record was written (`docs/manual/DECISION_LOG.md`, 2026-08-19 entries; the 2026-08-26 amendment
 > in the build plan). The executable plan is `2026-08-19-product-data-model-BUILD-PLAN.md`, driven by

@@ -165,7 +165,7 @@ export const RpcErrorCodes = {
   DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
   DELIVERY_MISSING: 'DELIVERY_MISSING',
   // post_invoice / post_invoice_group / batch_post_invoices reviewed-version binding (Goal 3,
-  // migration 20261021200000): the saved invoice changed after the screen loaded it, or the
+  // migration 20261022022000): the saved invoice changed after the screen loaded it, or the
   // screen sent no version.
   INVOICE_CHANGED_SINCE_LOADED: 'INVOICE_CHANGED_SINCE_LOADED',
   INVOICE_VERSION_REQUIRED: 'INVOICE_VERSION_REQUIRED',
@@ -199,6 +199,8 @@ export const RpcErrorCodes = {
   RETURN_CREDIT_VOID_RELEASE_FAILED: 'RETURN_CREDIT_VOID_RELEASE_FAILED',
   RETURN_CREDIT_UNAPPLY_RELEASE_FAILED: 'RETURN_CREDIT_UNAPPLY_RELEASE_FAILED',
   ORDER_INVOICE_TERMINAL: 'ORDER_INVOICE_TERMINAL',
+  // create_invoice_from_order — the order is split across fields; bill it per field owner
+  ORDER_HAS_FIELD_SPLIT: 'ORDER_HAS_FIELD_SPLIT',
   ORDER_LIFECYCLE_BUSY_RETRY: 'ORDER_LIFECYCLE_BUSY_RETRY',
   // price_order (sell-side roadmap #2 v2)
   INVALID_PRICE: 'INVALID_PRICE',
@@ -323,6 +325,8 @@ export const RpcErrorCodes = {
   // between the approval window and Approve
   BLEND_TICKET_PRODUCT_UNMATCHED: 'BLEND_TICKET_PRODUCT_UNMATCHED',
   BELOW_COST_APPROVAL_STALE: 'BELOW_COST_APPROVAL_STALE',
+  // create_invoice_from_blend_ticket (20261022020000) — a line's quantity rounds to 0 at 4 decimals
+  BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO: 'BLEND_INVOICE_QUANTITY_ROUNDS_TO_ZERO',
   // set_blend_ticket_product_quote_price refusals
   BLEND_TICKET_QUOTE_PRICE_INVALID_CHOICE: 'BLEND_TICKET_QUOTE_PRICE_INVALID_CHOICE',
   BLEND_TICKET_QUOTE_PRICE_LOCKED: 'BLEND_TICKET_QUOTE_PRICE_LOCKED',

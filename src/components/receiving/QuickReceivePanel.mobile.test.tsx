@@ -16,10 +16,13 @@ vi.mock('../../lib/db', () => {
     select: vi.fn(),
     eq: vi.fn(),
     order: vi.fn(),
+    range: vi.fn(),
   };
   builder.select.mockReturnValue(builder);
   builder.eq.mockReturnValue(builder);
-  builder.order.mockResolvedValue({ data: [], error: null });
+  builder.order.mockReturnValue(builder);
+  // The product list is read page by page and ends in .range().
+  builder.range.mockResolvedValue({ data: [], error: null, count: 0 });
 
   return {
     supabase: { from: vi.fn(() => builder), rpc: vi.fn() },
@@ -37,7 +40,7 @@ describe('QuickReceivePanel mobile form', () => {
     );
 
     expect(screen.getByTestId('quick-receive-shipment-fields')).toHaveClass('grid-cols-1', 'md:grid-cols-2');
-    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Product' }));
 
     const quantity = await screen.findByRole('spinbutton', { name: 'Quantity received' });
     expect(quantity).toHaveAttribute('inputmode', 'decimal');

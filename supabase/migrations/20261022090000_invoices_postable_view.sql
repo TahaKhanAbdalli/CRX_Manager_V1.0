@@ -1,8 +1,8 @@
 -- Written 2026-10-22. STATUS: NOT APPLIED (local candidate). Apply status is tracked only in
--- docs/reference/migration-history.md (row 969).
+-- docs/reference/migration-history.md (row 976).
 --
--- WHAT: the invoice posting version (20261021200000, PR #1018) moves onto a column-safe relation,
---   so it keeps working once the cost column lock (20261022030000, Goal 1 step 3) takes
+-- WHAT: the invoice posting version (20261022022000, PR #1018) moves onto a column-safe relation,
+--   so it keeps working once the cost column lock (20261022091000, Goal 1 step 3) takes
 --   invoices.total_cost_cents away from the API roles.
 --   1. public.invoices_postable: a security_invoker view of every invoices column except the cost
 --      column the lock revokes (total_cost_cents). Row security and column privileges are checked
@@ -26,7 +26,7 @@
 --   (a) this file: the view and the new overload; the old overload stays, so the screens live
 --       before this PR merges keep working;
 --   (b) this PR's app switches the seven version-bearing reads to invoices_postable;
---   (c) the cost lock (20261022030000) then DROPS invoice_post_version(public.invoices), leaving
+--   (c) the cost lock (20261022091000) then DROPS invoice_post_version(public.invoices), leaving
 --       exactly this overload, and revokes cost. A browser still running a bundle from before (b)
 --       (the PWA service worker) then cannot open an invoice screen until it reloads, so (c) waits
 --       a while after (b) deploys.
@@ -75,12 +75,12 @@ BEGIN
     RAISE EXCEPTION 'INVOICES_POSTABLE_PREFLIGHT: invoices columns are not the ones this view lists (re-read them): %', v_cols;
   END IF;
 
-  -- PR #1018 (20261021200000) is live, with the reviewed bodies this file mirrors.
+  -- PR #1018 (20261022022000) is live, with the reviewed bodies this file mirrors.
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public._invoice_post_version(uuid)')), chr(13), ''))
        IS DISTINCT FROM 'd351f2e930ff7196550c12bfca01dfbe'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.invoice_post_version(public.invoices)')), chr(13), ''))
        IS DISTINCT FROM 'f353b5c3078efb42544ea7b76c7b16e6' THEN
-    RAISE EXCEPTION 'INVOICES_POSTABLE_PREFLIGHT: 20261021200000 is not applied, or its version functions drifted';
+    RAISE EXCEPTION 'INVOICES_POSTABLE_PREFLIGHT: 20261022022000 is not applied, or its version functions drifted';
   END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'invoice_post_version') <> 1
@@ -107,7 +107,7 @@ SELECT id, invoice_number, order_id, blend_ticket_id, customer_id, invoice_type,
   FROM public.invoices;
 
 COMMENT ON VIEW public.invoices_postable IS
-  'Invoices without cost columns, for screens that post (20261022025000). security_invoker: the caller''s row security and column grants apply. Select invoice_post_version from here, in the same query as the rows shown. Read-only: SELECT to authenticated and service_role, nothing else to anyone.';
+  'Invoices without cost columns, for screens that post (20261022090000). security_invoker: the caller''s row security and column grants apply. Select invoice_post_version from here, in the same query as the rows shown. Read-only: SELECT to authenticated and service_role, nothing else to anyone.';
 
 -- Supabase's default privileges grant a new view to anon, authenticated and service_role with every
 -- privilege; the view is simple, so INSERT/UPDATE/DELETE would pass through to invoices. Take them
@@ -134,7 +134,7 @@ AS $fn$
 $fn$;
 
 COMMENT ON FUNCTION public.invoice_post_version(public.invoices_postable) IS
-  'Version of the saved invoice for posting (20261022025000). Select it from invoices_postable with the rows shown and send it to post_invoice / post_invoice_group, which refuse INVOICE_CHANGED_SINCE_LOADED if the invoice changed since. Admins and the rep the invoice is under; carries no cost.';
+  'Version of the saved invoice for posting (20261022090000). Select it from invoices_postable with the rows shown and send it to post_invoice / post_invoice_group, which refuse INVOICE_CHANGED_SINCE_LOADED if the invoice changed since. Admins and the rep the invoice is under; carries no cost.';
 
 REVOKE ALL ON FUNCTION public.invoice_post_version(public.invoices_postable) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.invoice_post_version(public.invoices_postable) TO authenticated, service_role;

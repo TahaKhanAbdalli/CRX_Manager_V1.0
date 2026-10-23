@@ -43,7 +43,7 @@ const siblings = [
 
 function productQuery() {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'order']) builder[method] = vi.fn(() => builder);
+  for (const method of ['select', 'eq', 'order', 'range']) builder[method] = vi.fn(() => builder);
   builder.then = (resolve: (value: unknown) => void) =>
     Promise.resolve({ data: siblings, error: null }).then(resolve);
   return builder;
@@ -153,7 +153,7 @@ describe('QuickReceivePanel Product identity', () => {
         <QuickReceivePanel />
       </MemoryRouter>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Product' }));
     fireEvent.click(await screen.findByRole('button', { name: /select product/i }));
 
     const siblingA = await screen.findByRole('button', { name: /SKU-A.*Family A/i });
@@ -228,7 +228,7 @@ describe('QuickReceivePanel Product identity', () => {
         }], error: null }
         : { data: { receiving_record_ids: [] }, error: null });
       fireEvent.click(screen.getByRole('button', { name: 'Receive Another Shipment' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add Product' }));
       fireEvent.click(await screen.findByRole('button', { name: /select product/i }));
       fireEvent.click(await screen.findByRole('button', { name: /SKU-A.*Family A/i }));
       fireEvent.change(screen.getByRole('spinbutton', { name: /quantity received/i }), { target: { value: '2' } });
@@ -357,7 +357,7 @@ describe('QuickReceivePanel Product identity', () => {
       createdAtMs: Date.now(), retryNotAfterMs: Date.now() + 60_000, intent: {},
     }));
     render(<MemoryRouter><QuickReceivePanel /></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Product' }));
     fireEvent.click(await screen.findByRole('button', { name: /select product/i }));
     fireEvent.click(await screen.findByRole('button', { name: /SKU-B.*Family B/i }));
     fireEvent.change(screen.getByRole('spinbutton', { name: /quantity received/i }), { target: { value: '3' } });

@@ -134,6 +134,7 @@ Columns below are from `.claude/schema-registry.json`; read the named migrations
 - `field_app_billing_sets` / `field_app_billing_lines` - Per-line split-billing source lines for a field-application invoice group (set: invoice_group_id, source_job_id; line: billing_set_id, line_kind: chemical/service/fuel_surcharge/flat_fee, product_id, application_service_id, source_quantity, source_acres, source_unit_price_cents, source_line_cents)
 - `invoice_line_shares` - Each customer's share of a billing line (billing_line_id, invoice_item_id, customer_id, split_mode, split_micro_pct, allocated_quantity, allocated_acres, unit_price_cents, amount_cents, override reasons, calculation/vector hashes); `invoice_line_share_snapshots` freezes those shares at post
 - `split_invoice_provenance`, `split_invoice_creation_claims`, `split_invoice_mutation_claims` - Provenance and transaction-scoped claims for split invoices created from an order (mutation claims cover save_invoice/delete_invoices/void_invoice/cancel_order)
+- `return_credit_customer_claims` - Transaction-scoped claim `issue_return_credit` opens around every order-linked return credit (since `20261021155000`, pending apply when written); the invoice guards admit a return credit memo on a split order, or for a field owner who is not the order's customer, only inside it. RLS deny-all, no Data API grant, empty outside that transaction
 - `job_product_draws` - Per-(job, product) booking draw-down against a quote (job_id, quote_id, product_id, quantity_drawn)
 
 ## Email & Notifications

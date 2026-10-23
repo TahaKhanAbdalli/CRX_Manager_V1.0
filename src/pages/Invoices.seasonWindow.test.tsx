@@ -17,7 +17,7 @@ const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), 
 
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
-  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  // The version-bearing reads use the invoices_postable view (20261022090000): same rows as invoices here.
   return { ...actual, supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc } };
 });
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
@@ -31,7 +31,7 @@ import Invoices from './Invoices';
 function invoice(overrides: Record<string, unknown>) {
   return {
     id: overrides.invoice_number,
-    // The list reads the posting version with every row (migration 20261021200000).
+    // The list reads the posting version with every row (migration 20261022022000).
     invoice_post_version: `v1:${String(overrides.invoice_number)}`,
     invoice_type: 'chemical_sale',
     customer_id: 'cust-1',

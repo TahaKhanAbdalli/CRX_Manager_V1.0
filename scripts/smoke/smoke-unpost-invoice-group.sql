@@ -47,8 +47,8 @@ BEGIN
     VALUES ('[SMOKE] UPG-A-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 120000, v_admin, v_grp) RETURNING id INTO v_inv_a;
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
     VALUES ('[SMOKE] UPG-B-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 80000, v_admin, v_grp) RETURNING id INTO v_inv_b;
-  PERFORM post_invoice(v_inv_a, '[SMOKE] upg-a-post-'||v_sfx);
-  PERFORM post_invoice(v_inv_b, '[SMOKE] upg-b-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_a, public._invoice_post_version(v_inv_a), '[SMOKE] upg-a-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_b, public._invoice_post_version(v_inv_b), '[SMOKE] upg-b-post-'||v_sfx);
 
   v_res := unpost_invoice_group(v_grp, v_admin, '[SMOKE] upg-unpost-'||v_sfx);
   IF (v_res->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'SMOKE_FAIL: group unpost did not succeed'; END IF;
@@ -66,8 +66,8 @@ BEGIN
     VALUES ('[SMOKE] UPG-C-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 60000, v_admin, v_grp2) RETURNING id INTO v_inv_c;
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
     VALUES ('[SMOKE] UPG-D-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 40000, v_admin, v_grp2) RETURNING id INTO v_inv_d;
-  PERFORM post_invoice(v_inv_c, '[SMOKE] upg-c-post-'||v_sfx);
-  PERFORM post_invoice(v_inv_d, '[SMOKE] upg-d-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_c, public._invoice_post_version(v_inv_c), '[SMOKE] upg-c-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_d, public._invoice_post_version(v_inv_d), '[SMOKE] upg-d-post-'||v_sfx);
   -- Apply money to D so it cannot be unposted.
   INSERT INTO allocation_sets (entity_type, entity_id, version, is_active, customer_id, total_payment_cents, total_allocated_cents)
     VALUES ('payment', gen_random_uuid(), 1, true, v_cust_b, 40000, 40000) RETURNING id INTO v_aset;
@@ -130,8 +130,8 @@ BEGIN
       VALUES ('[SMOKE] UPG-E-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 30000, v_admin, v_grp3) RETURNING id INTO v_inv_e;
     INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
       VALUES ('[SMOKE] UPG-F-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 20000, v_admin, v_grp3) RETURNING id INTO v_inv_f;
-    PERFORM post_invoice(v_inv_e, '[SMOKE] upg-e-post-'||v_sfx);
-    PERFORM post_invoice(v_inv_f, '[SMOKE] upg-f-post-'||v_sfx);
+    PERFORM post_invoice(v_inv_e, public._invoice_post_version(v_inv_e), '[SMOKE] upg-e-post-'||v_sfx);
+    PERFORM post_invoice(v_inv_f, public._invoice_post_version(v_inv_f), '[SMOKE] upg-f-post-'||v_sfx);
     BEGIN
       PERFORM unpost_invoice_group(v_grp3, v_admin, '[SMOKE] upg-unpost-'||v_sfx);  -- v_grp's key!
       RAISE EXCEPTION 'SMOKE_FAIL: cross-group key replay silently returned (wrong-group success)';

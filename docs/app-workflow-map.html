@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">98 routes · 265 RPC calls · 5 issues · Updated Oct 20, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">98 routes · 267 RPC calls · 5 issues · Updated Oct 22, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -430,22 +430,22 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
           <span class="loc">src/App.tsx</span>
         </div>
         <div class="prob-item ">
-          <strong>Orphan page: /integrity-report</strong>
-          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
-          <span class="loc">src/App.tsx</span>
-        </div>
-        <div class="prob-item ">
-          <strong>Orphan page: /integrity-cleanup</strong>
-          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
-          <span class="loc">src/App.tsx</span>
-        </div>
-        <div class="prob-item ">
           <strong>Orphan page: /prepayments</strong>
           <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
           <span class="loc">src/App.tsx</span>
         </div>
         <div class="prob-item ">
           <strong>Orphan page: /prepay-workspace</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-report</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-cleanup</strong>
           <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
           <span class="loc">src/App.tsx</span>
         </div>
@@ -503,51 +503,211 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "dashboard",
-      "label": "Dashboard",
-      "type": "page-all",
-      "group": "Core",
-      "path": "/dashboard",
+      "id": "field-application-invoice",
+      "label": "FieldApplicationInvoice",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices/field-app/new",
       "problem": false
     },
     {
-      "id": "team-board",
-      "label": "TeamBoard",
-      "type": "page-all",
-      "group": "Core",
-      "path": "/team-board",
+      "id": "quotes",
+      "label": "Quotes",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/quotes",
       "problem": false
     },
     {
-      "id": "notifications",
-      "label": "Notifications",
-      "type": "page-all",
-      "group": "Core",
-      "path": "/notifications",
+      "id": "quote-builder",
+      "label": "QuoteBuilder",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/quotes/new",
       "problem": false
     },
     {
-      "id": "getting-started",
-      "label": "GettingStarted",
-      "type": "page-all",
-      "group": "Core",
-      "path": "/getting-started",
+      "id": "orders",
+      "label": "Orders",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders",
       "problem": false
     },
     {
-      "id": "products",
-      "label": "Products",
+      "id": "new-order",
+      "label": "NewOrder",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders/new",
+      "problem": false
+    },
+    {
+      "id": "order-detail",
+      "label": "OrderDetail",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders/:id",
+      "problem": false
+    },
+    {
+      "id": "deliveries",
+      "label": "Deliveries",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries",
+      "problem": false
+    },
+    {
+      "id": "new-delivery",
+      "label": "NewDelivery",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries/new",
+      "problem": false
+    },
+    {
+      "id": "delivery-detail",
+      "label": "DeliveryDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries/:id",
+      "problem": false
+    },
+    {
+      "id": "field-route",
+      "label": "FieldRoute",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/my-route",
+      "problem": false
+    },
+    {
+      "id": "field-stop",
+      "label": "FieldStop",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/my-route/:id",
+      "problem": false
+    },
+    {
+      "id": "delivery-remainders",
+      "label": "DeliveryRemainders",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/delivery-remainders",
+      "problem": false
+    },
+    {
+      "id": "invoices",
+      "label": "Invoices",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices",
+      "problem": false
+    },
+    {
+      "id": "invoice-detail",
+      "label": "InvoiceDetail",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices/:id",
+      "problem": false
+    },
+    {
+      "id": "returns",
+      "label": "Returns",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/returns",
+      "problem": false
+    },
+    {
+      "id": "to-ship",
+      "label": "ToShip",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/to-ship",
+      "problem": false
+    },
+    {
+      "id": "jobs",
+      "label": "Jobs",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/jobs",
+      "problem": false
+    },
+    {
+      "id": "job-detail",
+      "label": "JobDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/jobs/:id",
+      "problem": false
+    },
+    {
+      "id": "dispatch-board",
+      "label": "DispatchBoard",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/dispatch",
+      "problem": false
+    },
+    {
+      "id": "field-invoices",
+      "label": "FieldInvoices",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/field-invoices",
+      "problem": false
+    },
+    {
+      "id": "navigate",
+      "label": "Navigate",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/field-invoices/unposted",
+      "problem": false
+    },
+    {
+      "id": "field-app-split-invoice-editor",
+      "label": "FieldAppSplitInvoiceEditor",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/split-billing/new",
+      "problem": false
+    },
+    {
+      "id": "application-records",
+      "label": "ApplicationRecords",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/application-records",
+      "problem": false
+    },
+    {
+      "id": "program-tracker",
+      "label": "ProgramTracker",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/program-tracker",
+      "problem": false
+    },
+    {
+      "id": "blend-recipes",
+      "label": "BlendRecipes",
       "type": "page-sales",
       "group": "Products",
-      "path": "/products",
+      "path": "/recipes",
       "problem": false
     },
     {
-      "id": "product-detail",
-      "label": "ProductDetail",
+      "id": "field-view",
+      "label": "FieldView",
       "type": "page-sales",
-      "group": "Products",
-      "path": "/products/:id",
+      "group": "Customers",
+      "path": "/field",
       "problem": false
     },
     {
@@ -599,51 +759,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "quotes",
-      "label": "Quotes",
+      "id": "crop-programs",
+      "label": "CropPrograms",
       "type": "page-sales",
-      "group": "Sales",
-      "path": "/quotes",
-      "problem": false
-    },
-    {
-      "id": "quote-builder",
-      "label": "QuoteBuilder",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/quotes/new",
-      "problem": false
-    },
-    {
-      "id": "orders",
-      "label": "Orders",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/orders",
-      "problem": false
-    },
-    {
-      "id": "new-order",
-      "label": "NewOrder",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/orders/new",
-      "problem": false
-    },
-    {
-      "id": "order-detail",
-      "label": "OrderDetail",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/orders/:id",
-      "problem": false
-    },
-    {
-      "id": "to-ship",
-      "label": "ToShip",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/to-ship",
+      "group": "Customers",
+      "path": "/crop-programs",
       "problem": false
     },
     {
@@ -655,99 +775,35 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "invoices",
-      "label": "Invoices",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/invoices",
-      "problem": false
-    },
-    {
-      "id": "field-application-invoice",
-      "label": "FieldApplicationInvoice",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/invoices/field-app/new",
-      "problem": false
-    },
-    {
-      "id": "invoice-detail",
-      "label": "InvoiceDetail",
-      "type": "page-sales",
-      "group": "Sales",
-      "path": "/invoices/:id",
-      "problem": false
-    },
-    {
-      "id": "field-invoices",
-      "label": "FieldInvoices",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices",
-      "problem": false
-    },
-    {
-      "id": "field-app-split-invoice-editor",
-      "label": "FieldAppSplitInvoiceEditor",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/split-billing/new",
-      "problem": false
-    },
-    {
-      "id": "navigate",
-      "label": "Navigate",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/unposted",
-      "problem": false
-    },
-    {
-      "id": "blend-tickets",
-      "label": "BlendTickets",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/blend-tickets",
-      "problem": false
-    },
-    {
-      "id": "blend-ticket-detail",
-      "label": "BlendTicketDetail",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/blend-tickets/:id",
-      "problem": false
-    },
-    {
-      "id": "blend-recipes",
-      "label": "BlendRecipes",
+      "id": "products",
+      "label": "Products",
       "type": "page-sales",
       "group": "Products",
-      "path": "/recipes",
+      "path": "/products",
       "problem": false
     },
     {
-      "id": "cycle-counts",
-      "label": "CycleCounts",
+      "id": "product-detail",
+      "label": "ProductDetail",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/products/:id",
+      "problem": false
+    },
+    {
+      "id": "supplier-pricing",
+      "label": "SupplierPricing",
       "type": "page-admin",
+      "group": "Core",
+      "path": "/supplier-pricing",
+      "problem": false
+    },
+    {
+      "id": "brand-vs-generic",
+      "label": "BrandVsGeneric",
+      "type": "page-sales",
       "group": "Products",
-      "path": "/cycle-counts",
-      "problem": false
-    },
-    {
-      "id": "returns",
-      "label": "Returns",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/returns",
-      "problem": false
-    },
-    {
-      "id": "receiving",
-      "label": "Receiving",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/receiving",
+      "path": "/brand-vs-generic",
       "problem": false
     },
     {
@@ -775,43 +831,19 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "brand-vs-generic",
-      "label": "BrandVsGeneric",
+      "id": "receiving",
+      "label": "Receiving",
       "type": "page-sales",
-      "group": "Products",
-      "path": "/brand-vs-generic",
+      "group": "Supply",
+      "path": "/receiving",
       "problem": false
     },
     {
-      "id": "reports",
-      "label": "Reports",
-      "type": "page-sales",
-      "group": "Finance",
-      "path": "/reports",
-      "problem": false
-    },
-    {
-      "id": "field-profitability",
-      "label": "FieldProfitability",
+      "id": "cycle-counts",
+      "label": "CycleCounts",
       "type": "page-admin",
-      "group": "Customers",
-      "path": "/field-profitability",
-      "problem": false
-    },
-    {
-      "id": "sales-reports",
-      "label": "SalesReports",
-      "type": "page-sales",
-      "group": "Finance",
-      "path": "/sales-reports",
-      "problem": false
-    },
-    {
-      "id": "crop-programs",
-      "label": "CropPrograms",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/crop-programs",
+      "group": "Products",
+      "path": "/cycle-counts",
       "problem": false
     },
     {
@@ -823,11 +855,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "payment-history",
-      "label": "PaymentHistory",
+      "id": "accounts-receivable",
+      "label": "AccountsReceivable",
       "type": "page-admin",
-      "group": "Sales",
-      "path": "/payment-history",
+      "group": "Core",
+      "path": "/accounts-receivable",
       "problem": false
     },
     {
@@ -839,254 +871,6 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "compliance",
-      "label": "Compliance",
-      "type": "page-sales",
-      "group": "Finance",
-      "path": "/compliance",
-      "problem": false
-    },
-    {
-      "id": "lot-trace",
-      "label": "LotTrace",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/lot-trace",
-      "problem": false
-    },
-    {
-      "id": "label-review",
-      "label": "LabelReview",
-      "type": "page-admin",
-      "group": "Core",
-      "path": "/label-review",
-      "problem": false
-    },
-    {
-      "id": "label-data-quality",
-      "label": "LabelDataQuality",
-      "type": "page-admin",
-      "group": "Core",
-      "path": "/label-data-quality",
-      "problem": false
-    },
-    {
-      "id": "watchdog-exceptions",
-      "label": "WatchdogExceptions",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/watchdog",
-      "problem": false
-    },
-    {
-      "id": "offline-work-review",
-      "label": "OfflineWorkReview",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/offline-work-review",
-      "problem": false
-    },
-    {
-      "id": "office-cockpit",
-      "label": "OfficeCockpit",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/office-cockpit",
-      "problem": false
-    },
-    {
-      "id": "rebates",
-      "label": "Rebates",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/rebates",
-      "problem": false
-    },
-    {
-      "id": "vehicles",
-      "label": "Vehicles",
-      "type": "page-admin",
-      "group": "Ops",
-      "path": "/vehicles",
-      "problem": false
-    },
-    {
-      "id": "vehicle-detail",
-      "label": "VehicleDetail",
-      "type": "page-admin",
-      "group": "Ops",
-      "path": "/vehicles/:id",
-      "problem": false
-    },
-    {
-      "id": "application-services",
-      "label": "ApplicationServices",
-      "type": "page-admin",
-      "group": "Ops",
-      "path": "/application-services",
-      "problem": false
-    },
-    {
-      "id": "application-service-detail",
-      "label": "ApplicationServiceDetail",
-      "type": "page-admin",
-      "group": "Ops",
-      "path": "/application-services/:id",
-      "problem": false
-    },
-    {
-      "id": "application-records",
-      "label": "ApplicationRecords",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/application-records",
-      "problem": false
-    },
-    {
-      "id": "program-tracker",
-      "label": "ProgramTracker",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/program-tracker",
-      "problem": false
-    },
-    {
-      "id": "delivery-remainders",
-      "label": "DeliveryRemainders",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/delivery-remainders",
-      "problem": false
-    },
-    {
-      "id": "deliveries",
-      "label": "Deliveries",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/deliveries",
-      "problem": false
-    },
-    {
-      "id": "new-delivery",
-      "label": "NewDelivery",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/deliveries/new",
-      "problem": false
-    },
-    {
-      "id": "delivery-detail",
-      "label": "DeliveryDetail",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/deliveries/:id",
-      "problem": false
-    },
-    {
-      "id": "field-route",
-      "label": "FieldRoute",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/my-route",
-      "problem": false
-    },
-    {
-      "id": "field-stop",
-      "label": "FieldStop",
-      "type": "page-sales",
-      "group": "Core",
-      "path": "/my-route/:id",
-      "problem": false
-    },
-    {
-      "id": "jobs",
-      "label": "Jobs",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/jobs",
-      "problem": false
-    },
-    {
-      "id": "job-detail",
-      "label": "JobDetail",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/jobs/:id",
-      "problem": false
-    },
-    {
-      "id": "dispatch-board",
-      "label": "DispatchBoard",
-      "type": "page-sales",
-      "group": "Ops",
-      "path": "/dispatch",
-      "problem": false
-    },
-    {
-      "id": "field-view",
-      "label": "FieldView",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field",
-      "problem": false
-    },
-    {
-      "id": "supplier-pricing",
-      "label": "SupplierPricing",
-      "type": "page-admin",
-      "group": "Core",
-      "path": "/supplier-pricing",
-      "problem": false
-    },
-    {
-      "id": "financial-dashboard",
-      "label": "FinancialDashboard",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/financial-dashboard",
-      "problem": false
-    },
-    {
-      "id": "month-end-close",
-      "label": "MonthEndClose",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/month-end",
-      "problem": false
-    },
-    {
-      "id": "integrity",
-      "label": "Integrity",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/integrity",
-      "problem": false
-    },
-    {
-      "id": "legacy-tab-redirect",
-      "label": "LegacyTabRedirect",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/integrity-report",
-      "problem": true
-    },
-    {
-      "id": "commission-payments",
-      "label": "CommissionPayments",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/commission-payments",
-      "problem": false
-    },
-    {
-      "id": "customer-transaction-review",
-      "label": "CustomerTransactionReview",
-      "type": "page-admin",
-      "group": "Customers",
-      "path": "/customer-transactions",
-      "problem": false
-    },
-    {
       "id": "prepay",
       "label": "Prepay",
       "type": "page-admin",
@@ -1095,11 +879,19 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "accounts-receivable",
-      "label": "AccountsReceivable",
+      "id": "legacy-tab-redirect",
+      "label": "LegacyTabRedirect",
       "type": "page-admin",
-      "group": "Core",
-      "path": "/accounts-receivable",
+      "group": "Finance",
+      "path": "/prepayments",
+      "problem": true
+    },
+    {
+      "id": "customer-transaction-review",
+      "label": "CustomerTransactionReview",
+      "type": "page-admin",
+      "group": "Customers",
+      "path": "/customer-transactions",
       "problem": false
     },
     {
@@ -1135,11 +927,219 @@ const NODES = [
       "problem": false
     },
     {
+      "id": "commission-payments",
+      "label": "CommissionPayments",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/commission-payments",
+      "problem": false
+    },
+    {
+      "id": "rebates",
+      "label": "Rebates",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/rebates",
+      "problem": false
+    },
+    {
+      "id": "month-end-close",
+      "label": "MonthEndClose",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/month-end",
+      "problem": false
+    },
+    {
+      "id": "integrity",
+      "label": "Integrity",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/integrity",
+      "problem": false
+    },
+    {
+      "id": "payment-history",
+      "label": "PaymentHistory",
+      "type": "page-admin",
+      "group": "Sales",
+      "path": "/payment-history",
+      "problem": false
+    },
+    {
+      "id": "compliance",
+      "label": "Compliance",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/compliance",
+      "problem": false
+    },
+    {
+      "id": "lot-trace",
+      "label": "LotTrace",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/lot-trace",
+      "problem": false
+    },
+    {
+      "id": "watchdog-exceptions",
+      "label": "WatchdogExceptions",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/watchdog",
+      "problem": false
+    },
+    {
+      "id": "offline-work-review",
+      "label": "OfflineWorkReview",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/offline-work-review",
+      "problem": false
+    },
+    {
+      "id": "label-review",
+      "label": "LabelReview",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/label-review",
+      "problem": false
+    },
+    {
+      "id": "label-data-quality",
+      "label": "LabelDataQuality",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/label-data-quality",
+      "problem": false
+    },
+    {
+      "id": "blend-tickets",
+      "label": "BlendTickets",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/blend-tickets",
+      "problem": false
+    },
+    {
+      "id": "blend-ticket-detail",
+      "label": "BlendTicketDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/blend-tickets/:id",
+      "problem": false
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/dashboard",
+      "problem": false
+    },
+    {
+      "id": "office-cockpit",
+      "label": "OfficeCockpit",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/office-cockpit",
+      "problem": false
+    },
+    {
+      "id": "reports",
+      "label": "Reports",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/reports",
+      "problem": false
+    },
+    {
+      "id": "field-profitability",
+      "label": "FieldProfitability",
+      "type": "page-admin",
+      "group": "Customers",
+      "path": "/field-profitability",
+      "problem": false
+    },
+    {
+      "id": "sales-reports",
+      "label": "SalesReports",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/sales-reports",
+      "problem": false
+    },
+    {
+      "id": "financial-dashboard",
+      "label": "FinancialDashboard",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/financial-dashboard",
+      "problem": false
+    },
+    {
+      "id": "vehicles",
+      "label": "Vehicles",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/vehicles",
+      "problem": false
+    },
+    {
+      "id": "vehicle-detail",
+      "label": "VehicleDetail",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/vehicles/:id",
+      "problem": false
+    },
+    {
+      "id": "application-services",
+      "label": "ApplicationServices",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/application-services",
+      "problem": false
+    },
+    {
+      "id": "application-service-detail",
+      "label": "ApplicationServiceDetail",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/application-services/:id",
+      "problem": false
+    },
+    {
       "id": "vendors",
       "label": "Vendors",
       "type": "page-admin",
       "group": "Core",
       "path": "/vendors",
+      "problem": false
+    },
+    {
+      "id": "getting-started",
+      "label": "GettingStarted",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/getting-started",
+      "problem": false
+    },
+    {
+      "id": "team-board",
+      "label": "TeamBoard",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/team-board",
+      "problem": false
+    },
+    {
+      "id": "notifications",
+      "label": "Notifications",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/notifications",
       "problem": false
     },
     {

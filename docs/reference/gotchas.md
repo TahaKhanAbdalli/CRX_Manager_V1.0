@@ -42,6 +42,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | `returns.requested_by` (NOT `created_by`) | And status starts at `'requested'` (NOT `'pending'`) |
 | `return_items.order_item_id` (NOT `delivery_item_id`) | Returns are linked to order lines, not delivery lines |
 | `invoice_items.extended_cents` (NOT `line_total_cents`) | Naming inconsistency from early schema |
+| A user the Auth service creates starts as an inactive, login-banned `driver` named `Pending user <id>` (since `20261022023000`) | `handle_new_user` ignores `raw_user_meta_data` role and name unless the session is `postgres`/`supabase_admin` with no `SET ROLE` in effect (direct SQL, provers' seeds). Signup and the `create-user` admin API both get the safe default; an admin sets the role with `admin_update_profile` (Settings does it right after Create User). Never trust signup metadata for a privilege |
 | `financial_audit_log.entity_type` is a CHECK-constrained list | The CHECK was AR-only until PR-04 (2026-05-10) and has grown since; read the current values from `.claude/schema-registry.json` → `check_constraints["financial_audit_log.entity_type"]` (same for `operation_type`). Adding a new entity type means expanding the CHECK with every existing value kept. |
 
 ---
@@ -117,7 +118,7 @@ The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bil
 
 | Rule | Detail |
 |------|--------|
-| Every `<Route>` first segment must have a `PAGE_PERMISSIONS` entry OR be in `EXEMPT_ROUTE_SEGMENTS` | `pagePermissions.test.ts` enforces by greppping App.tsx routes. ProtectedRoute fails-closed (logs + redirect) when `getPageKeyFromPath()` returns null on a non-exempt path. Adding a Route without an entry now fails CI. |
+| Every route must map to a `PAGE_PERMISSIONS` entry OR be in `EXEMPT_ROUTE_SEGMENTS` | Since 2026-10-22 both are derived from the shared page list `src/appPages.tsx`, which the router also builds from, so a page added there gets both. `pagePermissions.test.ts` walks that list and fails if a route's address does not resolve (`getPageKeyFromPath()`) to its own page's key. ProtectedRoute still fails closed (logs + redirect) when `getPageKeyFromPath()` returns null on a non-exempt path. |
 | `parseDollarsToCents` PRESERVES leading minus | Pre-PR-15 it stripped them, turning `-50` discount into `+5000` cent ADD. Use `parseDollarsToCentsPositive()` for fields that must reject negatives (default callers don't need to switch). |
 | Edge Functions throw at startup if `ALLOWED_ORIGIN` is unset (and not localhost) | PR-16 removed silent fallback to `https://croprxsolutions.app`. Every function in `supabase/functions/` (create-user, customer-document-files, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage) imports `../_shared/cors.ts`, which throws when the secret is unset, so all of them need it. (`seed-admin` was deleted 2026-06-16 as a security cleanup.) |
 | `logActivity({performedBy})` requires `profile.id` (no empty-string fallback) | PR-20 patched the handlers in WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries and InvoiceDetail. If `profile` is null, handler returns early with toast. QuoteBuilder's compliance check is the one useEffect-gated callsite (still gates on `profile?.id`). |
@@ -260,7 +261,7 @@ form → **false**. Live example: `application_services.cost_per_acre_cents`, mi
 **The trap this leaves behind:** once the grant is an explicit list, every column added later is
 invisible and unwritable to `authenticated` until someone adds it to that list. It surfaces as
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
-is actually a missing grant. **`invoices_postable` (20261022025000) names every `invoices` column but
+is actually a missing grant. **`invoices_postable` (20261022090000) names every `invoices` column but
 `total_cost_cents`:** a migration that adds, drops or renames an `invoices` column must re-create the view in
 the same file (a `DROP COLUMN … CASCADE` would silently drop it and its `invoice_post_version` overload), or
 every screen that reads `INVOICE_COLUMNS` from it fails with "column does not exist". `costFields.test.ts`
@@ -298,8 +299,8 @@ Two more consequences worth knowing before you carve a column out:
 
 ## A green CodeRabbit check does not mean a review happened (2026-08-17)
 
-Since 2026-10-19 CodeRabbit is advisory (one review per PR, comments only, no approval required to
-merge), but a CodeRabbit review that arrives before the merge must still be read and every comment
+Since 2026-10-19 CodeRabbit is advisory (comments only, no approval required to merge; since
+2026-10-21 no automatic reviews, only requested ones), but a CodeRabbit review that arrives before the merge must still be read and every comment
 fixed or refuted. The check row is **not** evidence that a review happened. On PR #411, `gh pr checks` reported:
 
 ```text
@@ -322,8 +323,8 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
 CodeRabbit review was submitted. Say so rather than treating green as clean. Current rule (Mason,
-2026-10-19): CodeRabbit reviews each PR once, when marked ready or opened non-draft, and only
-comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
+2026-10-19, narrowed 2026-10-21): CodeRabbit makes no automatic reviews, reviews only when an
+agent requests one, and only comments; the merge gates and GitHub's `protect-main` ruleset no longer require its approval. If no
 review has arrived by the time checks are green and Sol is clean, merge without it — never post
 `@coderabbitai review` to buy one. Exception (Mason, 2026-10-21): a money or Mason-named PR needs a
 clean CodeRabbit review of its current head, and the agent posts `@coderabbitai full review` once
