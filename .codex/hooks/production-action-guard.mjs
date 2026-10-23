@@ -1473,7 +1473,10 @@ function nativePatchPathProblem(filePath) {
   if (/[\x00-\x1f*?"<>|]/.test(filePath)) return "a path with a wildcard or control character";
   if (filePath.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return "a path with a stream or drive separator (`:`)";
   for (const segment of filePath.split(/[\\/]/)) {
-    if (segment === "." || segment === "..") continue;
+    if (segment === ".") continue;
+    // `..` is resolved lexically by Windows but after a link by POSIX, so after
+    // a linked directory it names different files on different systems.
+    if (segment === "..") return "a path with a `..` segment";
     if (/[. ]$/.test(segment)) return "a path segment ending in a dot or space";
     if (/~\d/.test(segment)) return "a path with an 8.3 short-name alias (`~1`)";
   }
@@ -1694,6 +1697,14 @@ export function evaluateProductionAction({
     if (reviewProofPathMentioned(landed) || protectedHarnessPathMentioned(landed)) {
       return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is a link to, or inside a link to, a protected harness or review-proof file (${landed}); it cannot be changed through a direct file-write tool.`);
     }
+    // A hard link is the same file under a second name that no path walk can
+    // see through, so an existing file with another name is refused.
+    try {
+      const stat = lstatSync(landed);
+      if (stat.isFile() && stat.nlink > 1) {
+        return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is an existing file with more than one hard link, so it may be another name for a protected file; it is refused (fail closed).`);
+      }
+    } catch { /* the destination does not exist yet: nothing to alias */ }
   }
 
   if (NODE_REPL_TOOL.test(name)) {

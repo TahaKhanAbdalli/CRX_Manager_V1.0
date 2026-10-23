@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -3440,11 +3440,14 @@ try {
     symlinkSync(path.join(linkRoot, ".codex", "hooks"), path.join(linkRoot, "src", "linked-dir"), "junction");
     symlinkSync(path.join(linkRoot, ".claude", "session-state"), path.join(linkRoot, "docs", "linked-state"), "junction");
     symlinkSync(path.join(linkRoot, ".codex", "hooks", "not-created-yet"), path.join(linkRoot, "src", "dangling-dir"), "junction");
+    linkSync(path.join(linkRoot, ".codex", "hooks", "production-action-guard.mjs"), path.join(linkRoot, "src", "guard-hardlink.mjs"));
     const linkCases = [
       ["file inside a linked directory", "src/linked-dir/production-action-guard.mjs", true],
       ["new file inside a linked proof directory", "docs/linked-state/claude-review-push.json", true],
       ["a junction whose target does not resolve", "src/dangling-dir/new-file.ts", true],
-      ["linked directory then a dot-dot back out", "src/linked-dir/../../src/plain.ts", false],
+      ["a dot-dot after a linked directory", "src/linked-dir/../hooks/production-action-guard.mjs", true],
+      ["a dot-dot anywhere", "src/../src/plain.ts", true],
+      ["a second name (hard link) for the guard file", "src/guard-hardlink.mjs", true],
       ["an ordinary existing file", "src/plain.ts", false],
       ["an ordinary new file", "src/brand-new.ts", false],
       ["a new file under a missing directory", "src/new-dir/deeper/brand-new.ts", false],
@@ -3461,23 +3464,20 @@ try {
         `native patch link check (${label})`,
       );
     }
-    let fileLink = true;
-    try {
-      symlinkSync(path.join(linkRoot, ".codex", "hooks", "production-action-guard.mjs"), path.join(linkRoot, "src", "notes.ts"), "file");
-      symlinkSync(path.join(linkRoot, ".codex", "hooks", "not-yet-created-guard.mjs"), path.join(linkRoot, "src", "dangling.ts"), "file");
-    } catch {
-      fileLink = false; // creating a file symlink needs a privilege some Windows accounts lack
-    }
-    if (fileLink) {
+    // File symlinks need a Windows privilege some accounts lack: each case runs only where its own link could be made.
+    for (const [label, target, name, patchHeader] of [
+      ["a symlink to the guard file", path.join(linkRoot, ".codex", "hooks", "production-action-guard.mjs"), "notes.ts", "*** Update File: src/notes.ts"],
+      ["a dangling symlink", path.join(linkRoot, ".codex", "hooks", "not-yet-created-guard.mjs"), "dangling.ts", "*** Update File: src/dangling.ts"],
+    ]) {
+      try {
+        symlinkSync(target, path.join(linkRoot, "src", name), "file");
+      } catch {
+        continue;
+      }
       assert.equal(
-        evaluateProductionAction({ toolName: "apply_patch", repoDir: linkRoot, eventCwd: linkRoot, toolInput: { command: nativePatch("*** Update File: src/notes.ts", "@@", "-a", "+b") } }).blocked,
+        evaluateProductionAction({ toolName: "apply_patch", repoDir: linkRoot, eventCwd: linkRoot, toolInput: { command: nativePatch(patchHeader, "@@", "-a", "+b") } }).blocked,
         true,
-        "a symlink to the guard file is denied",
-      );
-      assert.equal(
-        evaluateProductionAction({ toolName: "apply_patch", repoDir: linkRoot, eventCwd: linkRoot, toolInput: { command: nativePatch("*** Add File: src/dangling.ts", "+x") } }).blocked,
-        true,
-        "a dangling link cannot be resolved, so it is refused",
+        `${label} is denied`,
       );
     }
     assert.equal(
