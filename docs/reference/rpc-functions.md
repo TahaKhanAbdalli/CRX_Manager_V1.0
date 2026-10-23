@@ -571,7 +571,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Global Search
 - `global_search(p_query text, p_limit int DEFAULT 5)` → TABLE(entity_type text, id uuid, primary_text text, secondary_text text) — Searches customers, orders, invoices, deliveries, products with ILIKE. Used by Command Palette (Ctrl+K).
 
-### Product brands (`20261022086500_product_brands.sql`, NOT YET APPLIED)
+### Product brands (`20261022086500_product_brands.sql`, applied live 2026-10-23 as ledger `20261023193816`)
 
 - `upsert_product_brand(p_product_id, p_brand_name, p_epa_registration, p_manufacturer, p_is_currently_sourced, p_is_rup, p_signal_word, p_brand_id DEFAULT NULL, p_expected_row_version DEFAULT NULL, p_idempotency_key DEFAULT NULL)` → jsonb (the saved `product_brands` row). Admin only (`is_admin()`), checked before the receipt lookup. The retry key is required and bound to the caller and request (`check_idempotency_intent` + `_bind_replay_receipt_20261015`). Adding: no `p_brand_id`, no version. Editing: `p_brand_id` plus the `row_version` read, stale → `BRAND_CHANGED` (40001); a brand never moves to another product. One name per product, case-insensitive (`BRAND_NAME_TAKEN`). EPA number blank or the EPA lookup's shapes, `^[1-9][0-9]{0,5}-[1-9][0-9]{0,4}(-[1-9][0-9]{0,5})?$` (Section 3 or distributor, no zero-led part). Never deletes: retire with `p_is_currently_sourced = false`. Plan: `docs/plans/2026-10-22-product-brands-step1-PLAN.md`.
 
