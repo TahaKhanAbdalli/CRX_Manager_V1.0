@@ -6,6 +6,7 @@ import {
   PlayCircle, Lock, Zap, FileText, Mail, RotateCcw, MessageSquarePlus,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import HelpTip from '../components/ui/HelpTip';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -124,6 +125,10 @@ export default function DeliveryDetail() {
   const [photos, setPhotos] = useState<DeliveryPhoto[]>([]);
   const [remainders, setRemainders] = useState<DeliveryRemainder[]>([]);
   const [loading, setLoading] = useState(true);
+  // The delivery whose last load failed. The page then shows "could not be loaded"
+  // in place of a delivery with no lines (whose Edit could save over the real ones)
+  // or "Delivery not found" (To-Do 10.5).
+  const [loadFailedId, setLoadFailedId] = useState<string | null>(null);
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [inventoryWarnings, setInventoryWarnings] = useState<string[]>([]);
 
@@ -270,6 +275,18 @@ export default function DeliveryDetail() {
   // Sibling deliveries + quote context for transaction thread
   const [siblingDeliveries, setSiblingDeliveries] = useState<{ id: string; delivery_number: string }[]>([]);
   const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
+  // Load call order, so only the newest fetchDelivery for this route may publish.
+  const fetchSeqRef = useRef(0);
+
+  // The order context, invoices and remainders belong to the delivery they were read for:
+  // drop them on a route change so none shows under the next delivery while it loads.
+  useLayoutEffect(() => {
+    setRemainders([]);
+    setParentOrder(null);
+    setRelatedInvoices([]);
+    setSiblingDeliveries([]);
+    setParentQuote(null);
+  }, [id]);
 
   const isDriver = role === 'driver';
   const isAdmin = role === 'admin';
@@ -309,7 +326,15 @@ export default function DeliveryDetail() {
     setBilledOutsideCrxReason(null);
     // This page is reused across deliveries: a slow load for the previous one must
     // never publish its items, quantities or photos onto the delivery now on screen.
-    const isStale = () => signatureRouteIdRef.current !== id;
+    // Two loads of the SAME delivery can overlap (the first open and a refresh after an
+    // action): only the newest may publish, so an older failure cannot hide a newer page.
+    const seq = ++fetchSeqRef.current;
+    const isStale = () => signatureRouteIdRef.current !== id || seq !== fetchSeqRef.current;
+    const failLoad = (message: string) => {
+      toast('error', message);
+      setLoadFailedId(id ?? null);
+      setLoading(false);
+    };
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
@@ -318,8 +343,8 @@ export default function DeliveryDetail() {
     if (isStale()) return;
 
     if (delError) {
-      toast('error', sanitizeError(delError));
-      setLoading(false);
+      Sentry.captureException(delError, { extra: { context: 'load_delivery', deliveryId: id } });
+      failLoad(sanitizeError(delError));
       return;
     }
 
@@ -344,10 +369,11 @@ export default function DeliveryDetail() {
         ]);
         if (isStale()) return;
 
-        if (itemsRes.error) {
-          Sentry.captureException(itemsRes.error, { extra: { context: 'load_delivery_items', deliveryId: del.id } });
-          toast('error', 'Failed to load delivery items');
-          setLoading(false);
+        // No list, or no customer row read, is a failed load too: with no lines on screen
+        // Edit would offer every order line as new and save over the real ones.
+        if (itemsRes.error || !itemsRes.data || custRes.error) {
+          Sentry.captureException(itemsRes.error ?? custRes.error ?? new Error('delivery_items read returned no list'), { extra: { context: 'load_delivery_items', deliveryId: del.id } });
+          failLoad('Failed to load delivery items');
           return;
         }
 
@@ -398,6 +424,19 @@ export default function DeliveryDetail() {
               .maybeSingle(),
           ]);
           if (isStale()) return;
+          // A failed order read would show the delivery with no order, quote or thread.
+          if (orderRes.error) {
+            Sentry.captureException(orderRes.error, { extra: { context: 'load_delivery_order', deliveryId: del.id } });
+            failLoad('Failed to load this delivery\'s order');
+            return;
+          }
+          // Without its invoices the page would hide them and could offer
+          // "Create invoice" for a delivery that is already billed.
+          if (invRes.error || !invRes.data) {
+            Sentry.captureException(invRes.error ?? new Error('invoices read returned no list'), { extra: { context: 'load_delivery_invoices', deliveryId: del.id } });
+            failLoad('Failed to load this delivery\'s invoices');
+            return;
+          }
           if (externalBillingRes.error) {
             // Fail OPEN like the split-billing read above: keep the button; the server's
             // DELIVERY_BILLED_OUTSIDE_CRX guard still refuses, in plain English.
@@ -433,7 +472,7 @@ export default function DeliveryDetail() {
           }
           setParentOrder(orderRes.data as { id: string; order_number: string } | null);
           setRelatedInvoices(
-            (invRes.data || []).map((inv: Record<string, unknown>) => ({
+            invRes.data.map((inv: Record<string, unknown>) => ({
               id: inv.id as string,
               invoice_number: inv.invoice_number as string,
               invoice_date: inv.invoice_date as string,
@@ -465,12 +504,19 @@ export default function DeliveryDetail() {
               if (isStale()) return;
               setParentQuote(qData as { id: string; quote_number: string } | null);
             } else { setParentQuote(null); }
+          } else {
+            // The order read failed or found nothing: never keep another delivery's quote link.
+            setParentQuote(null);
           }
         } else {
-          // Orphan delivery: no order, so no split-billing state to carry over
-          // from a previously viewed delivery.
+          // Orphan delivery: no order, so no split-billing state, order, invoices,
+          // sibling deliveries or quote to carry over from a previously viewed delivery.
           setOrderNeedsSplitBilling(false);
           setBilledOutsideCrxReason(null);
+          setParentOrder(null);
+          setRelatedInvoices([]);
+          setSiblingDeliveries([]);
+          setParentQuote(null);
         }
 
         // Fetch remainders for completed deliveries
@@ -480,10 +526,14 @@ export default function DeliveryDetail() {
             .select('*, product:products(product_name)')
             .eq('original_delivery_id', id!);
           if (isStale()) return;
-          if (remError) {
-            toast('error', sanitizeError(remError));
+          // Without its remainders a completed delivery would show none (or another
+          // delivery's) under "Remaining Items", so a failed read fails the page.
+          if (remError || !remData) {
+            Sentry.captureException(remError ?? new Error('delivery_remainders read returned no list'), { extra: { context: 'load_delivery_remainders', deliveryId: del.id } });
+            failLoad('Failed to load this delivery\'s remaining items');
+            return;
           } else {
-            setRemainders(((remData || []) as Array<DeliveryRemainder & { product?: { product_name: string } | null }>).map((r) => ({
+            setRemainders((remData as Array<DeliveryRemainder & { product?: { product_name: string } | null }>).map((r) => ({
               ...r,
               product_name: r.product?.product_name || 'Unknown',
             })) as DeliveryRemainder[]);
@@ -507,9 +557,11 @@ export default function DeliveryDetail() {
         }
       } catch {
         if (isStale()) return;
-        toast('error', 'Failed to load delivery details. Please refresh.');
+        failLoad('Failed to load delivery details. Please try again.');
+        return;
       }
     }
+    setLoadFailedId(null);
     setLoading(false);
   }, [id, toast]);
 
@@ -1470,6 +1522,15 @@ export default function DeliveryDetail() {
           <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />
         ))}
       </div>
+    );
+  }
+
+  if (loadFailedId === id) {
+    return (
+      <LoadFailedState
+        title="This delivery could not be loaded"
+        onRetry={() => { setLoading(true); fetchDelivery(); }}
+      />
     );
   }
 
