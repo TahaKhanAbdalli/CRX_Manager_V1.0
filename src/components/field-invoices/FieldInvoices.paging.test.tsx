@@ -48,6 +48,7 @@ function fieldInvoice(i: number, status: string) {
   const n = String(i).padStart(4, '0');
   return {
     id: `fa-${status}-${n}`,
+    invoice_post_version: `v1:fa-${status}-${n}`,
     invoice_number: `FA-${n}`,
     invoice_type: 'field_application',
     status,

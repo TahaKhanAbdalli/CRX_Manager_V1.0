@@ -157,7 +157,9 @@ BEGIN
   END IF;
   SELECT invoice_group_id INTO v_group
     FROM public.invoices WHERE order_id = v_order AND invoice_group_id IS NOT NULL LIMIT 1;
-  PERFORM public.post_invoice_group(v_group, v_admin, 'e2e-split-return-post-' || v_suffix);
+  PERFORM public.post_invoice_group(v_group, v_admin,
+    (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id)) FROM public.invoices i WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL),
+    'e2e-split-return-post-' || v_suffix);
   SELECT i.id INTO v_b_invoice
     FROM public.invoices i WHERE i.invoice_group_id = v_group AND i.customer_id = v_b;
   SELECT ii.id INTO v_b_line1_item
@@ -557,7 +559,9 @@ BEGIN
   END IF;
   SELECT invoice_group_id INTO v_group3
     FROM public.invoices WHERE order_id = v_order3 AND invoice_group_id IS NOT NULL LIMIT 1;
-  PERFORM public.post_invoice_group(v_group3, v_admin, 'e2e-split-return-post-3-' || v_suffix);
+  PERFORM public.post_invoice_group(v_group3, v_admin,
+    (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id)) FROM public.invoices i WHERE i.invoice_group_id = v_group3 AND i.deleted_at IS NULL),
+    'e2e-split-return-post-3-' || v_suffix);
   SELECT ii.id INTO v_b_line4_item
     FROM public.invoice_items ii JOIN public.invoices i ON i.id = ii.invoice_id
    WHERE i.invoice_group_id = v_group3 AND i.customer_id = v_b AND i.status = 'posted'

@@ -227,7 +227,7 @@ BEGIN
   END IF;
 
   -- =================================================== 5) post_invoice
-  PERFORM post_invoice(v_invoice, '[SMOKE] pi-' || v_sfx);
+  PERFORM post_invoice(v_invoice, public._invoice_post_version(v_invoice), '[SMOKE] pi-' || v_sfx);
   SELECT * INTO v_inv FROM invoices WHERE id = v_invoice;
   IF v_inv.status <> 'posted' THEN RAISE EXCEPTION 'FAIL: not posted (status %)', v_inv.status; END IF;
   IF v_inv.posted_by <> v_admin OR v_inv.posted_at IS NULL THEN

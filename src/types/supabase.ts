@@ -4813,6 +4813,7 @@ export type Database = {
           invoice_date: string
           invoice_group_id: string | null
           invoice_number: string
+          invoice_post_version: string | null
           invoice_type: string
           is_quick_delivery: boolean | null
           job_id: string | null
@@ -12347,7 +12348,7 @@ export type Database = {
         Returns: number
       }
       batch_post_invoices: {
-        Args: { p_idempotency_key?: string; p_invoice_ids: string[] }
+        Args: { p_idempotency_key?: string; p_invoices: Json }
         Returns: Json
       }
       batch_reject_blend_tickets: {
@@ -13874,6 +13875,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      invoice_post_version: {
+        Args: { "": Database["public"]["Tables"]["invoices"]["Row"] }
+        Returns: string
+      }
       is_active_profile: { Args: never; Returns: boolean }
       is_admin: { Args: never; Returns: boolean }
       is_applicator: { Args: never; Returns: boolean }
@@ -14303,11 +14308,16 @@ export type Database = {
         Returns: Json
       }
       post_invoice: {
-        Args: { p_idempotency_key?: string; p_invoice_id: string }
+        Args: {
+          p_expected_version: string
+          p_idempotency_key?: string
+          p_invoice_id: string
+        }
         Returns: undefined
       }
       post_invoice_group: {
         Args: {
+          p_expected_versions: Json
           p_idempotency_key?: string
           p_invoice_group_id: string
           p_performed_by: string

@@ -39,6 +39,8 @@ import FieldInvoices from '../../pages/FieldInvoices';
 function fieldInvoice(overrides: Record<string, unknown>) {
   return {
     id: overrides.invoice_number,
+    // Post All sends the version read with each row (migration 20261022022000).
+    invoice_post_version: `v1:${String(overrides.invoice_number)}`,
     invoice_type: 'field_application',
     customer_id: 'cust-1',
     customer: { farm_name: 'Test Farm' },
@@ -137,7 +139,7 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     fireEvent.click(await screen.findByRole('button', { name: 'Post 1 invoice(s)' }));
 
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
-    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'FA-NEW-DRAFT' });
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'FA-NEW-DRAFT', p_expected_version: 'v1:FA-NEW-DRAFT' });
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(0);
   });
 

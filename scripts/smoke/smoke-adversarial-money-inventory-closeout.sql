@@ -114,8 +114,10 @@ BEGIN
   END;
 
   BEGIN
+    -- Since 20261022022000 the own-name check runs before the version check, so any version works here.
     PERFORM public.post_invoice(
       v_other_invoice,
+      'v1:smoke',
       'smk-post-other-' || v_suffix
     );
     RAISE EXCEPTION 'SMOKE_FAIL: sales rep posted an invoice not under their own name';

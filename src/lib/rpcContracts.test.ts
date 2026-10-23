@@ -2438,12 +2438,14 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('batch_post_invoices binds replay and forwards a deterministic key to every child post', () => {
     const body = latestFunctionBody('batch_post_invoices');
     expect(body).not.toBeNull();
-    expect(body).toContain("v_contract CONSTANT text := 'batch_post_invoices_v2'");
+    // v3 (20261022022000): each row carries the invoice version the screen loaded, the request
+    // binding covers them, and every child post forwards it.
+    expect(body).toContain("v_contract CONSTANT text := 'batch_post_invoices_v3'");
     expect(body).toContain('public._claim_bound_lifecycle_idempotency(');
     expect(body).toContain('public._bind_completed_lifecycle_idempotency(');
     expect(body).toContain("'actor_id', v_actor");
-    expect(body).toContain("'invoice_ids', to_jsonb(p_invoice_ids)");
-    expect(body).toContain("p_idempotency_key || ':post:' || v_index::text");
+    expect(body).toContain("'invoices', p_invoices");
+    expect(body).toContain("v_id, v_item ->> 'expected_version', 'batch_post_invoices:' || p_idempotency_key || ':post:' || v_index::text");
     expect(body).not.toMatch(/post_invoice\s*\(\s*v_id\s*\)/);
     expect(IDEMPOTENCY_BODY_EXEMPT.batch_post_invoices).toBe('delegated');
   });
@@ -3013,6 +3015,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _lock_invoice_post_inputs:
+    'internal row-lock helper of post_invoice / post_invoice_group (20261022022000); takes FOR UPDATE/FOR SHARE locks only, writes nothing, and every application-role EXECUTE is revoked; the required-key posting wrappers own idempotency',
   _close_undelivered_order_remainder_20260718:
     'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
   _post_deleted_delivery_recovery_invoice_20260719:

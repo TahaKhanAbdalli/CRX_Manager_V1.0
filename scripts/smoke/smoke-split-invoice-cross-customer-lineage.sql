@@ -185,7 +185,9 @@ BEGIN
 
   -- 2. Posting the group updates each draft; the provenance branch admits B's, C's and Y's.
   BEGIN
-    SELECT public.post_invoice_group(v_group, v_admin, 'e2e-split-lineage-post-' || v_suffix) INTO v_res;
+    SELECT public.post_invoice_group(v_group, v_admin,
+    (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id)) FROM public.invoices i WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL),
+    'e2e-split-lineage-post-' || v_suffix) INTO v_res;
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     RAISE EXCEPTION 'SMOKE_FAIL: posting the cross-customer split group was refused: %', v_err;

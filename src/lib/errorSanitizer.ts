@@ -265,6 +265,22 @@ export function sanitizeError(error: unknown): string {
       ? 'Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead'
       : 'Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice';
   }
+  // Reviewed-version binding (20261022022000): the saved invoice changed after the screen loaded it.
+  // The server sentence names the invoice by number and says what to do, so it is kept.
+  const changedSinceLoaded = message.match(/^INVOICE_CHANGED_SINCE_LOADED:\s*(.+)$/s);
+  if (changedSinceLoaded) return `Nothing was posted. ${changedSinceLoaded[1].trim()}`;
+  if (/^INVOICE_CHANGED_SINCE_LOADED$/.test(message)) {
+    return 'Nothing was posted. This invoice was changed after this screen loaded it. Reload it, check it, then post again.';
+  }
+  if (/^INVOICE_POSTED_LOCKED(?::|$)/.test(message)) {
+    return 'This invoice was posted, so its lines, billing shares and field locations cannot change. Unpost it first, then edit.';
+  }
+  if (/^INVOICE_GROUP_BUSY(?::|$)/.test(message)) {
+    return 'This split invoice group is being posted or saved right now. Nothing was changed. Try again in a moment.';
+  }
+  if (/^INVOICE_VERSION_REQUIRED(?::|$)/.test(message)) {
+    return 'Nothing was posted. This screen is out of date. Reload the page, then post again.';
+  }
   if (/^ORDER_DELETED_(STATUS|LINES|DELIVERIES)_LOCKED(?::|$)/.test(message)) {
     return 'Nothing was changed. This order has been deleted, so it cannot be changed or restored';
   }

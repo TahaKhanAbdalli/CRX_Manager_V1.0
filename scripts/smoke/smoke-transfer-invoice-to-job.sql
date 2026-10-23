@@ -104,7 +104,7 @@ BEGIN
 
   -- GUARD: a POSTED invoice cannot be reversed.
   -- Post the freshly re-transferred invoice, then attempt the reverse -> honest error.
-  PERFORM post_invoice(v_inv2, '[SMOKE] rt-post-'||v_sfx);
+  PERFORM post_invoice(v_inv2, public._invoice_post_version(v_inv2), '[SMOKE] rt-post-'||v_sfx);
   SELECT status INTO v_invR.status FROM invoices WHERE id=v_inv2;
   IF v_invR.status<>'posted' THEN RAISE EXCEPTION 'SMOKE_FAIL: post_invoice did not post (%)', v_invR.status; END IF;
   BEGIN

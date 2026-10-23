@@ -74,7 +74,8 @@ import {
   type ProofDraft,
 } from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, withAdminCost, withAdminCosts } from '../lib/costFields';
+import { requireGroupVersions, requirePostVersion } from '../lib/invoicePostVersion';
 import {
   carryoverRowsFromRecords,
   realApplicatorName,
@@ -247,6 +248,8 @@ export default function FieldApplicationInvoice() {
   // step in performSave).
   const billingKeysRef = useRef<Record<string, UnansweredKey>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  // invoice_post_version of this invoice and each split sibling, as the last load read them.
+  const postVersionsRef = useRef<Record<string, string | null>>({});
   // Keep receipt ownership scoped by invoice id even though the route wrapper now
   // remounts per record. Reset only after assertRpcResult confirms success.
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
@@ -1018,9 +1021,12 @@ export default function FieldApplicationInvoice() {
       }
     }
 
+    // invoice_post_version comes in the same read as the row, before the lines and siblings, so
+    // Post binds what this load showed (a save landing mid-load makes the post refuse).
+    postVersionsRef.current = {};
     const { data: rawInv, error } = await supabase
       .from('invoices')
-      .select(INVOICE_COLUMNS)
+      .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
       .eq('id', id)
       .single();
 
@@ -1222,21 +1228,29 @@ export default function FieldApplicationInvoice() {
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
+    const loadedVersions: Record<string, string | null> = { [id]: (rawInv as { invoice_post_version?: string | null }).invoice_post_version ?? null };
 
     // Helper: cents → typed dollars string for the Discount Earned editor (blank at 0).
     const centsToDollars = (cents: number | null | undefined) =>
       cents && cents > 0 ? (cents / 100).toFixed(2) : '';
 
     // If grouped, load sibling invoices for the banner
+    let sibsError: unknown = null;
     if (groupId) {
-      const { data: sibs } = await supabase
+      const { data: sibs, error: sibsReadError } = await supabase
         .from('invoices')
-        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (!isCurrentLoad()) return;
+      // A failed sibling read leaves the group map incomplete, so Post stays unauthorized below.
+      sibsError = sibsReadError;
       if (sibs) {
+        // Post sends every member this load saw; this invoice keeps the version read with its row.
+        for (const s of sibs as Array<{ id: string; invoice_post_version?: string | null }>) {
+          if (s.id !== id) loadedVersions[s.id] = s.invoice_post_version ?? null;
+        }
         setSiblings(
           (sibs as Array<Record<string, unknown>>).map((s) => ({
             id: s.id as string,
@@ -1272,6 +1286,8 @@ export default function FieldApplicationInvoice() {
         },
       });
     }
+    // Post is authorized only once every read the version covers (locations, lines, shares) has
+    // succeeded below; until then the versions stay empty and Post asks for a reload.
 
     // Locations: when grouped, locations are keyed by invoice_group_id;
     // otherwise by invoice_id.
@@ -1279,7 +1295,7 @@ export default function FieldApplicationInvoice() {
       .from('field_app_locations')
       .select('*, field:fields!field_app_locations_field_id_fkey(field_name, crop_type, total_acres, measured_acres, override_acres, customer:customers!fields_customer_id_fkey(farm_name))')
       .order('sort_order');
-    const { data: locs } = groupId
+    const { data: locs, error: locsError } = groupId
       ? await locQuery.eq('invoice_group_id', groupId)
       : await locQuery.eq('invoice_id', id);
 
@@ -1306,7 +1322,7 @@ export default function FieldApplicationInvoice() {
       );
     }
 
-    const { data: rawItems } = await supabase
+    const { data: rawItems, error: itemsError } = await supabase
       .from('invoice_items')
       .select(INVOICE_ITEM_COLUMNS)
       .eq('invoice_id', id)
@@ -1390,7 +1406,7 @@ export default function FieldApplicationInvoice() {
       );
     }
 
-    const { data: shareData } = await supabase
+    const { data: shareData, error: sharesError } = await supabase
       .from('invoice_shares')
       .select('customer_id, customer_name, split_percentage, acres, amount_cents, is_primary')
       .eq('invoice_id', id)
@@ -1444,6 +1460,12 @@ export default function FieldApplicationInvoice() {
     } else {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
+    }
+    if (sibsError || locsError || itemsError || sharesError) {
+      Sentry.captureException(sibsError || locsError || itemsError || sharesError, { tags: { context: 'field_app_invoice_load' } });
+      toast('error', 'Some invoice details did not load. Reload the page before posting.');
+    } else {
+      postVersionsRef.current = loadedVersions;
     }
     setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
   }, [id, toast, navigate, isAdmin]);
@@ -2212,10 +2234,13 @@ export default function FieldApplicationInvoice() {
     try {
       const key = postIdem.getKey();
       // Group-aware: route through post_invoice_group when a group exists, otherwise post_invoice.
+      // Both send the versions this page loaded; the server refuses if the saved invoice, a
+      // sibling, or the group's membership changed since.
       if (invoiceGroupId) {
         const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoiceGroupId,
           p_performed_by: profile.id,
+          p_expected_versions: requireGroupVersions(postVersionsRef.current),
           p_idempotency_key: key,
         });
         if (error) throw error;
@@ -2224,6 +2249,7 @@ export default function FieldApplicationInvoice() {
         // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
         await supabase.rpc('post_invoice', {
           p_invoice_id: id,
+          p_expected_version: requirePostVersion(postVersionsRef.current[id]),
           p_idempotency_key: key,
         }).throwOnError();
       }
@@ -2233,6 +2259,11 @@ export default function FieldApplicationInvoice() {
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
       toast('error', `Post failed: ${fieldAppError(err)}`);
+      // Refused because the saved invoice or its group changed: reload the form and the versions
+      // (Post needs a clean form, so no unsaved edit is lost), so the next Post sends what is shown.
+      if (hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) {
+        await fetchInvoice().catch(() => undefined);
+      }
     } finally {
       setPosting(false);
     }

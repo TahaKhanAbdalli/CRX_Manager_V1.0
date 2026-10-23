@@ -8,7 +8,7 @@ import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
@@ -24,6 +24,8 @@ import FieldSearchPicker, { type FieldSearchResult } from '../components/fields/
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
 import type { ProductSearchResult, UnitConversion } from '../types';
+import { requireGroupVersions } from '../lib/invoicePostVersion';
+import { groupVersionsFromRows } from '../lib/invoiceBatchPosting';
 
 /**
  * Per-line split-billing EDITOR (flag-gated, OFF by default).
@@ -184,6 +186,8 @@ export default function FieldAppSplitInvoiceEditor() {
 
   const saveIdem = useIdempotencyKey('save_field_app_split_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  // Each child invoice's group and invoice_post_version, as the last result readback read them.
+  const postVersionsRef = useRef<Array<{ id: string; invoice_group_id: string | null; invoice_post_version: string | null }>>([]);
   const resetPostIdemKey = postIdem.resetKey; // stable useCallback identity — safe as an effect dep
 
   // Flag gate: null = still reading, false = OFF (render notice), true = ON (render editor).
@@ -608,10 +612,15 @@ export default function FieldAppSplitInvoiceEditor() {
     // `stale()` checkpoint below instead of overwriting a newer set's result card.
     activeLoadSetIdRef.current = setId;
     const stale = () => activeLoadSetIdRef.current !== setId;
+    // Post stays unauthorized while this readback runs: the versions are kept local and published
+    // only once the invoices, items and shares they cover have all been read and shown.
+    postVersionsRef.current = [];
     // 1) Child invoices for this billing set (authoritative totals + send disposition).
     const { data: invRows, error: invErr } = await supabaseUntyped
       .from('invoices')
-      .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status')
+      // invoice_post_version: Post sends these, read with the rows the review card shows, and the
+      // server refuses if any member or the group's membership changed since.
+      .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status, invoice_group_id, invoice_post_version')
       .eq('field_app_billing_set_id', setId)
       // Codex round-6/7 P1/P2: the review card + totals must match EXACTLY what post_invoice_group will
       // act on (it operates on the active invoice_group). Exclude soft-deleted children AND children
@@ -632,6 +641,8 @@ export default function FieldAppSplitInvoiceEditor() {
       send_disposition: ((r.send_disposition as string) === 'suppressed_zero_total' ? 'suppressed_zero_total' : 'normal') as ResultInvoice['send_disposition'],
       status: (r.status as string) || 'draft',
     }));
+    const loadedVersions = ((invRows as Array<{ id: string; invoice_group_id: string | null; invoice_post_version?: string | null }> | null) ?? [])
+      .map((r) => ({ id: r.id, invoice_group_id: r.invoice_group_id, invoice_post_version: r.invoice_post_version ?? null }));
     setResultInvoices(invoices);
     // "Posted" means every child is in a COMMITTED status — NOT merely "not draft" (Codex round-3
     // P2). An unposted group has children in status 'unposted'; treating that as posted would label
@@ -649,7 +660,7 @@ export default function FieldAppSplitInvoiceEditor() {
     }
 
     const invoiceIds = invoices.map((i) => i.id);
-    if (invoiceIds.length === 0) { if (stale()) return false; setResultShares([]); return true; }
+    if (invoiceIds.length === 0) { if (stale()) return false; setResultShares([]); postVersionsRef.current = loadedVersions; return true; }
 
     // 2) Invoice items (invoice_id + description) for those invoices.
     const { data: itemRows, error: itemErr } = await supabaseUntyped
@@ -665,7 +676,7 @@ export default function FieldAppSplitInvoiceEditor() {
     if (stale()) return false;
     // 3) Per-line shares, joined to their item for invoice_id + description.
     const itemIds = Array.from(itemMap.keys());
-    if (itemIds.length === 0) { setResultShares([]); return true; }
+    if (itemIds.length === 0) { setResultShares([]); postVersionsRef.current = loadedVersions; return true; }
     const { data: shareRows, error: shareErr } = await supabaseUntyped
       .from('invoice_line_shares')
       .select('invoice_item_id, customer_id, unit_price_cents, amount_cents')
@@ -683,6 +694,7 @@ export default function FieldAppSplitInvoiceEditor() {
     });
     if (stale()) return false;
     setResultShares(shares);
+    postVersionsRef.current = loadedVersions;
     return true;
   }, [customerNames]);
 
@@ -792,6 +804,8 @@ export default function FieldAppSplitInvoiceEditor() {
       const { data, error } = await supabaseUntyped.rpc('post_invoice_group', {
         p_invoice_group_id: invoiceGroupId,
         p_performed_by: profile.id,
+        // Only the members of the group being posted, exactly the set the server compares against.
+        p_expected_versions: requireGroupVersions(groupVersionsFromRows(invoiceGroupId, postVersionsRef.current)),
         p_idempotency_key: postIdem.getKey(),
       });
       if (error) throw error;
@@ -811,6 +825,14 @@ export default function FieldAppSplitInvoiceEditor() {
       }
     } catch (err) {
       toast('error', splitBackendError(err));
+      // A refusal because the group changed: re-read the results and versions, so the next Post is
+      // bound to what is then on screen. Best-effort; the toast above already reported the refusal.
+      // If that re-read does not finish, the versions are cleared so Post refuses ("reload")
+      // rather than posting fresh versions whose lines were never fully shown.
+      if (billingSetId && hasRpcCode(err, RpcErrorCodes.INVOICE_CHANGED_SINCE_LOADED)) {
+        const reloaded = await loadResults(billingSetId).catch(() => false);
+        if (!reloaded) postVersionsRef.current = [];
+      }
     } finally {
       setPosting(false);
     }

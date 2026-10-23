@@ -717,6 +717,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
               application_service_id: null,
               invoice_group_id: null,
               total_amount_cents: 100000,
+              invoice_post_version: 'v1:inv-solo',
             },
           ],
         },
@@ -794,6 +795,9 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
       expect(calls).toContain('post_invoice');
       expect(calls).not.toContain('post_invoice_group');
     });
+    // The post is bound to the version this page loaded.
+    const postCall = mockRpc.mock.calls.find((c) => c[0] === 'post_invoice')!;
+    expect(postCall[1]).toMatchObject({ p_invoice_id: 'inv-solo', p_expected_version: 'v1:inv-solo' });
   });
 
   it('does not render the sibling banner on a single (ungrouped) invoice', async () => {
@@ -1057,6 +1061,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       application_service_id: 'svc-1',
       invoice_group_id: 'grp-xyz',
       total_amount_cents: 100000,
+      invoice_post_version: 'v1:header',
     };
     const siblings = siblingStatuses.map((s, i) => ({
       id: `inv-grp-${i + 1}`,
@@ -1065,6 +1070,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       customer: { farm_name: `Farm ${i + 1}` },
       total_amount_cents: 50000,
       status: s,
+      invoice_post_version: `v1:sibling-${i + 1}`,
     }));
     mockFrom.mockImplementation(
       makeFromMock({
@@ -1104,8 +1110,32 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     expect(groupCall[1]).toMatchObject({
       p_invoice_group_id: 'grp-xyz',
       p_performed_by: 'user-1',
+      // This invoice keeps the version read with its own row; each sibling sends the one the
+      // sibling read returned.
+      p_expected_versions: { 'inv-grp-1': 'v1:header', 'inv-grp-2': 'v1:sibling-2' },
       p_idempotency_key: 'test-idem-key',
     });
+  });
+
+  it('keeps Post unauthorized when the sibling read fails', async () => {
+    setupGroup(['draft', 'draft']);
+    const base = mockFrom.getMockImplementation()!;
+    const failing = makeFromMock({ invoices: { data: null, error: { message: 'sibling read failed' } } });
+    // Only the sibling list (the read that joins the customer name) fails; the invoice row loads.
+    mockFrom.mockImplementation((table: string) => {
+      const chain = base(table);
+      if (table !== 'invoices') return chain;
+      const select = chain.select;
+      chain.select = vi.fn((cols: string) => (cols.includes('customer:customers') ? failing('invoices') : select(cols)));
+      return chain;
+    });
+    await renderPage();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some invoice details did not load. Reload the page before posting.'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Post Group/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Post Group$/i }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('could not read the invoice version')));
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('post_invoice_group');
   });
 
   it('locks edit (no Save / Post / Delete buttons) when any sibling is posted', async () => {

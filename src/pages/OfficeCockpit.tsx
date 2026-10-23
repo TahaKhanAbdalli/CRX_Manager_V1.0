@@ -74,6 +74,7 @@ import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages, type DeliveryInvoiceCoverage } from '../lib/deliveryInvoiceCoverage';
+import { requirePostVersion } from '../lib/invoicePostVersion';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,6 +97,8 @@ interface PostableInvoiceRow {
   job_id: string | null;
   invoice_group_id: string | null;
   pricing_pending: boolean;
+  /** Version loaded with the row; "Post all clean" refuses an invoice changed since. */
+  invoice_post_version: string | null;
 }
 
 interface ChemicalDraftRow {
@@ -244,6 +247,7 @@ type RawPostableInvoice = {
   job_id: string | null;
   invoice_group_id: string | null;
   pricing_pending: boolean | null;
+  invoice_post_version: string | null;
   customer: { farm_name: string } | null;
 };
 
@@ -555,7 +559,7 @@ export default function OfficeCockpit() {
       // (b) Draft/unposted field-app invoices (§4 auto-populates these)
       supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, customer:customers(farm_name)')
+        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, invoice_post_version, customer:customers(farm_name)')
         .in('status', ['draft', 'unposted'])
         .eq('invoice_type', 'field_application')
         .is('deleted_at', null)
@@ -793,6 +797,7 @@ export default function OfficeCockpit() {
       job_id: r.job_id,
       invoice_group_id: r.invoice_group_id,
       pricing_pending: r.pricing_pending === true,
+      invoice_post_version: r.invoice_post_version,
     }));
 
     const chemicalDrafts: ChemicalDraftRow[] = ((chemicalDraftsRes.data || []) as RawChemicalDraft[]).map((r) => ({
@@ -1060,10 +1065,12 @@ export default function OfficeCockpit() {
             if (!postKeysRef.current[inv.id]) {
               postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
             }
-            // post_invoice RETURNS void — .throwOnError(), no result to assert.
+            // post_invoice RETURNS void — .throwOnError(), no result to assert. It refuses an
+            // invoice changed since this page loaded it (one row at a time, with a reload message).
             await supabase
               .rpc('post_invoice', {
                 p_invoice_id: inv.id,
+                p_expected_version: requirePostVersion(inv.invoice_post_version),
                 p_idempotency_key: postKeysRef.current[inv.id],
               })
               .throwOnError();
