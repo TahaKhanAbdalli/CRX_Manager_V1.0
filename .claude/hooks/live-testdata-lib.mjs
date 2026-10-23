@@ -331,19 +331,6 @@ const schemaBefore = (word) => new RegExp(`(?:^|[^${IDENT_CHAR}."])(?:${caseless
 const AUTH_SCHEMA_BEFORE_RE = schemaBefore("auth");
 const PG_CATALOG_BEFORE_RE = schemaBefore("pg_catalog");
 
-// A called function whose name has a delete/cancel/void/reverse-type word as a
-// whole underscore-separated part (cancel_order, batch_void, delete_invoices,
-// reverse_write_off). A match inside a string literal also counts: refusing is
-// the safe direction.
-const DESTRUCTIVE_FN_CALL_RE = /\b([a-z_][a-z0-9_]*)\s*\(/gi;
-const DESTRUCTIVE_FN_WORD_RE = /(?:^|_)(?:delete|void|cancel|remove|purge|reverse|refund|undo|wipe|drop|truncate)(?:_|$)/i;
-export function findDestructiveFunctionCall(sqlText) {
-  for (const m of String(sqlText || "").matchAll(DESTRUCTIVE_FN_CALL_RE)) {
-    if (DESTRUCTIVE_FN_WORD_RE.test(m[1])) return m[1];
-  }
-  return null;
-}
-
 export function findNonReadFunctionCall(sqlText) {
   // Comments go first (quote-aware, each becomes one space): `evil./*x*/fn(1)`
   // hid its schema and `fn/**/(1)` hid the call itself (Codex connector, PR #882),
@@ -658,10 +645,10 @@ export function isKnownSweepQuery(query) {
 
 // realDataOk: Mason authorized a real write (a fresh REAL-DATA-OK marker,
 // checked by the guard). It relaxes ONLY ordinary writes — real inserts and
-// updates, money-column updates and RPC calls — and classification keeps going,
-// so a later DELETE or TRUNCATE in the same batch is still caught. Audit-log
-// writes, TRUNCATE, DDL/GRANT, sequence changes, deletes and cancels/voids stay
-// blocked regardless (2026-10-23: a stale marker left from a smoke run had
+// updates and money-column updates — and classification keeps going, so a
+// later DELETE or TRUNCATE in the same batch is still caught. Audit-log writes,
+// TRUNCATE, DDL/GRANT, sequence changes, RPC calls, deletes and cancels/voids
+// stay blocked regardless (2026-10-23: a stale marker left from a smoke run had
 // switched every rule off in 15 checkouts).
 const REAL_WRITE_OVERRIDE_HINT = "If Mason explicitly asked for a REAL write in this conversation, record it in .claude/session-state/REAL-DATA-OK with the current UTC time as the first line (e.g. `2026-10-23T21:00:00Z Mason OK: <what he approved>`); it lapses after 2 hours. Delete it when done.";
 
@@ -729,9 +716,12 @@ function classifySqlInner(query, realDataOk) {
   //     PR #352): setval/nextval mutate live sequence state (e.g. invoice
   //     numbering), and the app's mutating RPCs can be invoked via a plain
   //     SELECT fn(...). Neither is a read. No [E2E] exemption — these change
-  //     shared state regardless of marker. A fresh REAL-DATA-OK relaxes the RPC
-  //     check only; a sequence change is never undone by a ROLLBACK, so it has
-  //     no override. currval/lastval remain allowed (true reads).
+  //     shared state regardless of marker, and REAL-DATA-OK does not relax them:
+  //     the delete/cancel rules cannot see inside a function body, and a list
+  //     of "destructive" names never converges (Luna 2026-10-23: a quoted
+  //     "void_invoice" and destroy_customer slipped one). A real RPC call goes
+  //     through the app. A sequence change is never undone by a ROLLBACK.
+  //     currval/lastval remain allowed (true reads).
   if (/\b(?:setval|nextval)\s*\(/i.test(t)) {
     return {
       block: true,
@@ -739,34 +729,17 @@ function classifySqlInner(query, realDataOk) {
       reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead; a real sequence change belongs in a reviewed migration.",
     };
   }
-  if (!realDataOk) {
-    const rpc = findNonReadFunctionCall(t);
-    if (rpc) {
-      return {
-        block: true,
-        kind: "rpc-via-select",
-        reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app, or get Mason's explicit REAL-DATA-OK. (Read-prefixed functions like get_/check_/list_ and SQL builtins stay allowed.)`,
-      };
-    }
+  const rpc = findNonReadFunctionCall(t);
+  if (rpc) {
+    return {
+      block: true,
+      kind: "rpc-via-select",
+      reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app; REAL-DATA-OK does not cover RPC calls. (Read-prefixed functions like get_/check_/list_ and SQL builtins stay allowed.)`,
+    };
   }
 
   // Comments removed, so `-- [E2E]` or `/* [E2E] */` cannot exempt anything below.
   const code = stripCommentsQuoteAware(t);
-
-  // 3c. A fresh REAL-DATA-OK relaxes RPC calls, but never one whose name says it
-  //     deletes, cancels, voids or reverses (cancel_order, void_invoice,
-  //     delete_invoices, reverse_write_off): the delete/cancel rules below cannot
-  //     see inside a function body (Luna, 2026-10-23).
-  if (realDataOk) {
-    const destructive = findDestructiveFunctionCall(code);
-    if (destructive) {
-      return {
-        block: true,
-        kind: "destructive-rpc",
-        reason: `This calls "${destructive}()", whose name says it deletes, cancels, voids or reverses records. REAL-DATA-OK does not cover deletes, cancels or voids; do it in the app or surface the IDs to Mason.`,
-      };
-    }
-  }
 
   let m;
 

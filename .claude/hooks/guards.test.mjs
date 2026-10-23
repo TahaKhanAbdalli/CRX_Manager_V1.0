@@ -423,7 +423,7 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
   fs.writeFileSync(marker, `${hoursAgo(0.1)} Mason OK: real customer fix\n`);
   eq(sql("INSERT INTO customers (name) VALUES ('Real Farm')").trim(), "", "fresh marker: real insert allowed");
   eq(sql("UPDATE customers SET phone = '555-0100' WHERE id = 1").trim(), "", "fresh marker: real update allowed");
-  eq(sql("SELECT save_customer('{}'::jsonb)").trim(), "", "fresh marker: RPC call allowed");
+  ok(sql("SELECT save_customer('{}'::jsonb)").includes("deny"), "fresh marker: RPC call still denied");
   ok(sql("TRUNCATE customers").includes("deny"), "fresh marker: TRUNCATE still denied");
   ok(sql("DROP TABLE customers").includes("deny"), "fresh marker: DDL still denied");
   ok(sql("GRANT ALL ON customers TO anon").includes("deny"), "fresh marker: GRANT still denied");
@@ -443,7 +443,8 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
     ok(res.stdout.includes("deny"), "unreadable execute_sql event is denied");
   }
   for (const call of ["SELECT cancel_order(123)", "SELECT void_invoice(1)", "SELECT delete_invoices(ARRAY[1])",
-    "SELECT public.batch_void('{}')", "SELECT reverse_write_off(5)"]) {
+    "SELECT public.batch_void('{}')", "SELECT reverse_write_off(5)", 'SELECT public."void_invoice"(1)',
+    "SELECT public.destroy_customer(1)"]) {
     ok(sql(call).includes("deny"), `fresh marker: destructive RPC still denied (${call})`);
   }
   // [E2E] is judged per statement, and a comment never carries it (Luna round 2).

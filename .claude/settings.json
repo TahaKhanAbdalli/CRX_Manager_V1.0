@@ -319,7 +319,16 @@
       "Bash(type .env.production)",
       "Bash(cat ./.env)",
       "Bash(cat ./.env.local)",
-      "Bash(cat ./.env.production)"
+      "Bash(cat ./.env.production)",
+      "Bash(cat .env.development)",
+      "Bash(cat .env.staging)",
+      "Bash(cat .env.test)",
+      "Bash(type .env.development)",
+      "Bash(type .env.staging)",
+      "Bash(type .env.test)",
+      "Bash(Get-Content .env.development)",
+      "Bash(Get-Content .env.staging)",
+      "Bash(Get-Content .env.test)"
     ]
   },
   "hooks": {

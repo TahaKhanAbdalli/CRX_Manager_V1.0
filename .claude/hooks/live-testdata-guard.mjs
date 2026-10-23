@@ -7,7 +7,7 @@
 //
 // Override: a REAL-DATA-OK marker in .claude/session-state/ (Claude writes it
 // only when Mason explicitly authorizes a real write) relaxes ONLY ordinary
-// writes — real inserts/updates, money-column updates and RPC calls — and only
+// writes — real inserts/updates and money-column updates, not RPC calls — and only
 // while it is fresh: its FIRST LINE must be the UTC time it was written, e.g.
 // `2026-10-23T21:00:00Z Mason OK: <what he approved>`, no older than
 // REAL_DATA_OK_MAX_AGE_MS. The time is read from the content, not the file's

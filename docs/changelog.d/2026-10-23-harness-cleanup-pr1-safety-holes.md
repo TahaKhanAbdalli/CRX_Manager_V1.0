@@ -12,20 +12,21 @@ actions through and guards that blocked harmless ones. This change does the firs
   that real marker: before, `TRUNCATE customers`, `DROP TABLE invoices` and `DELETE FROM payments` were
   allowed; after, all three are refused and plain reads still pass. The marker now counts only when its
   first line is the UTC time it was written and that time is under 2 hours old, and it relaxes only real
-  inserts/updates, money-column updates and RPC calls. The marker never unlocks audit-log writes,
-  TRUNCATE, DDL/GRANT, sequence changes, deletes or cancels/voids, including later in the same batch.
-  Nor does it unlock an RPC named for deleting, cancelling, voiding or reversing (`cancel_order`,
-  `void_invoice`). Deletes and cancels/voids now honour `[E2E]` per statement and only in the SQL, not
+  inserts/updates and money-column updates. The marker never unlocks audit-log writes, TRUNCATE,
+  DDL/GRANT, sequence changes, RPC calls, deletes or cancels/voids, including later in the same batch.
+  (It used to unlock RPC calls; a function body can delete or void, and a list of "destructive" names
+  never converges, so a real RPC call now goes through the app.) Deletes and cancels/voids now honour `[E2E]` per statement and only in the SQL, not
   a comment, so `DELETE FROM invoices WHERE id = 7; -- [E2E]` is refused; before, one marker anywhere
   exempted the whole batch. Unchanged and deferred: a batch-wide `[E2E]`, a comment included, still
   exempts ordinary inserts and updates. The guard now denies an event it cannot read or a classifier
-  error instead of allowing it (Luna rounds 1–2).
-- Vercel: 36 current connector tools that change live settings had no deny entry (DNS records,
+  error instead of allowing it (Luna rounds 1–3).
+- Vercel: 35 current connector tools that change live settings had no deny entry (DNS records,
   redirects, domain verification, sandboxes that run commands, team access/SSO, toolbar comments,
   `get_project_deletion_link`, which only reads but hands out a link that deletes the project). Added to
   `permissions.deny`. Other read-only tools are unchanged.
 - Secrets: `Read` of real `.env` files (not the `.example` files) and the plain `cat`, `type` and
-  `Get-Content` forms of `.env`, `.env.local` and `.env.production`, plus the `cat ./` spellings, are now
+  `Get-Content` forms of `.env`, `.env.local`, `.env.production`, `.env.development`, `.env.staging`
+  and `.env.test`, plus a few `./` spellings, are now
   denied. Bash rules match command text only, so other spellings still get through: a speed bump, not a
   boundary.
 - The migration-apply and live-data gates now carry `onFailure: "block"` (Claude Code 2.1.295+), so a
