@@ -63,10 +63,21 @@ const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
   "i"
 );
 
+// INCIDENT (2026-10-23). Claude Code 2.1.304 hands UserPromptSubmit hooks a
+// background subagent's report as the bare body, which opens with the harness's
+// own "[Subagent hand-back]" frame line, without the "Another Claude session sent
+// a message:" preamble or <agent-message> tags the stripping below keys on. Words
+// such as "pause" inside four read-only audit reports latched hold.json in a
+// session where Mason never said stop (replayed: the bare body latches, the
+// wrapped form does not). The harness indents every line of the report itself,
+// so only the harness can put that frame at the very start of the prompt.
+const STARTS_WITH_HANDBACK_FRAME_RE = /^\[Subagent hand-back\]/;
+
 export function isMachineGenerated(prompt) {
   const text = String(prompt || "");
   if (!text) return false;
   if (CONTAINS_MACHINE_TAG_RE.test(text)) return true;
+  if (STARTS_WITH_HANDBACK_FRAME_RE.test(text.trimStart())) return true;
   return STARTS_WITH_MACHINE_TAG_RE.test(text.trim());
 }
 
