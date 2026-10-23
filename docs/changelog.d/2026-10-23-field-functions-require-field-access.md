@@ -33,5 +33,9 @@ the company-wide overdue-invoice list, global search results and every team note
 * `operational_dashboard_summary` is re-emitted unchanged so the migration files carry the role check
   live already has.
 
+The migration refuses to run outside one transaction or over any changed live body (md5 pins on all
+eighteen), and its closing check confirms every function's new body and unchanged owner, grants,
+search_path, volatility and return type, plus the new helper's body and grants.
+
 Office staff see exactly what they saw before (proved by the prover's before/after snapshot).
 Parts B (tables) and C (the whole-job applicator's lifecycle window) are still open.

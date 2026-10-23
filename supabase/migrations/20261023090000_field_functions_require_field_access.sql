@@ -1557,7 +1557,8 @@ BEGIN
      WHERE p.oid = to_regprocedure('public._can_see_field(uuid)')
        AND p.prosecdef AND p.provolatile = 's' AND pg_get_userbyid(p.proowner) = 'postgres'
        AND p.proconfig = ARRAY['search_path=public, pg_temp']
-       AND p.proacl::text = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}') THEN
+       AND p.proacl::text = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
+       AND md5(replace(p.prosrc, chr(13), '')) = '0b7f544337f93adc79163cafe581222c') THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAIL: public._can_see_field(uuid) does not have the expected attributes or grants';
   END IF;
   RAISE NOTICE 'POSTFLIGHT_OK: field functions require field access (row 11.4 part A)';

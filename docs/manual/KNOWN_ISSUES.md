@@ -101,7 +101,8 @@ can read, and re-emits `operational_dashboard_summary` with its live check. Proo
 `scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs` (before: every field role, an inactive
 applicator and an `entity_recipient` read all nine seeded fields, every office-only function, search and every
 note; after: each applicator sees only the fields assigned to them, everyone else none, office staff unchanged).
-Findings 1 and 2 stay open until it is applied live and re-checked read-only; findings 3–5 wait on parts B and C.
+The file refuses to run over any changed live body (md5 pins on all eighteen) and its postflight confirms every
+new body, the helper's included. Findings 1 and 2 stay open until it is applied live and re-checked read-only; findings 3–5 wait on parts B and C.
 One thing part A does not change: `team_notes` itself (`tnotes_select`) admits every active profile, and the Team
 Board shows field roles every note, so the notes gate closes the unchecked function, not field roles' view of
 notes on the Team Board (Mason's call whether to narrow that). Until part B narrows `job_fields`, an applicator
