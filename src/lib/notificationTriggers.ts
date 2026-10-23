@@ -2,9 +2,9 @@
  * notificationTriggers.ts — Automated notification triggers
  * GAP FIX #17: Automated Notifications
  *
- * This module provides functions that check for conditions and fire
- * notifications automatically. Call these from relevant pages or
- * from a periodic check on the Dashboard.
+ * This module provides functions that fire notifications when a page
+ * completes an action. Time-based checks (low stock, expiring quotes)
+ * run in the database's morning cron job, not here.
  *
  * Notifications are created in the `notifications` table and shown
  * on the Notifications page.
@@ -16,7 +16,7 @@ import { supabase } from './db';
 import type { Json } from '../types/supabase';
 import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
-import { localToday, formatLocalDate, parseLocalDate } from './dateUtils';
+import { parseLocalDate } from './dateUtils';
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
@@ -77,113 +77,6 @@ async function logNotificationFailure(
     } catch {
       // Nothing left to report through.
     }
-  }
-}
-
-/**
- * Check inventory for low-stock items and notify admins.
- * Should be called from Dashboard load or InventoryPage.
- * Uses a simple dedup: only notifies once per product per day.
- */
-export async function checkLowStockNotifications() {
-  try {
-    const { data: lowStockItems } = await supabase
-      .from('inventory')
-      .select('id, product_id, quantity_available, reorder_point, product:products(product_name)')
-      .gt('reorder_point', 0);
-
-    if (!lowStockItems) return;
-
-    const alerts = lowStockItems.filter(
-      (i) => Number(i.quantity_available) <= Number(i.reorder_point)
-    );
-
-    if (alerts.length === 0) return;
-
-    // Check which products already had a notification today (dedup)
-    const todayStr = localToday();
-    const { data: existingToday } = await supabase
-      .from('notifications')
-      .select('related_entity_id')
-      .eq('notification_type', 'low_stock')
-      .gte('created_at', `${todayStr}T00:00:00Z`);
-
-    const alreadyNotified = new Set((existingToday || []).map((n) => n.related_entity_id));
-
-    for (const item of alerts) {
-      if (alreadyNotified.has(item.product_id)) continue;
-
-      // Supabase returns joined relations as nested objects
-      const product = item.product as unknown as { product_name: string } | null;
-      const productName = product?.product_name || 'Unknown product';
-      await notifyAdmins(
-        'Low Stock Alert',
-        `${productName} is low — ${item.quantity_available} units available (reorder point: ${item.reorder_point})`,
-        'low_stock',
-        'product',
-        item.product_id
-      );
-    }
-  } catch (err) {
-    await logNotificationFailure('low_stock', err, 'product', undefined, {
-      context: 'checkLowStockNotifications',
-    });
-  }
-}
-
-/**
- * Check for quotes expiring within the next 3 days and notify the quote creator.
- * Should be called from Dashboard load.
- */
-export async function checkExpiringQuoteNotifications() {
-  try {
-    const now = new Date();
-    const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-
-    const { data: expiringQuotes } = await supabase
-      .from('quotes')
-      .select('id, quote_number, created_by, expires_at, customer:customers(farm_name)')
-      .in('status', ['sent', 'draft'])
-      .lte('expires_at', formatLocalDate(threeDaysFromNow))
-      .gte('expires_at', formatLocalDate(now));
-
-    if (!expiringQuotes || expiringQuotes.length === 0) return;
-
-    // Dedup: check existing notifications for today
-    const today = formatLocalDate(now);
-    const { data: existingToday } = await supabase
-      .from('notifications')
-      .select('related_entity_id')
-      .eq('notification_type', 'quote_expiring')
-      .gte('created_at', `${today}T00:00:00Z`);
-
-    const alreadyNotified = new Set((existingToday || []).map((n) => n.related_entity_id));
-
-    for (const quote of expiringQuotes) {
-      if (alreadyNotified.has(quote.id)) continue;
-
-      // Supabase may return joined relations as object or array depending on relationship type
-      const customer = quote.customer as unknown as { farm_name: string } | { farm_name: string }[] | null;
-      const customerName = Array.isArray(customer)
-        ? customer[0]?.farm_name || 'customer'
-        : customer?.farm_name || 'customer';
-      const daysLeft = Math.ceil(
-        (new Date(quote.expires_at!).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
-      );
-
-      await createNotification(
-        quote.created_by,
-        'Quote Expiring Soon',
-        `Quote ${quote.quote_number} for ${customerName} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`,
-        'quote_expiring',
-        'quote',
-        quote.id
-      );
-    }
-  } catch (err) {
-    await logNotificationFailure('quote_expiring', err, 'quote', undefined, {
-      context: 'checkExpiringQuoteNotifications',
-    });
   }
 }
 
@@ -383,47 +276,6 @@ export async function notifyLargeOrder(
       context: 'notifyLargeOrder',
       orderNumber,
       totalPrice,
-    });
-  }
-}
-
-/**
- * Notify admins + sales reps that a rush order was created and needs pricing
- * (ship-now/price-later, #2). Call from NewOrder after create_rush_order — the
- * people who can price it (admin/sales_rep) get an actionable alert.
- */
-export async function notifyOrderNeedsPricing(
-  orderId: string,
-  orderNumber: string,
-  customerName: string
-) {
-  try {
-    // Read via profile_public_view so a non-admin creator (driver/applicator)
-    // can still fan out the alert (admin-or-self RLS would zero-out a direct
-    // profiles read) — same rationale as notifyAdmins.
-    const { data: staff } = await supabase
-      .from('profile_public_view')
-      .select('id')
-      .in('role', ['admin', 'sales_rep'])
-      .eq('is_active', true);
-    if (staff && staff.length > 0) {
-      const rows = staff
-        .filter((s): s is { id: string } => s.id != null)
-        .map((s) => ({
-          user_id: s.id,
-          title: 'Order needs pricing',
-          message: `Rush order ${orderNumber} for ${customerName} shipped without pricing — set its prices so it can be invoiced.`,
-          notification_type: 'needs_pricing',
-          related_entity_type: 'order',
-          related_entity_id: orderId,
-        }));
-      const { error } = await supabase.from('notifications').insert(rows);
-      if (error) Sentry.captureException(error, { tags: { source: 'notification_trigger', action: 'notify_order_needs_pricing' } });
-    }
-  } catch (err) {
-    await logNotificationFailure('needs_pricing', err, 'order', orderId, {
-      context: 'notifyOrderNeedsPricing',
-      orderNumber,
     });
   }
 }
@@ -648,15 +500,4 @@ export async function notifyDeliveryCompleted(
       customerName,
     });
   }
-}
-
-/**
- * Run all periodic notification checks.
- * Retired from Dashboard-load in favor of the run_morning_notification_checks cron (U18).
- */
-export async function runPeriodicNotificationChecks() {
-  await Promise.all([
-    checkLowStockNotifications(),
-    checkExpiringQuoteNotifications(),
-  ]);
 }

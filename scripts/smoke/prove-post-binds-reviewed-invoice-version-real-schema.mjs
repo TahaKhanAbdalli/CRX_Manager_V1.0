@@ -27,6 +27,11 @@
  *   group-level field location added after load is refused.
  *   B1 a batch posts the unchanged row and reports the changed row as that row's failure.
  *   C1 a line write made while posting (a trigger standing in for a racing writer) rolls the post back.
+ * SWAP (20261022090000, invoices_postable): refuses outside one transaction; then the whole AFTER
+ *   matrix again with every version read from the view; the view's rules (V1-V6: row security as the
+ *   caller, a NULL version where the caller may not post, the same hash as the table, read-only,
+ *   closed to anon, no cost column); and, under a simulated cost column lock, the table's computed
+ *   field fails with 42501 while the whole matrix passes through the view with the old overload dropped.
  * RACES (two real connections, committed data): a save_invoice by a second user held open while
  *   Post runs, a raw line update held open while Post runs, and a Post held open while a save runs.
  * MUTATIONS: without the line lock, the raw line update race posts and the line changes under a
@@ -51,6 +56,8 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20261022022000_post_binds_reviewed_invoice_version.sql');
+// The invoices_postable swap (20261022090000): applied after the candidate's matrix, then proven too.
+const SWAP = path.join(MIGRATIONS, '20261022090000_invoices_postable_view.sql');
 const PARKED = new Set([
   '20260914100700_customer_document_bytes_server_only.sql',
   '20261015230000_staff_photo_storage_access.sql',
@@ -61,7 +68,7 @@ const LEDGER_ONLY = new Set([
   '20261007150200_release_reservations_of_deleted_spring_orders.sql',
 ]);
 // A later or parked file that (re)defines anything the candidate replaces or relies on.
-const TOUCHED = /FUNCTION\s+(public\.)?"?(post_invoice|post_invoice_group|batch_post_invoices|_post_invoice_\w+|_post_invoice_group_\w+|invoice_post_version|_invoice_post_\w+)\b/i;
+const TOUCHED = /FUNCTION\s+(public\.)?"?(post_invoice|post_invoice_group|batch_post_invoices|_post_invoice_\w+|_post_invoice_group_\w+|invoice_post_version|invoice_postable_version|_invoice_post_\w+)\b/i;
 const LIVE_AUTH_UID_SRC = '\n  select \n  coalesce(\n'
   + "    nullif(current_setting('request.jwt.claim.sub', true), ''),\n"
   + "    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')\n"
@@ -125,6 +132,7 @@ function plan() {
   assert.ok(at >= 0, 'the candidate must be selected for post-baseline replay');
   const before = all.slice(0, at);
   for (const file of all.slice(at + 1)) {
+    if (file === SWAP) continue; // proven by swapPhase() below
     assert.ok(!TOUCHED.test(lf(file)), `${path.basename(file)} sorts after the candidate and touches what it changes; re-think this proof`);
   }
   for (const name of PARKED) {
@@ -209,6 +217,7 @@ function seed() {
 // "<sqlstate>|<message>".
 function who(as) {
   if (as === 'owner') return `RESET ROLE;\n${claims(U.ADMIN)}`;
+  if (as === 'anon') return `RESET ROLE;\nSELECT set_config('request.jwt.claims', '{"role":"anon"}', true);\nSELECT set_config('request.jwt.claim.sub', '', true);\nSET LOCAL ROLE anon;`;
   return `RESET ROLE;\n${claims(as)}\nSET LOCAL ROLE authenticated;`;
 }
 function scenario(steps, fixture = '') {
@@ -244,7 +253,12 @@ const edit = (salesman, cents, key, inv = INV) => `public.save_invoice(${j(heade
 // The id of the invoice the last step created, and versions read by a step, kept in session settings.
 const KEEP_ID = (call) => `v := (${call})::text; PERFORM set_config('prover.inv', v, true);`;
 const INV = "current_setting('prover.inv')::uuid";
-const READ_VERSION = (slot = 'v', inv = INV) => `v := (SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = ${inv}); PERFORM set_config('prover.${slot}', coalesce(v, ''), true);`;
+// The relation screens read the version from: invoices (20261022022000), then invoices_postable
+// (20261022090000, swapPhase), whose row carries no cost column.
+let REL = 'invoices';
+// The computed field on REL: invoice_post_version on the table, invoice_postable_version on the view.
+let VFN = 'invoice_post_version';
+const READ_VERSION = (slot = 'v', inv = INV) => `v := (SELECT public.${VFN}(i) FROM public.${REL} i WHERE i.id = ${inv}); PERFORM set_config('prover.${slot}', coalesce(v, ''), true);`;
 const VER = (slot = 'v') => `current_setting('prover.${slot}')`;
 const post = (key, slot = 'v', inv = INV) => `PERFORM public.post_invoice(${inv}, ${VER(slot)}, '${key}'); v := 'posted';`;
 const STATE = (inv = INV) => `(SELECT i.status || ':' || i.total_amount_cents FROM public.invoices i WHERE i.id = ${inv})`;
@@ -262,7 +276,7 @@ ALTER TABLE public.invoices ENABLE TRIGGER USER;
 INSERT INTO public.invoice_items (invoice_id, charge_type, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order) VALUES
   ('${GA}', 'freight', 'Freight A', 1, 1000, 1000, 0, 0),
   ('${GB}', 'freight', 'Freight B', 1, 2000, 2000, 0, 0);`;
-const READ_MAP = (slot = 'map') => `v := (SELECT jsonb_object_agg(i.id, public.invoice_post_version(i))::text FROM public.invoices i WHERE i.invoice_group_id = '${G}' AND i.deleted_at IS NULL); PERFORM set_config('prover.${slot}', v, true);`;
+const READ_MAP = (slot = 'map') => `v := (SELECT jsonb_object_agg(i.id, public.${VFN}(i))::text FROM public.${REL} i WHERE i.invoice_group_id = '${G}' AND i.deleted_at IS NULL); PERFORM set_config('prover.${slot}', v, true);`;
 const MAP = (slot = 'map') => `current_setting('prover.${slot}')::jsonb`;
 const postGroup = (key, as, map = MAP()) => `v := (public.post_invoice_group('${G}', '${as}', ${map}, '${key}'))::text;`;
 const GSTATE = `(SELECT string_agg(i.invoice_number || ':' || i.status, ',' ORDER BY i.invoice_number) FROM public.invoices i WHERE i.invoice_group_id = '${G}')`;
@@ -379,8 +393,8 @@ function runAfter() {
 
   add(scenario([
     { key: 'P8 rep creates', as: U.REP, stmt: KEEP_ID(save(U.REP, 2500, 'p8s')) },
-    { key: 'P8 rep reads a version', as: U.REP, call: `(SELECT public.invoice_post_version(i) ~ '^v1:[0-9a-f]{64}$' FROM public.invoices i WHERE i.id = ${INV})` },
-    { key: 'P8 driver reads the version', as: U.DRIVER, call: `public.invoice_post_version((SELECT i FROM public.invoices i WHERE i.id = ${INV}))` },
+    { key: 'P8 rep reads a version', as: U.REP, call: `(SELECT public.${VFN}(i) ~ '^v1:[0-9a-f]{64}$' FROM public.${REL} i WHERE i.id = ${INV})` },
+    { key: 'P8 driver reads the version', as: U.DRIVER, call: `public.${VFN}((SELECT i FROM public.${REL} i WHERE i.id = ${INV}))` },
     { key: 'P8 cost values are not in the version', as: 'owner', stmt: `
       PERFORM set_config('prover.c0', public._invoice_post_version(${INV}), true);
       ALTER TABLE public.invoice_items DISABLE TRIGGER USER; ALTER TABLE public.invoice_items DROP CONSTRAINT IF EXISTS invoice_items_charge_line_shape_chk;
@@ -403,8 +417,8 @@ function runAfter() {
     { key: 'P9 rep posts with the withheld placeholder', as: U.REP, stmt: `PERFORM public.post_invoice(${INV}, 'withheld', 'p9w'); v := 'posted';` },
     { key: 'P9 admin posts with the withheld placeholder', as: U.ADMIN, stmt: `PERFORM public.post_invoice(${INV}, 'withheld', 'p9a'); v := 'posted';` },
     // Called as an RPC with a made-up row, the field answers only for an invoice the caller may post.
-    { key: 'P9 rep asks for an admin invoice version with a made-up row', as: U.REP, call: `public.invoice_post_version(jsonb_populate_record(NULL::public.invoices, jsonb_build_object('id', ${INV})))` },
-    { key: 'P9 admin asks with a made-up row', as: U.ADMIN, call: `(public.invoice_post_version(jsonb_populate_record(NULL::public.invoices, jsonb_build_object('id', ${INV}))) ~ '^v1:')` },
+    { key: 'P9 rep asks for an admin invoice version with a made-up row', as: U.REP, call: `public.${VFN}(jsonb_populate_record(NULL::public.${REL}, jsonb_build_object('id', ${INV})))` },
+    { key: 'P9 admin asks with a made-up row', as: U.ADMIN, call: `(public.${VFN}(jsonb_populate_record(NULL::public.${REL}, jsonb_build_object('id', ${INV}))) ~ '^v1:')` },
   ]));
   add(scenario([
     { key: 'G8 admin reads the group', as: U.ADMIN, stmt: READ_MAP() },
@@ -429,7 +443,7 @@ function runAfter() {
     { key: 'G2 member B edited after load', as: 'owner', stmt: `UPDATE public.invoice_items SET description = 'Freight B (edited)' WHERE invoice_id = '${GB}'; v := 'changed';` },
     { key: 'G2 post after member edit', as: U.ADMIN, stmt: postGroup('g2e', U.ADMIN) },
     { key: 'G2 state', as: 'owner', call: GSTATE },
-    { key: 'G4 single post of a member', as: U.ADMIN, stmt: `v := (SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = '${GA}'); PERFORM public.post_invoice('${GA}', v, 'g4'); v := 'posted';` },
+    { key: 'G4 single post of a member', as: U.ADMIN, stmt: `v := (SELECT public.${VFN}(i) FROM public.${REL} i WHERE i.id = '${GA}'); PERFORM public.post_invoice('${GA}', v, 'g4'); v := 'posted';` },
   ], group()));
   add(scenario([
     { key: 'G2s admin reads the group', as: U.ADMIN, stmt: READ_MAP() },
@@ -485,8 +499,8 @@ function runAfter() {
     { key: 'B1 admin creates X', as: U.ADMIN, stmt: `v := (${save(U.ADMIN, 1100, 'b1x')})::text; PERFORM set_config('prover.x', v, true);` },
     { key: 'B1 admin creates Y', as: U.ADMIN, stmt: `v := (${save(U.ADMIN, 2200, 'b1y')})::text; PERFORM set_config('prover.y', v, true);` },
     { key: 'B1 admin reads both', as: U.ADMIN, stmt: `
-      PERFORM set_config('prover.vx', (SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = current_setting('prover.x')::uuid), true);
-      PERFORM set_config('prover.vy', (SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = current_setting('prover.y')::uuid), true);
+      PERFORM set_config('prover.vx', (SELECT public.${VFN}(i) FROM public.${REL} i WHERE i.id = current_setting('prover.x')::uuid), true);
+      PERFORM set_config('prover.vy', (SELECT public.${VFN}(i) FROM public.${REL} i WHERE i.id = current_setting('prover.y')::uuid), true);
       v := 'read';` },
     { key: 'B1 second user saves Y', as: U.ADMIN2, call: edit(U.ADMIN, 2300, 'b1e', "current_setting('prover.y')::uuid") },
     { key: 'B1 batch', as: U.ADMIN, call: `public.batch_post_invoices(jsonb_build_array(
@@ -949,9 +963,99 @@ async function races() {
   assert.equal(scalar("SELECT md5(prosrc) = md5(prosrc) AND position('while it was being posted' in prosrc) > 0 AND position('invoice_items WHERE invoice_id = p_invoice_id ORDER BY id FOR UPDATE' in prosrc) > 0 FROM pg_proc WHERE oid = 'public.post_invoice(uuid,text,text)'::regprocedure;"), 't');
 }
 
+// ------------------------------------------------------------------------------------------------
+// The invoices_postable swap (20261022090000): the version moves onto a view without cost columns so
+// it survives the cost column lock (20261022091000). Proven here: the swap refuses outside one
+// transaction; the whole after matrix passes with every version read from the view; the view's rules
+// (row security as the caller, a NULL version where the caller may not post, read-only, closed to
+// anon, the same hash as the table); and, under a simulated cost lock, the table's computed field
+// fails for everyone while the whole matrix still passes through the view, with the old overload
+// dropped as the lock will drop it.
+const OTHER_SALES = id('9f1');
+const VIEW_RULES = [
+  ['V1 rep reads own row and version from the view', /^ok\|1:true$/],
+  ['V2 rep reads an invoice neither created by nor under them', /^ok\|0$/],
+  ['V2 admin version from the view equals _invoice_post_version', /^ok\|true$/],
+  ['V2 view and table versions agree', /^ok\|true$/],
+  ['V3 rep-created invoice under another salesperson: row, no version', /^ok\|1:<null>$/],
+  ['V4 rep inserts through the view', /^42501\|permission denied for view invoices_postable$/],
+  ['V4 rep updates through the view', /^42501\|permission denied for view invoices_postable$/],
+  ['V4 admin updates through the view', /^42501\|permission denied for view invoices_postable$/],
+  ['V4 admin deletes through the view', /^42501\|permission denied for view invoices_postable$/],
+  ['V5 anon reads the view', /^42501\|permission denied for view invoices_postable$/],
+  ['V5 anon calls the view computed field', /^42501\|permission denied for function invoice_postable_version$/],
+  ['V6 the view has no cost column', /^ok\|0$/],
+];
+async function swapPhase() {
+  stageText('swap.sql', lf(SWAP));
+  const auto = docker([...psqlArgs()], { input: '\\i /tmp/swap.sql\n', allowFailure: true });
+  assert.notEqual(auto.status, 0, 'the swap ran under autocommit');
+  assert.match(auto.stderr, /INVOICES_POSTABLE_NOT_IN_TRANSACTION/, `wrong autocommit refusal:\n${auto.stderr}`);
+  assert.equal(scalar("SELECT to_regclass('public.invoices_postable') IS NULL;"), 't', 'the autocommit refusal left the view behind');
+  const s = apply('swap.sql');
+  assert.equal(s.status, 0, `the swap failed to apply:\n${s.output}`);
+  console.log('[prover] SWAP: refuses outside one transaction, then applies');
+
+  REL = 'invoices_postable';
+  VFN = 'invoice_postable_version';
+  check(runAfter());
+  console.log('[prover] SWAP: the whole after matrix passes with every version read from invoices_postable');
+
+  const v = scenario([
+    { key: 'V1 rep creates own', as: U.REP, stmt: KEEP_ID(save(U.REP, 1500, 'v1s')) },
+    { key: 'V1 rep reads own row and version from the view', as: U.REP, call: `(SELECT count(*) || ':' || bool_and(public.invoice_postable_version(i) ~ '^v1:[0-9a-f]{64}$')::text FROM public.invoices_postable i WHERE i.id = ${INV})` },
+    { key: 'V2 admin creates', as: U.ADMIN, stmt: `v := (${save(U.ADMIN, 2500, 'v2s')})::text; PERFORM set_config('prover.adm', v, true);` },
+    { key: 'V2 rep reads an invoice neither created by nor under them', as: U.REP, call: `(SELECT count(*) FROM public.invoices_postable i WHERE i.id = current_setting('prover.adm')::uuid)` },
+    { key: 'V2 admin reads the view version', as: U.ADMIN, stmt: `PERFORM set_config('prover.va', (SELECT public.invoice_postable_version(i) FROM public.invoices_postable i WHERE i.id = current_setting('prover.adm')::uuid), true); v := 'read';` },
+    { key: 'V2 admin version from the view equals _invoice_post_version', as: 'owner', call: `(public._invoice_post_version(current_setting('prover.adm')::uuid) = current_setting('prover.va'))` },
+    { key: 'V2 view and table versions agree', as: U.ADMIN, call: `((SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = current_setting('prover.adm')::uuid) = current_setting('prover.va'))` },
+    { key: 'V3 owner seeds a rep-created invoice under another salesperson', as: 'owner', stmt: `
+      ALTER TABLE public.invoices DISABLE TRIGGER USER;
+      INSERT INTO public.invoices (id, invoice_number, customer_id, invoice_type, status, invoice_date, created_by, salesman_id, total_amount_cents)
+        VALUES ('${OTHER_SALES}', 'PROVER-V3', '${CUST}', 'misc_charge', 'draft', CURRENT_DATE, '${U.REP}', '${U.ADMIN}', 500);
+      ALTER TABLE public.invoices ENABLE TRIGGER USER; v := 'seeded';` },
+    { key: 'V3 rep-created invoice under another salesperson: row, no version', as: U.REP, call: `(SELECT count(*) || ':' || coalesce(max(public.invoice_postable_version(i)), '<null>') FROM public.invoices_postable i WHERE i.id = '${OTHER_SALES}')` },
+    { key: 'V4 rep inserts through the view', as: U.REP, stmt: `INSERT INTO public.invoices_postable (invoice_number, customer_id, invoice_type, status, invoice_date, created_by, salesman_id) VALUES ('PROVER-V4', '${CUST}', 'misc_charge', 'draft', CURRENT_DATE, '${U.REP}', '${U.REP}'); v := 'inserted';` },
+    { key: 'V4 rep updates through the view', as: U.REP, stmt: `UPDATE public.invoices_postable SET header_notes = 'v4' WHERE id = ${INV}; v := 'updated';` },
+    { key: 'V4 admin updates through the view', as: U.ADMIN, stmt: `UPDATE public.invoices_postable SET header_notes = 'v4' WHERE id = current_setting('prover.adm')::uuid; v := 'updated';` },
+    { key: 'V4 admin deletes through the view', as: U.ADMIN, stmt: `DELETE FROM public.invoices_postable WHERE id = current_setting('prover.adm')::uuid; v := 'deleted';` },
+    { key: 'V5 anon reads the view', as: 'anon', call: '(SELECT count(*) FROM public.invoices_postable)' },
+    { key: 'V5 anon calls the view computed field', as: 'anon', call: `public.invoice_postable_version(jsonb_populate_record(NULL::public.invoices_postable, jsonb_build_object('id', ${INV})))` },
+    { key: 'V6 the view has no cost column', as: 'owner', call: "(SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.invoices_postable'::regclass AND attname IN ('total_cost_cents'))" },
+  ]);
+  const vLines = VIEW_RULES.map(([k, want]) => ({ ok: want.test(v[k] ?? '<missing>'), line: `  ${want.test(v[k] ?? '<missing>') ? 'PASS' : 'FAIL'} ${k} -> ${v[k]}` }));
+  console.log(`[prover] SWAP view rules:\n${vLines.map((l) => l.line).join('\n')}`);
+  assert.ok(vLines.every((l) => l.ok), 'a view rule failed');
+
+  // The cost column lock, simulated as 20261022091000 will apply it to invoices.
+  const cols = scalar("SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) FROM pg_attribute WHERE attrelid = 'public.invoices'::regclass AND attnum > 0 AND NOT attisdropped AND attname <> 'total_cost_cents';");
+  psql(`BEGIN;
+    REVOKE SELECT, REFERENCES ON public.invoices FROM authenticated;
+    GRANT SELECT (${cols}) ON public.invoices TO authenticated;
+    GRANT REFERENCES (${cols}) ON public.invoices TO authenticated;
+    COMMIT;`);
+  const lock = scenario([
+    { key: 'L1 admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'l1s')) },
+    { key: 'L1 admin reads total_cost_cents from invoices', as: U.ADMIN, call: `(SELECT total_cost_cents FROM public.invoices WHERE id = ${INV})` },
+    { key: 'L1 admin reads the table computed field', as: U.ADMIN, call: `(SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = ${INV})` },
+    { key: 'L1 admin reads the view computed field', as: U.ADMIN, call: `(SELECT public.invoice_postable_version(i) ~ '^v1:' FROM public.invoices_postable i WHERE i.id = ${INV})` },
+  ]);
+  assert.match(lock['L1 admin reads total_cost_cents from invoices'], /^42501\|permission denied for table invoices$/, 'the simulated lock is not in force');
+  assert.match(lock['L1 admin reads the table computed field'], /^42501\|permission denied for table invoices$/, 'under the lock the table computed field should fail (the reason for the swap)');
+  assert.equal(lock['L1 admin reads the view computed field'], 'ok|true', 'under the lock the view computed field must still work');
+  console.log('[prover] LOCK: with total_cost_cents revoked, invoice_post_version(invoices) fails with 42501 for an admin; invoice_postable_version on the view works');
+
+  psql('DROP FUNCTION public.invoice_post_version(public.invoices);');
+  check(runAfter());
+  console.log('[prover] LOCK: with invoice_post_version(invoices) dropped (as the lock will), the whole after matrix passes through invoices_postable');
+}
+
 async function main() {
   const started = Date.now();
   if (!REUSE) buildContainer();
+  if (REUSE && scalar("SELECT to_regclass('public.invoices_postable') IS NOT NULL;") === 't') {
+    throw new Error('the reused container already ran the SWAP phase (view created, cost lock simulated, table function dropped); recreate the container');
+  }
   if (scalar("SELECT count(*) FROM public.profiles WHERE id::text LIKE '7d400000-%';") === '0') seed();
   if (scalar("SELECT to_regproc('public.invoice_post_version') IS NULL;") === 't') {
     runBefore();
@@ -979,6 +1083,7 @@ async function main() {
   console.log('[prover] GRANTS: authenticated (not anon) runs the posting functions and the computed field; no API role runs the hash helpers');
 
   await races();
+  await swapPhase();
 
   console.log(`[prover] finished in ${Math.round((Date.now() - started) / 1000)}s`);
   console.log('POST_BINDS_REVIEWED_VERSION_PROOF_PASS');

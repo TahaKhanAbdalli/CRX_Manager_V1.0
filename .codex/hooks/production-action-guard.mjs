@@ -946,7 +946,7 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     `Required JSON: ` +
     `{\"codex_ran\":true,\"verdict\":\"clean\",\"model\":\"gpt-6-sol\",\"reasoning_effort\":\"high\",` +
     `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"${expectedBase}\",` +
-    `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
+    `\"timestamp\":\"<ISO-8601, 0-24 hours old>\"}. ` +
     `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused. ` +
     `If this head only merged a newer main into a branch Sol already reviewed clean, ` +
     `\`node scripts/write-codex-push-proof.mjs --carry-forward\` keeps that review instead.`

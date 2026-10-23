@@ -12,7 +12,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../lib/db';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import HelpTip from '../components/ui/HelpTip';
@@ -45,6 +45,8 @@ export default function DeliveryRemainders() {
   const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
   const [remainders, setRemainders] = useState<RemainderRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last list read failed: no rows or counts, so it never reads as "No remainders".
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('pending');
   const [customerFilter, setCustomerFilter] = useState('');
   const [creating, setCreating] = useState<string | null>(null);
@@ -55,7 +57,7 @@ export default function DeliveryRemainders() {
   const fetchRemainders = useCallback(async () => {
     const seq = ++fetchSeq.current;
     const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) =>
-      supabase
+      pageWithList(supabase
         .from('delivery_remainders')
         .select(`
           *,
@@ -66,18 +68,21 @@ export default function DeliveryRemainders() {
         `, { count: 'exact' })
         .order('created_at', { ascending: false })
         .order('id')
-        .range(from, to),
+        .range(from, to)),
     );
     if (seq !== fetchSeq.current) return;
 
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_delivery_remainders' } });
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('delivery_remainders read returned no list'), { tags: { source: 'fetch', action: 'load_delivery_remainders' } });
       toast('error', 'Failed to load delivery remainders');
+      // An older list would look current; none at all would read as "No remainders" and 0 pending.
+      setRemainders([]);
+      setLoadFailed(true);
       setLoading(false);
       return;
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; product?: { product_name: string }; original_delivery?: { delivery_number: string }; order?: { order_number: string } }>).map((r) => ({
+    const rows = (data as Array<Record<string, unknown> & { customer?: { farm_name: string }; product?: { product_name: string }; original_delivery?: { delivery_number: string }; order?: { order_number: string } }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       product_name: r.product?.product_name || 'Unknown',
@@ -86,6 +91,7 @@ export default function DeliveryRemainders() {
     })) as unknown as RemainderRow[];
 
     setRemainders(rows);
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -266,7 +272,8 @@ export default function DeliveryRemainders() {
         subtitle={<HelpTip text="Items that couldn't be fully delivered. These are automatically created when a delivery is completed with less than the ordered quantity. Group by customer to create follow-up deliveries." />}
       />
 
-      {/* Summary */}
+      {/* Summary: hidden after a failed load, where 0 would read as "nothing pending". */}
+      {!loadFailed && (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card>
           <div className="flex items-center gap-3 mb-2">
@@ -289,6 +296,7 @@ export default function DeliveryRemainders() {
           <p className="text-xs text-secondary mt-1">customers with pending remainders</p>
         </Card>
       </div>
+      )}
 
       {/* Data Table */}
       <Card padding={false}>
@@ -302,6 +310,8 @@ export default function DeliveryRemainders() {
             emptyTitle="No remainders"
             emptyDescription="Partial deliveries will create remainder items automatically"
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => { setLoading(true); fetchRemainders(); }}
             filters={
               <div className="flex gap-2 items-center">
                 <select

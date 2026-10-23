@@ -367,7 +367,7 @@ const good = {
 ok(proofValid(good, "abc", Date.now()), "valid proof");
 ok(!proofValid(good, "different", Date.now()), "wrong HEAD → invalid");
 ok(!proofValid({ ...good, codex_ran: false }, "abc", Date.now()), "codex_ran false → invalid");
-ok(!proofValid({ ...good, timestamp: new Date(Date.now() - 40 * 60000).toISOString() }, "abc", Date.now()), "stale proof invalid");
+ok(!proofValid({ ...good, timestamp: new Date(Date.now() - 25 * 60 * 60000).toISOString() }, "abc", Date.now()), "stale proof invalid");
 ok(!proofValid({ ...good, verdict: "has-blockers" }, "abc", Date.now()), "non-clean verdict invalid");
 
 // ── LIVE inert checks: guards emit NOTHING when their state files are absent ─

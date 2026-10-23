@@ -1,11 +1,10 @@
 import { supabase } from '../../lib/db';
-import RecordSearchPicker, { RECORD_SEARCH_LIMIT } from '../ui/RecordSearchPicker';
+import RecordSearchPicker from '../ui/RecordSearchPicker';
 import { ProductOptionDetails } from './ProductOptionPresentation';
 import type { ProductSearchResult } from '../../types';
 
 export const PRODUCT_SEARCH_SELECT =
   'id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, rate_unit, rate_per_acre, product_form, product_family:product_families(name)';
-export const PRODUCT_SEARCH_LIMIT = RECORD_SEARCH_LIMIT;
 
 interface ProductSearchPickerProps<T extends ProductSearchResult = ProductSearchResult> {
   /** Selected product id, or '' for none. */
