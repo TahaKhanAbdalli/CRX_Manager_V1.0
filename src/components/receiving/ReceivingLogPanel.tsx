@@ -406,9 +406,12 @@ export default function ReceivingLogPanel() {
       </div>
 
       {summaryFailed && (
-        <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          The receiving totals could not be loaded, including any damaged deliveries this week.
-        </p>
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <span>The receiving totals could not be loaded, including any damaged deliveries this week.</span>
+          <button type="button" onClick={() => { void fetchData(); }} className="font-medium underline hover:no-underline">
+            Try again
+          </button>
+        </div>
       )}
 
       {/* Summary Cards */}

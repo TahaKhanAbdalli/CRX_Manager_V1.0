@@ -217,6 +217,11 @@ describe('Receiving', () => {
     H.failing.set('get_receiving_summary', 'error');
     at('/receiving?tab=log', <ReceivingLogPanel />);
     expect(await screen.findByText(/The receiving totals could not be loaded/)).toBeInTheDocument();
+
+    H.failing.delete('get_receiving_summary');
+    H.functions.get_receiving_summary = { expected_today: 0, pending_receipt: 0, received_this_week: 0, received_ytd: 0, damaged_this_week: 2 };
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    await waitFor(() => expect(screen.queryByText(/The receiving totals could not be loaded/)).not.toBeInTheDocument());
   });
 
   it('a Quick Receive catalog read with no list is a failure, not "No products found"', async () => {
@@ -240,6 +245,21 @@ describe('Inventory', () => {
     tryAgain();
     expect((await screen.findAllByText('Widget 2.5 GL')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Total on Floor').length).toBeGreaterThan(0);
+  });
+
+  it.each(['error', 'nodata'] as const)('a %s open-PO read in the receive dialog is not "No open purchase orders found", and Try again lists them', async (mode) => {
+    H.functions.get_inventory_position = [position];
+    H.failing.set('purchase_order_items', mode);
+    at('/inventory', <InventoryPage />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /Receive/ }))[0]);
+    expect(await screen.findByText('Open purchase orders for this product could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText(/No open purchase orders found/)).not.toBeInTheDocument();
+
+    H.failing.delete('purchase_order_items');
+    H.tables.purchase_order_items = [poLine];
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    await waitFor(() => expect(screen.queryByText('Open purchase orders for this product could not be loaded.')).not.toBeInTheDocument());
+    expect(screen.queryByText(/No open purchase orders found/)).not.toBeInTheDocument();
   });
 
   it.each(['error', 'nodata'] as const)('a %s holds read says so instead of hiding the holds', async (mode) => {

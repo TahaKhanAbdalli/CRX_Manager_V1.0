@@ -2120,8 +2120,11 @@ export default function InventoryPage() {
             </div>
           )}
           {receivePoIntent.isForeignIntentLocked ? null : receivePOsFailed ? (
-            <div role="alert" className="text-red-700 text-sm bg-red-50 p-3 rounded">
-              Open purchase orders for this product could not be loaded. Close this and try again.
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-2 text-red-700 text-sm bg-red-50 p-3 rounded">
+              <span>Open purchase orders for this product could not be loaded.</span>
+              <button type="button" onClick={() => { void openReceiveModal(selectedId); }} className="font-medium underline hover:no-underline">
+                Try again
+              </button>
             </div>
           ) : availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
