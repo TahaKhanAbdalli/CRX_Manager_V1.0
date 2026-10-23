@@ -305,7 +305,18 @@ describe('admin cost helpers', () => {
 // for everyone once the cost column lock revokes total_cost_cents.
 const VERSION_TOKEN = /\binvoice_post_version\b|\bINVOICE_POST_VERSION_COLUMNS\b/;
 
-function versionReadsOffView(src: string): number[] {
+/** Every exported string constant in src/, so a select that names an imported constant is resolved too. */
+function exportedStringConstants(files: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(/export\s+const\s+([A-Z][A-Z0-9_]*)\s*=\s*(['"`])([\s\S]*?)\2/g)) {
+      out.set(m[1], m[3]);
+    }
+  }
+  return out;
+}
+
+function versionReadsOffView(src: string, exported: Map<string, string> = new Map()): number[] {
   const lines: number[] = [];
   const fromRe = /\.from\(\s*([^)]*?)\s*\)/g;
   let m: RegExpExecArray | null;
@@ -316,7 +327,7 @@ function versionReadsOffView(src: string): number[] {
     const select = /\.select\(\s*([\s\S]*?)\s*(?:,\s*\{|\)\s*(?:\.|$))/.exec(chain);
     if (!select) continue;
     const arg = select[1].trim();
-    const constant = /^[A-Z][A-Z0-9_]*$/.test(arg) ? sameFileStringConstant(src, arg) : undefined;
+    const constant = /^[A-Z][A-Z0-9_]*$/.test(arg) ? (sameFileStringConstant(src, arg) ?? exported.get(arg)) : undefined;
     if (!VERSION_TOKEN.test(arg) && !(constant !== undefined && VERSION_TOKEN.test(constant))) continue;
     if (!['INVOICES_POSTABLE', "'invoices_postable'", '"invoices_postable"'].includes(m[1])) {
       lines.push(src.slice(0, m.index).split('\n').length);
@@ -339,8 +350,10 @@ function changesInvoiceColumns(sql: string): boolean {
 describe('the posting version is read only from invoices_postable', () => {
   it('every select of invoice_post_version in src/ is on invoices_postable', () => {
     const offences: string[] = [];
-    for (const file of sourceFiles(SRC)) {
-      for (const line of versionReadsOffView(readFileSync(file, 'utf8'))) offences.push(`${relative(SRC, file).replace(/\\/g, '/')}:${line}`);
+    const files = sourceFiles(SRC);
+    const exported = exportedStringConstants(files);
+    for (const file of files) {
+      for (const line of versionReadsOffView(readFileSync(file, 'utf8'), exported)) offences.push(`${relative(SRC, file).replace(/\\/g, '/')}:${line}`);
     }
     expect(offences).toEqual([]);
   });
@@ -351,6 +364,11 @@ describe('the posting version is read only from invoices_postable', () => {
     expect(versionReadsOffView("const LIST = `${INVOICE_POST_VERSION_COLUMNS}, id`;\nsupabase.from('invoices').select(LIST, { count: 'exact' });")).toEqual([2]);
     expect(versionReadsOffView("supabase.from(INVOICES_POSTABLE).select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`).eq('id', x);")).toEqual([]);
     expect(versionReadsOffView("supabase.from('invoices').select('id, status').eq('id', x);")).toEqual([]);
+    // A constant imported from another file (Luna round 3).
+    const exported = new Map([['POSTING_COLUMNS', '${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}']]);
+    expect(versionReadsOffView("supabase.from('invoices').select(POSTING_COLUMNS).eq('id', x);", exported)).toEqual([1]);
+    expect(versionReadsOffView("supabase.from(INVOICES_POSTABLE).select(POSTING_COLUMNS).eq('id', x);", exported)).toEqual([]);
+    expect(exportedStringConstants([join(HERE, 'costFields.ts')]).get('INVOICE_POST_VERSION_COLUMNS')).toBe('invoice_post_version');
   });
 
   it("the view's columns are every invoices column except the cost columns (schema registry)", () => {
