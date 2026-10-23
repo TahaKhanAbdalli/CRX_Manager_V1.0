@@ -200,8 +200,9 @@ export default function NewDelivery() {
       toast('error', 'Failed to load order items.');
     }
     // Without its items and customer (RUP and inventory checks, driver notice) the order cannot be delivered.
-    if (custRes.error || itemsRes.error || !custRes.data) {
-      setOrderProblem(custRes.error || itemsRes.error
+    // A lines read that answers with no list is failed too: it would read as "nothing left to deliver".
+    if (custRes.error || itemsRes.error || !custRes.data || !itemsRes.data) {
+      setOrderProblem(custRes.error || itemsRes.error || !itemsRes.data
         ? 'The order details could not be loaded.'
         : 'The order\'s customer could not be loaded.');
       setOrderLoadFailed(true);
@@ -221,10 +222,19 @@ export default function NewDelivery() {
         .eq('customer_id', cust.id)
         .order('is_default', { ascending: false });
       if (seq !== orderLoadSeqRef.current) return;
-      if (addrErr) {
-        Sentry.captureException(addrErr, { tags: { source: 'fetch', action: 'load_addresses' } });
+      // Without the addresses no default is chosen, and the delivery would be created
+      // with no address and nothing saying why (To-Do 10.5).
+      if (addrErr || !addrData) {
+        Sentry.captureException(addrErr ?? new Error('customer_addresses read returned no list'), { tags: { source: 'fetch', action: 'load_addresses' } });
+        toast('error', 'Failed to load the customer\'s addresses.');
+        setCustomer(null);
+        setOrderItems([]);
+        setOrderProblem('The customer\'s delivery addresses could not be loaded.');
+        setOrderLoadFailed(true);
+        setLoadingDetails(false);
+        return;
       }
-      const addrs = (addrData || []) as CustomerAddress[];
+      const addrs = addrData as CustomerAddress[];
       setAddresses(addrs);
       const defaultAddr = addrs.find((a) => a.is_default);
       if (defaultAddr) setSelectedAddressId(defaultAddr.id);
@@ -643,9 +653,12 @@ export default function NewDelivery() {
             </div>
           ) : deliveryItems.length === 0 ? (
             <p className="text-sm text-secondary py-4 text-center">
-              {orderItems.length === 0
-                ? 'No items found on this order'
-                : 'All items have been fully delivered'}
+              {/* After a failed load the lines are unknown, not missing. */}
+              {orderLoadFailed
+                ? 'The order\'s items are not shown because the order did not finish loading.'
+                : orderItems.length === 0
+                  ? 'No items found on this order'
+                  : 'All items have been fully delivered'}
             </p>
           ) : (
             <div className="space-y-3">

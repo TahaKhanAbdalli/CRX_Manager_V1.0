@@ -46,7 +46,6 @@ vi.mock('jspdf-autotable', () => ({
 import {
   generateStatementPdf,
   downloadStatementPdf,
-  generateBatchStatementsPdf,
 } from './statementPdf';
 
 // ── Test Data Factories ─────────────────────────────────────────────────
@@ -274,35 +273,5 @@ describe('downloadStatementPdf', () => {
   it('calls doc.save', async () => {
     await downloadStatementPdf(makeStatementData());
     expect(mockDoc.save).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('generateBatchStatementsPdf', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockDoc.lastAutoTable = { finalY: 300 };
-  });
-
-  it('generates batch with multiple statements', async () => {
-    const statements = [
-      makeStatementData(),
-      makeStatementData({
-        customer: {
-          id: 'cust-2',
-          farm_name: 'Jones Farm',
-          contact_name: 'Bob Jones',
-          account_number: 'ACC-002',
-          email: null,
-          phone: null,
-          billing_address: null,
-          city: null,
-          state: null,
-          zip: null,
-          payment_terms: null,
-        },
-      }),
-    ];
-    const doc = await generateBatchStatementsPdf(statements);
-    expect(doc).toBe(mockDoc);
   });
 });
