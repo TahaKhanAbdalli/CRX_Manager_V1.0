@@ -256,6 +256,10 @@ describe('JobDetail recipe pricing tier', () => {
     await pickProduct(/Oz Rate Chem/);
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('is not a whole number of cents per oz')));
     expect(priceInput().value).toBe('');
+    // Even at quantity 0 this blank blocks: the product HAS a price, so a saved $0 would pass every
+    // check once the quantity rose and bill nothing.
+    fireEvent.change(screen.getByText('Total Applied').nextElementSibling as HTMLInputElement, { target: { value: '0' } });
+    expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
   });
 
   it('a blank price on a quantity-0 line does not block the save (it bills nothing)', async () => {

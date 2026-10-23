@@ -1656,10 +1656,19 @@ export default function JobDetail() {
       // that has already lost precision before any arithmetic runs. Refusing above 2^53
       // keeps every cents amount that reaches the total exactly representable.
       ] as const).find(([side, raw]) => {
-        // A customer-supplied line, or one with a quantity of 0, bills nothing, so a blank price
-        // there (a picked product that states no price) saves as 0 instead of blocking the save.
-        // The job_chemicals price trigger skips quantity 0 too.
-        if (side === 'price' && raw === '' && ((c.customer_supplied ?? false) || parseFloat(c.quantity) === 0)) return false;
+        // A customer-supplied line is never billed, so a blank price there (a picked product that
+        // states no price) saves as 0 instead of blocking the save.
+        if (side === 'price' && raw === '' && (c.customer_supplied ?? false)) return false;
+        // Neither is a quantity-0 line whose product states no price for the tier (the
+        // job_chemicals price trigger skips quantity 0 too). Raising its quantity later is refused
+        // by the no-price check below and by that trigger. A blank left by a price that is not
+        // whole cents in the line's unit still blocks: that product HAS a price, so a saved 0
+        // would pass both checks once the quantity rose and bill nothing.
+        if (side === 'price' && raw === '' && parseFloat(c.quantity) === 0) {
+          const product = allProducts.find((p) => p.id === c.product_id);
+          const tier = customerPricingTier === 2 || customerPricingTier === 3 ? customerPricingTier : 1;
+          if (product && getStatedTierPriceCents(product, tier) == null) return false;
+        }
         return !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0;
       });
       if (badCents) {
