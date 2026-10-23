@@ -78,6 +78,32 @@ BEGIN
   VALUES ('[SMOKE] Loop Chem B ' || v_sfx, 'GL', '[SMOKE]-EPA-LB', 'liquid')
   RETURNING id INTO v_prod_b;
 
+  -- Since 20260812115237 a sale needs a positive catalog cost (COST_BASIS_REQUIRED), and a product
+  -- is priced only through the governed preview/apply path (the smoke-govern-invoice-order-money-
+  -- lifecycle.sql pattern). The costs match the job's cost per unit below.
+  v_res := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(
+      jsonb_build_object('product_id', v_prod_a, 'row_version', 1, 'pricing_mode', 'price_driven',
+        'new_cost', '10.00', 'tier1_price', '25.00', 'tier2_price', '25.00', 'tier3_price', '25.00'),
+      jsonb_build_object('product_id', v_prod_b, 'row_version', 1, 'pricing_mode', 'price_driven',
+        'new_cost', '8.00', 'tier1_price', '20.00', 'tier2_price', '20.00', 'tier3_price', '20.00')
+    ),
+    v_admin,
+    '[SMOKE] pricing-preview-' || v_sfx
+  );
+  IF v_res->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_res->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP_FAILED: governed product pricing preview: %', v_res;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    '[SMOKE] pricing-apply-' || v_sfx
+  );
+
   INSERT INTO fields (customer_id, field_name, crop_type, total_acres)
   VALUES (v_customer, '[SMOKE] Loop Field ' || v_sfx, 'soybeans', 120)
   RETURNING id INTO v_field;

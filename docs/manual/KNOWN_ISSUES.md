@@ -799,7 +799,7 @@ leave these open:
 - **The never-posted draft CS-2026-0055** (ORD-2026-0186's May delivery DEL-00074) is left as is; its
   order's other delivery was recorded as billed in Chem Man.
 
-## OPEN 2026-10-22 — Smoke chains rotted by the PO cost lock: `adversarial_money_inventory_closeout` fails live at its bulk-PO step
+## RESOLVED 2026-10-22 (same day) — Smoke chains rotted by the PO cost lock: `adversarial_money_inventory_closeout` fails live at its bulk-PO step
 
 **What it is.** Running `scripts/smoke/smoke-adversarial-money-inventory-closeout.sql` live on
 2026-10-22 (after row 968 applied) failed at file line 376: an admin re-importing the same vendor
@@ -811,11 +811,18 @@ chain rolled back, so nothing was kept. Its posting step (a rep refused for an i
 name) ran before the failure and passed. The later assertions in the chain that expect the rep's line
 costs (`3372` / `333` cents) would fail for the same reason.
 
-**Open question for the fix (business behaviour, not just the test):** should a rep's import and an
-admin's import of the same vendor document count as one document? Today they do not, so an admin
-re-entering a rep's bulk import is refused rather than told it already exists. The fix is either a
-smoke update (rep imports without cost, admin sets cost through `set_purchase_order_item_costs`) or a
-fingerprint that ignores cost for non-admins. Logged with the coordinator 2026-10-22.
+**Fixed in the test, behaviour kept (2026-10-22, evening).** The chain now follows the admin-only cost
+flow: its bulk imports send no cost, so a rep's and an admin's import of one document fingerprint the
+same and the admin gets `already_imported`; the admin then prices the line with
+`set_purchase_order_item_costs`, and the `3372` / `333` cent checks hold. It returned
+`SMOKE_PASS_ROLLBACK` live the same evening and in a disposable copy of the real schema with every
+migration replayed.
+
+The app behaviour stays as it is: when an admin's import of a document a rep already imported carries
+costs, it is refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT` instead of being told it already exists.
+That is safe (no second purchase order is made). The admin's path is to open the rep's purchase order
+and set its costs. Making the message friendlier would need a fingerprint that ignores cost, which is
+a migration on the import path for a rare case; not planned unless it causes confusion in use.
 
 ## RESOLVED 2026-10-22 (opened 2026-10-09) — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
 
