@@ -3448,6 +3448,8 @@ try {
     "Add with no content": "*** Begin Patch\n*** Add File: src/a.ts\n*** End Patch\n",
     "Delete with a body": "*** Begin Patch\n*** Delete File: src/a.ts\n+x\n*** End Patch\n",
     "Update with no hunk": "*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch\n",
+    "Update with context only": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n context\n*** End Patch\n",
+    "Update with only an end-of-file marker": "*** Begin Patch\n*** Update File: src/a.ts\n*** End of File\n*** End Patch\n",
     "Move not after Update": "*** Begin Patch\n*** Add File: src/a.ts\n*** Move to: src/b.ts\n+a\n*** End Patch\n",
     "Move after a hunk": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n+a\n*** Move to: src/b.ts\n*** End Patch\n",
     "unknown header": "*** Begin Patch\n*** Rename File: src/a.ts\n*** End Patch\n",
@@ -3481,7 +3483,7 @@ try {
   assert.equal(nativePatchEnvelope("apply_patch", { patch: addProbe }), null, "the patch-field shape keeps its existing route");
 
   // Only the exact native tool is taken off the shell route.
-  for (const toolName of ["Bash", "PowerShell", "shell", "exec_command", "Edit", "Write", "mcp__x__apply_patch", "apply_patch_extra", "Apply_Patch", "functions.apply_patch"]) {
+  for (const toolName of ["Bash", "PowerShell", "shell", "exec_command", "Edit", "Write", "mcp__x__apply_patch", "apply_patch_extra", "Apply_Patch", "functions.apply_patch", "apply_patch\n", " apply_patch", "apply_patch "]) {
     for (const field of ["command", "cmd"]) {
       assert.equal(
         evaluateProductionAction({ toolName, toolInput: { [field]: addProbe } }).blocked,

@@ -1478,7 +1478,7 @@ export function parseNativePatch(text) {
   let bodyLines = 0;
   let sawMoveWindow = false; // `*** Move to:` is legal only straight after an Update header
   const finishFile = (index) => {
-    if (kind === "Update" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Update File section has no hunk` };
+    if (kind === "Update" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Update File section has no added or removed line` };
     if (kind === "Add" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Add File section has no content` };
     return null;
   };
@@ -1514,9 +1514,10 @@ export function parseNativePatch(text) {
       continue;
     }
     // Update File body: @@ hunk markers, ' ' / '+' / '-' lines, a bare empty
-    // line (context), or the end-of-file marker.
+    // line (context), or the end-of-file marker. Only an added or removed line
+    // counts as a change: a section of context alone edits nothing.
     if (line.startsWith("@@") || line === "*** End of File" || line === "" || /^[ +-]/.test(line)) {
-      bodyLines += 1;
+      if (/^[+-]/.test(line)) bodyLines += 1;
       continue;
     }
     return { ok: false, reason: `line ${i + 1}: not a valid patch line` };
