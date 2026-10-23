@@ -13,6 +13,22 @@ const MAX_READ_ATTEMPTS = 3;
 
 export const LIST_CHANGED_WHILE_LOADING = 'The list changed while it was loading. Reload to try again.';
 
+export const PAGE_RETURNED_NO_LIST = 'The read returned no list. Reload to try again.';
+
+/**
+ * Wrap one page of a fetchAllRows read so a page that answers with no list and
+ * no error counts as a failed page. fetchAllRows reads such a page as an empty
+ * one, which a screen would show as "No … found" or $0 (To-Do 10.5). Callers
+ * opt in; fetchAllRows itself is unchanged for everyone else.
+ */
+export async function pageWithList<T>(page: PromiseLike<PageResult<T>>): Promise<PageResult<T>> {
+  const result = await page;
+  if (!result.error && (result.data === null || result.data === undefined)) {
+    return { data: null, error: { message: PAGE_RETURNED_NO_LIST }, count: null };
+  }
+  return result;
+}
+
 /**
  * Read every row of a query, page by page. One request is silently cut off at
  * the PostgREST row cap, so a list or a ledger recompute over a single read

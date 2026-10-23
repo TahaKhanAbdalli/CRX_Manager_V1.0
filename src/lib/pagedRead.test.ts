@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fetchAllRows, fetchAllRowsForIds, LIST_CHANGED_WHILE_LOADING } from './pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, LIST_CHANGED_WHILE_LOADING, PAGE_RETURNED_NO_LIST, pageWithList } from './pagedRead';
 
 type Row = { id: string };
 
@@ -257,5 +257,22 @@ describe('fetchAllRowsForIds', () => {
     });
     expect(calls).toBe(0);
     expect(result).toEqual({ data: [], error: null });
+  });
+});
+
+describe('pageWithList', () => {
+  it('fails a read whose page answers with no list, which fetchAllRows alone reads as empty', async () => {
+    const noList = () => Promise.resolve({ data: null, error: null, count: null });
+    expect(await fetchAllRows<Row>(noList)).toEqual({ data: [], error: null });
+    expect(await fetchAllRows<Row>(() => pageWithList(noList()))).toEqual({ data: null, error: { message: PAGE_RETURNED_NO_LIST } });
+  });
+
+  it('passes a real page, an empty page and an error through unchanged', async () => {
+    const page = { data: [{ id: 'a' }], error: null, count: 1 };
+    expect(await pageWithList(Promise.resolve(page))).toBe(page);
+    const empty = { data: [], error: null, count: 0 };
+    expect(await pageWithList(Promise.resolve(empty))).toBe(empty);
+    const failed = { data: null, error: { message: 'boom' }, count: null };
+    expect(await pageWithList(Promise.resolve(failed))).toBe(failed);
   });
 });
