@@ -16,8 +16,11 @@
 -- quantities, units, notes). Cost is not document identity: an admin corrects
 -- cost on the existing purchase order with set_purchase_order_item_costs. A real
 -- content change (different quantity, product, unit or invoice date) still
--- raises BULK_PO_DOCUMENT_CONTENT_CONFLICT, and a same-key retry still compares
--- against the stored fingerprint.
+-- raises BULK_PO_DOCUMENT_CONTENT_CONFLICT. A same-key retry (a lost response)
+-- must be the exact request, cost included: a new bulk import binds a
+-- cost-inclusive request fingerprint to its idempotency receipt
+-- (_bind_replay_receipt_20261015, the house receipt binder), and a retry that
+-- changed only a cost gets the conflict instead of a "saved" replay.
 --
 -- Stored fingerprints: a claim stored before this migration from lines that
 -- carried cost would keep its old hash, so a same-key retry of that request
@@ -56,6 +59,14 @@ BEGIN
   IF v_md5 IS DISTINCT FROM 'f5b2c9e81df528a449881ecd339ee54a' THEN
     RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text) changed since 2026-10-22 (md5 %)', COALESCE(v_md5, 'missing');
   END IF;
+  -- The receipt binder the new body calls (20261015).
+  SELECT md5(replace(prosrc, chr(13), ''))
+    INTO v_md5
+    FROM pg_proc
+   WHERE oid = to_regprocedure('public._bind_replay_receipt_20261015(text,text,text)');
+  IF v_md5 IS DISTINCT FROM '722ddd3b5d9174c598735cb321088f73' THEN
+    RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: public._bind_replay_receipt_20261015(text,text,text) changed since 2026-10-22 (md5 %)', COALESCE(v_md5, 'missing');
+  END IF;
 END
 $preflight$;
 
@@ -87,6 +98,9 @@ DECLARE
   v_expected_intent_key text;
   v_canonical_items jsonb;
   v_content_fingerprint text;
+  v_request_items jsonb;
+  v_request_fingerprint text;
+  v_existing_request_fingerprint text;
   v_existing_po_id uuid;
   v_existing_intent_key text;
   v_existing_content_fingerprint text;
@@ -175,6 +189,29 @@ BEGIN
       'hex'
     );
 
+    -- A same-key retry must be the exact request, cost included (the lines as
+    -- this writer received them): bound to the idempotency receipt below.
+    SELECT COALESCE(
+      jsonb_agg(item.value ORDER BY item.value::text),
+      '[]'::jsonb
+    )
+      INTO v_request_items
+      FROM jsonb_array_elements(p_items) AS item(value);
+
+    v_request_fingerprint := encode(
+      extensions.digest(
+        convert_to(
+          jsonb_build_object(
+            'invoice_date', v_invoice_date,
+            'items', v_request_items
+          )::text,
+          'UTF8'
+        ),
+        'sha256'
+      ),
+      'hex'
+    );
+
     -- Replace any legacy browser digest with the server-derived key consumed
     -- by the atomic writer's claim insert. The marker itself is not persisted.
     v_payload := jsonb_set(
@@ -232,6 +269,17 @@ BEGIN
           RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
         END IF;
         IF v_existing_content_fingerprint IS DISTINCT FROM v_content_fingerprint THEN
+          RAISE EXCEPTION 'BULK_PO_DOCUMENT_CONTENT_CONFLICT';
+        END IF;
+        -- The document fingerprint ignores cost; the receipt binds the exact
+        -- request, so a retry that changed only a cost is not replayed as saved.
+        SELECT receipt.request_fingerprint
+          INTO v_existing_request_fingerprint
+          FROM public.idempotency_keys AS receipt
+         WHERE receipt.idempotency_key = p_idempotency_key
+           AND receipt.operation = 'save_purchase_order';
+        IF v_existing_request_fingerprint IS NOT NULL
+           AND v_existing_request_fingerprint IS DISTINCT FROM v_request_fingerprint THEN
           RAISE EXCEPTION 'BULK_PO_DOCUMENT_CONTENT_CONFLICT';
         END IF;
       END IF;
@@ -305,6 +353,11 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'BULK_PO_IMPORT_CLAIM_MISSING';
     END IF;
+    PERFORM public._bind_replay_receipt_20261015(
+      p_idempotency_key,
+      'save_purchase_order',
+      v_request_fingerprint
+    );
   END IF;
 
   RETURN v_result;
@@ -336,14 +389,15 @@ BEGIN
      OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] THEN
     RAISE EXCEPTION 'Internal purchase-order writer security is incorrect';
   END IF;
-  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '8abda47ee41b50063c45a6c181f90598' THEN
+  IF md5(replace(v_source, chr(13), '')) IS DISTINCT FROM '16f2836a375c917fb393054e69fd7645' THEN
     RAISE EXCEPTION 'Bulk-PO cost-free fingerprint body is not the reviewed body';
   END IF;
   IF v_source NOT LIKE '%raw.value - ''unit_cost'' - ''unit_cost_cents''%'
      OR v_source NOT LIKE '%v_bulk_intent_key := v_expected_intent_key%'
      OR v_source NOT LIKE '%''{bulk_import_intent_key}''%to_jsonb(v_bulk_intent_key)%'
      OR (length(v_source) - length(replace(v_source, 'BULK_PO_DOCUMENT_CONTENT_CONFLICT', '')))
-        / length('BULK_PO_DOCUMENT_CONTENT_CONFLICT') <> 2
+        / length('BULK_PO_DOCUMENT_CONTENT_CONFLICT') <> 3
+     OR v_source NOT LIKE '%public._bind_replay_receipt_20261015(%v_request_fingerprint%'
      OR v_source NOT LIKE '%public.next_po_number()%' THEN
     RAISE EXCEPTION 'Bulk-PO cost-free fingerprint body is incomplete';
   END IF;

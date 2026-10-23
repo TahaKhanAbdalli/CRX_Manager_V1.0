@@ -7,8 +7,12 @@
   the only one. The admin sets cost on it with `set_purchase_order_item_costs`.
 - Because a re-import never changes costs, the bulk-import screen now tells an admin, when it skips a document as already
   imported, to check costs in Supplier POs (`BulkPOImport.tsx`); a sales rep's message is unchanged.
-- A changed quantity, product, unit or invoice date is still refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`, and a
-  same-key retry still checks the stored fingerprint.
+- A changed quantity, product, unit or invoice date is still refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`. A
+  same-key retry (a lost response) must be the exact request, cost included: the import binds a cost-inclusive request
+  fingerprint to its idempotency receipt (`_bind_replay_receipt_20261015`), so a retry that changed only a cost is
+  refused rather than replayed as saved.
+- The migration refuses to apply while any import claim exists (live had none), so no claim keeps a fingerprint made
+  under the old rule.
 - Proof: `node scripts/smoke/prove-bulk-po-fingerprint-ignores-cost-real-schema.mjs`. The live smoke chain
   `smoke-adversarial-money-inventory-closeout.sql` checks rep-then-admin-with-cost and a date change.
 - `docs/manual/KNOWN_ISSUES.md` (the "Smoke chains rotted by the PO cost lock" entry) and

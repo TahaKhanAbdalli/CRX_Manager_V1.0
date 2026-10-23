@@ -308,7 +308,11 @@ const SCENARIOS = [
     ['exact retry, same key', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ cents: COST })]), 'ok|saved:true', 'same'],
     ['retry, same key, other quantity', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ qty: 12, cents: COST })]), CONFLICT, 'same'],
     ['retry, same key, other date', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ cents: COST })], '2026-10-19'), CONFLICT, 'same'],
-    ['retry, same key, only the cost changed', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ cents: 444 })]), CONFLICT, 'ok|saved:true'],
+    // The receipt binds the exact request, cost included: a lost-response retry with another cost is
+    // refused, not replayed as "saved" while the PO keeps the first cost.
+    ['retry, same key, only the cost changed', U.ADMIN, imp(U.ADMIN, 'D4', 'k4', [line({ cents: 444 })]), CONFLICT, 'same'],
+    ['the receipt carries a request fingerprint', 'owner', "(SELECT (request_fingerprint ~ '^[0-9a-f]{64}$')::text || ':' || (request_actor_id IS NOT NULL)::text FROM public.idempotency_keys WHERE idempotency_key = 'k4')",
+      'ok|<null>', 'ok|true:true'],
     ['the stored cost is the first one', 'owner', `${NEW_POS} || '|' || ${LINECOST('D4')}`, `ok|1|10:${COST}`, 'same'],
     ['rep imports another document', U.REP, imp(U.REP, 'D5', 'k5', [line()]), 'ok|saved:true', 'same'],
     ['rep exact retry, same key', U.REP, imp(U.REP, 'D5', 'k5', [line()]), 'ok|saved:true', 'same'],
@@ -381,19 +385,30 @@ function preflightRefuses(phase) {
   console.log(`[prover] PREFLIGHT (${phase}): ${cases.map(([label]) => label).join(' and ')} ${cases.length > 1 ? 'each abort' : 'is refused by'} the candidate`);
 }
 
-// MUTATION: strip only unit_cost_cents. An admin line still carries unit_cost, so the conflict returns:
-// both keys must go for the rep-then-admin import to match.
+// MUTATION 1: strip only unit_cost_cents. An admin line still carries unit_cost, so the conflict
+// returns: both keys must go for the rep-then-admin import to match.
+// MUTATION 2: skip the receipt's request-fingerprint check. A same-key retry that changed only the
+// cost then replays "saved": the receipt binding is what refuses it.
 function mutation() {
-  const body = lf(CANDIDATE).split('$preflight$;')[1].split('REVOKE ALL ON FUNCTION')[0]
-    .replace("raw.value - 'unit_cost' - 'unit_cost_cents'", "raw.value - 'unit_cost_cents'");
-  assert.ok(body.includes("raw.value - 'unit_cost_cents'") && !body.includes("- 'unit_cost' -"), 'the mutation did not apply');
+  const candidateBody = lf(CANDIDATE).split('$preflight$;')[1].split('REVOKE ALL ON FUNCTION')[0];
+  const body = candidateBody.replace("raw.value - 'unit_cost' - 'unit_cost_cents'", "raw.value - 'unit_cost_cents'");
+  assert.ok(body.includes("raw.value - 'unit_cost_cents'") && !body.includes("- 'unit_cost' -"), 'mutation 1 did not apply');
   const out = scenario([
     { key: 'rep imports', as: U.REP, call: imp(U.REP, 'M1', 'km-rep', [line()]) },
     { key: 'admin with cost', as: U.ADMIN, call: imp(U.ADMIN, 'M1', 'km-admin', [line({ cents: COST })]) },
   ], body);
   assert.equal(out['rep imports'], 'ok|saved:true');
-  assert.match(out['admin with cost'], CONFLICT, `MUTATION: with unit_cost kept the admin import should conflict, got ${out['admin with cost']}`);
-  console.log('[prover] MUTATION: stripping only unit_cost_cents brings the conflict back -- so both keys must leave the fingerprint');
+  assert.match(out['admin with cost'], CONFLICT, `MUTATION 1: with unit_cost kept the admin import should conflict, got ${out['admin with cost']}`);
+
+  const unbound = candidateBody.replace('IF v_existing_request_fingerprint IS NOT NULL\n', 'IF false AND v_existing_request_fingerprint IS NOT NULL\n');
+  assert.notEqual(unbound, candidateBody, 'mutation 2 did not apply');
+  const out2 = scenario([
+    { key: 'admin imports', as: U.ADMIN, call: imp(U.ADMIN, 'M2', 'km2', [line({ cents: COST })]) },
+    { key: 'same key, other cost', as: U.ADMIN, call: imp(U.ADMIN, 'M2', 'km2', [line({ cents: 444 })]) },
+  ], unbound);
+  assert.equal(out2['admin imports'], 'ok|saved:true');
+  assert.equal(out2['same key, other cost'], 'ok|saved:true', `MUTATION 2: without the receipt check a cost-only retry should replay, got ${out2['same key, other cost']}`);
+  console.log('[prover] MUTATION: stripping only unit_cost_cents brings the conflict back; skipping the receipt check replays a cost-only retry as saved -- so each behaviour comes from the code it names');
 }
 
 function main() {
