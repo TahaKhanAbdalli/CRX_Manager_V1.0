@@ -53,7 +53,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { solExemptPathProblem } from "../.claude/hooks/sol-exempt-lib.mjs";
-import { carriedSolProof } from "../.claude/hooks/codex-push-lib.mjs";
+import { carriedSolProof, SOL_PROOF_MAX_AGE_MS } from "../.claude/hooks/codex-push-lib.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -1094,7 +1094,8 @@ export function captureReviewOutput(root, result, runInfo = {}) {
 // was carried (codex_ran:false, carried_forward:true), and is accepted by
 // proofValid() in codex-push-lib.mjs. Anything uncertain refuses, and the
 // operator falls back to the full review.
-export const CARRY_SOURCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// The same 24 hours a Sol proof stays valid at the merge gates.
+export const CARRY_SOURCE_MAX_AGE_MS = SOL_PROOF_MAX_AGE_MS;
 // Paths the collision check is pointed at first (COLLISION_FOCUS.json) because
 // their changes can break the other side without sharing a file: the database,
 // the guards and settings that gate landing, the proof writers, CI,

@@ -42,6 +42,9 @@ import {
 import { findCodeRabbitSkip, skipPullRequestFor, skipStateDirs } from "./coderabbit-skip-lib.mjs";
 
 const PROTECTED_BRANCH_RE = /^(?:main|master|production)$/i;
+// A live apply keeps the 30-minute Sol window (Mason, 2026-10-23: "Keep
+// migration apply at 30 minutes"); the merge gates accept a Sol proof for 24 hours.
+export const APPLY_SOL_PROOF_MAX_AGE_MS = 30 * 60 * 1000;
 
 function refuse(why) {
   return {
@@ -267,7 +270,7 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees, sessio
         if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(file)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, file), "utf8")); } catch { continue; }
-        if (proofValid(data, head, now, baseSha)) { proven = true; break; }
+        if (proofValid(data, head, now, baseSha, APPLY_SOL_PROOF_MAX_AGE_MS)) { proven = true; break; }
       }
     } catch { /* an unreadable directory holds no proof — keep looking */ }
     if (proven) break;

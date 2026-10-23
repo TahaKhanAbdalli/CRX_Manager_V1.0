@@ -127,7 +127,7 @@ outside that list, including every `.claude/` file, still needs Sol. Do not burn
 through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
 
 **Sol must be the LAST review before the merge — so it does NOT run in this step.** Its proof binds
-to the HEAD it reviewed and to GitHub's real base, expires after 30 minutes, and the proof writer
+to the HEAD it reviewed and to GitHub's real base, lasts 24 hours on an unchanged head and base, and the proof writer
 requires a clean, committed worktree, so any commit afterwards — including a CodeRabbit fix — voids
 it. Run only the Luna rounds here. Sequence: Luna clean (Step 6) → docs + commit (Step 7) → push,
 draft PR, checks, mark ready, CodeRabbit's comments handled (Step 8) → Sol on that exact HEAD (skipped only for a
@@ -157,8 +157,8 @@ Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it r
 Immediately inspect repository and branch state with `git status --short --branch` and `git branch --show-current`, then commit **on the branch** with a clear message. The fast husky pre-commit hook runs private-artifact containment, staged SQL/frontend checks, conditional agent-parity/dependency checks, and the ledger guard (2026-07-13); lint/typecheck/build/tests already ran above and remain enforced at pre-push/CI rather than repeating at commit. A commit staging agent-surface files (`.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, `scripts/normalize-eol.mjs`, `scripts/agent-health-check.mjs`, `scripts/run-claude-review.mjs`, `scripts/write-codex-push-proof.mjs`, `scripts/sync-agent-workflows.mjs`, or a new `supabase/migrations/*.sql` file) must also stage a ledger update in the same commit — a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry (preferred), or `docs/CHANGELOG.md`, a `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, `docs/reference/migration-history.md`, or a `docs/loops/` ledger. Step 7's changelog.d entry normally satisfies this. The entry must be ADDED by this commit and must actually describe the change: modifying, renaming, or emptying an existing entry does not count, and neither does a bare date heading. If the hook rejects, fix and retry (never `--no-verify`).
 
 **Do NOT run the Sol pass yet.** It runs in Step 8, after CodeRabbit's review of the frozen head is handled — the
-proof expires in 30 minutes and is voided by any later commit, and CodeRabbit's findings often add
-one.
+proof is voided by any later commit (and a live migration apply needs it under 30 minutes), and
+CodeRabbit's findings often add one.
 
 ## Step 8 — The production decision
 
