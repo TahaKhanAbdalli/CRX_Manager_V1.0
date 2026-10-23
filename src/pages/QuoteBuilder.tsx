@@ -26,11 +26,12 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import CustomerSearchPicker, { CUSTOMER_SEARCH_SELECT, type CustomerSearchResult } from '../components/customers/CustomerSearchPicker';
 import FieldSearchPicker, { FIELD_SEARCH_SELECT, type FieldSearchResult } from '../components/fields/FieldSearchPicker';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { billableAcres } from '../lib/fieldGeometry';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -306,6 +307,11 @@ export default function QuoteBuilder() {
   // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
   // position for an open booking (sent/revised quote), via get_booking_settlement.
   const [bookingSettlement, setBookingSettlement] = useState<BookingSettlement | null>(null);
+  // The settlement read failed: the money card says so instead of disappearing.
+  const [bookingSettlementFailed, setBookingSettlementFailed] = useState(false);
+  const [bookingSettlementAttempt, setBookingSettlementAttempt] = useState(0);
+  // The saved quote this route opened could not be read: show that, not a blank new-quote form.
+  const [quoteLoadFailedId, setQuoteLoadFailedId] = useState<string | null>(null);
   const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
@@ -411,6 +417,9 @@ export default function QuoteBuilder() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [quoteId, setQuoteId] = useState<string | null>(id || null);
+  // The saved quote whose snapshot is on screen. `quoteId` starts as the URL's id
+  // before anything loads, so it cannot tell a loaded quote from a failed first load.
+  const [installedQuoteId, setInstalledQuoteId] = useState<string | null>(null);
   // Scoped by the quote this save actually TARGETS. F1 makes an ambiguous reply
   // RETAIN this key, and QuoteBuilder does not remount when only `:id` changes (no
   // `<x>/:id` route in src/App.tsx carries a `key` prop). Page-wide, an unresolved
@@ -724,20 +733,28 @@ export default function QuoteBuilder() {
   // status changes (e.g. after a draw flips it). Read-only; clears otherwise.
   useEffect(() => {
     const isOpenBooking = isEditing && quoteId && (currentStatus === 'sent' || currentStatus === 'revised');
-    if (!isOpenBooking) { setBookingSettlement(null); return; }
+    if (!isOpenBooking) { setBookingSettlement(null); setBookingSettlementFailed(false); return; }
+    // A new read (Try again, or another quote) starts clean: no earlier failure or figures.
+    setBookingSettlementFailed(false);
+    setBookingSettlement(null);
     let cancelled = false;
     (async () => {
       try {
         const { data, error } = await supabase.rpc('get_booking_settlement', { p_quote_id: quoteId });
         if (error) throw error;
         const s = assertRpcResult<BookingSettlement>(data, 'get_booking_settlement');
-        if (!cancelled) setBookingSettlement(s && s.found ? s : null);
-      } catch {
-        if (!cancelled) setBookingSettlement(null);
+        if (cancelled) return;
+        setBookingSettlement(s && s.found ? s : null);
+        setBookingSettlementFailed(false);
+      } catch (err) {
+        if (cancelled) return;
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'get_booking_settlement' } });
+        setBookingSettlement(null);
+        setBookingSettlementFailed(true);
       }
     })();
     return () => { cancelled = true; };
-  }, [isEditing, quoteId, currentStatus]);
+  }, [isEditing, quoteId, currentStatus, bookingSettlementAttempt]);
 
   const loadActivePlannedHolds = useCallback(async (targetQuoteId: string) => {
     const { data, error } = await supabase
@@ -846,30 +863,34 @@ export default function QuoteBuilder() {
     // Customers and fields are searched by their pickers; the product list is read whole because
     // pricing, the product picker's local search and the admin cost overlay all use it.
     const [prodRes, convRes] = await Promise.all([
-      fetchAllRows((from, to) => supabase
+      fetchAllRows((from, to) => pageWithList(supabase
         .from('products')
         .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
         .eq('is_active', true)
         .order('product_name')
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
       supabase.from('unit_conversions').select('*'),
     ]);
 
-    if (prodRes.error) {
-      Sentry.captureException(prodRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
+    // A read that answers with no list is a failed read too: an empty conversion
+    // table would price every unit at a factor of 1 (To-Do 10.5).
+    const prodFailed = !!prodRes.error || !prodRes.data;
+    const convFailed = !!convRes.error || !convRes.data;
+    if (prodFailed) {
+      Sentry.captureException(prodRes.error ?? new Error('products read returned no list'), { tags: { source: 'fetch', page: 'quote_builder' } });
       toast('error', 'Failed to load products.');
     }
-    if (convRes.error) {
-      Sentry.captureException(convRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
+    if (convFailed) {
+      Sentry.captureException(convRes.error ?? new Error('unit_conversions read returned no list'), { tags: { source: 'fetch', page: 'quote_builder' } });
       toast('error', 'Failed to load unit conversions.');
     }
 
     // Cost and margin are admin-only (Mason, 2026-10-15): only an admin's product list carries cost.
     // A failed read leaves no list at all, never a partial or previous one. Without unit conversions
     // every unit would convert at a factor of 1, so that failure blocks pricing the same way.
-    let productRows = prodRes.error || convRes.error ? [] : ((prodRes.data || []) as unknown as Product[]);
-    let productListFailed = !!prodRes.error || !!convRes.error;
+    let productRows = prodFailed || convFailed ? [] : ((prodRes.data || []) as unknown as Product[]);
+    let productListFailed = prodFailed || convFailed;
     try {
       productRows = await withAdminCosts('products', productRows, isAdmin);
     } catch (costErr) {
@@ -883,7 +904,7 @@ export default function QuoteBuilder() {
 
     setProducts(productRows);
     setProductsLoadFailed(productListFailed);
-    setUnitConversions((convRes.data || []) as UnitConversion[]);
+    setUnitConversions(convFailed ? [] : (convRes.data as UnitConversion[]));
     setReferenceDataReady(!productListFailed);
   }, [toast, isAdmin]);
 
@@ -1051,6 +1072,7 @@ export default function QuoteBuilder() {
       } else {
         toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
       }
+      setQuoteLoadFailedId(quoteId);
       setLoading(false);
       return false;
     }
@@ -1069,10 +1091,12 @@ export default function QuoteBuilder() {
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
     // with an empty quote, sections, or items list.
-    if (sectionsRes.error || itemsRes.error) {
-      if (sectionsRes.error) Sentry.captureException(sectionsRes.error, { tags: { source: 'read', action: 'load_quote_sections_snapshot' } });
-      if (itemsRes.error) Sentry.captureException(itemsRes.error, { tags: { source: 'read', action: 'load_quote_items_snapshot' } });
+    // A read that answers with no list counts as failed too: installing it would
+    // show an empty quote whose next Save replaces the real lines (To-Do 10.5).
+    if (sectionsRes.error || itemsRes.error || !sectionsRes.data || !itemsRes.data) {
+      Sentry.captureException(sectionsRes.error ?? itemsRes.error ?? new Error('quote sections or items read returned no list'), { tags: { source: 'read', action: sectionsRes.error || !sectionsRes.data ? 'load_quote_sections_snapshot' : 'load_quote_items_snapshot' } });
       toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+      setQuoteLoadFailedId(quoteId);
       setLoading(false);
       return false;
     }
@@ -1095,6 +1119,7 @@ export default function QuoteBuilder() {
       Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_quote_costs' } });
       if (mustNotInstall()) return false;
       toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+      setQuoteLoadFailedId(quoteId);
       setLoading(false);
       return false;
     }
@@ -1106,6 +1131,7 @@ export default function QuoteBuilder() {
     if (finalHeaderError || !finalHeader || !stableVersion) {
       if (finalHeaderError) Sentry.captureException(finalHeaderError, { tags: { source: 'read', action: 'confirm_quote_snapshot_version' } });
       toast('error', 'Could not confirm a stable saved quote. Your current edits were kept; try Reload again or refresh the page.');
+      setQuoteLoadFailedId(quoteId);
       setLoading(false);
       return false;
     }
@@ -1188,6 +1214,8 @@ export default function QuoteBuilder() {
       resetSaveQuoteKeyFor(q.id);
     }
     setQuoteId(q.id);
+    setInstalledQuoteId(q.id);
+    setQuoteLoadFailedId(null);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
     customerPickedSinceLoadRef.current = false;
@@ -1888,7 +1916,9 @@ export default function QuoteBuilder() {
     // navigated away from. `p_quote_id` below is this same `quoteId`, so
     // refusing before any RPC also means no idempotency key is ever minted
     // against the wrong quote.
-    if (isEditing && quoteId !== id) {
+    // A first load that failed leaves `quoteId` equal to the URL's id over an empty
+    // form; saving that would replace the real quote's lines (To-Do 10.5).
+    if (isEditing && (quoteId !== id || installedQuoteId !== id)) {
       toast('error', 'This quote has not finished loading. Refresh the page before saving so your changes go to the right quote.');
       return null;
     }
@@ -2264,6 +2294,7 @@ export default function QuoteBuilder() {
       commissionSplitTouchedRef.current = false;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
+        setInstalledQuoteId(savedQuoteId);
       }
       return savedQuoteId;
     } catch (err: unknown) {
@@ -3684,6 +3715,18 @@ export default function QuoteBuilder() {
     );
   }
 
+  // The quote this URL names never loaded. An empty form would read as a quote with no lines,
+  // and another quote's form left on screen would offer Close / Revert, which act on this
+  // URL's quote while showing the other one's status (compliance review, PR #1073).
+  if (isEditing && id && installedQuoteId !== id && quoteLoadFailedId === id) {
+    return (
+      <LoadFailedState
+        title="This quote could not be loaded"
+        onRetry={() => { setLoading(true); fetchQuote(id); }}
+      />
+    );
+  }
+
   // The quote cannot be edited while a save or order creation runs: an edit made then
   // would not be in what was written, and the page usually moves on afterwards.
   const formLocked = saving || converting || drawing;
@@ -4008,6 +4051,14 @@ export default function QuoteBuilder() {
       )}
 
       {/* Booking settlement (roadmap #6c): open-booking position. Read-only. */}
+      {isEditing && canDraw && bookingSettlementFailed && (
+        <Card>
+          <LoadFailedState
+            title="The booking settlement could not be loaded"
+            onRetry={() => setBookingSettlementAttempt((n) => n + 1)}
+          />
+        </Card>
+      )}
       {isEditing && canDraw && bookingSettlement?.found && (
         <Card>
           <CardHeader title="Booking" accent="Settlement" />

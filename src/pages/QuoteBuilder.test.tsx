@@ -3211,21 +3211,17 @@ describe('QuoteBuilder', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
     await screen.findByRole('button', { name: /Reload Quote/i });
 
-    // Move to quote B; its load fails, so `loading` clears and quote A's form -
-    // and this still-open dialog - come back under quote B's address.
+    // Move to quote B; its load fails. Quote A's form - and this still-open dialog -
+    // no longer come back under quote B's address: the page says quote B could not be
+    // loaded (To-Do 10.5), so the stale reload cannot even be fired.
     await goToQuote(router, 'quote-b');
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
       expect.stringContaining('Could not load the complete quote'),
     ));
-
-    fireEvent.click(await screen.findByRole('button', { name: /Reload Quote/i }));
+    expect(await screen.findByText('This quote could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Reload Quote/i })).not.toBeInTheDocument();
     await flushPendingWork();
-
-    // The reload was refused, so the dialog stays open and reports that it did
-    // not finish - rather than silently installing quote A over quote B's route.
-    expect(screen.getByRole('button', { name: /Reload Quote/i })).toBeInTheDocument();
-    expect(screen.getByText(/Reload could not finish/)).toBeInTheDocument();
     expect(screen.queryAllByText('Q-AAA-RELOADED')).toHaveLength(0);
     // The reload never completed, so the key that may represent a committed
     // save must NOT have been rotated.
@@ -3262,43 +3258,41 @@ describe('QuoteBuilder', () => {
       expect.stringContaining('Could not load the complete quote'),
     ));
 
-    const readsBeforeDoomedReload = mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length;
-    fireEvent.click(await screen.findByRole('button', { name: /Reload Quote/i }));
+    // The failed switch shows quote B's failed state, so the reload dialog that
+    // names quote A is gone: the doomed reload has no button to start it.
+    expect(await screen.findByText('This quote could not be loaded')).toBeInTheDocument();
+    const readsAfterFailedSwitch = mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length;
+    expect(screen.queryByRole('button', { name: /Reload Quote/i })).not.toBeInTheDocument();
     await flushPendingWork();
 
-    // The decisive check. The doomed load must turn round at the door: no read
-    // issued, so no serial consumed, so nothing legitimately in flight for the
-    // quote on screen can be superseded by it.
+    // No read of quote A is issued afterwards, so no serial is consumed.
     expect(mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length)
-      .toBe(readsBeforeDoomedReload);
-    // And it still must not install, which is what the sibling test above pins.
+      .toBe(readsAfterFailedSwitch);
     expect(screen.queryAllByText('Q-AAA-RELOADED')).toHaveLength(0);
   });
 
-  it('refuses the save when a failed switch leaves quote A on screen under quote B address', async () => {
+  it('a failed switch shows quote B could not be loaded, with no Save, Close or Revert over quote A', async () => {
     const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
     const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
     const router = renderQuoteSwitch([quoteA, quoteB], {}, { failSectionsFor: 'quote-b' });
 
     expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
 
-    // A load that fails part-way deliberately KEEPS the operator's current
-    // edits rather than blanking them — which puts quote A's form, and a live
-    // Save button, under quote B's URL.
+    // Quote A's form used to stay under quote B's URL, where Save was refused but
+    // Close / Revert (which send the URL's quote B) were still offered from quote A's
+    // status. The page now says quote B could not be loaded instead.
     await goToQuote(router, 'quote-b');
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
       expect.stringContaining('Could not load the complete quote'),
     ));
 
-    const saveDraft = await screen.findByRole('button', { name: /Save Draft/ });
-    fireEvent.click(saveDraft);
-
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
-      'error',
-      expect.stringContaining('has not finished loading'),
-    ));
+    expect(await screen.findByText('This quote could not be loaded')).toBeInTheDocument();
+    expect(screen.queryAllByText('Q-AAA-1')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /Save Draft/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close|Revert/ })).not.toBeInTheDocument();
     expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+    expect(mockRpc).not.toHaveBeenCalledWith('revert_quote_status', expect.anything());
   });
 
   // ── ...and neither may a save's REPLY ──────────────────────────────────────
@@ -3701,5 +3695,90 @@ describe('QuoteBuilder', () => {
       (call) => call[0] === 'error' && String(call[1]).includes('Q-AAA-1'),
     )!;
     expect(refusalMessage).toMatch(/was not saved/i);
+  });
+});
+
+// To-Do 10.5: a saved quote whose reads fail says so; it never shows an empty quote
+// (whose Save would replace the real lines) or prices at a factor of 1.
+describe('QuoteBuilder load failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    quoteIdempotencyState.reset();
+    quoteIdempotencyHandles.clear();
+    dirtyStates.length = 0;
+    authState.role = 'admin';
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  // Serves a saved quote; `fail` names a table whose read fails, and how.
+  function serveQuote(
+    fixture: ReturnType<typeof makeQuoteFixture>,
+    fail: { table?: string; mode?: 'error' | 'nodata' } = {},
+  ) {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === fail.table) {
+        return buildChain(fail.mode === 'nodata'
+          ? { data: null, error: null }
+          : { data: null, error: { message: 'connection reset' } });
+      }
+      const data = table === 'quotes'
+        ? fixture.quote
+        : table === 'quote_sections'
+          ? [fixture.section]
+          : table === 'quote_items'
+            ? [fixture.item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [fixture.product]
+                : [];
+      return buildChain({ data, error: null });
+    });
+  }
+
+  it.each([
+    ['quotes', 'error'],
+    ['quote_sections', 'nodata'],
+    ['quote_items', 'nodata'],
+  ] as const)('a first load whose %s read fails (%s) says the quote could not be loaded, with no Save, and Try again opens it', async (table, mode) => {
+    const fixture = makeQuoteFixture('draft', 3);
+    serveQuote(fixture, { table, mode });
+    renderQuoteBuilder(fixture.quote.id);
+
+    expect(await screen.findByText('This quote could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save Draft/ })).not.toBeInTheDocument();
+
+    serveQuote(fixture);
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(await screen.findByRole('button', { name: /Save Draft/ })).toBeInTheDocument();
+    expect(screen.queryByText('This quote could not be loaded')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Q-version-test').length).toBeGreaterThan(0);
+  });
+
+  it('a unit-conversion read that answers with no list counts as failed, so lines are not priced at a factor of 1', async () => {
+    const fixture = makeQuoteFixture('draft', 3);
+    serveQuote(fixture, { table: 'unit_conversions', mode: 'nodata' });
+    renderQuoteBuilder(fixture.quote.id);
+
+    await screen.findByRole('button', { name: /Save Draft/ });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load unit conversions.'));
+  });
+
+  it('a failed booking settlement says so instead of hiding the booked / drawn / remaining card', async () => {
+    const fixture = makeQuoteFixture('sent', 3);
+    serveQuote(fixture);
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'get_booking_settlement'
+      ? { data: null, error: { message: 'connection reset' } }
+      : { data: null, error: null }));
+    renderQuoteBuilder(fixture.quote.id);
+
+    expect(await screen.findByText('The booking settlement could not be loaded')).toBeInTheDocument();
+
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'get_booking_settlement'
+      ? { data: { found: true, booked_cents: 12345, drawn_cents: 0, remaining_cents: 12345, prepay_remaining_cents: 0, prepay_earmarked_cents: 0, prepay_applied_cents: 0, lines: [] }, error: null }
+      : { data: null, error: null }));
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(await screen.findByText('Booked')).toBeInTheDocument();
+    expect(screen.queryByText('The booking settlement could not be loaded')).not.toBeInTheDocument();
   });
 });
