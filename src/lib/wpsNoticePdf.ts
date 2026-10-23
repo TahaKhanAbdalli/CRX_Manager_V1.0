@@ -11,7 +11,7 @@
  * requirement — is directed to each product label by an explicit callout, so the
  * document does not present itself as a complete standalone notice (Codex 2026-06-13).
  *
- * Follows the dynamic-import + pdfTheme pattern of loadSheetPdf.ts.
+ * Follows the dynamic-import + pdfTheme pattern of the other PDF generators (e.g. deliveryPdf.ts).
  */
 import { CRX_GREEN, CHARCOAL, GRAY, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import { COMPANY_NAME, COMPANY_FOOTER_THANKS } from './companyInfo';

@@ -46,7 +46,6 @@ vi.mock('./activityLogger', () => ({
 import {
   notifyDamagedReceiving,
   notifyCreditLimitExceeded,
-  runPeriodicNotificationChecks,
 } from './notificationTriggers';
 import { notifyAdmins } from './activityLogger';
 import type { Commission, DeliveryRemainder } from '../types';
@@ -487,14 +486,5 @@ describe('notifyCreditLimitExceeded', () => {
     await expect(
       notifyCreditLimitExceeded('Farm', 99999, 10000, 'id')
     ).resolves.toBeUndefined();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// runPeriodicNotificationChecks still works
-// ═══════════════════════════════════════════════════════════════
-describe('runPeriodicNotificationChecks', () => {
-  it('does not throw', async () => {
-    await expect(runPeriodicNotificationChecks()).resolves.toBeUndefined();
   });
 });
