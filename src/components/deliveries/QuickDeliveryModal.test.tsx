@@ -2,13 +2,13 @@
  * QuickDeliveryModal.test.tsx — Tests for quick delivery creation modal
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import QuickDeliveryModal from './QuickDeliveryModal';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey, productReply } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey, productReply, mockCapture } = vi.hoisted(() => {
   const mockOrder = vi.fn().mockReturnThis();
   const mockIn = vi.fn().mockReturnThis();
   const mockEq = vi.fn().mockReturnThis();
@@ -59,7 +59,9 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey, pro
   const mockNavigate = vi.fn();
   const mockResetKey = vi.fn();
 
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey, productReply };
+  const mockCapture = vi.fn();
+
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey, productReply, mockCapture };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -75,6 +77,10 @@ vi.mock('../../lib/db', () => ({
 const AUTH = { profile: { id: 'user-1', role: 'admin' }, role: 'admin' };
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => AUTH,
+}));
+
+vi.mock('../../lib/sentry', () => ({
+  Sentry: { captureException: mockCapture },
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -171,6 +177,43 @@ describe('QuickDeliveryModal', () => {
     rerender(<QuickDeliveryModal {...defaultProps} initialCustomerId="customer-1" />);
 
     expect(input).toHaveValue('South Farm');
+  });
+
+  // The typed customer search: select → eq → or → order → limit. Records its .or() filter.
+  function serveCustomerSearch(reply: { data: unknown; error: unknown }) {
+    const filters: string[] = [];
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'order']) chain[m] = () => chain;
+    chain.or = (expr: string) => { filters.push(expr); return chain; };
+    chain.limit = () => Promise.resolve(reply);
+    const base = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => (table === 'customers' ? chain : base(table)));
+    onTestFinished(() => { mockFrom.mockImplementation(base); });
+    return filters;
+  }
+
+  it('quotes a customer search with a comma so the filter is not cut short', async () => {
+    const filters = serveCustomerSearch({
+      data: [{ id: 'customer-7', farm_name: 'Smith, John', account_number: null, assigned_tier: 2 }],
+      error: null,
+    });
+    await renderModal();
+
+    fireEvent.change(screen.getByPlaceholderText(/search by farm name/i), { target: { value: 'Smith, J' } });
+
+    expect(await screen.findByText('Smith, John')).toBeInTheDocument();
+    expect(filters).toEqual(['farm_name.ilike."%Smith, J%",account_number.ilike."%Smith, J%"']);
+  });
+
+  it('reports a failed customer search to Sentry', async () => {
+    const searchError = { message: 'search failed' };
+    serveCustomerSearch({ data: null, error: searchError });
+    await renderModal();
+
+    fireEvent.change(screen.getByPlaceholderText(/search by farm name/i), { target: { value: 'North' } });
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Customer search failed. Please try again.'));
+    expect(mockCapture).toHaveBeenCalledWith(searchError, { extra: { context: 'QuickDeliveryModal.customerSearch' } });
   });
 
   it('leaves the customer picker empty without an initial customer', async () => {

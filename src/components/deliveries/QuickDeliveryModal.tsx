@@ -23,6 +23,7 @@ import { validateInventoryPositionShape } from '../../lib/inventoryPositionValid
 import { inventoryPositionByProduct } from '../../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../products/ProductOptionPresentation';
 import { fetchAllRows } from '../../lib/pagedRead';
+import { ilikeOrPattern } from '../../lib/recordSearch';
 import type { Product, Profile, InventoryPositionRow } from '../../types';
 
 const PRODUCTS_FAILED_MESSAGE = 'Products could not be loaded, so items cannot be added or priced. Close and reopen to try again.';
@@ -189,16 +190,21 @@ export default function QuickDeliveryModal({
       setShowCustomerDropdown(false);
       return;
     }
+    // A reply for an older search text (or after a pick) is dropped, not shown.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const { data, error } = await supabase
           .from('customers')
           .select('id, farm_name, account_number, assigned_tier')
           .eq('is_active', true)
-          .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
+          // Quoted: a farm name with a comma or parenthesis would otherwise end the filter early.
+          .or(`farm_name.ilike.${ilikeOrPattern(customerSearch)},account_number.ilike.${ilikeOrPattern(customerSearch)}`)
           .order('farm_name')
           .limit(15);
+        if (cancelled) return;
         if (error) {
+          Sentry.captureException(error, { extra: { context: 'QuickDeliveryModal.customerSearch' } });
           toast('error', 'Customer search failed. Please try again.');
           setCustomerResults([]);
           setShowCustomerDropdown(false);
@@ -206,13 +212,15 @@ export default function QuickDeliveryModal({
           setCustomerResults((data || []) as CustomerOption[]);
           setShowCustomerDropdown(true);
         }
-      } catch {
+      } catch (err) {
+        if (cancelled) return;
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.customerSearch' } });
         toast('error', 'Customer search failed. Please try again.');
         setCustomerResults([]);
         setShowCustomerDropdown(false);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [customerSearch, selectedCustomer, toast]);
 
   const selectedCustomerId = selectedCustomer?.id;

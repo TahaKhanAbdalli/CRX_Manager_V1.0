@@ -103,9 +103,51 @@ describe('AR Aging statement customer picker (Goal 4 part 3)', () => {
     expect(H.customerFilters).not.toContain('is_active');
     expect(screen.getByRole('combobox', { name: 'Statement customer' })).toHaveValue('Big Farm');
   });
+
+  it('says a loaded statement with no rows has no transactions, until the customer or range changes', async () => {
+    H.functions.get_customer_statement = [];
+    await loadStatement();
+
+    expect(await screen.findByText('No transactions in this date range.')).toBeInTheDocument();
+    expect(screen.queryByText(/Select a customer and date range/)).not.toBeInTheDocument();
+    expect(H.toast).not.toHaveBeenCalledWith('error', expect.anything());
+
+    // A new range has not been loaded yet, so the screen asks for it again.
+    const [from] = document.querySelectorAll('input[type="date"]');
+    fireEvent.change(from, { target: { value: '2026-01-01' } });
+    expect(screen.getByText('Select a customer and date range, then click Load Transactions.')).toBeInTheDocument();
+  });
 });
 
 describe('AR Aging customer statement past the 1,000-row server cap (M57)', () => {
+  it('hides a loaded statement once its date range is changed, until it is loaded again', async () => {
+    H.functions.get_customer_statement = statement(3);
+    await loadStatement();
+    await waitFor(() => expect(screen.getByText('Ending Balance').parentElement!).toHaveTextContent('$3.00'));
+
+    // The period line would show the new dates over the old range's rows.
+    const [from] = document.querySelectorAll('input[type="date"]');
+    const loadedFrom = (from as HTMLInputElement).value;
+    fireEvent.change(from, { target: { value: '2026-01-01' } });
+    expect(screen.queryByText('Ending Balance')).not.toBeInTheDocument();
+    expect(screen.getByText('Select a customer and date range, then click Load Transactions.')).toBeInTheDocument();
+
+    // Changing back to the loaded range still needs a fresh load: the old rows do not come back.
+    fireEvent.change(from, { target: { value: loadedFrom } });
+    expect(screen.queryByText('Ending Balance')).not.toBeInTheDocument();
+  });
+
+  it('does not call a statement empty after Back to Aging and reopening the tab', async () => {
+    H.functions.get_customer_statement = statement(3);
+    await loadStatement();
+    await waitFor(() => expect(screen.getByText('Ending Balance').parentElement!).toHaveTextContent('$3.00'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to Aging/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Customer Statement' }));
+    expect(await screen.findByText('Select a customer and date range, then click Load Transactions.')).toBeInTheDocument();
+    expect(screen.queryByText('No transactions in this date range.')).not.toBeInTheDocument();
+  });
+
   it('shows all 1,205 rows in order and the true ending balance', async () => {
     H.functions.get_customer_statement = statement(TOTAL);
     await loadStatement();
