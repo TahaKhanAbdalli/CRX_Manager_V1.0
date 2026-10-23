@@ -973,7 +973,7 @@ for (const pushCmd of pushCommands) {
     `  2. If Codex flags blockers, fix them and re-run until it reports clean; only a clean verdict on a stable, clean worktree mints the proof.\n` +
     `  3. On success it writes the HEAD-bound proof {codex_ran:true, verdict:"clean", head_sha:"${headSha || "<HEAD>"}", timestamp:"<ISO>"} for you — never hand-write it (review-proof-guard blocks that).\n` +
     `  4. Retry the push.\n` +
-    `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify. (Proof is bound to this exact HEAD and to origin/main; it expires in 30min, and a moved base forces a fresh review.)`
+    `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify. (Proof is bound to this exact HEAD and to origin/main; it lasts 24 hours on an unchanged head and base, and a moved base forces a fresh review.)`
   );
 }
 
