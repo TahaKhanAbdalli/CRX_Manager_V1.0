@@ -818,7 +818,7 @@ same and the admin gets `already_imported`; the admin then prices the line with
 `SMOKE_PASS_ROLLBACK` live the same evening and in a disposable copy of the real schema with every
 migration replayed.
 
-**Friendlier message (Mason asked for it, 2026-10-22, late evening).** Until then an admin's import of
+**Friendlier message (Mason asked for it, 2026-10-22, late evening; he approved the business rule in chat on 2026-10-23, see DECISION_LOG).** Until then an admin's import of
 a document a rep already imported, carrying costs, was refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`
 instead of being told it already exists. That was safe (no second purchase order was ever made), only
 unfriendly. Migration `20261022100000_bulk_po_fingerprint_ignores_cost` (migration-history row 978;
