@@ -1241,7 +1241,7 @@ export default function FieldApplicationInvoice() {
     if (groupId) {
       const { data: sibs, error: sibsReadError } = await supabase
         .from(INVOICES_POSTABLE)
-        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, invoice_post_version:invoice_postable_version, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');

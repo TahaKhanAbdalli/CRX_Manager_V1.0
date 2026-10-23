@@ -16,6 +16,31 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
   // A completion retried under a fresh key after an earlier attempt already completed the record.
   [/^Delivery must be in_progress to complete \(current status: completed\)/,
    'This delivery is already completed. Refresh the page to see it'],
+  // Goal 5 (migration 20261022075000): a completion needs its proof saved first. Nothing changed.
+  [/^COMPLETION_EVIDENCE_REQUIRED\b/,
+   'This version of the app is out of date. Reload the app, then open the delivery to check whether it is already completed before completing it again'],
+  // Every evidence refusal: THIS attempt changed nothing. An earlier attempt may still have completed
+  // the delivery (a lost reply), so the pages reload it after any refusal.
+  [/^COMPLETION_EVIDENCE_INVALID\b/,
+   'This attempt made no change (no stock or invoice change): the proof sent with it was not accepted. The delivery may already be completed by an earlier attempt; check it before trying again'],
+  [/^COMPLETION_EVIDENCE_LOCKED\b/,
+   'This attempt made no change (no stock or invoice change): the proof saved with a completed delivery cannot be changed or removed. The delivery may already be completed by an earlier attempt; check it before trying again'],
+  [/^COMPLETION_EVIDENCE_NOT_RECORDED\b/,
+   'This attempt made no change (no stock or invoice change): the proof could not be recorded. The delivery may already be completed by an earlier attempt; check it before trying again'],
+  [/^SIGNATURE_IMAGE_MISSING\b/,
+   'This attempt made no change (no stock or invoice change): the signature did not reach the server. Check your signal, then try again'],
+  [/^PAPER_TICKET_PHOTO_MISSING\b/,
+   'This attempt made no change (no stock or invoice change): no photo of the signed paper ticket is saved on it. Take the photo, then tap Complete'],
+  [/^LEFT_AT_SITE_PHOTO_MISSING\b/,
+   'This attempt made no change (no stock or invoice change): no photo of where it was left is saved on it. Take the photo, then tap Complete'],
+  [/^LEFT_AT_SITE_SIGNER_MISMATCH\b/,
+   'This attempt made no change (no stock or invoice change): a delivery left at the site is signed "No one present — left at site". Reload the stop and try again'],
+  [/^NO_PROOF_ADMIN_ONLY\b/,
+   'This attempt made no change (no stock or invoice change): only an admin can record a delivery without proof. The delivery may already be completed by an earlier attempt; check it before trying again'],
+  [/^NO_PROOF_REASON_REQUIRED\b/,
+   'This attempt made no change (no stock or invoice change): write why there is no proof, 10 to 500 characters'],
+  [/^NO_PROOF_SIGNER_MISMATCH\b/,
+   'This attempt made no change (no stock or invoice change): a delivery recorded without proof is signed "No proof — recorded by office". Reload the page and try again'],
   [/^Job must be in_progress before completion\. Current status: completed\./,
    'This job is already completed. Refresh the page to see it'],
   [/^GENERIC_FIELD_CUTOVER_(?:IN_PROGRESS|ISOLATION|STALE_CALL)(?::|$)/,
@@ -272,6 +297,10 @@ export function sanitizeError(error: unknown): string {
   if (/^INVOICE_CHANGED_SINCE_LOADED$/.test(message)) {
     return 'Nothing was posted. This invoice was changed after this screen loaded it. Reload it, check it, then post again.';
   }
+  // job_chemicals trigger (20261022087000): a billable job line whose product states no price was sent at $0.
+  // The server sentence names the product and says what to do, so it is kept.
+  const chemPriceRequired = message.match(/^CHEM_PRICE_REQUIRED:\s*(.+)$/s);
+  if (chemPriceRequired) return `Nothing was saved. ${chemPriceRequired[1].trim()}`;
   if (/^INVOICE_POSTED_LOCKED(?::|$)/.test(message)) {
     return 'This invoice was posted, so its lines, billing shares and field locations cannot change. Unpost it first, then edit.';
   }

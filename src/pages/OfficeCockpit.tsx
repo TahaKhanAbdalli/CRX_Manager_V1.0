@@ -30,6 +30,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import {
   RefreshCw,
   Tractor,
@@ -199,7 +200,29 @@ interface CockpitData {
   watchdogLoadOk: boolean;
   // Every cockpit query loaded without error (gates the page-wide "All clear!").
   allChecksLoadOk: boolean;
+  // Tiles whose own read failed: they say so instead of their "No …" all-clear line (To-Do 10.5).
+  failedTiles: FailedTiles;
 }
+
+interface FailedTiles {
+  unbilledJobs: boolean;
+  postableInvoices: boolean;
+  chemicalDrafts: boolean;
+  upcomingJobs: boolean;
+  needsDispatchJobs: boolean;
+  expiringLicenses: boolean;
+  overdueAR: boolean;
+}
+
+const NO_FAILED_TILES: FailedTiles = {
+  unbilledJobs: false,
+  postableInvoices: false,
+  chemicalDrafts: false,
+  upcomingJobs: false,
+  needsDispatchJobs: false,
+  expiringLicenses: false,
+  overdueAR: false,
+};
 
 interface MorningSummaryRpc {
   active_orders_count: number | string;
@@ -396,6 +419,11 @@ const emptyMorningSummary: MorningSummaryData = {
   programCompletionPct: null,
 };
 
+// A tile's read failed when it errored or came back without a list: neither proves the tile clear.
+function tileReadFailed(res: { error: unknown; data: unknown }): boolean {
+  return !!res.error || !Array.isArray(res.data);
+}
+
 // ── Helper components ─────────────────────────────────────────────────────────
 
 function AllClear({ label }: { label: string }) {
@@ -417,18 +445,19 @@ function TileHeader({
 }: {
   icon: React.ReactNode;
   title: string;
-  count: number;
+  /** null when the tile's read failed: no count is known. */
+  count: number | null;
   countColor?: string;
   linkLabel?: string;
   onLink?: () => void;
 }) {
-  const color = count === 0 ? 'text-gray-400' : (countColor ?? 'text-red-600');
+  const color = count === null || count === 0 ? 'text-gray-400' : (countColor ?? 'text-red-600');
   return (
     <div className="flex items-start justify-between gap-2 mb-3">
       <div className="flex min-w-0 items-start gap-2">
         {icon}
         <h2 className="font-semibold text-nav-dark">{title}</h2>
-        <span className={`text-sm font-bold ${color}`}>({count})</span>
+        <span className={`text-sm font-bold ${color}`}>({count ?? '–'})</span>
       </div>
       {onLink && (
         <button
@@ -495,6 +524,7 @@ export default function OfficeCockpit() {
     plannedBookingAttentionLoadOk: false,
     watchdogLoadOk: false,
     allChecksLoadOk: false,
+    failedTiles: NO_FAILED_TILES,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   // §4 Post-all-clean state.
@@ -504,7 +534,10 @@ export default function OfficeCockpit() {
   // a failed item reuses the SAME key (no risk of double-posting on retry).
   const postKeysRef = useRef<Record<string, string>>({});
 
+  // Only the newest load may set the tiles: Refresh or a post can start one while an older one is in flight.
+  const loadSeqRef = useRef(0);
   const fetchAll = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const today = localToday();
     const in7Days = localDatePlusDays(7);
@@ -560,7 +593,7 @@ export default function OfficeCockpit() {
       // (b) Draft/unposted field-app invoices (§4 auto-populates these)
       supabase
         .from(INVOICES_POSTABLE)
-        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, invoice_post_version, customer:customers(farm_name)')
+        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, invoice_post_version:invoice_postable_version, customer:customers(farm_name)')
         .in('status', ['draft', 'unposted'])
         .eq('invoice_type', 'field_application')
         .is('deleted_at', null)
@@ -773,6 +806,7 @@ export default function OfficeCockpit() {
       programCompletionValidationError,
     ].filter(Boolean);
 
+    if (seq !== loadSeqRef.current) return;
     if (errors.length > 0) {
       const firstErr = errors[0] as { message?: string };
       Sentry.captureException(firstErr, { tags: { page: 'office-cockpit' } });
@@ -921,6 +955,16 @@ export default function OfficeCockpit() {
       ]
       : [];
 
+    const failedTiles: FailedTiles = {
+      unbilledJobs: tileReadFailed(unbilledJobsRes),
+      postableInvoices: tileReadFailed(postableInvRes),
+      chemicalDrafts: tileReadFailed(chemicalDraftsRes),
+      upcomingJobs: tileReadFailed(upcomingJobsRes),
+      needsDispatchJobs: tileReadFailed(needsDispatchRes),
+      expiringLicenses: tileReadFailed(expiringLicRes),
+      overdueAR: tileReadFailed(overdueARRes),
+    };
+
     setData({
       unbilledJobs,
       postableInvoices,
@@ -939,7 +983,10 @@ export default function OfficeCockpit() {
       plannedBookingAttention,
       plannedBookingAttentionLoadOk,
       watchdogLoadOk,
-      allChecksLoadOk: errors.length === 0 && nextMorningSummaryLoadOk,
+      // A tile that could not load has proved nothing clear, error or not.
+      allChecksLoadOk: errors.length === 0 && nextMorningSummaryLoadOk
+        && !Object.values(failedTiles).some(Boolean),
+      failedTiles,
     });
     setMorningSummary(nextMorningSummary);
     setMorningSummaryLoadOk(nextMorningSummaryLoadOk);
@@ -1174,12 +1221,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<Tractor className="w-5 h-5 text-orange-500" />}
             title="Unbilled Jobs"
-            count={data.unbilledJobs.length}
+            count={data.failedTiles.unbilledJobs ? null : data.unbilledJobs.length}
             countColor="text-orange-600"
             linkLabel="View all"
             onLink={() => navigate('/field-invoices/unbilled')}
           />
-          {data.unbilledJobs.length === 0 ? (
+          {data.failedTiles.unbilledJobs ? (
+            <LoadFailedState title="Unbilled jobs could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.unbilledJobs.length === 0 ? (
             <AllClear label="No completed jobs without an invoice." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1219,12 +1268,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<Send className="w-5 h-5 text-sky-500" />}
             title="Needs Dispatch"
-            count={data.needsDispatchJobs.length}
+            count={data.failedTiles.needsDispatchJobs ? null : data.needsDispatchJobs.length}
             countColor="text-sky-600"
             linkLabel="View all"
             onLink={() => navigate('/jobs')}
           />
-          {data.needsDispatchJobs.length === 0 ? (
+          {data.failedTiles.needsDispatchJobs ? (
+            <LoadFailedState title="Jobs needing dispatch could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.needsDispatchJobs.length === 0 ? (
             <AllClear label="No scheduled jobs without a dispatched applicator or crew." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1290,7 +1341,7 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<FileCheck className="w-5 h-5 text-blue-500" />}
             title="Ready to Post"
-            count={data.postableInvoices.length}
+            count={data.failedTiles.postableInvoices ? null : data.postableInvoices.length}
             countColor="text-blue-600"
             linkLabel="Field Invoices"
             onLink={() => navigate('/field-invoices/unposted')}
@@ -1327,7 +1378,9 @@ export default function OfficeCockpit() {
               </Button>
             </div>
           )}
-          {data.postableInvoices.length === 0 ? (
+          {data.failedTiles.postableInvoices ? (
+            <LoadFailedState title="Invoices ready to post could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.postableInvoices.length === 0 ? (
             <AllClear label="No field-app invoices waiting to post." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1367,12 +1420,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<FileText className="w-5 h-5 text-violet-500" />}
             title="Chemical drafts to post"
-            count={data.chemicalDrafts.length}
+            count={data.failedTiles.chemicalDrafts ? null : data.chemicalDrafts.length}
             countColor="text-violet-600"
             linkLabel="Invoices"
             onLink={() => navigate('/invoices')}
           />
-          {data.chemicalDrafts.length === 0 ? (
+          {data.failedTiles.chemicalDrafts ? (
+            <LoadFailedState title="Chemical drafts could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.chemicalDrafts.length === 0 ? (
             <AllClear label="No chemical-sale drafts waiting to post." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1472,12 +1527,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<AlertTriangle className="w-5 h-5 text-red-500" />}
             title="Watchdog Flags"
-            count={data.watchdogFlags.length}
+            count={data.watchdogLoadOk ? data.watchdogFlags.length : null}
             countColor="text-red-600"
             linkLabel="Manage"
             onLink={() => navigate('/watchdog')}
           />
-          {data.watchdogFlags.length === 0 ? (
+          {!data.watchdogLoadOk ? (
+            <LoadFailedState title="Watchdog flags could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.watchdogFlags.length === 0 ? (
             <AllClear label="No active watchdog flags." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1517,7 +1574,7 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<CalendarClock className="w-5 h-5 text-indigo-500" />}
             title="Upcoming Jobs (7 days)"
-            count={data.upcomingJobs.length}
+            count={data.failedTiles.upcomingJobs ? null : data.upcomingJobs.length}
             countColor="text-indigo-600"
             linkLabel="Schedule"
             onLink={() => navigate('/jobs')}
@@ -1526,7 +1583,9 @@ export default function OfficeCockpit() {
             Scheduled jobs in the next 7 days. Weather risk is checked live in Job Detail
             (no stored weather-blocked flag exists in the DB).
           </p>
-          {data.upcomingJobs.length === 0 ? (
+          {data.failedTiles.upcomingJobs ? (
+            <LoadFailedState title="Upcoming jobs could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.upcomingJobs.length === 0 ? (
             <AllClear label="No scheduled jobs in the next 7 days." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1566,12 +1625,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<ShieldAlert className="w-5 h-5 text-yellow-500" />}
             title="Expiring Licenses"
-            count={data.expiringLicenses.length}
+            count={data.failedTiles.expiringLicenses ? null : data.expiringLicenses.length}
             countColor="text-yellow-600"
             linkLabel="Compliance"
             onLink={() => navigate('/compliance')}
           />
-          {data.expiringLicenses.length === 0 ? (
+          {data.failedTiles.expiringLicenses ? (
+            <LoadFailedState title="Expiring licenses could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.expiringLicenses.length === 0 ? (
             <AllClear label="No licenses or certs expiring within 30 days." />
           ) : (
             <div className="divide-y divide-gray-100">
@@ -1613,12 +1674,14 @@ export default function OfficeCockpit() {
           <TileHeader
             icon={<DollarSign className="w-5 h-5 text-red-500" />}
             title="Overdue Field-App AR"
-            count={data.overdueAR.length}
+            count={data.failedTiles.overdueAR ? null : data.overdueAR.length}
             countColor="text-red-600"
             linkLabel={isAdmin ? 'AR Aging' : undefined}
             onLink={isAdmin ? () => navigate('/ar-aging') : undefined}
           />
-          {data.overdueAR.length === 0 ? (
+          {data.failedTiles.overdueAR ? (
+            <LoadFailedState title="Overdue receivables could not be loaded" onRetry={() => { void fetchAll(); }} />
+          ) : data.overdueAR.length === 0 ? (
             <AllClear label="No overdue field-app receivables." />
           ) : (
             <div className="divide-y divide-gray-100">

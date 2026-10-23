@@ -2,9 +2,11 @@
 
 **What changed.** Migration `20261022090000_invoices_postable_view` (migration history row 976; written, not yet
 applied) adds `invoices_postable`, a read-only view of every invoice column except the cost total, which applies the
-caller's own access rules, and puts the posting version (`invoice_post_version`, PR #1018) on it. The seven screens that
+caller's own access rules, and puts the posting version (PR #1018) on it as `invoice_postable_version`: its own name,
+not a second `invoice_post_version`, so a caller can never reach the wrong one. The seven screens that
 post invoices (invoice detail, the invoice list, field-application invoices, the split editor, order detail, the office
-cockpit and the unposted field-invoice panel) read the version from the view, in the same read as the rows they show.
+cockpit and the unposted field-invoice panel) read the version from the view, in the same read as the rows they show,
+named back to `invoice_post_version` so the rest of the app is unchanged.
 Nothing about what posting checks changes.
 
 **Why.** The version is a computed field, which receives a whole row, and the database only allows that when the caller

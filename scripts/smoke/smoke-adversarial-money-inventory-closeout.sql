@@ -3,6 +3,9 @@
 -- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
 -- 20260717081856, 20260717085512, 20260717092749, 20260717101619, and
 -- 20260717110016 and 20260717112906.
+-- Updated 2026-10-22 for 20261021140000 (purchase cost admin-only): the bulk
+-- imports send no cost and the admin prices the line with
+-- set_purchase_order_item_costs.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -289,7 +292,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -324,7 +326,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -355,7 +356,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -391,7 +391,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -423,7 +422,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -453,7 +451,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),
@@ -489,7 +486,6 @@ BEGIN
           'product_id', v_product,
           'product_name', v_product_name,
           'quantity_ordered', 11.125,
-          'unit_cost_cents', 333,
           'unit_size', v_unit_size
         )
       ),
@@ -527,15 +523,26 @@ BEGIN
   SET CONSTRAINTS require_bulk_po_content_fingerprint DEFERRED;
   RESET ROLE;
 
+  -- Purchase cost is admin-only since 20261021140000: a rep's import stores the catalog cost and
+  -- the admin sets the real cost afterwards. The bulk imports above therefore send no cost, so a
+  -- rep's and an admin's import of one document fingerprint the same. The admin is still current.
+  SELECT id INTO v_po_item
+    FROM public.purchase_order_items
+   WHERE purchase_order_id = v_po;
+  PERFORM public.set_purchase_order_item_costs(
+    v_po,
+    jsonb_build_array(jsonb_build_object('id', v_po_item, 'unit_cost_cents', 333)),
+    '[SMOKE] admin prices the rep import',
+    v_admin,
+    'smk-po-set-cost-' || v_suffix
+  );
+
   PERFORM set_config(
     'request.jwt.claims',
     json_build_object('sub', v_sales, 'role', 'authenticated')::text,
     true
   );
 
-  SELECT id INTO v_po_item
-    FROM public.purchase_order_items
-   WHERE purchase_order_id = v_po;
   SELECT total_cost_cents INTO v_total_cents
     FROM public.purchase_orders
    WHERE id = v_po;
@@ -762,7 +769,6 @@ BEGIN
         'product_id', v_product,
         'product_name', v_product_name,
         'quantity_ordered', 10.125,
-        'unit_cost_cents', 333,
         'unit_size', v_unit_size
       )
     ),

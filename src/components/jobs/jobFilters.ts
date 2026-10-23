@@ -35,7 +35,7 @@ export interface JobFilters {
   startDate: string;          // job_date >=
   endDate: string;            // job_date <=
   // --- client-side (over joined data) ---
-  tagIds: string[];           // reuses #4's jobMatchesTagFilter (OR within tags)
+  tagIds: string[];           // OR within the selected tags (see jobMatchesClientFilters)
   crop: string;               // substring match on any field's crop
   county: string;             // substring match on any field's county
   state: string;              // substring match on any field's state
@@ -130,7 +130,7 @@ function anyContains(values: string[], needle: string): boolean {
  * Pure predicate for the CLIENT-side filters. AND-combined: a job passes only
  * when it satisfies EVERY active client filter. Each individual filter is inert
  * when empty (passes all), so this composes cleanly with the server filters that
- * already ran on the query. Tag semantics are OR-within (reuses #4's contract):
+ * already ran on the query. Tag semantics are OR-within (field-app parity #4):
  * a job passes the tag filter when it carries at least one selected tag.
  */
 export function jobMatchesClientFilters(facts: JobFilterFacts, f: JobFilters): boolean {

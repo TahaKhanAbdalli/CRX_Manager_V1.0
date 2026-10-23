@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261023004246",
+    "migrations_high_water": "20261023123930",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -431,6 +431,10 @@
       "20261022020000_blend_invoice_binding_lows",
       "20261022021000_order_invoice_refuses_field_split",
       "20261022022000_post_binds_reviewed_invoice_version",
+      "20261022023000_handle_new_user_ignores_signup_role",
+      "20261022040000_payment_allocation_tables_no_direct_writes",
+      "20261022070000_role_reads_require_active_profile",
+      "20261022075000_delivery_completion_evidence",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1782,6 +1786,17 @@
       ],
       "constraints": [
         "cycle_counts_status_check"
+      ]
+    },
+    "deliveries.completion_evidence": {
+      "values": [
+        "signature",
+        "paper_ticket",
+        "left_at_site",
+        "no_proof"
+      ],
+      "constraints": [
+        "deliveries_completion_evidence_check"
       ]
     },
     "deliveries.issue_type": {
@@ -3203,6 +3218,18 @@
       "table": "cycle_counts",
       "constraint": "cycle_counts_item_revision_nonnegative_chk",
       "def": "CHECK ((item_revision >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "deliveries",
+      "constraint": "deliveries_no_proof_fields_only_check",
+      "def": "CHECK (((COALESCE(completion_evidence, ''::text) = 'no_proof'::text) OR ((completion_no_proof_by IS NULL) AND (completion_no_proof_at IS NULL) AND (completion_no_proof_by_name IS NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "deliveries",
+      "constraint": "deliveries_no_proof_record_check",
+      "def": "CHECK (((COALESCE(completion_evidence, ''::text) <> 'no_proof'::text) OR ((completion_no_proof_by IS NOT NULL) AND (completion_no_proof_at IS NOT NULL) AND (completion_no_proof_by_name IS NOT NULL) AND (completion_evidence_ref IS NOT NULL) AND ((char_length(completion_evidence_ref) >= 10) AND (char_length(completion_evidence_ref) <= 500)) AND (status IS NOT NULL) AND (status <> ALL (ARRAY['scheduled'::text, 'in_progress'::text])))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -6990,7 +7017,12 @@
       "issue_notes",
       "last_edited_by",
       "last_edited_at",
-      "is_quick_delivery"
+      "is_quick_delivery",
+      "completion_evidence",
+      "completion_evidence_ref",
+      "completion_no_proof_by",
+      "completion_no_proof_by_name",
+      "completion_no_proof_at"
     ],
     "delivery_external_billings": [
       "delivery_id",

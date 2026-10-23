@@ -780,9 +780,14 @@ assert.equal(proofValid({ ...proof, reasoning_effort: "medium" }, HEAD, now, BAS
 assert.equal(proofValid(proof, "b".repeat(40), now), false, "wrong head_sha → invalid");
 assert.equal(proofValid(proof, HEAD, now, "d".repeat(40)), false, "moved origin/main base → invalid");
 assert.equal(
-  proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "clean", timestamp: "2026-07-14T11:00:00.000Z" }), HEAD, now),
+  proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "clean", timestamp: "2026-07-14T11:00:00.000Z" }), HEAD, now, BASE),
+  true,
+  "an hour-old proof on the same head and base stays valid (24-hour window)",
+);
+assert.equal(
+  proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "clean", timestamp: "2026-07-13T11:59:59.999Z" }), HEAD, now),
   false,
-  "31-minute-old proof → invalid (expired)",
+  "proof over 24 hours old → invalid (expired)",
 );
 assert.equal(
   proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "not-a-verdict", timestamp: "2026-07-14T11:59:00.000Z" }), HEAD, now),

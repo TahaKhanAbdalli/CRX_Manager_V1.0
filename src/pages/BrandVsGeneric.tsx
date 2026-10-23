@@ -507,9 +507,6 @@ export default function BrandVsGeneric() {
               </Button>
             )}
           </div>
-          {loadFailed && (
-            <p role="alert" className="text-sm text-red-600">Products and mappings could not be loaded. Reload the page to try again.</p>
-          )}
           <DataTable<MappingRow>
             data={mappings}
             columns={columns}
@@ -523,6 +520,8 @@ export default function BrandVsGeneric() {
                 : 'No brand-to-generic mappings have been set up yet.'
             }
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => void fetchData()}
           />
         </div>
       </Card>

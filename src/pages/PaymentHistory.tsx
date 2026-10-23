@@ -10,11 +10,12 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
@@ -56,11 +57,16 @@ export default function PaymentHistory() {
 
   const [payments, setPayments] = useState<AllocationSet[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last list read failed: no rows or totals, so it never reads as "No payments yet".
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Expanded row
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [allocations, setAllocations] = useState<InvoiceAllocation[]>([]);
   const [loadingAllocs, setLoadingAllocs] = useState(false);
+  const [allocsFailed, setAllocsFailed] = useState(false);
+  // Only the latest opened payment's read may set its allocations.
+  const allocSeq = useRef(0);
 
   // Void modal
   const [voidPayment, setVoidPayment] = useState<AllocationSet | null>(null);
@@ -73,7 +79,7 @@ export default function PaymentHistory() {
   const fetchPayments = useCallback(async () => {
     const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('allocation_sets')
       .select(`
         id, customer_id, total_payment_cents, total_allocated_cents,
@@ -83,16 +89,28 @@ export default function PaymentHistory() {
       `, { count: 'exact' })
       .order('created_at', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (seq !== fetchSeq.current) return;
 
-    if (error) {
+    if (error || !data) {
       toast('error', 'Failed to load payment history');
+      // An older list, or none, would look current under zero totals.
+      setPayments([]);
+      setLoadFailed(true);
+      // Close the open payment too: its allocations may have changed (a void) and it is no longer listed.
+      allocSeq.current += 1;
+      setExpandedId(null);
+      setAllocations([]);
+      setAllocsFailed(false);
+      setLoadingAllocs(false);
+      // And any open void confirmation: it shows a payment from the list that failed to load.
+      setVoidPayment(null);
       setLoading(false);
       return;
     }
+    setLoadFailed(false);
 
-    const mapped: AllocationSet[] = (data || []).map((row: Record<string, unknown>) => ({
+    const mapped: AllocationSet[] = data.map((row: Record<string, unknown>) => ({
       ...(row as AllocationSet),
       farm_name: (row.customers as { farm_name: string } | null)?.farm_name || 'Unknown',
     }));
@@ -107,7 +125,11 @@ export default function PaymentHistory() {
 
   // Fetch allocations for expanded row
   const fetchAllocations = useCallback(async (setId: string) => {
+    const seq = ++allocSeq.current;
     setLoadingAllocs(true);
+    // Never show the previously opened payment's allocations under this one.
+    setAllocations([]);
+    setAllocsFailed(false);
     const { data, error } = await supabase
       .from('invoice_line_allocations')
       .select(`
@@ -117,11 +139,14 @@ export default function PaymentHistory() {
       `)
       .eq('allocation_set_id', setId)
       .order('created_at');
+    // Another payment was opened (or this one closed) while this loaded.
+    if (seq !== allocSeq.current) return;
 
-    if (error) {
+    if (error || !data) {
       toast('error', 'Failed to load allocations');
+      setAllocsFailed(true);
     } else {
-      const mapped: InvoiceAllocation[] = (data || []).map((row: Record<string, unknown>) => ({
+      const mapped: InvoiceAllocation[] = data.map((row: Record<string, unknown>) => ({
         ...(row as unknown as InvoiceAllocation),
         invoice_number: (row.invoices as { invoice_number: string } | null)?.invoice_number || '—',
         bill_to_farm_name: (row.customers as { farm_name: string } | null)?.farm_name || 'Unknown',
@@ -133,8 +158,12 @@ export default function PaymentHistory() {
 
   const toggleExpand = (id: string) => {
     if (expandedId === id) {
+      // A read still running for the closed payment must not fill the list.
+      allocSeq.current += 1;
       setExpandedId(null);
       setAllocations([]);
+      setAllocsFailed(false);
+      setLoadingAllocs(false);
     } else {
       setExpandedId(id);
       fetchAllocations(id);
@@ -268,6 +297,8 @@ export default function PaymentHistory() {
           <Button
             variant="secondary"
             size="sm"
+            // A failed or unfinished load must not export as if it were the whole list.
+            disabled={loadFailed || loading}
             onClick={() =>
               exportToCSV(
                 payments as unknown as Record<string, unknown>[],
@@ -289,7 +320,8 @@ export default function PaymentHistory() {
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards: hidden while loading and after a failed load, where $0 would read as "no payments". */}
+      {!loadFailed && !loading && (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <div className="flex items-center gap-3 mb-2">
@@ -322,6 +354,7 @@ export default function PaymentHistory() {
           <p className="text-xs text-secondary mt-1">reversed</p>
         </Card>
       </div>
+      )}
 
       {/* Data Table */}
       <Card padding={false}>
@@ -335,6 +368,8 @@ export default function PaymentHistory() {
             emptyTitle="No payments yet"
             emptyDescription="Payment allocations will appear here after you record payments"
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => { void fetchPayments(); }}
           />
 
           {/* Expanded allocations for selected payment */}
@@ -343,6 +378,8 @@ export default function PaymentHistory() {
               <h3 className="text-sm font-semibold text-nav-dark mb-3">Invoice Allocations</h3>
               {loadingAllocs ? (
                 <p className="text-sm text-secondary py-4 text-center">Loading allocations...</p>
+              ) : allocsFailed ? (
+                <LoadFailedState title="This payment's allocations could not be loaded" onRetry={() => { void fetchAllocations(expandedId); }} />
               ) : allocations.length === 0 ? (
                 <p className="text-sm text-secondary py-4 text-center">No invoice allocations for this payment</p>
               ) : (

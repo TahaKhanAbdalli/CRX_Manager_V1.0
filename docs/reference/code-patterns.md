@@ -34,7 +34,6 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 - Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts`
 - Delivery PDF: `src/lib/deliveryPdf.ts` — batch support, delivered vs planned columns, partial delivery amber highlight
 - Receiving PDF: `src/lib/receivingPdf.ts` — CRX green header, condition color-coding, batch support
-- Load Sheet PDF: `src/lib/loadSheetPdf.ts` — product summary table + per-stop tables, aggregates quantities across stops, tote number column
 - PDF text extraction uses `pdfjs-dist` (already installed), see `BulkOrderImport.tsx` for reference
 
 ## OCR & Matching
@@ -241,10 +240,5 @@ const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 - "Unit Cost" and "Value" columns in table (admin-only visibility)
 - Currency formatting: `$` prefix with `.toLocaleString()` and 2 decimal places
 
-## Load Sheet PDF Pattern (Inventory Improvements)
-- `generateLoadSheetPdf()` in `src/lib/loadSheetPdf.ts` — generates pick list for warehouse staff
-- Product summary table: aggregates quantities across all stops by product name
-- Per-stop tables: delivery number, customer, items with quantities and tote numbers
-- Follows `deliveryPdf.ts` pattern: dynamic imports of jsPDF + jspdf-autotable, CRX brand colors
-- "Load Sheet" button on Deliveries page for scheduled deliveries
-- 6 unit tests in `loadSheetPdf.test.ts`
+## Load Sheet (Deliveries page)
+- The "Load Sheet" button on the Deliveries page prints one combined Delivery Receipt PDF (`generateBatchDeliveryPdf` in `src/lib/deliveryPdf.ts`), one page per delivery, for the selected deliveries (or every scheduled/in-progress delivery in the current filter when none are selected). The older summary-style `loadSheetPdf.ts` was replaced in March 2026 and removed in October 2026.

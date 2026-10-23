@@ -402,8 +402,10 @@ one-line reason. This is still the advisory path — it mints no proof.
 rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
 or not). Run it LAST: after the head is frozen and checks are green (and after any CodeRabbit
 fix push, if a requested review arrived), immediately before the migration apply (if any) and
-the merge. The proof binds to that HEAD and to GitHub's real base and expires after 30 minutes, so a
-later commit or a moved base voids it.
+the merge. The proof binds to that HEAD and to GitHub's real base, so a later commit or a moved base
+voids it; on an unchanged head and base it stays valid for 24 hours (Mason, 2026-10-23), so a PR
+waiting in the merge queue keeps its review. A live migration apply still needs the head's Sol
+proof under 30 minutes (the migration landing gate).
 
 **Main moved after a clean Sol pass? Carry it forward (Mason, 2026-10-21).** Do not pay for a second
 full Sol review just because another PR landed. Merge the new main into the branch (`git fetch origin`,
@@ -424,8 +426,9 @@ decision only) immediately before the merge. It mints a carried proof for the ne
   any other blocker it sees.
 
 Anything else refuses, and the full Step 3B review above is the answer. The carried proof states
-`codex_ran: false, carried_forward: true`, names the head and base it came from, and still expires
-30 minutes after it is minted. Every merge gate accepts it on the same head/base/age terms.
+`codex_ran: false, carried_forward: true`, names the head and base it came from, and expires 24 hours
+after the original full review at the root of its chain (it can never outlive that review). Every
+merge gate accepts it on the same head/base/age terms.
 
 **The one exception: skip Step 3B for a documentation-only change** as defined in
 `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). Both merge gates read the PR's real file

@@ -15,7 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { ORDER_COLUMNS, ORDER_ITEM_COLUMNS } from '../lib/costFields';
 import { Sentry } from '../lib/sentry';
 import { formatUSD as fmt } from '../lib/money';
@@ -56,6 +56,8 @@ export default function Orders() {
   const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last list read failed: no rows, so it never reads as "No orders yet".
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   const [planFilter, setPlanFilter] = useState('');
   // Ship-now/price-later (sell-side #2): filter unpriced rush orders.
@@ -80,7 +82,16 @@ export default function Orders() {
     const seq = ++fetchSeq.current;
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     // Read every page: a single request is silently cut off at the server's row cap.
-    const { data: ordersData, error: ordersError } = await fetchAllRows((from, to) => supabase
+    // A failed read shows "could not be loaded": an older list would look current,
+    // and an empty one would read as "No orders yet".
+    const failLoad = (err: unknown) => {
+      Sentry.captureException(err instanceof Error ? err : new Error(String((err as { message?: string })?.message ?? err)), { tags: { source: 'fetch', action: 'load_orders' } });
+      toast('error', 'Failed to load orders. Please try again.');
+      setOrders([]);
+      setLoadFailed(true);
+      setLoading(false);
+    };
+    const { data: ordersData, error: ordersError } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('orders')
       .select(`${ORDER_COLUMNS}, customer:customers(farm_name, parent_customer_id)`, { count: 'exact' })
       .gte('order_date', seasonStart)
@@ -88,21 +99,19 @@ export default function Orders() {
       .is('deleted_at', null)
       .order('order_date', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (seq !== fetchSeq.current) return;
 
-    if (ordersError) {
-      Sentry.captureException(ordersError);
-      toast('error', 'Failed to load orders. Please try again.');
-      setLoading(false);
+    if (ordersError || !ordersData) {
+      failLoad(ordersError ?? new Error('orders read returned no list'));
       return;
     }
 
-    const orderIds = (ordersData || []).map((o: Record<string, unknown>) => (o as { id: string }).id);
+    const orderIds = ordersData.map((o: Record<string, unknown>) => (o as { id: string }).id);
 
     // Fetch parent customer names for farm group labels
     const parentIds = [...new Set(
-      (ordersData || [])
+      ordersData
         .map((o: Record<string, unknown>) => (o.customer as { parent_customer_id?: string })?.parent_customer_id)
         .filter(Boolean) as string[]
     )];
@@ -111,40 +120,46 @@ export default function Orders() {
     // Each id list is sent in chunks and every chunk is paged, so a long order list
     // neither overflows the request URL nor loses rows past the server's row cap.
     const [itemsResult, invoiceResult, parentsResult, deliveryResult] = await Promise.all([
-      fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
+      fetchAllRowsForIds(orderIds, (idChunk, from, to) => pageWithList(supabase
         .from('order_items')
         // `id` lets the pager drop a line repeated across a page seam.
         .select('id, order_id, total_units_needed, quantity_delivered, price_per_unit, product_name', { count: 'exact' })
         .in('order_id', idChunk)
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
       fetchActiveInvoiceCoveragePages(orderIds),
-      fetchAllRowsForIds(parentIds, (idChunk, from, to) => supabase
+      fetchAllRowsForIds(parentIds, (idChunk, from, to) => pageWithList(supabase
         .from('customers')
         .select('id, farm_name', { count: 'exact' })
         .in('id', idChunk)
         .order('id')
-        .range(from, to)),
-      fetchAllRowsForIds(orderIds, (idChunk, from, to) => supabase
+        .range(from, to))),
+      fetchAllRowsForIds(orderIds, (idChunk, from, to) => pageWithList(supabase
         .from('deliveries')
         .select('id, order_id, scheduled_date, status', { count: 'exact' })
         .in('order_id', idChunk)
         .in('status', ['scheduled', 'in_progress'])
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
     ]);
     if (seq !== fetchSeq.current) return;
 
+    // Without the lines every order would show 0% fulfilled and no products to
+    // search by; without the deliveries every order would show none scheduled.
+    // Without the parent names, grouped farms would show no farm-group label as if they had none.
     const { data: itemsData, error: itemsError } = itemsResult;
-    if (itemsError) {
-      Sentry.captureException(itemsError);
+    const { data: deliveryData, error: deliveryError } = deliveryResult;
+    const { data: parents, error: parentsError } = parentsResult;
+    if (itemsError || !itemsData || deliveryError || !deliveryData || parentsError || !parents) {
+      failLoad(itemsError ?? deliveryError ?? parentsError ?? new Error('order lines, deliveries or farm groups read returned no list'));
+      return;
     }
 
     // H16: Use value-based fulfillment (weighted by price_per_unit) instead of item-count-based
     const itemsByOrder: Record<string, { neededValue: number; deliveredValue: number }> = {};
     // Collect product names per order so the list is searchable by product (F1).
     const productNamesByOrder: Record<string, Set<string>> = {};
-    (itemsData || []).forEach((item) => {
+    itemsData.forEach((item) => {
       if (!itemsByOrder[item.order_id]) {
         itemsByOrder[item.order_id] = { neededValue: 0, deliveredValue: 0 };
       }
@@ -158,7 +173,9 @@ export default function Orders() {
     });
 
     // Fetch invoice totals per order for invoiced %
-    const { data: invoiceData, error: invoiceError } = invoiceResult;
+    // No list is a failed read too: it must say "unavailable", never 0% invoiced (Luna round 2).
+    const { data: invoiceData } = invoiceResult;
+    const invoiceError = invoiceResult.error ?? (invoiceData ? null : { message: 'invoice coverage read returned no list' });
     if (invoiceError) {
       Sentry.captureException(invoiceError);
       toast('error', 'Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.');
@@ -172,16 +189,11 @@ export default function Orders() {
     });
 
     const parentNameMap: Record<string, string> = {};
-    const { data: parents } = parentsResult;
-    (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
+    parents.forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
     // Build active delivery info per order (scheduled + in_progress only)
-    const { data: deliveryData, error: deliveryError } = deliveryResult;
-    if (deliveryError) {
-      Sentry.captureException(deliveryError);
-    }
     const deliveryByOrder: Record<string, { count: number; earliestDate: string | null }> = {};
-    (deliveryData || []).forEach((del: { order_id: string; scheduled_date: string; status: string }) => {
+    deliveryData.forEach((del: { order_id: string; scheduled_date: string; status: string }) => {
       if (!deliveryByOrder[del.order_id]) {
         deliveryByOrder[del.order_id] = { count: 0, earliestDate: null };
       }
@@ -191,7 +203,7 @@ export default function Orders() {
       }
     });
 
-    const enriched = ((ordersData || []) as Array<Omit<Order, 'customer'> & {
+    const enriched = (ordersData as Array<Omit<Order, 'customer'> & {
       customer: { farm_name: string; parent_customer_id: string | null } | null;
     }>).map((o) => {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
@@ -216,6 +228,7 @@ export default function Orders() {
     });
 
     setOrders(enriched);
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -702,6 +715,8 @@ export default function Orders() {
               </div>
             }
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => { setLoading(true); fetchOrders(); }}
             filters={
               <>
                 <select

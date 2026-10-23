@@ -21,12 +21,13 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import PageHeader from '../components/ui/PageHeader';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
@@ -84,6 +85,10 @@ export default function PaymentAllocation() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  // The last customer search failed: say so rather than show no results at all.
+  const [searchFailed, setSearchFailed] = useState(false);
+  // Bumped by Try again to run the same search once more.
+  const [searchAttempt, setSearchAttempt] = useState(0);
 
   // Payment fields
   const [checkAmountInput, setCheckAmountInput] = useState('');
@@ -113,6 +118,7 @@ export default function PaymentAllocation() {
       setCustomerResults([]);
       setShowDropdown(false);
       setSearchLoading(false);
+      setSearchFailed(false);
       return;
     }
     // L3: cancel flag so a debounced response that resolves after the input
@@ -130,21 +136,25 @@ export default function PaymentAllocation() {
           .order('farm_name')
           .limit(15);
         if (error) throw error;
+        if (!data) throw new Error('customer search returned no list');
         if (cancelled) return;
-        setCustomerResults((data || []) as CustomerOption[]);
+        setCustomerResults(data as CustomerOption[]);
+        setSearchFailed(false);
         setShowDropdown(true);
       } catch (err) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'payment_customer_search' } });
         if (!cancelled) {
           setCustomerResults([]);
-          setShowDropdown(false);
+          // Not "No customers found": the search did not run.
+          setSearchFailed(true);
+          setShowDropdown(true);
         }
       } finally {
         if (!cancelled) setSearchLoading(false);
       }
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [customerSearch, selectedCustomer]);
+  }, [customerSearch, selectedCustomer, searchAttempt]);
 
   /* ── Load invoices when customer selected ──────────────────────────── */
 
@@ -156,7 +166,7 @@ export default function PaymentAllocation() {
     const today = new Date();
     // Every open invoice, page by page: a check could only be applied to the
     // customer's first 200 before (2026-10-20 Goal 4 part 2).
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('invoices')
       .select('id, invoice_number, invoice_date, due_date, invoice_type, total_amount_cents, balance_cents', { count: 'exact' })
       .eq('customer_id', customerId)
@@ -169,11 +179,11 @@ export default function PaymentAllocation() {
       .order('invoice_date', { ascending: true })
       .order('created_at', { ascending: true })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     // Another customer was picked (or cleared) while this one loaded.
     if (seq !== invoiceLoadSeq.current) return;
 
-    if (error) {
+    if (error || !data) {
       toast('error', 'Failed to load invoices');
       setInvoicesFailed(true);
       setLoadingInvoices(false);
@@ -181,7 +191,7 @@ export default function PaymentAllocation() {
     }
     setInvoicesFailed(false);
 
-    const mapped = ((data || []) as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string | null; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv): PaymentAllocationEntry => ({
+    const mapped = (data as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string | null; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv): PaymentAllocationEntry => ({
       invoice_id: inv.id,
       invoice_number: inv.invoice_number,
       invoice_date: inv.invoice_date,
@@ -457,7 +467,19 @@ export default function PaymentAllocation() {
                     ))}
                   </div>
                 )}
-                {showDropdown && customerResults.length === 0 && !searchLoading && customerSearch.length >= 2 && (
+                {showDropdown && searchFailed && !searchLoading && customerSearch.length >= 2 && (
+                  <div role="alert" className="absolute z-30 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm text-red-600">
+                    Customer search failed.{' '}
+                    <button
+                      type="button"
+                      className="underline font-medium"
+                      onClick={() => setSearchAttempt((n) => n + 1)}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+                {showDropdown && !searchFailed && customerResults.length === 0 && !searchLoading && customerSearch.length >= 2 && (
                   <div className="absolute z-30 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm text-secondary">
                     No customers found
                   </div>
@@ -575,9 +597,10 @@ export default function PaymentAllocation() {
                   </div>
                 ) : invoicesFailed ? (
                   // Not "no open invoices": a failed read must not look like a paid-up customer.
-                  <p role="alert" className="text-center py-12 text-red-600 text-sm">
-                    Open invoices could not be loaded, so the check cannot be applied. Search for the customer and pick them again to retry.
-                  </p>
+                  <LoadFailedState
+                    title="Open invoices could not be loaded, so the check cannot be applied"
+                    onRetry={() => { void fetchInvoices(selectedCustomer.id); }}
+                  />
                 ) : invoices.length === 0 ? (
                   <div className="text-center py-12 text-secondary text-sm">
                     No open invoices for this customer

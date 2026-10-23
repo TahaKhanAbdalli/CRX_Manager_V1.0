@@ -2628,6 +2628,11 @@ export type Database = {
           cancelled_at: string | null
           cancelled_by: string | null
           completed_at: string | null
+          completion_evidence: string | null
+          completion_evidence_ref: string | null
+          completion_no_proof_at: string | null
+          completion_no_proof_by: string | null
+          completion_no_proof_by_name: string | null
           created_at: string
           created_by: string
           customer_id: string
@@ -2660,6 +2665,11 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           completed_at?: string | null
+          completion_evidence?: string | null
+          completion_evidence_ref?: string | null
+          completion_no_proof_at?: string | null
+          completion_no_proof_by?: string | null
+          completion_no_proof_by_name?: string | null
           created_at?: string
           created_by: string
           customer_id: string
@@ -2692,6 +2702,11 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           completed_at?: string | null
+          completion_evidence?: string | null
+          completion_evidence_ref?: string | null
+          completion_no_proof_at?: string | null
+          completion_no_proof_by?: string | null
+          completion_no_proof_by_name?: string | null
           created_at?: string
           created_by?: string
           customer_id?: string
@@ -7557,6 +7572,83 @@ export type Database = {
           },
         ]
       }
+      product_brands: {
+        Row: {
+          brand_name: string
+          created_at: string
+          created_by: string
+          epa_registration: string | null
+          id: string
+          is_currently_sourced: boolean
+          is_rup: boolean | null
+          manufacturer: string | null
+          product_id: string
+          row_version: number
+          signal_word: string | null
+          updated_at: string
+          updated_by: string
+        }
+        Insert: {
+          brand_name: string
+          created_at?: string
+          created_by: string
+          epa_registration?: string | null
+          id?: string
+          is_currently_sourced?: boolean
+          is_rup?: boolean | null
+          manufacturer?: string | null
+          product_id: string
+          row_version?: number
+          signal_word?: string | null
+          updated_at?: string
+          updated_by: string
+        }
+        Update: {
+          brand_name?: string
+          created_at?: string
+          created_by?: string
+          epa_registration?: string | null
+          id?: string
+          is_currently_sourced?: boolean
+          is_rup?: boolean | null
+          manufacturer?: string | null
+          product_id?: string
+          row_version?: number
+          signal_word?: string | null
+          updated_at?: string
+          updated_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_brands_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_brands_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_cost_basis: {
         Row: {
           basis_type: string
@@ -11122,7 +11214,7 @@ export type Database = {
           invoice_date: string | null
           invoice_group_id: string | null
           invoice_number: string | null
-          invoice_post_version: string | null
+          invoice_postable_version: string | null
           invoice_type: string | null
           is_quick_delivery: boolean | null
           job_id: string | null
@@ -12839,6 +12931,8 @@ export type Database = {
         Args: {
           p_completed_at?: string
           p_delivery_id: string
+          p_evidence?: string
+          p_evidence_ref?: string
           p_idempotency_key?: string
           p_issue_notes?: string
           p_issue_type?: string
@@ -13535,6 +13629,10 @@ export type Database = {
         Returns: Json
       }
       get_dashboard_action_items: { Args: { p_limit?: number }; Returns: Json }
+      get_delivery_receipt_recipient: {
+        Args: { p_delivery_id: string }
+        Returns: Json
+      }
       get_detailed_statement_data: {
         Args: { p_as_of_date: string; p_customer_id: string; p_mode?: string }
         Returns: Json
@@ -14154,7 +14252,7 @@ export type Database = {
         }
         Returns: undefined
       }
-      invoice_post_version: {
+      invoice_postable_version: {
         Args: { "": Database["public"]["Views"]["invoices_postable"]["Row"] }
         Returns: string
       }
@@ -15276,6 +15374,8 @@ export type Database = {
         Args: {
           p_delivered_on: string
           p_delivery_id: string
+          p_evidence?: string
+          p_evidence_ref?: string
           p_idempotency_key?: string
           p_issue_notes?: string
           p_issue_type?: string
@@ -15480,6 +15580,21 @@ export type Database = {
           p_notes: string
           p_po_overage_reason?: string
           p_subtotal_cents: number
+        }
+        Returns: Json
+      }
+      upsert_product_brand: {
+        Args: {
+          p_brand_id?: string
+          p_brand_name: string
+          p_epa_registration: string
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_is_currently_sourced: boolean
+          p_is_rup: boolean
+          p_manufacturer: string
+          p_product_id: string
+          p_signal_word: string
         }
         Returns: Json
       }

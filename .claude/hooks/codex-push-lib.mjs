@@ -2358,7 +2358,24 @@ export function describeRiskyContent(diffText, options) {
     `\n--- END UNTRUSTED DIFF-DERIVED DATA ---`;
 }
 
-function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
+// How long a clean review stays valid while its head AND base are unchanged.
+// Sol proofs last 24 hours (Mason, 2026-10-23): the head and base binding
+// already voids a proof the moment the code or main moves, so a shorter clock
+// only threw away reviews of unchanged code that waited in the merge queue.
+// 24 hours matches CARRY_SOURCE_MAX_AGE_MS in write-codex-push-proof.mjs.
+// Codex's Claude-review proofs keep the original 30 minutes.
+export const SOL_PROOF_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const CLAUDE_PROOF_MAX_AGE_MS = 30 * 60 * 1000;
+
+function proofAgeOk(timestamp, nowMs, maxAgeMs) {
+  const t = timestamp ? Date.parse(timestamp) : NaN;
+  if (!Number.isFinite(t)) return false;
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  const age = now - t;
+  return age >= 0 && age <= maxAgeMs;
+}
+
+function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha, maxAgeMs) {
   if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
   if (v !== "clean") return false;
@@ -2375,12 +2392,7 @@ function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   // shared validator stays usable in base-agnostic unit contexts; both real
   // guards always pass the resolved origin/main.
   if (expectedBaseSha && data.base_sha !== expectedBaseSha) return false;
-  const t = data.timestamp ? Date.parse(data.timestamp) : NaN;
-  if (!Number.isFinite(t)) return false;
-  const now = typeof nowMs === "number" ? nowMs : Date.now();
-  const age = now - t;
-  if (age < 0 || age > 30 * 60 * 1000) return false;
-  return true;
+  return proofAgeOk(data.timestamp, nowMs, maxAgeMs);
 }
 
 // A Sol proof CARRIED FORWARD by `write-codex-push-proof.mjs --carry-forward`
@@ -2403,17 +2415,33 @@ export function carriedSolProof(data) {
 }
 
 // Validate Claude's existing Codex-review proof shape (a full review, or a
-// carried one bound to this exact head and base).
-export function proofValid(data, headSha, nowMs, expectedBaseSha) {
-  const candidate = carriedSolProof(data) ? { ...data, codex_ran: true } : data;
-  return reviewProofValid(candidate, headSha, nowMs, "codex_ran", expectedBaseSha)
+// carried one bound to this exact head and base). Each carry gets a fresh
+// timestamp, so a carried proof must also have its original full review inside
+// the same 24 hours, or a chain of carries would never expire.
+// `maxAgeMs` lets the migration-apply landing gate keep its stricter window.
+export function proofValid(data, headSha, nowMs, expectedBaseSha, maxAgeMs = SOL_PROOF_MAX_AGE_MS) {
+  const carried = carriedSolProof(data);
+  const candidate = carried ? { ...data, codex_ran: true } : data;
+  return reviewProofValid(candidate, headSha, nowMs, "codex_ran", expectedBaseSha, Math.min(maxAgeMs, SOL_PROOF_MAX_AGE_MS))
     && data.model === "gpt-6-sol"
-    && data.reasoning_effort === "high";
+    && data.reasoning_effort === "high"
+    && (!carried || carryRootReviewOk(data, nowMs));
+}
+
+// The full review at the root of a carry chain must name a real head and base,
+// come no later than the carry itself, and be inside the 24 hours.
+function carryRootReviewOk(data, nowMs) {
+  const root = data.carry.root_review;
+  if (!root || typeof root !== "object") return false;
+  if (!CARRY_SHA_RE.test(String(root.head_sha || "")) || !CARRY_SHA_RE.test(String(root.base_sha || ""))) return false;
+  const rootT = Date.parse(root.timestamp || "");
+  if (!(rootT <= Date.parse(data.timestamp))) return false;
+  return proofAgeOk(root.timestamp, nowMs, SOL_PROOF_MAX_AGE_MS);
 }
 
 // Mirror validation for Codex's Claude-review proof shape.
 export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
-  return reviewProofValid(data, headSha, nowMs, "claude_ran", expectedBaseSha);
+  return reviewProofValid(data, headSha, nowMs, "claude_ran", expectedBaseSha, CLAUDE_PROOF_MAX_AGE_MS);
 }
 
 // Every session-state directory belonging to THIS repository — the primary
@@ -2430,7 +2458,7 @@ export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
 //
 // Widening the SEARCH does not widen what COUNTS. `proofValid()` still demands
 // the exact head SHA GitHub reports, the exact base GitHub will merge onto, a
-// clean verdict, and an age inside 30 minutes; and
+// clean verdict, and an age inside SOL_PROOF_MAX_AGE_MS; and
 // `review-proof-guard.mjs` still blocks hand-writing a proof in ANY directory.
 // These are sibling checkouts of one repository, not arbitrary paths — a proof
 // that would be rejected in the primary checkout is rejected in every one.

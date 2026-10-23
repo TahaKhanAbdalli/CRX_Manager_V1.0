@@ -603,6 +603,37 @@ export interface ChemAutofillUnits {
  *
  * Pure + tested (chemCalculator.test.ts).
  */
+/**
+ * The price text an autofilled chemical line gets: blank when the product states no price, or
+ * when a positive stated price rounds to 0 cents in the reconciled unit (e.g. $0.50/GAL per oz).
+ * A blank price makes the job's save check ask for one instead of billing the line at $0.
+ */
+export function autofillPriceText(statedPriceCents: number | null, reconciledPriceCents: number): string {
+  if (statedPriceCents == null || (statedPriceCents > 0 && reconciledPriceCents === 0)) return '';
+  return reconciledPriceCents.toString();
+}
+
+/**
+ * A stated per-stock-unit price as price text for a line billed in `lineUnit`. Filled in only when
+ * the line is billed in the product's own stock unit: converting to another unit rounds to whole
+ * cents (64¢/GAL is 0.5¢/oz), which would bill the line wrongly. Blank otherwise, and when there
+ * is no stated price, so the job's save check asks for a price to be typed.
+ */
+export function priceTextInLineUnit(
+  stockUnit: string | null | undefined,
+  lineUnit: string | null | undefined,
+  statedPricePerStockCents: number | null,
+): string {
+  // Spellings of one unit ('gallon', 'gl', 'gal') compare equal.
+  const line = normalizeRateUnit(lineUnit);
+  const stock = normalizeRateUnit(stockUnit);
+  if (statedPricePerStockCents == null || line == null) return '';
+  // $0 is $0 in any unit, so a stated free price needs no conversion.
+  if (statedPricePerStockCents === 0) return '0';
+  if (line !== stock) return '';
+  return statedPricePerStockCents.toString();
+}
+
 export function reconcileChemAutofillUnits(
   stockUnit: string | null | undefined,
   rateUnit: string | null | undefined,

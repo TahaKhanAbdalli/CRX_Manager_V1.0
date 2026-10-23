@@ -90,6 +90,17 @@ describe('programItemToChemRowSeed', () => {
     // 100 ac × 32 oz = 3200 oz × $1.00 = $3200 = 200 lb × $16/lb (correct; not 16×).
   });
 
+  it('MONEY: a missing tier-2/3 price falls back to tier 1, not $0', () => {
+    const ozProduct = { ...galProduct, unit_size: 'oz', tier2_price: null, tier3_price: null } as unknown as Product;
+    expect(programItemToChemRowSeed(item, ozProduct, 2).price_per_unit_cents).toBe('1000');
+    expect(programItemToChemRowSeed(item, ozProduct, 3).price_per_unit_cents).toBe('1000');
+  });
+
+  it('MONEY: a stated zero tier price stays zero, not the tier-1 price', () => {
+    const ozProduct = { ...galProduct, unit_size: 'oz', tier3_price: 0 } as unknown as Product;
+    expect(programItemToChemRowSeed(item, ozProduct, 3).price_per_unit_cents).toBe('0');
+  });
+
   it('leaves per-stock cost/price untouched when the units already match', () => {
     const ozProduct = { ...galProduct, unit_size: 'oz' } as unknown as Product;
     const seed = programItemToChemRowSeed(item, ozProduct, 1);
@@ -105,9 +116,15 @@ describe('programItemToChemRowSeed', () => {
     expect(seed.phi_days).toBe('30');
   });
 
+  it('MONEY: leaves the price blank for a product that states no price', () => {
+    const unpriced = { ...galProduct, tier1_price: null, tier2_price: null, tier3_price: null } as unknown as Product;
+    expect(programItemToChemRowSeed(item, unpriced, 2).price_per_unit_cents).toBe('');
+  });
+
   it('is safe when the product is missing (deleted/inactive) — no price/cost, keeps rate', () => {
     const seed = programItemToChemRowSeed(item, undefined, 2);
-    expect(seed.price_per_unit_cents).toBe('0');
+    // No price is known: blank, so the job's save check asks for one instead of billing $0.
+    expect(seed.price_per_unit_cents).toBe('');
     expect(seed.cost_per_unit_cents).toBe('0');
     expect(seed.rate_per_acre).toBe('32');
     expect(seed.rate_unit).toBe('oz/acre'); // program unit still applies

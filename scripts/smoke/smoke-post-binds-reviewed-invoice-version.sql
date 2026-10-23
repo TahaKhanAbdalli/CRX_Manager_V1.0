@@ -14,8 +14,8 @@ DECLARE
   v_message text;
   v_result jsonb;
   -- The computed field lives on public.invoices (20261022022000) until the cost lock
-  -- (20261022091000) drops that overload; from 20261022090000 it is also on invoices_postable.
-  v_field regprocedure := coalesce(to_regprocedure('public.invoice_post_version(public.invoices_postable)'),
+  -- drops it; from 20261022090000 the view's own invoice_postable_version(invoices_postable) answers too.
+  v_field regprocedure := coalesce(to_regprocedure('public.invoice_postable_version(public.invoices_postable)'),
                                    to_regprocedure('public.invoice_post_version(public.invoices)'));
 BEGIN
   IF v_field IS NULL

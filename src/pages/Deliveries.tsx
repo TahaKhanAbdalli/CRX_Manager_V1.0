@@ -23,6 +23,7 @@ import Card from '../components/ui/Card';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { hasPageAccess } from '../lib/pagePermissions';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import Button from '../components/ui/Button';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -30,8 +31,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
-import { runCriticalAction } from '../lib/criticalAction';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
+import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
 import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRef } from '../hooks/useLatestRef';
@@ -39,7 +40,9 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { digestIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
-import { isValidDeliveredOn } from '../lib/paperTicket';
+import { isValidDeliveredOn, isValidNoProofReason, MAX_PAPER_TICKET_PHOTOS, NO_PROOF_REASON_MAX_CHARS, NO_PROOF_REASON_MIN_CHARS, NO_PROOF_SIGNER, noProofReasonLength, PAPER_TICKET_PHOTO_CAPTION } from '../lib/paperTicket';
+import { COMPLETED_BY_EARLIER_ATTEMPT_MESSAGE, INVALID_SIGNATURE_MESSAGE, isNetworkFailure, isSignatureDataUrl, isSignatureImageMissing, latestEvidencePhoto, mergePhotosById, reconcileFailedCompletion, signatureDigest, signatureImagePathFor, storedNoProofReason, uploadEvidencePhoto, uploadSignatureImage } from '../lib/deliveryEvidence';
+import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
@@ -50,7 +53,7 @@ import { findShortDeliveries } from '../lib/inventoryShortage';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
-import type { Delivery, Profile } from '../types';
+import type { Delivery, DeliveryCompletionEvidence, DeliveryEvidencePhoto, Profile } from '../types';
 
 /* ─── Row type ─── */
 interface DeliveryRow extends Delivery {
@@ -61,6 +64,15 @@ interface DeliveryRow extends Delivery {
 }
 
 /* ─── Helpers ─── */
+// A completion an admin recorded without customer proof (completion_evidence = 'no_proof').
+const NoProofLabel = () => (
+  <span
+    title="Recorded without customer proof (admin)"
+    className="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
+  >
+    No proof
+  </span>
+);
 const today = () => localToday();
 // Completion dates use the business day in America/Chicago, the day the server dates the delivery.
 const businessToday = () => todayInBusinessTz();
@@ -132,11 +144,20 @@ export default function Deliveries() {
   // Bumped on every open and close of the complete dialog, so a request started in an
   // earlier dialog session can never submit or close a later one.
   const completeDialogGenRef = useRef(0);
-  const closeCompleteDialog = () => {
+  // The same session number as state, for what the dialog renders (e.g. the per-session upload spinner).
+  const [completeDialogGen, setCompleteDialogGen] = useState(0);
+  const bumpCompleteDialogGen = () => {
     completeDialogGenRef.current += 1;
+    setCompleteDialogGen(completeDialogGenRef.current);
+    return completeDialogGenRef.current;
+  };
+  const closeCompleteDialog = () => {
+    bumpCompleteDialogGen();
     setCompleteTarget(null);
     setSignedBy('');
     setDeliveredOnDate(businessToday());
+    resetCompleteEvidence();
+    setNoProofConfirmOpen(false);
   };
   // Send the in-app completion notification at most once per delivery. start_and_complete_delivery
   // is idempotent but returns no replay marker, so a same-key retry after a lost
@@ -145,9 +166,59 @@ export default function Deliveries() {
   const notifiedCompletionFor = useRef<Set<string>>(new Set());
   const [signedBy, setSignedBy] = useState('');
   const [deliveredOnDate, setDeliveredOnDate] = useState(businessToday());
+  // Goal 5 (migration 20261022075000): the server completes only with saved proof, either the
+  // on-screen signature or a photo of the signed paper ticket, or (admin only) a written reason
+  // recorded without proof.
+  const [completeEvidence, setCompleteEvidence] = useState<DeliveryCompletionEvidence>('signature');
+  const [completeSignature, setCompleteSignature] = useState<string | null>(null);
+  const [noProofReason, setNoProofReason] = useState('');
+  // A no-proof record is confirmed in a second step, as on the delivery page.
+  const [noProofConfirmOpen, setNoProofConfirmOpen] = useState(false);
+  // Every ticket-photo read and local add takes a number; only the newest read may replace the list.
+  const ticketPhotoSeqRef = useRef(0);
+  // The saved ticket photos of the delivery in the dialog (one saved earlier, e.g. by the driver, counts).
+  const [ticketPhotos, setTicketPhotos] = useState<{ deliveryId: string; photos: DeliveryEvidencePhoto[] } | null>(null);
+  // The dialog session whose ticket photo is uploading, so a later session never shows its spinner.
+  const [uploadingTicketGen, setUploadingTicketGen] = useState<number | null>(null);
+  const uploadingTicket = uploadingTicketGen !== null && uploadingTicketGen === completeDialogGen;
+  const ticketInputRef = useRef<HTMLInputElement>(null);
+  const resetCompleteEvidence = () => {
+    setCompleteEvidence('signature');
+    setCompleteSignature(null);
+    setNoProofReason('');
+    setTicketPhotos(null);
+  };
+  const loadTicketPhotos = async (deliveryId: string, dialogGen: number) => {
+    const seq = ++ticketPhotoSeqRef.current;
+    const { data, error } = await supabase.from('delivery_photos')
+      .select('id, storage_path, image_url, caption, uploaded_at')
+      .eq('delivery_id', deliveryId).eq('caption', PAPER_TICKET_PHOTO_CAPTION)
+      .order('uploaded_at');
+    if (completeDialogGenRef.current !== dialogGen) return;
+    // A newer read, or a photo saved meanwhile, superseded this read: it must not replace the list.
+    if (seq !== ticketPhotoSeqRef.current) return;
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'Load ticket photos for Mark Delivered' } });
+      toast('error', 'Saved ticket photos could not be loaded. Close and reopen this dialog to try again.');
+      return;
+    }
+    // The server's list replaces the shown one, so a photo no longer saved disappears too.
+    setTicketPhotos({ deliveryId, photos: (data || []) as DeliveryEvidencePhoto[] });
+  };
+  const currentTicketPhotos = ticketPhotos && ticketPhotos.deliveryId === completeTarget?.id ? ticketPhotos.photos : [];
+  const currentTicketPhoto = latestEvidencePhoto(currentTicketPhotos, PAPER_TICKET_PHOTO_CAPTION);
+  const canRecordWithoutProof = role === 'admin';
+  // A role change (or a profile that loads late) never leaves a non-admin on the no-proof path.
+  useEffect(() => {
+    if (!canRecordWithoutProof && completeEvidence === 'no_proof') setCompleteEvidence('signature');
+  }, [canRecordWithoutProof, completeEvidence]);
+  // A delivery recorded without proof is signed with the fixed office text, never a customer's name.
+  const completeSignedBy = completeEvidence === 'no_proof' ? NO_PROOF_SIGNER : signedBy.trim();
   // The dialog's editable inputs, compared after each signal check (see handleCompleteConfirm).
-  const completeInputsRef = useLatestRef(JSON.stringify([signedBy.trim(), deliveredOnDate]));
+  const completeInputsRef = useLatestRef(JSON.stringify([completeSignedBy, deliveredOnDate, completeEvidence, completeSignature, noProofReason]));
   const [completing, setCompleting] = useState(false);
+  // Claimed synchronously at the start of a submit, so a second tap never starts a second attempt.
+  const completeClaimRef = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
@@ -318,15 +389,15 @@ export default function Deliveries() {
         query = query.eq('assigned_driver', profile.id);
       }
 
-      return query
+      return pageWithList(query
         .order('scheduled_date', { ascending: false })
         .order('id')
-        .range(from, to);
+        .range(from, to));
     });
     if (seq !== fetchSeq.current) return;
 
-    if (delError) {
-      failLoad(delError);
+    if (delError || !delPages) {
+      failLoad(delError ?? new Error('deliveries read returned no list'));
       return;
     }
     const delData = (delPages || []) as unknown as Array<Delivery & {
@@ -355,25 +426,25 @@ export default function Deliveries() {
     // Each id list is sent in chunks and every chunk is paged, so a long delivery list
     // neither overflows the request URL nor loses rows past the server's row cap.
     const [itemCountsResult, parentsResult, driversResult] = await Promise.all([
-      fetchAllRowsForIds(deliveryIds, (idChunk, from, to) => supabase
+      fetchAllRowsForIds(deliveryIds, (idChunk, from, to) => pageWithList(supabase
         .from('delivery_items')
         // `id` lets the pager drop a line repeated across a page seam.
         .select('id, delivery_id', { count: 'exact' })
         .in('delivery_id', idChunk)
         .order('id')
-        .range(from, to)),
-      fetchAllRowsForIds(parentIds, (idChunk, from, to) => supabase
+        .range(from, to))),
+      fetchAllRowsForIds(parentIds, (idChunk, from, to) => pageWithList(supabase
         .from('customers')
         .select('id, farm_name', { count: 'exact' })
         .in('id', idChunk)
         .order('id')
-        .range(from, to)),
-      fetchAllRowsForIds(driverIds, (idChunk, from, to) => supabase
+        .range(from, to))),
+      fetchAllRowsForIds(driverIds, (idChunk, from, to) => pageWithList(supabase
         .from('profile_public_view')
         .select('id, full_name', { count: 'exact' })
         .in('id', idChunk)
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
     ]);
     if (seq !== fetchSeq.current) return;
 
@@ -422,25 +493,25 @@ export default function Deliveries() {
 
     if (activeIds.length > 0) {
       try {
-        const { data: diData, error: diError } = await fetchAllRowsForIds(activeIds, (idChunk, from, to) => supabase
+        const { data: diData, error: diError } = await fetchAllRowsForIds(activeIds, (idChunk, from, to) => pageWithList(supabase
           .from('delivery_items')
           .select('id, delivery_id, product_id, quantity', { count: 'exact' })
           .in('delivery_id', idChunk)
           .order('id')
-          .range(from, to));
+          .range(from, to)));
         if (seq !== fetchSeq.current) return;
         if (diError) throw diError;
 
         const productIds = [...new Set((diData || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
 
         if (productIds.length > 0) {
-          const { data: invData, error: invError } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => supabase
+          const { data: invData, error: invError } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => pageWithList(supabase
             .from('inventory')
             .select('id, product_id, quantity_available', { count: 'exact' })
             .in('product_id', idChunk)
             .eq('location', 'Main Warehouse')
             .order('id')
-            .range(from, to));
+            .range(from, to)));
           if (seq !== fetchSeq.current) return;
           if (invError) throw invError;
 
@@ -473,19 +544,68 @@ export default function Deliveries() {
   }, [isDriver, profile, statusFilter, toast]);
 
   // F3 act-from-list: complete a delivery in full, in place. p_quantities omitted = deliver
-  // in full. Partial deliveries, signature image, and issue flags stay on the detail page.
-  // One server call, start_and_complete_delivery, starts a scheduled delivery and completes it
+  // in full. Partial deliveries, issue flags and the customer receipt email stay on the detail page.
+  // The proof is captured here: an on-screen signature, a photo of the signed paper ticket, or
+  // (admin only) a written reason recorded without proof. One server call, start_and_complete_delivery, starts a scheduled delivery and completes it
   // in a single transaction, so a lost signal can never leave it half done (In Progress).
   // Goal 5: completing needs a signal, checked before that call.
+  // Mark Delivered: a no-proof record asks for confirmation first; every other path submits directly.
+  const requestCompleteConfirm = () => {
+    if (completeEvidence === 'no_proof') {
+      if (!canRecordWithoutProof) { toast('error', 'Only an admin can record a delivery without proof'); return; }
+      if (!isValidNoProofReason(noProofReason)) {
+        toast('error', `Write why there is no proof (${NO_PROOF_REASON_MIN_CHARS} to ${NO_PROOF_REASON_MAX_CHARS} characters)`);
+        return;
+      }
+      setNoProofConfirmOpen(true);
+      return;
+    }
+    void handleCompleteConfirm();
+  };
+
   const handleCompleteConfirm = async () => {
+    setNoProofConfirmOpen(false);
+    if (completeClaimRef.current) return;
+    completeClaimRef.current = true;
+    try {
+      await runCompleteConfirm();
+    } finally {
+      completeClaimRef.current = false;
+    }
+  };
+
+  const runCompleteConfirm = async () => {
     if (!completeTarget || !profile) return;
-    if (!signedBy.trim()) { toast('error', 'Please enter a signature name'); return; }
+    // The submitted mode decides every follow-up below (never a checkbox read later).
+    const submittedEvidence = completeEvidence;
+    if (submittedEvidence === 'no_proof') {
+      if (!canRecordWithoutProof) { toast('error', 'Only an admin can record a delivery without proof'); return; }
+      if (!isValidNoProofReason(noProofReason)) {
+        toast('error', `Write why there is no proof (${NO_PROOF_REASON_MIN_CHARS} to ${NO_PROOF_REASON_MAX_CHARS} characters)`);
+        return;
+      }
+    } else if (!signedBy.trim()) { toast('error', 'Please enter a signature name'); return; }
     // The date is required: an empty date would silently date the delivery and invoice to today.
     if (!isValidDeliveredOn(deliveredOnDate)) {
       toast('error', 'Enter the delivery date (today or earlier)');
       return;
     }
+    if (submittedEvidence === 'signature' && !completeSignature) {
+      toast('error', 'Have the customer sign on screen, or choose the paper ticket and add its photo');
+      return;
+    }
+    if (submittedEvidence === 'signature' && !isSignatureDataUrl(completeSignature)) {
+      toast('error', INVALID_SIGNATURE_MESSAGE);
+      return;
+    }
+    if (submittedEvidence === 'paper_ticket' && !currentTicketPhoto) {
+      toast('error', 'Add a photo of the signed paper ticket before completing');
+      return;
+    }
     const target = completeTarget;
+    const signatureAtSubmit = completeSignature;
+    const ticketPhotoAtSubmit = submittedEvidence === 'paper_ticket' ? currentTicketPhoto : undefined;
+    const reasonAtSubmit = noProofReason;
     // Captured before any await, so a cancel during the hashing or a signal check is seen.
     const dialogGen = completeDialogGenRef.current;
     // The chosen business date (America/Chicago) goes to the server as a date: the server
@@ -493,47 +613,117 @@ export default function Deliveries() {
     // "today" request that reaches it just after Chicago midnight keeps the chosen day.
     const completeParams = {
       p_delivery_id: target.id,
-      p_signed_by: signedBy.trim(),
+      p_signed_by: completeSignedBy,
       p_delivered_on: deliveredOnDate,
       p_performed_by: profile.id,
+      p_evidence: submittedEvidence,
+      // The exact ticket photo shown as saved (the signature's reference comes from the key).
+      ...(ticketPhotoAtSubmit ? { p_evidence_ref: ticketPhotoAtSubmit.id } : {}),
+      // no_proof: the reason exactly as typed (the server collapses whitespace; an exact retry resends it).
+      ...(submittedEvidence === 'no_proof' ? { p_evidence_ref: reasonAtSubmit } : {}),
     };
-    // The server binds the key to this exact request, so a retry with an edited signer or date
-    // mints a fresh key instead of being refused. The scope uses the collision-resistant SHA-256
-    // digest (digestIntentPayload), never the 64-bit FNV fingerprint (see idempotency.ts).
-    const completeScope = `start-complete:${await digestIntentPayload(completeParams)}`;
+    // The server binds the key to this exact request (mode, signer, date, photo or reason), so a
+    // retry with an edited value mints a fresh key instead of being refused. The scope uses the
+    // collision-resistant SHA-256 digest (digestIntentPayload), never the 64-bit FNV fingerprint
+    // (see idempotency.ts). A re-drawn signature is a new attempt: new key, new signature file.
+    const completeScope = `start-complete:${await digestIntentPayload({
+      ...completeParams,
+      signature_digest: submittedEvidence === 'signature' && signatureAtSubmit ? await signatureDigest(signatureAtSubmit) : null,
+    })}`;
     const idemKey = completeIdem.getKeyFor(completeScope);
-    let bindingRejected = false;
+    // start_and_complete_delivery completes under `<key>:complete`; the server accepts only the
+    // image at the path it derives from that, so a retry of this key reuses the same file.
+    const signaturePath = submittedEvidence === 'signature' ? await signatureImagePathFor(target.id, `${idemKey}:complete`) : undefined;
+    let signatureUploadError: unknown = null;
     // The signal check takes a few seconds; if the dialog was cancelled or switched to
-    // another delivery meanwhile, stop before sending the server call.
+    // another delivery meanwhile, stop before sending the server call. These checks gate only the
+    // DISPATCH: once the call is sent, its result is always reconciled for this delivery.
     const stillOpenForTarget = () =>
       completeDialogGenRef.current === dialogGen && completeTargetRef.current?.id === target.id;
-    // An edit to the signer or date during the check must not be dropped in favour of the old values.
-    const inputsAtSubmit = JSON.stringify([signedBy.trim(), deliveredOnDate]);
+    // An edit to the signer, date, mode or reason during the check must not be dropped in favour of the old values.
+    const inputsAtSubmit = JSON.stringify([completeSignedBy, deliveredOnDate, submittedEvidence, completeSignature, noProofReason]);
     const inputsUnchanged = () => completeInputsRef.current === inputsAtSubmit;
+    // An error toast for a delivery whose dialog was closed or switched names it.
+    const forTarget = (message: string) => (stillOpenForTarget() ? message : `Delivery ${target.delivery_number}: ${message}`);
     // Route through runCriticalAction for parity with this page's other mutations.
-    const outcome = await runCriticalAction<'completed' | 'no_signal' | 'cancelled' | 'changed'>({
+    await runCriticalAction<'completed' | 'no_signal' | 'cancelled' | 'changed'>({
       action: async () => {
         if (!(await hasSignal())) return 'no_signal';
         if (!stillOpenForTarget()) return 'cancelled';
         if (!inputsUnchanged()) return 'changed';
-        // completeIdem is intentionally retained until onSuccess (or a binding refusal below), so a
-        // retry after a lost response replays the same request idempotently.
-        const { data, error } = await supabase.rpc('start_and_complete_delivery', {
-          ...completeParams,
-          p_idempotency_key: idemKey,
-        });
-        if (error) {
-          // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
-          // used) retires the key; nothing ran for THIS request. Safe for a completion even if an earlier
-          // attempt committed: the next try runs fresh and the server refuses a completed delivery.
-          if (getIdempotencyBindingRejection(error)) {
-            completeIdem.resetKeyFor(completeScope);
-            bindingRejected = true;
+        // The server completes only once this attempt's signature image is saved, so it goes up
+        // first. A failed upload does not stop the call: after a lost reply the earlier attempt may
+        // already have completed the delivery (storage then refuses the re-upload). The same key
+        // replays that completion, or the server refuses SIGNATURE_IMAGE_MISSING and nothing changes.
+        if (signaturePath && signatureAtSubmit) {
+          try {
+            await uploadSignatureImage(signaturePath, signatureAtSubmit);
+          } catch (sigErr) {
+            signatureUploadError = sigErr;
+            Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { level: 'warning', extra: { context: 'Deliveries list signature upload before completion failed; sending the completion anyway' } });
           }
-          throw error;
+          if (!stillOpenForTarget()) return 'cancelled';
+          if (!inputsUnchanged()) return 'changed';
         }
-        assertRpcResult(data, 'start_and_complete_delivery');
-        return 'completed';
+        // Sends this attempt exactly: the same inputs and key every time (a lost-reply replay included).
+        // completeIdem is intentionally retained until onSuccess, so a retry after a lost response
+        // replays the same request idempotently. Any replay-binding refusal (another request's or
+        // person's key, or a receipt that can never be used) retires it; nothing ran for THIS request.
+        // Safe for a completion even if an earlier attempt committed: the next try runs fresh and the
+        // server refuses a completed delivery. So does SIGNATURE_IMAGE_MISSING: this key's image is
+        // not saved and never will be under it.
+        const sendCompletion = async (): Promise<unknown> => {
+          const { data, error: rpcError } = await supabase.rpc('start_and_complete_delivery', {
+            ...completeParams,
+            ...(signaturePath ? { p_evidence_ref: signaturePath } : {}),
+            p_idempotency_key: idemKey,
+          });
+          try {
+            if (rpcError) throw rpcError;
+            assertRpcResult(data, 'start_and_complete_delivery');
+          } catch (error: unknown) {
+            if (getIdempotencyBindingRejection(error) || isSignatureImageMissing(error)) {
+              completeIdem.resetKeyFor(completeScope);
+            }
+            throw error;
+          }
+          return data;
+        };
+        try {
+          await sendCompletion();
+          return 'completed';
+        } catch (error: unknown) {
+          // A binding refusal or SIGNATURE_IMAGE_MISSING retired the key in sendCompletion; nothing ran
+          // for THIS request. Otherwise the key is still held: the reply may have been lost after a commit.
+          const bindingRejected = !!getIdempotencyBindingRejection(error);
+          const keyHeld = !bindingRejected && !isSignatureImageMissing(error);
+          Sentry.captureException(error, { tags: { source: 'critical_action', action: 'start_and_complete_delivery' } });
+          // Reconcile for THIS delivery while the button still shows it is working. Completed with the
+          // key still held: resend the identical call, which replays the saved result, and run the
+          // normal success path.
+          const reconciled = await reconcileFailedCompletion({ deliveryId: target.id, keyHeld, resend: sendCompletion, context: 'Deliveries list' });
+          if (reconciled.kind === 'replayed') return 'completed';
+          if (reconciled.kind === 'completed_not_replayed') {
+            toast('error', forTarget(COMPLETED_BY_EARLIER_ATTEMPT_MESSAGE));
+          } else {
+            toast('error', forTarget(sanitizeError(error)));
+            // The upload had already failed for a reason other than the signal: say what it was.
+            if (isSignatureImageMissing(error) && signatureUploadError && !isNetworkFailure(signatureUploadError)) {
+              toast('error', forTarget(sanitizeError(signatureUploadError)));
+            }
+          }
+          if (bindingRejected || reconciled.kind === 'completed_not_replayed' || reconciled.kind === 'closed') {
+            // The delivery is no longer open (or the key was refused and retired): close the dialog and
+            // reload, so a completion an earlier attempt committed shows instead of a stale dialog.
+            if (completeDialogGenRef.current === dialogGen) closeCompleteDialog();
+            await fetchDeliveries();
+          } else if (reconciled.kind === 'open' && completeDialogGenRef.current === dialogGen) {
+            // Still open: the dialog stays, with the SAME retained key (unless retired above), so a retry
+            // after a lost response replays the saved result. Its ticket photos are re-read.
+            await loadTicketPhotos(target.id, dialogGen);
+          }
+          throw new CriticalActionHandledError('Completion failure already reported and reconciled');
+        }
       },
       toast,
       setLoading: setCompleting,
@@ -551,8 +741,21 @@ export default function Deliveries() {
           toast('error', NO_SIGNAL_MESSAGE);
           return;
         }
-        toast('success', `Delivery ${target.delivery_number} completed`);
         completeIdem.resetKeyFor(completeScope);
+        if (submittedEvidence === 'no_proof') {
+          toast('success', `Delivery ${target.delivery_number} recorded as completed without proof`);
+          toast('info', 'No receipt was emailed. The office can send one later with Email Confirmation on the delivery.');
+          void storedNoProofReason(target.id, reasonAtSubmit).then((reason) => logActivity({
+            event: 'delivery_completed',
+            description: `Delivery ${target.delivery_number} completed (recorded without proof: ${reason}) (from the Deliveries list)`,
+            performedBy: profile.id,
+            entityType: 'delivery',
+            entityId: target.id,
+            customerId: target.customer_id,
+          }));
+        } else {
+          toast('success', `Delivery ${target.delivery_number} completed`);
+        }
         // Fire the same in-app completion notification the detail page sends
         // (driver/admins/sales) — once per delivery so a same-key RPC replay after
         // a lost response can't duplicate it. The customer EMAIL receipt is sent
@@ -567,15 +770,6 @@ export default function Deliveries() {
         fetchDeliveries();
       },
     });
-
-    if (outcome !== 'completed' && bindingRejected) {
-      // The key was refused and retired: close the modal and reload, so a completion an earlier
-      // attempt already committed shows in the list instead of a stale, still-actionable modal.
-      if (completeDialogGenRef.current === dialogGen) closeCompleteDialog();
-      await fetchDeliveries();
-    }
-    // Any other failure leaves the dialog open with the SAME retained key, so a retry after a
-    // lost response replays the saved result instead of completing twice.
   };
 
   useEffect(() => {
@@ -998,7 +1192,10 @@ export default function Deliveries() {
               <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /></span>
             )}
           </div>
-          <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
+          <span className="inline-flex items-center gap-1.5">
+            {d.completion_evidence === 'no_proof' && <NoProofLabel />}
+            <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
+          </span>
         </div>
         <p className="text-gray-300 text-sm">{d.customer_name}</p>
         {d.farm_group_name && (
@@ -1258,9 +1455,12 @@ export default function Deliveries() {
       header: 'Status',
       sortable: true,
       render: (row) => (
-        <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-          {row.status.replace('_', ' ')}
-        </Badge>
+        <span className="inline-flex items-center gap-1.5 flex-wrap">
+          <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
+            {row.status.replace('_', ' ')}
+          </Badge>
+          {row.completion_evidence === 'no_proof' && <NoProofLabel />}
+        </span>
       ),
     },
     {
@@ -1277,10 +1477,12 @@ export default function Deliveries() {
             onClick={(e) => {
               e.stopPropagation();
               completeIdem.resetKey();
-              completeDialogGenRef.current += 1;
+              const dialogGen = bumpCompleteDialogGen();
               setCompleteTarget(row);
               setSignedBy('');
               setDeliveredOnDate(businessToday());
+              resetCompleteEvidence();
+              void loadTicketPhotos(row.id, dialogGen);
             }}
             title={row.status === 'scheduled' ? 'Mark this delivery delivered' : 'Mark this delivery complete'}
             aria-label={`Mark delivery ${row.delivery_number} ${row.status === 'scheduled' ? 'delivered' : 'complete'}`}
@@ -1678,8 +1880,7 @@ export default function Deliveries() {
             Complete delivery <span className="font-medium text-nav-dark">{completeTarget?.delivery_number}</span> for{' '}
             <span className="font-medium text-nav-dark">{completeTarget?.customer_name}</span> — all items delivered in full.
             For a partial delivery or to email the customer their receipt, open the delivery instead.
-            If the customer signed a paper ticket, the assigned driver completes it from their own
-            delivery screen with a photo of the signed ticket.
+            The customer signs on screen here, or, if they signed a paper ticket, add a photo of it.
           </p>
           {completeTarget?.status === 'scheduled' && (
             <p className="text-sm text-secondary">
@@ -1697,10 +1898,11 @@ export default function Deliveries() {
             <input
               id="complete-signed-by"
               type="text"
-              value={signedBy}
+              value={completeEvidence === 'no_proof' ? NO_PROOF_SIGNER : signedBy}
               onChange={(e) => setSignedBy(e.target.value)}
               placeholder="Name of person who received"
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              disabled={completeEvidence === 'no_proof'}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-100 disabled:text-gray-500"
             />
           </div>
           <div>
@@ -1715,14 +1917,141 @@ export default function Deliveries() {
             />
             <p className="mt-1 text-xs text-secondary">Recording a delivery that already happened? Set the real date — it becomes the invoice date.</p>
           </div>
+          {completeEvidence !== 'no_proof' && (
+            <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={completeEvidence === 'paper_ticket'}
+                onChange={(e) => {
+                  setCompleteEvidence(e.target.checked ? 'paper_ticket' : 'signature');
+                  setCompleteSignature(null);
+                }}
+                className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+              />
+              Customer signed a paper ticket
+            </label>
+          )}
+          {canRecordWithoutProof && (
+            <div className="flex items-center gap-1">
+              <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={completeEvidence === 'no_proof'}
+                  onChange={(e) => {
+                    setCompleteEvidence(e.target.checked ? 'no_proof' : 'signature');
+                    setCompleteSignature(null);
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+                />
+                Record without proof (admin only)
+              </label>
+              <HelpTip text="Only when there is no signature and no ticket photo, for example a delivery confirmed by phone. Your name, the time and your written reason are saved with the delivery. No receipt is emailed." className="ml-1" />
+            </div>
+          )}
+          {completeEvidence === 'no_proof' ? (
+            <div className="space-y-2 border border-amber-300 rounded-lg p-3 bg-amber-50">
+              <label htmlFor="complete-no-proof-reason" className="flex items-center gap-2 text-sm font-medium text-amber-900">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> Why is there no proof? (required)
+              </label>
+              <textarea
+                id="complete-no-proof-reason"
+                value={noProofReason}
+                onChange={(e) => setNoProofReason(e.target.value)}
+                rows={3}
+                maxLength={2000}
+                placeholder="For example: customer confirmed by phone that all items arrived"
+                aria-describedby="complete-no-proof-reason-count"
+                className="w-full px-3 py-2 text-sm border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+              <p
+                id="complete-no-proof-reason-count"
+                className={`text-xs ${isValidNoProofReason(noProofReason) ? 'text-secondary' : 'text-amber-800'}`}
+              >
+                {noProofReasonLength(noProofReason)} / {NO_PROOF_REASON_MAX_CHARS} characters (at least {NO_PROOF_REASON_MIN_CHARS})
+              </p>
+            </div>
+          ) : completeEvidence === 'paper_ticket' ? (
+            <div className="space-y-2">
+              <input
+                ref={ticketInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  const target = completeTargetRef.current;
+                  const dialogGen = completeDialogGenRef.current;
+                  if (!file || !target || !profile) return;
+                  if (currentTicketPhotos.length >= MAX_PAPER_TICKET_PHOTOS) {
+                    toast('error', `Maximum ${MAX_PAPER_TICKET_PHOTOS} ticket photos per delivery`);
+                    return;
+                  }
+                  setUploadingTicketGen(dialogGen);
+                  try {
+                    const saved = await uploadEvidencePhoto(target.id, file, profile.id, PAPER_TICKET_PHOTO_CAPTION);
+                    // Only the dialog session that took the photo shows it (and its toast).
+                    if (completeDialogGenRef.current === dialogGen && completeTargetRef.current?.id === target.id) {
+                      ticketPhotoSeqRef.current++; // an older in-flight read must not replace the list without it
+                      setTicketPhotos((prev) => ({
+                        deliveryId: target.id,
+                        photos: mergePhotosById(prev?.deliveryId === target.id ? prev.photos : [], [saved]),
+                      }));
+                      toast('success', 'Photo of the signed ticket saved');
+                    }
+                  } catch (err) {
+                    Sentry.captureException(err, { tags: { source: 'critical_action', action: 'upload_delivery_photo' } });
+                    if (completeDialogGenRef.current === dialogGen) toast('error', sanitizeError(err));
+                  }
+                  // Clear only this session's spinner; a newer session's upload keeps its own.
+                  setUploadingTicketGen((current) => (current === dialogGen ? null : current));
+                }}
+              />
+              {currentTicketPhoto ? (
+                <p className="flex items-center gap-2 text-sm text-green-700">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" /> Photo of the signed ticket saved
+                </p>
+              ) : (
+                <p className="text-sm text-amber-700">A photo of the signed paper ticket is required.</p>
+              )}
+              <Button
+                variant="secondary"
+                onClick={() => ticketInputRef.current?.click()}
+                loading={uploadingTicket}
+                disabled={!isOnline || currentTicketPhotos.length >= MAX_PAPER_TICKET_PHOTOS}
+              >
+                Add Photo of Signed Ticket
+              </Button>
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-lg p-3 bg-white">
+              <SignatureCanvas
+                key={completeTarget?.id ?? 'none'}
+                onSignatureChange={setCompleteSignature}
+                label="Customer Signature"
+                height={120}
+              />
+            </div>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={closeCompleteDialog}>Cancel</Button>
-            <Button icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleCompleteConfirm} loading={completing} disabled={!signedBy.trim()}>
+            <Button icon={<CheckCircle2 className="w-4 h-4" />} onClick={requestCompleteConfirm} loading={completing} disabled={!completeSignedBy || uploadingTicket || (completeEvidence === 'no_proof' && !isValidNoProofReason(noProofReason))}>
               {completeTarget?.status === 'scheduled' ? 'Mark Delivered' : 'Mark Complete'}
             </Button>
           </div>
         </div>
       </Modal>
+      <ConfirmModal
+        open={noProofConfirmOpen && !!completeTarget}
+        onClose={() => setNoProofConfirmOpen(false)}
+        onConfirm={() => { void handleCompleteConfirm(); }}
+        title="Record Without Proof"
+        message={`Record delivery ${completeTarget?.delivery_number ?? ''} as completed WITHOUT customer proof? Your name and reason are saved with it. This will update inventory and cannot be undone.`}
+        confirmLabel="Record Without Proof"
+        variant="warning"
+        loading={completing}
+      />
     </div>
   );
 }

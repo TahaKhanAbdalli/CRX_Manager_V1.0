@@ -42,7 +42,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | `returns.requested_by` (NOT `created_by`) | And status starts at `'requested'` (NOT `'pending'`) |
 | `return_items.order_item_id` (NOT `delivery_item_id`) | Returns are linked to order lines, not delivery lines |
 | `invoice_items.extended_cents` (NOT `line_total_cents`) | Naming inconsistency from early schema |
-| A user the Auth service creates starts as an inactive, login-banned `driver` named `Pending user <id>` (since `20261022023000`) | `handle_new_user` ignores `raw_user_meta_data` role and name unless the session is `postgres`/`supabase_admin` with no `SET ROLE` in effect (direct SQL, provers' seeds). Signup and the `create-user` admin API both get the safe default; an admin sets the role with `admin_update_profile` (Settings does it right after Create User). Never trust signup metadata for a privilege |
+| A user the Auth service creates starts as an inactive, login-banned `driver` named `Pending user <id>` (since `20261022023000`) | `handle_new_user` ignores `raw_user_meta_data` role and name unless the session is `postgres`/`supabase_admin` with no `SET ROLE` in effect (direct SQL, provers' seeds). Signup and the `create-user` admin API both get the safe default; an admin sets the role with `admin_update_profile` (the `create-user` function does it in the same request, as the calling admin; Settings repeats it only when the reply says `activated: false`). Never trust signup metadata for a privilege |
 | `financial_audit_log.entity_type` is a CHECK-constrained list | The CHECK was AR-only until PR-04 (2026-05-10) and has grown since; read the current values from `.claude/schema-registry.json` → `check_constraints["financial_audit_log.entity_type"]` (same for `operation_type`). Adding a new entity type means expanding the CHECK with every existing value kept. |
 
 ---
@@ -262,16 +262,17 @@ form → **false**. Live example: `application_services.cost_per_acre_cents`, mi
 invisible and unwritable to `authenticated` until someone adds it to that list. It surfaces as
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
 is actually a missing grant. **`invoices_postable` (20261022090000) names every `invoices` column but
-`total_cost_cents`:** a migration that adds, drops or renames an `invoices` column must re-create the view in
-the same file (a `DROP COLUMN … CASCADE` would silently drop it and its `invoice_post_version` overload), or
+`total_cost_cents`:** a migration that adds, drops or renames an `invoices` column must rebuild, in the same
+file, the `security_invoker` view, its REVOKE ALL / GRANT SELECT lockdown and `invoice_postable_version(invoices_postable)`
+(a `DROP COLUMN … CASCADE` would silently drop the view and that function), or
 every screen that reads `INVOICE_COLUMNS` from it fails with "column does not exist". `costFields.test.ts`
-fails such a migration. Select `invoice_post_version` only from that view: on `invoices` it fails once a
-column is revoked. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
+fails such a migration. Select the posting version (`INVOICE_POST_VERSION_COLUMNS`) only from that view:
+on `invoices` it fails once a column is revoked. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
 `GRANT` for the new column in the same migration.** Tables in this state today:
 `public.application_services` **and `public.products`**, and (since `20261021141000` went live on 2026-10-22, ledger `20261022002748`)
 **`public.purchase_orders` and `public.purchase_order_items`**, whose `SELECT`/`REFERENCES` grants for
 `authenticated` and `SELECT` for `anon` list every column except the purchase cost ones. Once
-`20261022091000_cost_columns_admin_only` (Goal 1 step 3; written, not yet applied) is live, the same holds
+`20261022101000_cost_columns_admin_only` (Goal 1 step 3; written, not yet applied) is live, the same holds
 for **`products`, `quotes`, `quote_items`, `quote_versions`, `orders`, `order_items`, `invoices`,
 `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`**: every column
 except cost, profit and margin (the `COST_COLUMNS` of `src/lib/costFields.ts`, plus

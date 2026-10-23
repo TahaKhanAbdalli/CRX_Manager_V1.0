@@ -8,12 +8,15 @@
 --      column the lock revokes (total_cost_cents). Row security and column privileges are checked
 --      as the CALLER, so a rep sees exactly the invoices (and columns) they see on the table. It
 --      names its columns, so it never reads a whole invoices row. SELECT only, to authenticated.
---   2. invoice_post_version(public.invoices_postable): the same computed field, on the view. Same
---      access rule (an admin, or the rep the invoice is under: salesman_id = me, or no salesman and
---      created_by = me), re-read by id from public.invoices; the same _invoice_post_version(id), so
---      the hash and post_invoice / post_invoice_group / batch_post_invoices are unchanged.
---   The screens select `invoice_post_version` from invoices_postable in the SAME query as the rows
---   they show (one snapshot, as before), instead of from invoices.
+--   2. invoice_postable_version(public.invoices_postable): the same computed field, on the view,
+--      under its own name. Same access rule (an admin, or the rep the invoice is under: salesman_id
+--      = me, or no salesman and created_by = me), re-read by id from public.invoices; the same
+--      _invoice_post_version(id), so the hash and post_invoice / post_invoice_group /
+--      batch_post_invoices are unchanged. Its own name, not a second invoice_post_version overload,
+--      so no caller can ever resolve the one it did not mean.
+--   The screens select `invoice_post_version:invoice_postable_version` from invoices_postable (the
+--   alias keeps the field name the app reads) in the SAME query as the rows they show (one
+--   snapshot, as before), instead of invoice_post_version from invoices.
 --
 -- WHY: a PostgREST computed field receives the whole row, and Postgres checks SELECT on EVERY
 --   column for a whole-row reference. Once total_cost_cents is revoked, every select of
@@ -23,11 +26,11 @@
 --   embeds, filters, paging and row security all work through the view; see the PR.)
 --
 -- DEPLOY ORDER (agreed with PR #1018's owner, 2026-10-22):
---   (a) this file: the view and the new overload; the old overload stays, so the screens live
---       before this PR merges keep working;
+--   (a) this file: the view and invoice_postable_version; invoice_post_version(public.invoices)
+--       stays, so the screens live before this PR merges keep working;
 --   (b) this PR's app switches the seven version-bearing reads to invoices_postable;
 --   (c) the cost lock (20261022091000) then DROPS invoice_post_version(public.invoices), leaving
---       exactly this overload, and revokes cost. A browser still running a bundle from before (b)
+--       only invoice_postable_version, and revokes cost. A browser still running a bundle from before (b)
 --       (the PWA service worker) then cannot open an invoice screen until it reloads, so (c) waits
 --       a while after (b) deploys.
 --
@@ -36,7 +39,7 @@
 --
 -- ROLLBACK (as its own reviewed migration; only before the cost lock is applied):
 --   revert the app first, then
---   DROP FUNCTION public.invoice_post_version(public.invoices_postable);
+--   DROP FUNCTION public.invoice_postable_version(public.invoices_postable);
 --   DROP VIEW public.invoices_postable;
 --
 -- Proof: node scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs
@@ -84,8 +87,10 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'invoice_post_version') <> 1
+     OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'public' AND p.proname = 'invoice_postable_version')
      OR to_regclass('public.invoices_postable') IS NOT NULL THEN
-    RAISE EXCEPTION 'INVOICES_POSTABLE_PREFLIGHT: invoices_postable or a second invoice_post_version already exists';
+    RAISE EXCEPTION 'INVOICES_POSTABLE_PREFLIGHT: invoices_postable, invoice_postable_version or a second invoice_post_version already exists';
   END IF;
 END
 $preflight$;
@@ -107,7 +112,7 @@ SELECT id, invoice_number, order_id, blend_ticket_id, customer_id, invoice_type,
   FROM public.invoices;
 
 COMMENT ON VIEW public.invoices_postable IS
-  'Invoices without cost columns, for screens that post (20261022090000). security_invoker: the caller''s row security and column grants apply. Select invoice_post_version from here, in the same query as the rows shown. Read-only: SELECT to authenticated and service_role, nothing else to anyone.';
+  'Invoices without cost columns, for screens that post (20261022090000). security_invoker: the caller''s row security and column grants apply. Select invoice_postable_version from here, in the same query as the rows shown. Read-only: SELECT to authenticated and service_role, nothing else to anyone.';
 
 -- Supabase's default privileges grant a new view to anon, authenticated and service_role with every
 -- privilege; the view is simple, so INSERT/UPDATE/DELETE would pass through to invoices. Take them
@@ -115,9 +120,10 @@ COMMENT ON VIEW public.invoices_postable IS
 REVOKE ALL ON public.invoices_postable FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.invoices_postable TO authenticated, service_role;
 
--- 2. The computed field on the view: invoice_post_version(public.invoices)'s rule and helper,
--- re-read by id from public.invoices (a made-up row through the RPC endpoint answers nothing).
-CREATE FUNCTION public.invoice_post_version(p_invoice public.invoices_postable)
+-- 2. The computed field on the view, under its own name: invoice_post_version(public.invoices)'s
+-- rule and helper, re-read by id from public.invoices (a made-up row through the RPC endpoint
+-- answers nothing).
+CREATE FUNCTION public.invoice_postable_version(p_invoice public.invoices_postable)
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -133,15 +139,15 @@ AS $fn$
               AND (i.salesman_id = p.id OR (i.salesman_id IS NULL AND i.created_by = p.id))))
 $fn$;
 
-COMMENT ON FUNCTION public.invoice_post_version(public.invoices_postable) IS
+COMMENT ON FUNCTION public.invoice_postable_version(public.invoices_postable) IS
   'Version of the saved invoice for posting (20261022090000). Select it from invoices_postable with the rows shown and send it to post_invoice / post_invoice_group, which refuse INVOICE_CHANGED_SINCE_LOADED if the invoice changed since. Admins and the rep the invoice is under; carries no cost.';
 
-REVOKE ALL ON FUNCTION public.invoice_post_version(public.invoices_postable) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.invoice_post_version(public.invoices_postable) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.invoice_postable_version(public.invoices_postable) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.invoice_postable_version(public.invoices_postable) TO authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
 
--- POSTFLIGHT: the view's options, columns and grants, and both overloads with their grants.
+-- POSTFLIGHT: the view's options, columns and grants, and both version functions with their grants.
 DO $postflight$
 DECLARE
   v_cols text;
@@ -158,7 +164,9 @@ BEGIN
     RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: the view columns are not every invoices column but total_cost_cents: %', v_cols;
   END IF;
   -- Every privilege of every API role (and PUBLIC), table-wide and on any column: SELECT for
-  -- authenticated and service_role, nothing else for anyone.
+  -- authenticated and service_role, nothing else for anyone. The role name 'public' is the PUBLIC
+  -- pseudo-role in has_table_privilege / has_any_column_privilege (PostgreSQL docs, "Access Privilege
+  -- Inquiry Functions"): it reads PUBLIC's own grants, false after REVOKE ... FROM PUBLIC.
   SELECT string_agg(format('%s %s', r.rol, p.priv), ', ' ORDER BY r.rol, p.priv) INTO v_cols
     FROM (VALUES ('authenticated'), ('service_role'), ('anon'), ('public')) AS r(rol)
     CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
@@ -170,15 +178,17 @@ BEGIN
     RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: the view must be SELECT-only for authenticated and service_role and closed to anon; wrong: %', v_cols;
   END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-       WHERE n.nspname = 'public' AND p.proname = 'invoice_post_version') <> 2
-     OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'public.invoice_post_version(public.invoices_postable)'::regprocedure)
-     OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
+       WHERE n.nspname = 'public' AND p.proname = 'invoice_post_version') <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = 'invoice_postable_version') <> 1
+     OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'public.invoice_postable_version(public.invoices_postable)'::regprocedure)
+     OR NOT has_function_privilege('authenticated', 'public.invoice_postable_version(public.invoices_postable)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.invoice_postable_version(public.invoices_postable)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.invoice_post_version(public.invoices)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._invoice_post_version(uuid)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._invoice_post_version(uuid)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: expected both invoice_post_version overloads for authenticated only, and the helper closed';
+    RAISE EXCEPTION 'INVOICES_POSTABLE_POSTFLIGHT: expected one invoice_post_version and one invoice_postable_version, each for authenticated only, and the helper closed';
   END IF;
 END
 $postflight$;

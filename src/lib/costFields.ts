@@ -38,8 +38,9 @@ export const ORDER_COLUMNS = 'id, order_number, quote_id, customer_id, status, c
 export const ORDER_ITEM_COLUMNS = 'id, order_id, product_id, quote_item_id, section_name, product_name, price_per_unit, actual_rate, rate_unit, acres, total_units_needed, unit_size, total_price, quantity_delivered, quantity_remaining, sort_order, notes, pricing_pending, suggested_price' as const;
 export const INVOICE_COLUMNS = 'id, invoice_number, order_id, blend_ticket_id, customer_id, invoice_type, status, season, salesman_id, created_by, total_amount_cents, paid_amount_cents, prepay_applied_cents, posted_by, posted_at, voided_by, voided_at, void_reason, invoice_date, due_date, purchase_order_ref, header_notes, footer_notes, parent_invoice_id, deleted_at, created_at, updated_at, crop_type, field_names, total_acres, applicator_name, vehicle_name, application_date, job_id, is_quick_delivery, write_off_cents, invoice_group_id, application_service_id, delivery_id, wind_direction, temperature_text, pricing_pending, payment_terms, internal_notes, discount_earned_cents, discount_date, start_temp_f, start_wind_mph, start_wind_direction, start_humidity_pct, start_weather_time, start_weather_source, end_temp_f, end_wind_mph, end_wind_direction, end_humidity_pct, end_weather_time, end_weather_source, weather_manual_override, diluent_rate_gpa, credit_applied_cents, balance_cents, send_disposition, field_app_billing_set_id' as const;
 // The computed field posting binds to (migrations 20261022022000 and 20261022090000; see
-// invoicePostVersion.ts). A hash that carries no cost: the database leaves every cost column out of it.
-export const INVOICE_POST_VERSION_COLUMNS = 'invoice_post_version' as const;
+// invoicePostVersion.ts): invoice_postable_version on the view, aliased to the invoice_post_version
+// field the screens read. A hash that carries no cost: the database leaves every cost column out of it.
+export const INVOICE_POST_VERSION_COLUMNS = 'invoice_post_version:invoice_postable_version' as const;
 // Select INVOICE_POST_VERSION_COLUMNS only from this relation (migration 20261022090000): invoices
 // without cost columns, read with the caller's row security. A computed field gets the whole row,
 // so on `invoices` itself it fails once the cost column lock revokes total_cost_cents. Read-only;

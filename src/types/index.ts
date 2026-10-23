@@ -387,6 +387,26 @@ export interface LegacyVendorResolution {
   updated_at: string;
 }
 
+export type BrandSignalWord = EpaSignalWordCanonical;
+
+/** An acceptable real brand of a (usually generic) product, with its own EPA registration. */
+export interface ProductBrand {
+  id: string;
+  product_id: string;
+  brand_name: string;
+  epa_registration: string | null;
+  manufacturer: string | null;
+  is_currently_sourced: boolean;
+  /** null = restricted-use status not yet confirmed. */
+  is_rup: boolean | null;
+  signal_word: BrandSignalWord | null;
+  row_version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProductSupplierLink {
   id: string;
   product_id: string;
@@ -1060,6 +1080,24 @@ export interface DispatchStockRow {
 
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';
 export type DeliveryPriority = 'low' | 'normal' | 'high' | 'urgent';
+// How the customer confirmed a completion (migration 20261022075000); checked by complete_delivery.
+// completion_evidence_ref holds the signature path (signature), the delivery_photos id (paper_ticket,
+// left_at_site), or the admin's written reason with whitespace collapsed (no_proof, admin only).
+export type DeliveryCompletionEvidence = 'signature' | 'paper_ticket' | 'left_at_site' | 'no_proof';
+/** A saved ticket or drop-location photo sent as completion evidence (its id is p_evidence_ref). */
+export interface DeliveryEvidencePhoto {
+  id: string;
+  storage_path: string;
+  image_url: string;
+  caption: string | null;
+  uploaded_at?: string | null;
+}
+/** A delivery's receipt address, read through get_delivery_receipt_recipient. App-shaped: fetchReceiptRecipient maps the RPC's snake_case keys; never cast the raw result to this. */
+export interface ReceiptRecipient {
+  email: string | null;
+  contactName: string | null;
+  farmName: string | null;
+}
 export type DeliveryIssueType = 'none' | 'customer_not_home' | 'gate_locked' | 'road_blocked' | 'wrong_address' | 'refused' | 'weather' | 'other';
 
 export interface Delivery {
@@ -1077,6 +1115,12 @@ export interface Delivery {
   delivery_window_start: string | null;
   delivery_window_end: string | null;
   completed_at: string | null;
+  completion_evidence?: DeliveryCompletionEvidence | null;
+  completion_evidence_ref?: string | null;
+  // Set only for completion_evidence = 'no_proof': the admin, their name at that moment, and when.
+  completion_no_proof_by?: string | null;
+  completion_no_proof_by_name?: string | null;
+  completion_no_proof_at?: string | null;
   signature_url: string | null;
   signed_by: string | null;
   receipt_pdf_url: string | null;
@@ -1767,7 +1811,8 @@ export interface Invoice {
   created_by: string;
   /**
    * Computed field `invoice_post_version` (migrations 20261022022000, 20261022090000), present only
-   * when a query selects it, and selectable only from the `invoices_postable` view (INVOICES_POSTABLE).
+   * when a query selects it: `invoice_postable_version` on the `invoices_postable` view
+   * (INVOICES_POSTABLE), aliased to this name by INVOICE_POST_VERSION_COLUMNS.
    * Posting sends it back; the server refuses if the saved invoice changed since.
    */
   invoice_post_version?: string | null;

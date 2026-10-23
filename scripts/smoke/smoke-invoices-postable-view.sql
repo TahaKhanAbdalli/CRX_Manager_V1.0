@@ -11,7 +11,7 @@ DECLARE
   v_bad text;
 BEGIN
   IF to_regclass('public.invoices_postable') IS NULL
-     OR to_regprocedure('public.invoice_post_version(public.invoices_postable)') IS NULL THEN
+     OR to_regprocedure('public.invoice_postable_version(public.invoices_postable)') IS NULL THEN
     RAISE EXCEPTION 'SMOKE_PREREQ: 20261022090000 is not applied on this database';
   END IF;
 
@@ -27,7 +27,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: invoices_postable columns are not every invoices column but total_cost_cents';
   END IF;
 
-  -- SELECT-only for authenticated and service_role; nothing for anon or PUBLIC.
+  -- SELECT-only for authenticated and service_role; nothing for anon or PUBLIC. The role name 'public'
+  -- is the PUBLIC pseudo-role in has_table_privilege / has_any_column_privilege (PostgreSQL docs,
+  -- "Access Privilege Inquiry Functions"): it reads PUBLIC's own grants.
   SELECT string_agg(format('%s %s', r.rol, p.priv), ', ') INTO v_bad
     FROM (VALUES ('authenticated'), ('service_role'), ('anon'), ('public')) AS r(rol)
     CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
@@ -38,11 +40,11 @@ BEGIN
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'SMOKE_FAIL: invoices_postable privileges are wrong: %', v_bad;
   END IF;
-  IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'public.invoice_post_version(public.invoices_postable)'::regprocedure)
-     OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.invoice_post_version(public.invoices_postable)', 'EXECUTE')
+  IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'public.invoice_postable_version(public.invoices_postable)'::regprocedure)
+     OR NOT has_function_privilege('authenticated', 'public.invoice_postable_version(public.invoices_postable)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.invoice_postable_version(public.invoices_postable)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._invoice_post_version(uuid)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: invoice_post_version(invoices_postable) is not SECURITY DEFINER for authenticated only';
+    RAISE EXCEPTION 'SMOKE_FAIL: invoice_postable_version(invoices_postable) is not SECURITY DEFINER for authenticated only';
   END IF;
 
   -- On a real invoice, an admin's version from the view equals the posting helper's.
@@ -52,9 +54,9 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   SELECT id INTO v_any FROM public.invoices WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 1;
   IF v_any IS NOT NULL THEN
-    SELECT public.invoice_post_version(i) INTO v_version FROM public.invoices_postable i WHERE i.id = v_any;
+    SELECT public.invoice_postable_version(i) INTO v_version FROM public.invoices_postable i WHERE i.id = v_any;
     IF v_version !~ '^v1:[0-9a-f]{64}$' OR v_version IS DISTINCT FROM public._invoice_post_version(v_any) THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: invoice_post_version from invoices_postable returned % for an admin', v_version;
+      RAISE EXCEPTION 'SMOKE_FAIL: invoice_postable_version from invoices_postable returned % for an admin', v_version;
     END IF;
   ELSE
     RAISE NOTICE 'SMOKE_SKIP: no invoice exists, so the view version was not compared live (the container prover covers it)';

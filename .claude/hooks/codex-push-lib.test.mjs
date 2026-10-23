@@ -55,6 +55,8 @@ import {
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
   proofValid,
+  SOL_PROOF_MAX_AGE_MS,
+  CLAUDE_PROOF_MAX_AGE_MS,
   repoIsGuardedApp,
   urlIsGuardedApp,
   pushUsesTransportEnv,
@@ -1391,8 +1393,11 @@ const codexProof = {
   timestamp: new Date(now).toISOString(),
 };
 assert.equal(proofValid(codexProof, sha, now), true);
-assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000).toISOString() }, sha, now), true);
-assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
+// Sol proofs last 24 hours on an unchanged head and base (Mason, 2026-10-23).
+assert.equal(SOL_PROOF_MAX_AGE_MS, 24 * 60 * 60 * 1000, "Sol proofs last 24 hours");
+assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 31 * 60 * 1000).toISOString() }, sha, now, base), true, "a 31-minute-old Sol proof on the same head and base still passes");
+assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - SOL_PROOF_MAX_AGE_MS).toISOString() }, sha, now), true);
+assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - SOL_PROOF_MAX_AGE_MS - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, model: "gpt-6-luna" }, sha, now), false);
@@ -1404,13 +1409,19 @@ assert.equal(
 );
 
 // Carried-forward Sol proofs (Mason, 2026-10-21): accepted only in their exact
-// shape, and still bound to this head, this base and the 30-minute window.
+// shape, and still bound to this head, this base and the 24-hour window, which
+// also binds the original full review at the root of the carry chain.
 {
   const carriedProof = {
     ...codexProof,
     codex_ran: false,
     carried_forward: true,
-    carry: { mode: "disjoint", from_head: "d".repeat(40), from_base: "e".repeat(40) },
+    carry: {
+      mode: "disjoint",
+      from_head: "d".repeat(40),
+      from_base: "e".repeat(40),
+      root_review: { head_sha: "d".repeat(40), base_sha: "e".repeat(40), timestamp: new Date(now - 60 * 60 * 1000).toISOString() },
+    },
   };
   assert.equal(proofValid(carriedProof, sha, now, base), true, "carried proof bound to this head and base passes");
   assert.equal(
@@ -1421,9 +1432,26 @@ assert.equal(
   assert.equal(proofValid(carriedProof, sha, now, "f".repeat(40)), false, "carried proof on a moved base fails");
   assert.equal(proofValid(carriedProof, "b".repeat(40), now, base), false, "carried proof for another head fails");
   assert.equal(
-    proofValid({ ...carriedProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now, base),
+    proofValid({ ...carriedProof, timestamp: new Date(now - SOL_PROOF_MAX_AGE_MS - 1).toISOString() }, sha, now, base),
     false,
-    "carried proof older than 30 minutes fails",
+    "carried proof older than 24 hours fails",
+  );
+  const rootAt = (ms) => ({ ...carriedProof, carry: { ...carriedProof.carry, root_review: { ...carriedProof.carry.root_review, timestamp: new Date(ms).toISOString() } } });
+  assert.equal(proofValid(rootAt(now - SOL_PROOF_MAX_AGE_MS), sha, now, base), true, "carried proof whose full review is exactly 24 hours old passes");
+  assert.equal(proofValid(rootAt(now - SOL_PROOF_MAX_AGE_MS - 1), sha, now, base), false, "fresh carried proof whose full review is over 24 hours old fails");
+  assert.equal(proofValid(rootAt(now + 1), sha, now, base), false, "carried proof whose full review is future-dated fails");
+  assert.equal(
+    proofValid({ ...carriedProof, carry: { ...carriedProof.carry, root_review: undefined } }, sha, now, base),
+    false,
+    "carried proof that does not record its full review fails",
+  );
+  const rootWith = (patch) => ({ ...carriedProof, carry: { ...carriedProof.carry, root_review: { ...carriedProof.carry.root_review, ...patch } } });
+  assert.equal(proofValid(rootWith({ head_sha: undefined }), sha, now, base), false, "carried proof whose full review names no head fails");
+  assert.equal(proofValid(rootWith({ base_sha: "short" }), sha, now, base), false, "carried proof whose full review names no real base fails");
+  assert.equal(
+    proofValid({ ...rootWith({ timestamp: new Date(now - 60_000).toISOString() }), timestamp: new Date(now - 120_000).toISOString() }, sha, now, base),
+    false,
+    "carried proof whose full review is dated after the carry fails",
   );
   assert.equal(proofValid({ ...carriedProof, carried_forward: false }, sha, now, base), false, "codex_ran:false without the carry flag fails");
   assert.equal(proofValid({ ...carriedProof, carry: undefined }, sha, now, base), false, "carry flag without carry details fails");
@@ -1461,6 +1489,8 @@ assert.equal(
 assert.equal(claudeProofValid({ ...claudeProof, verdict: "ship" }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, head_sha: "b".repeat(40) }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now + 60_000).toISOString() }, sha, now), false);
+assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now - CLAUDE_PROOF_MAX_AGE_MS).toISOString() }, sha, now), true);
+assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now - CLAUDE_PROOF_MAX_AGE_MS - 1).toISOString() }, sha, now), false, "Claude-review proofs keep the 30-minute window");
 assert.equal(claudeProofValid(claudeProof, sha, now, base), true, "matching base_sha passes (Claude proof)");
 assert.equal(claudeProofValid(claudeProof, sha, now, "d".repeat(40)), false, "moved base → invalid (Claude proof)");
 assert.equal(claudeProofValid({ ...claudeProof, base_sha: undefined }, sha, now, base), false, "no base_sha fails closed when a base is required (Claude proof)");

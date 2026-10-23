@@ -205,7 +205,7 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     );
     const prodArr = asArray(prods, 'po product');
     expect(prodArr.length).toBe(1);
-    // Cost is admin-only and not a readable column (20261022091000): read it through the admin function.
+    // Cost is admin-only and not a readable column (20261022101000): read it through the admin function.
     const costs = await supabaseRpc(page, 'get_admin_cost_fields', { p_table: 'products', p_ids: [S.poProductId] }) as Record<string, Record<string, unknown>>;
     const prod = { ...(prodArr[0] as Record<string, unknown>), current_cost: costs?.[S.poProductId as string]?.current_cost };
 

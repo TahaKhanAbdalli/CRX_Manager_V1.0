@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Trash2, MapPin, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, MousePointerSquareDashed, Plus, X } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -95,7 +96,15 @@ function boundaryPartsFromGeometry(geometry: Polygon | MultiPolygon, fieldId: st
   });
 }
 
+// One fresh page per field: moving between fields (or to New Field) on the same route would
+// otherwise keep the previous field's form, billing splits and in-flight reads, and Save sends
+// the whole form and split list.
 export default function FieldSetup() {
+  const { id } = useParams();
+  return <FieldSetupPage key={id ?? 'none'} />;
+}
+
+function FieldSetupPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -124,6 +133,8 @@ export default function FieldSetup() {
 
   const [billingSplits, setBillingSplits] = useState<BillingSplit[]>([]);
   const [loading, setLoading] = useState(!isNew);
+  // The field's read failed: say so, never "Field not found" or a form missing its saved values (To-Do 10.5).
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Map / geo state
@@ -249,16 +260,30 @@ export default function FieldSetup() {
     setIsDirty(true);
   }, [field, billingSplits]);
 
+  // Only the newest field read may set the page: moving to another field (or Try again) can
+  // start one while an older read is still in flight.
+  const fieldLoadSeqRef = useRef(0);
   const fetchField = useCallback(async () => {
     if (!id) return;
+    const seq = ++fieldLoadSeqRef.current;
+    const superseded = () => seq !== fieldLoadSeqRef.current;
+    // Moving to another field must not leave the previous field's form usable while this one loads.
+    setLoading(true);
+    // What this read fills in is not an edit: otherwise "Field not found" or the failed state
+    // would block leaving the page with no unsaved-changes dialog on screen.
+    initialLoadDone.current = false;
+    setIsDirty(false);
     const { data, error } = await supabase
       .from('fields')
       .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
       .eq('id', id)
       .maybeSingle();
+    if (superseded()) return;
 
     if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_field' } });
       toast('error', 'Failed to load field');
+      setLoadError(true);
       setLoading(false);
       return;
     }
@@ -275,6 +300,7 @@ export default function FieldSetup() {
       // Fetch GeoJSON for map display
       let loadedBoundary: Feature<Polygon | MultiPolygon> | null = null;
       const { data: geoData, error: geoError } = await supabase.rpc('get_field_geojson', { p_field_id: id });
+      if (superseded()) return;
       if (geoError) {
         Sentry.captureException(geoError, { tags: { source: 'fetch', action: 'load_field_geometry' } });
         toast('warning', 'Could not load field boundary');
@@ -311,6 +337,7 @@ export default function FieldSetup() {
       // Load multi-polygon data if available. Older boundaries without field_polygons are
       // converted into the same DrawnPolygon state so adding a second part is additive too.
       const { data: polyData, error: polyError } = await supabase.rpc('get_field_polygons', { p_field_id: id });
+      if (superseded()) return;
       let loadedPolygons: DrawnPolygon[] = [];
       if (!polyError && polyData) {
         const polyRows = assertRpcResult<Array<{ id: string; polygon_geojson: object; label: string | null; acres: number | null; sort_order: number }>>(polyData, 'get_field_polygons');
@@ -336,27 +363,40 @@ export default function FieldSetup() {
       }
 
       // Fetch billing defaults
-      const { data: defaults } = await supabase
+      const { data: defaults, error: defaultsError } = await supabase
         .from('field_billing_defaults')
         .select('*, customer:customers!field_billing_defaults_customer_id_fkey(farm_name)')
         .eq('field_id', id)
         .order('split_pct', { ascending: false });
-
-      if (defaults && defaults.length > 0) {
-        setBillingOpen(true);
-        setBillingSplits(
-          defaults.map((d: { customer_id: string; customer?: { farm_name: string | null } | null; split_pct: number; is_primary: boolean; notes?: string | null; price_override_cents?: number | null; pricing_note?: string | null }) => ({
-            customer_id: d.customer_id,
-            customer_name: d.customer?.farm_name || 'Unknown',
-            split_pct: Number(d.split_pct),
-            is_primary: d.is_primary,
-            notes: d.notes || '',
-            price_override_cents: d.price_override_cents ?? null,
-            pricing_note: d.pricing_note || '',
-          }))
-        );
+      if (superseded()) return;
+      // Save sends the whole split list, so a form shown without the saved splits would erase them.
+      if (defaultsError || !Array.isArray(defaults)) {
+        Sentry.captureException(defaultsError ?? new Error('Billing splits read returned no list'), { tags: { source: 'fetch', action: 'load_field_billing_defaults' } });
+        toast('error', 'Failed to load field');
+        setLoadError(true);
+        setLoading(false);
+        return;
       }
+
+      if (defaults && defaults.length > 0) setBillingOpen(true);
+      // Always replace the splits, even with none: Save sends this whole list, so splits left over
+      // from another field (or an earlier read) must never stay on screen.
+      setBillingSplits(
+        (defaults ?? []).map((d: { customer_id: string; customer?: { farm_name: string | null } | null; split_pct: number; is_primary: boolean; notes?: string | null; price_override_cents?: number | null; pricing_note?: string | null }) => ({
+          customer_id: d.customer_id,
+          customer_name: d.customer?.farm_name || 'Unknown',
+          split_pct: Number(d.split_pct),
+          is_primary: d.is_primary,
+          notes: d.notes || '',
+          price_override_cents: d.price_override_cents ?? null,
+          pricing_note: d.pricing_note || '',
+        }))
+      );
+    } else {
+      // No such field: show "Field not found", never the form of the field open before.
+      setField({});
     }
+    setLoadError(false);
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [id, toast]);
@@ -365,9 +405,15 @@ export default function FieldSetup() {
     if (!isNew && id) {
       fetchField();
     } else {
+      // A new field: a read still in flight for the field open before must not fill this form.
+      fieldLoadSeqRef.current += 1;
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   }, [id, isNew, fetchField]);
+
+  // Each field route mounts a fresh page, so a read still in flight when this one unmounts
+  // must not toast "Failed to load field" over the next field.
+  useEffect(() => () => { fieldLoadSeqRef.current += 1; }, []);
 
   useEffect(() => {
     if (isNew || !id) {
@@ -909,8 +955,27 @@ export default function FieldSetup() {
     }
   };
 
-  if (loading) {
+  // A new field has nothing to load: a superseded read for the field open before may leave `loading` set.
+  if (loading && !isNew) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
+  }
+
+  if (loadError && !isNew) {
+    return (
+      <div className="space-y-4">
+        <LoadFailedState
+          title="This field could not be loaded"
+          onRetry={() => {
+            setLoadError(false);
+            setLoading(true);
+            void fetchField();
+          }}
+        />
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => navigate('/fields')}>Back to Fields</Button>
+        </div>
+      </div>
+    );
   }
 
   if (!isNew && !field.id) {

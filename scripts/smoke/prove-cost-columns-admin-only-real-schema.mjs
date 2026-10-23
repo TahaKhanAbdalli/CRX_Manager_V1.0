@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for the 20261022091000 candidate: the cost column lock on the remaining twelve
+ * Full-chain proof for the 20261022101000 candidate: the cost column lock on the remaining twelve
  * cost tables (Goal 1 part 3, step 3; cost and margin are admin-only, Mason 2026-10-15).
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a network-disabled Supabase
@@ -52,7 +52,7 @@ const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1' || REUSE;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
-const CANDIDATE = path.join(MIGRATIONS, '20261022091000_cost_columns_admin_only.sql');
+const CANDIDATE = path.join(MIGRATIONS, '20261022101000_cost_columns_admin_only.sql');
 // The column lists the screens read (src/lib/costFields.ts), proven readable under the lock.
 const COST_FIELDS = readFileSync(path.join(ROOT, 'src', 'lib', 'costFields.ts'), 'utf8');
 const screenColumns = (name) => {
@@ -609,8 +609,8 @@ function preflightRefusesDrift() {
       : new RegExp(`COST_LOCK_PREFLIGHT: ${t} columns are not the ones this grant list covers`)]),
     // The invoice-version swap (20261022090000) must be in place before the old overload is dropped.
     ['ALTER VIEW public.invoices_postable RESET (security_invoker);', /COST_LOCK_PREFLIGHT: 20261022090000 \(invoices_postable\) is not applied, or the view drifted/],
-    ['DROP FUNCTION public.invoice_post_version(public.invoices_postable);', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
-    ['GRANT EXECUTE ON FUNCTION public.invoice_post_version(public.invoices_postable) TO anon;', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
+    ['DROP FUNCTION public.invoice_postable_version(public.invoices_postable);', /COST_LOCK_PREFLIGHT: invoice_postable_version\(invoices_postable\) is missing or drifted/],
+    ['GRANT EXECUTE ON FUNCTION public.invoice_postable_version(public.invoices_postable) TO anon;', /COST_LOCK_PREFLIGHT: invoice_postable_version\(invoices_postable\) is missing or drifted/],
     [`DO $b$ BEGIN EXECUTE format('CREATE OR REPLACE FUNCTION public.invoice_post_version(p_invoice public.invoices) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS %L', (SELECT prosrc FROM pg_proc WHERE oid = 'public.invoice_post_version(public.invoices)'::regprocedure) || E'\\n-- prover: any body edit\\n'); END $b$;`,
       /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices\) drifted from 20261022022000/],
     ['ALTER TABLE public.products DROP COLUMN tier3_gross_margin;', /COST_LOCK_PREFLIGHT: products columns are not the ones/],
@@ -700,7 +700,7 @@ function postableAfterLock() {
   const read = (uid, sql) => docker([...psqlArgs(), '-A', '-t'], {
     input: `BEGIN;\n${claims(uid)}\nSET LOCAL ROLE authenticated;\n${sql}\nROLLBACK;`, allowFailure: true });
   for (const uid of [U.ADMIN, U.REP]) {
-    const r = read(uid, `SELECT public.invoice_post_version(i) FROM public.invoices_postable i WHERE i.id = '${INV}';`);
+    const r = read(uid, `SELECT public.invoice_postable_version(i) FROM public.invoices_postable i WHERE i.id = '${INV}';`);
     assert.equal(r.status, 0, `the view's version failed after the lock:\n${r.stderr}`);
     assert.match(r.stdout, /v1:[0-9a-f]{64}/, `no version from invoices_postable after the lock for ${uid}`);
   }

@@ -16,6 +16,7 @@ import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicat
 import { supabase, checkMutationResult, assertRpcResult, assertTransferDataPresent, assertTransferResultForJob, hasRpcCode, isTransferInvoiceResultInvalid, RpcErrorCodes, sanitizeError, transferInvoiceErrorMessage } from '../lib/db';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useLatestRef } from '../hooks/useLatestRef';
 import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
@@ -45,7 +46,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fieldAcresSurvivesSave, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, sumAcresExact, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, autofillPriceText, priceTextInLineUnit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fieldAcresSurvivesSave, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, sumAcresExact, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -56,6 +57,7 @@ import {
 } from '../lib/labelGuardrailSetting';
 import { computeSeason } from '../utils/season';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
+import { getStatedTierPriceCents } from '../lib/quoteCalc';
 import { programItemToChemRowSeed, parseCropPrograms, orderProgramsForJob, type CropProgram } from '../lib/cropProgramHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import { billableAcres } from '../lib/fieldGeometry';
@@ -373,6 +375,8 @@ export default function JobDetail() {
 
   // Lookup data
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // The customers list has been read (or failed): only then is a customer missing from it read by id.
+  const [customersLookupDone, setCustomersLookupDone] = useState(false);
   const [allFields, setAllFields] = useState<Field[]>([]);
   // The field picker and manual field selector derive billable acres from this
   // lookup. Keep those entry points closed until the lookup has succeeded so
@@ -399,6 +403,42 @@ export default function JobDetail() {
   // (/jobs/new?customer_id=…). Only for a NEW job; existing jobs load their own
   // customer in fetchJob. A stale/bogus id simply renders as no selection.
   const [customerId, setCustomerId] = useState(() => (isNew ? (searchParams.get('customer_id') ?? '') : ''));
+  // Read after an await: lines priced for one customer's tier must not land on another's job.
+  const customerIdRef = useLatestRef(customerId);
+  // The job's pricing tier. The customers list holds active customers only, so a job whose customer
+  // is not on it (an inactive customer) reads that customer by id. Until the tier is known, products
+  // are not priced: tier 1 is never assumed for a customer whose row did not load.
+  const listedCustomerTier = customers.find((c) => c.id === customerId)?.assigned_tier;
+  const [unlistedCustomerTier, setUnlistedCustomerTier] = useState<{ customerId: string; tier: number | null } | null>(null);
+  useEffect(() => {
+    if (!customersLookupDone || !customerId || listedCustomerTier != null) return;
+    let cancelled = false;
+    (async () => {
+      let tier: number | null = null;
+      try {
+        const { data, error } = await supabase.from('customers').select('id, assigned_tier').eq('id', customerId).maybeSingle();
+        if (error) Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_job_customer_tier' } });
+        else tier = data?.assigned_tier ?? null;
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'load_job_customer_tier' } });
+      }
+      if (!cancelled) setUnlistedCustomerTier({ customerId, tier });
+    })();
+    return () => { cancelled = true; };
+  }, [customersLookupDone, customerId, listedCustomerTier]);
+  const customerPricingTier = listedCustomerTier
+    ?? (unlistedCustomerTier?.customerId === customerId ? unlistedCustomerTier.tier : null);
+  // The tier to price products at, or null (with a message) when it is not known.
+  const requirePricingTier = (): 1 | 2 | 3 | null => {
+    if (customerPricingTier === 1 || customerPricingTier === 2 || customerPricingTier === 3) return customerPricingTier;
+    const tierReadFinished = listedCustomerTier != null || unlistedCustomerTier?.customerId === customerId;
+    toast('error', !customerId
+      ? 'Select a customer first: products are priced at the customer\'s tier.'
+      : tierReadFinished
+        ? "This job's customer could not be loaded, so products cannot be priced. Refresh the page and try again."
+        : "This job's customer is still loading. Try again in a moment.");
+    return null;
+  };
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
@@ -1615,13 +1655,29 @@ export default function JobDetail() {
       // ...992 and still reports as an integer, so the looser check would admit a value
       // that has already lost precision before any arithmetic runs. Refusing above 2^53
       // keeps every cents amount that reaches the total exactly representable.
-      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0);
+      ] as const).find(([side, raw]) => {
+        // A customer-supplied line is never billed, so a blank price there (a picked product that
+        // states no price) saves as 0 instead of blocking the save.
+        if (side === 'price' && raw === '' && (c.customer_supplied ?? false)) return false;
+        return !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0;
+      });
       if (badCents) {
         byIndex.set(i, `its ${badCents[0]} is blank, negative, or not a whole number of cents, and would not be billed correctly`);
+        return;
+      }
+      // Mirror of the job_chemicals CHEM_PRICE_REQUIRED trigger (20261022087000): a billable line at
+      // $0 whose product states no price for the customer's tier (tier 1 when it is not known yet,
+      // as the server reads it). A product with a stated $0 price is not caught.
+      if (!(c.customer_supplied ?? false) && parseFloat(c.quantity) !== 0 && Number(c.price_per_unit_cents) === 0) {
+        const product = allProducts.find((p) => p.id === c.product_id);
+        const tier = customerPricingTier === 2 || customerPricingTier === 3 ? customerPricingTier : 1;
+        if (product && getStatedTierPriceCents(product, tier) == null) {
+          byIndex.set(i, 'its product has no price for this customer\'s tier, so it would bill $0 — enter a price, tick Customer supplied if the grower supplied it, or give the product a $0 price if you give it away');
+        }
       }
     });
     return byIndex;
-  }, [chemRows, fieldRows]);
+  }, [chemRows, fieldRows, allProducts, customerPricingTier]);
 
   // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
   // than one distinct customer — the same customer set transfer_job_to_invoice
@@ -1685,6 +1741,7 @@ export default function JobDetail() {
     }
     // A failed read clears the list: never keep a previous or partial one.
     setCustomers(custResult.error ? [] : (custResult.data || []) as Customer[]);
+    setCustomersLookupDone(true);
     if (!fieldResult.error) {
       setAllFields((fieldResult.data || []) as Field[]);
       setFieldsLookupReady(true);
@@ -3326,6 +3383,9 @@ export default function JobDetail() {
    */
   const loadRecipeById = async (recipeId: string, mode: 'replace' | 'append') => {
     if (!recipeId) return;
+    const tier = requirePricingTier();
+    if (tier == null) return;
+    const customerIdAtStart = customerId;
     setLoadingRecipe(true);
     try {
       const { data, error } = await supabase
@@ -3334,6 +3394,11 @@ export default function JobDetail() {
         .eq('recipe_id', recipeId)
         .order('sort_order');
       if (error) throw error;
+      if (customerIdRef.current !== customerIdAtStart) {
+        toast('error', "The job's customer changed while the products were loading. Load them again to price them for this customer.");
+        setLoadingRecipe(false);
+        return;
+      }
       const items = (data || []) as BlendRecipeItem[];
       if (items.length === 0) {
         toast('error', 'That recipe has no products.');
@@ -3341,8 +3406,6 @@ export default function JobDetail() {
         return;
       }
 
-      const cust = customers.find((c) => c.id === customerId);
-      const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
       const acres = sumAcres(fieldRows);
       const seeds: ChemRow[] = items.map((item, idx) => {
         const product = allProducts.find((p) => p.id === item.product_id);
@@ -3391,10 +3454,11 @@ export default function JobDetail() {
       toast('error', 'That program has no products.');
       return;
     }
+    const tier = requirePricingTier();
+    if (tier == null) return;
+    const customerIdAtStart = customerId;
     setLoadingProgram(true);
     try {
-    const cust = customers.find((c) => c.id === customerId);
-    const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
     const acres = sumAcres(fieldRows);
 
     // Build a product lookup that ALSO includes any since-deactivated products the
@@ -3418,6 +3482,10 @@ export default function JobDetail() {
         Sentry.captureException(extraErr || extraCostErr, { tags: { source: 'fetch', action: 'load_program_inactive_products' } });
       } else {
         extraProducts.forEach((p) => byId.set(p.id, p));
+      }
+      if (customerIdRef.current !== customerIdAtStart) {
+        toast('error', "The job's customer changed while the products were loading. Load them again to price them for this customer.");
+        return;
       }
     }
 
@@ -3654,10 +3722,32 @@ export default function JobDetail() {
   const removeChemRow = (i: number) => setChemRows(chemRows.filter((_, idx) => idx !== i));
   const toggleChemSupplied = (i: number) => {
     const updated = [...chemRows];
-    updated[i] = { ...updated[i], customer_supplied: !updated[i].customer_supplied };
+    const row = updated[i];
+    updated[i] = { ...row, customer_supplied: !row.customer_supplied };
+    // Un-ticking makes the line billable again. A customer-supplied line may have been saved at $0
+    // only because its product stated no price then, so a $0 or blank price is re-priced from the
+    // catalog at the customer's tier now (a stated $0 included). With no stated price, or no known
+    // tier, it is blanked and chemRowDefects asks for one, instead of billing it at $0.
+    // Blank, or any exact spelling of zero ('0', '0.0'): a malformed price such as '0.5' stays for
+    // chemRowDefects to refuse.
+    const rawPrice = row.price_per_unit_cents.trim();
+    const blankOrZero = rawPrice === '' || (isExactDecimalText(rawPrice) && Number(rawPrice) === 0);
+    if (row.customer_supplied && row.product_id && blankOrZero) {
+      const p = allProducts.find((ap) => ap.id === row.product_id);
+      const tier = customerPricingTier === 1 || customerPricingTier === 2 || customerPricingTier === 3
+        ? customerPricingTier
+        : null;
+      const statedCents = p && tier != null ? getStatedTierPriceCents(p, tier) : null;
+      // Priced per the line's own billed unit (its quantity is in it), not the rate's.
+      updated[i].price_per_unit_cents = p ? priceTextInLineUnit(p.unit_size, row.unit, statedCents) : '';
+    }
     setChemRows(updated);
   };
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
+    // Picking a product prices it at the customer's tier: never at a guessed one.
+    const pickedProduct = key === 'product_id' ? allProducts.find((ap) => ap.id === value) : undefined;
+    const pickTier = pickedProduct ? requirePricingTier() : null;
+    if (pickedProduct && pickTier == null) return;
     const updated = [...chemRows];
     // RELABELLING THE STOCK UNIT MUST NOT KEEP THE OLD UNIT'S MONEY (Codex P1, 2026-08-24).
     // The banner's remedy tells the operator to set the Unit AND re-enter its cost/price —
@@ -3711,11 +3801,12 @@ export default function JobDetail() {
         // are NOT inflated. When the stock unit already equals the rate unit (or the
         // units can't be reconciled), this returns the stock unit + per-stock
         // cost/price unchanged — the common case is untouched.
-        const cust = customers.find((c) => c.id === customerId);
-        const tier = cust?.assigned_tier ?? 1;
-        const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
+        // A missing tier-2/3 price falls back to tier 1 (never a silent $0); a stated $0 is kept.
+        // Null when the product states no price at all. pickTier is set whenever a product is
+        // picked (an unknown tier returned above).
+        const tierPriceCents = pickTier == null ? null : getStatedTierPriceCents(p, pickTier);
         const costPerStockCents = Math.round((p.current_cost || 0) * 100);
-        const pricePerStockCents = tierPrice != null ? Math.round(tierPrice * 100) : 0;
+        const pricePerStockCents = tierPriceCents ?? 0;
         const reconciled = reconcileChemAutofillUnits(
           p.unit_size,
           updated[i].rate_unit || p.rate_unit,
@@ -3725,9 +3816,9 @@ export default function JobDetail() {
         );
         updated[i].unit = reconciled.unit;
         updated[i].cost_per_unit_cents = reconciled.costPerUnitCents.toString();
-        // Only default the price when the product has a tier price; otherwise leave
-        // whatever was there (mirrors the prior tierPrice != null guard).
-        if (tierPrice != null) updated[i].price_per_unit_cents = reconciled.pricePerUnitCents.toString();
+        // A product that states no price blanks the line's price rather than keeping the
+        // previous product's: chemRowDefects then refuses the save until a price is typed.
+        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled.pricePerUnitCents);
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }

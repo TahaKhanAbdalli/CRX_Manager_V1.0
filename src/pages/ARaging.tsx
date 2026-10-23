@@ -17,10 +17,11 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { fetchCustomerStatement } from '../lib/customerStatement';
 import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import { Sentry } from '../lib/sentry';
@@ -41,6 +42,10 @@ import type { ARAgingRow as BaseARagingRow, CustomerStatementRow, SeasonComparis
 
 type TabKey = 'aging' | 'statement' | 'season';
 type ARAgingRow = BaseARagingRow & { prepay_balance_cents: number | null; open_credit_cents: number | null };
+
+function statementKey(customerId: string, start: string, end: string): string {
+  return `${customerId}|${start}|${end}`;
+}
 
 export default function ARaging() {
   const { toast } = useToast();
@@ -90,28 +95,38 @@ export default function ARaging() {
   const [stmtEnd, setStmtEnd] = useState(localToday());
   const [statementData, setStatementData] = useState<CustomerStatementRow[]>([]);
   const [stmtCustomerName, setStmtCustomerName] = useState('');
+  // Which customer and date range the shown statement was loaded for, so an empty one can say
+  // so (and a changed customer or range goes back to the prompt).
+  const [stmtLoadedKey, setStmtLoadedKey] = useState<string | null>(null);
+  // The customer and range whose statement read last failed: shown as failed, not as "no transactions".
+  const [stmtFailedKey, setStmtFailedKey] = useState<string | null>(null);
+  const statementIsCurrent = stmtLoadedKey === statementKey(selectedCustomer, stmtStart, stmtEnd);
+  const statementFailed = stmtFailedKey !== null && stmtFailedKey === statementKey(selectedCustomer, stmtStart, stmtEnd);
 
   // Season Comparison
   const currentSeason = computeSeason();
   const [seasonA, setSeasonA] = useState(currentSeason);
   const [seasonB, setSeasonB] = useState(currentSeason - 1);
   const [seasonData, setSeasonData] = useState<SeasonComparisonRow[]>([]);
+  // The last comparison read failed: no rows, so the old seasons' figures never sit under the new labels.
+  const [seasonFailed, setSeasonFailed] = useState(false);
+  const seasonLoadSeq = useRef(0);
 
   const fetchAging = useCallback(async () => {
     const seq = ++agingLoadSeq.current;
     setLoading(true);
     // Read every page: the server cuts a function's rows off at 1,000, which
     // dropped the smallest balances from the list and the totals.
-    const { data, error } = await fetchAllRows<ARAgingRow>((from, to) => supabase
+    const { data, error } = await fetchAllRows<ARAgingRow>((from, to) => pageWithList(supabase
       .rpc('get_ar_aging', { p_as_of_date: asOfDate }, { count: 'exact' })
       // The function's own order (largest balance first), then the unique customer id.
       .order('total_outstanding', { ascending: false })
       .order('customer_id')
-      .range(from, to));
+      .range(from, to)));
     // A newer as-of date was picked while this one loaded.
     if (seq !== agingLoadSeq.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'ar_aging' } });
+    if (error || data === null || data === undefined) {
+      Sentry.captureException(error ?? new Error('get_ar_aging returned no data'), { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load AR aging data');
       // No rows and no totals: the previous date's or a partial list would look current.
       setAgingData([]);
@@ -130,18 +145,24 @@ export default function ARaging() {
   }, [asOfDate, toast]);
 
   const fetchSeasonComparison = useCallback(async () => {
+    const seq = ++seasonLoadSeq.current;
     setLoading(true);
     const { data, error } = await supabase.rpc('get_season_comparison', {
       p_season_a: seasonA,
       p_season_b: seasonB,
     });
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'ar_aging' } });
+    // Another pair of seasons was picked while this one loaded.
+    if (seq !== seasonLoadSeq.current) return;
+    if (error || data === null || data === undefined) {
+      Sentry.captureException(error ?? new Error('get_season_comparison returned no data'), { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load season comparison');
+      setSeasonData([]);
+      setSeasonFailed(true);
       setLoading(false);
       return;
     }
     setSeasonData(assertRpcResult<SeasonComparisonRow[]>(data, 'get_season_comparison'));
+    setSeasonFailed(false);
     setLoading(false);
   }, [seasonA, seasonB, toast]);
 
@@ -162,15 +183,19 @@ export default function ARaging() {
     // Every row, page by page (src/lib/customerStatement.ts).
     const { data, error } = await fetchCustomerStatement(selectedCustomer, stmtStart, stmtEnd);
     if (seq !== statementLoadSeq.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'ar_aging' } });
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('get_customer_statement returned no data'), { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load customer statement');
       // Never leave the previous customer's statement under this one's name.
       setStatementData([]);
+      setStmtLoadedKey(null);
+      setStmtFailedKey(statementKey(selectedCustomer, stmtStart, stmtEnd));
       setLoading(false);
       return;
     }
-    setStatementData(data ?? []);
+    setStatementData(data);
+    setStmtLoadedKey(statementKey(selectedCustomer, stmtStart, stmtEnd));
+    setStmtFailedKey(null);
     setTab('statement');
     setLoading(false);
   };
@@ -399,14 +424,21 @@ export default function ARaging() {
     // Every row, page by page (src/lib/customerStatement.ts).
     const { data, error } = await fetchCustomerStatement(custId, stmtStart, stmtEnd);
     if (seq !== statementLoadSeq.current) return;
-    if (error) {
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('get_customer_statement returned no data'), { tags: { source: 'fetch', page: 'ar_aging' } });
       toast('error', 'Failed to load statement');
       // Never leave the previous customer's statement under this one's name.
       setStatementData([]);
+      setStmtLoadedKey(null);
+      setStmtFailedKey(statementKey(custId, stmtStart, stmtEnd));
+      // Open the statement tab anyway, where the failure is shown with Try again.
+      setTab('statement');
       setLoading(false);
       return;
     }
-    setStatementData(data ?? []);
+    setStatementData(data);
+    setStmtLoadedKey(statementKey(custId, stmtStart, stmtEnd));
+    setStmtFailedKey(null);
     setTab('statement');
     setLoading(false);
   };
@@ -916,7 +948,7 @@ export default function ARaging() {
           {/* A failed load shows no totals or table: zeros would read as "nothing owed". */}
           {agingFailed ? (
             <Card>
-              <p role="alert" className="text-center text-red-600 py-8 text-sm">AR aging could not be loaded. Press Refresh to try again.</p>
+              <LoadFailedState title="AR aging could not be loaded" onRetry={() => { void fetchAging(); }} />
             </Card>
           ) : (
           <>
@@ -988,6 +1020,7 @@ export default function ARaging() {
                 <button
                   onClick={() => {
                     setStatementData([]);
+                    setStmtLoadedKey(null);
                     setTab('aging');
                   }}
                   className="flex items-center gap-1 text-sm text-crx-green hover:underline"
@@ -1004,6 +1037,8 @@ export default function ARaging() {
                   onSelect={(customer) => {
                     setSelectedCustomer(customer?.id ?? '');
                     setSelectedCustomerName(customer?.farm_name ?? '');
+                    // A changed customer or date needs a fresh load, even back to a loaded one (Sol, #1049).
+                    setStmtLoadedKey(null);
                   }}
                   activeOnly={false}
                   placeholder="Select customer..."
@@ -1016,7 +1051,7 @@ export default function ARaging() {
                 <input
                   type="date"
                   value={stmtStart}
-                  onChange={(e) => setStmtStart(e.target.value)}
+                  onChange={(e) => { setStmtStart(e.target.value); setStmtLoadedKey(null); }}
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
@@ -1025,7 +1060,7 @@ export default function ARaging() {
                 <input
                   type="date"
                   value={stmtEnd}
-                  onChange={(e) => setStmtEnd(e.target.value)}
+                  onChange={(e) => { setStmtEnd(e.target.value); setStmtLoadedKey(null); }}
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
@@ -1047,7 +1082,8 @@ export default function ARaging() {
             </div>
           </Card>
 
-          {statementData.length > 0 && (
+          {/* Shown only for the customer and range it was loaded for: the period line reads the inputs. */}
+          {statementIsCurrent && statementData.length > 0 && (
             <>
               <Card>
                 <div className="flex items-center justify-between">
@@ -1106,11 +1142,21 @@ export default function ARaging() {
             </>
           )}
 
-          {statementData.length === 0 && !loading && selectedCustomer && (
+          {statementFailed && !loading && (
+            <Card>
+              <LoadFailedState title="This statement could not be loaded" onRetry={() => { void fetchStatement(); }} />
+            </Card>
+          )}
+
+          {!(statementIsCurrent && statementData.length > 0) && !statementFailed && !loading && selectedCustomer && (
             <Card>
               <div className="text-center py-8">
                 <DollarSign className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                <p className="text-secondary">Select a customer and date range, then click Generate Statement.</p>
+                <p className="text-secondary">
+                  {statementIsCurrent
+                    ? 'No transactions in this date range.'
+                    : 'Select a customer and date range, then click Load Transactions.'}
+                </p>
               </div>
             </Card>
           )}
@@ -1160,6 +1206,8 @@ export default function ARaging() {
                 columns={seasonColumns}
                 data={seasonData}
                 loading={loading}
+                loadError={seasonFailed}
+                onRetry={() => { void fetchSeasonComparison(); }}
                 emptyTitle="No comparison data"
                 emptyDescription="Select two seasons to compare."
               />

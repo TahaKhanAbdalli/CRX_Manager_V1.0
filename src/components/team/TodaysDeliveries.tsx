@@ -9,10 +9,11 @@ import Badge from '../ui/Badge';
 import HelpTip from '../ui/HelpTip';
 import type { TeamBoardDeliveryData, TeamBoardDelivery } from '../../types';
 
+// deliveries.priority is low, normal, high or urgent (deliveries_priority_check); team notes use 'medium'.
 const priorityBorderColors: Record<string, string> = {
   urgent: 'border-l-red-500',
   high: 'border-l-amber-500',
-  medium: 'border-l-blue-500',
+  normal: 'border-l-blue-500',
   low: 'border-l-gray-300',
 };
 

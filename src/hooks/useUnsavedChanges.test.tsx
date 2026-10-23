@@ -83,6 +83,21 @@ describe('useUnsavedChanges', () => {
     expect(removeSpy).toHaveBeenCalledWith('beforeunload', expect.any(Function));
   });
 
+  it('skipNextBlockRef lets exactly one dirty navigation through, then blocks again', async () => {
+    const { useBlocker } = await import('react-router');
+    const skipRef = { current: false };
+    renderHook(() => useUnsavedChanges(true, skipRef));
+    const calls = vi.mocked(useBlocker).mock.calls;
+    const shouldBlock = calls[calls.length - 1]?.[0] as unknown as () => boolean;
+    expect(typeof shouldBlock).toBe('function');
+
+    expect(shouldBlock()).toBe(true);
+    skipRef.current = true;
+    expect(shouldBlock()).toBe(false);
+    expect(skipRef.current).toBe(false);
+    expect(shouldBlock()).toBe(true);
+  });
+
   it('beforeunload handler calls preventDefault', () => {
     renderHook(() => useUnsavedChanges(true));
     const handler = addSpy.mock.calls.find(

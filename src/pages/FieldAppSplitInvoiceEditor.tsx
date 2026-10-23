@@ -605,7 +605,7 @@ export default function FieldAppSplitInvoiceEditor() {
       .from(INVOICES_POSTABLE)
       // invoice_post_version: Post sends these, read with the rows the review card shows, and the
       // server refuses if any member or the group's membership changed since.
-      .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status, invoice_group_id, invoice_post_version')
+      .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status, invoice_group_id, invoice_post_version:invoice_postable_version')
       .eq('field_app_billing_set_id', setId)
       // Codex round-6/7 P1/P2: the review card + totals must match EXACTLY what post_invoice_group will
       // act on (it operates on the active invoice_group). Exclude soft-deleted children AND children
