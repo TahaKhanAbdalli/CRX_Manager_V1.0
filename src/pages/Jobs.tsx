@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import MobileCardList from '../components/ui/MobileCardList';
 import { applyTableSearchSort, type SortDir } from '../lib/tableSearchSort';
 import BulkActionBar from '../components/ui/BulkActionBar';
@@ -247,6 +248,8 @@ export default function Jobs() {
   // (data.length === JOBS_FETCH_LIMIT) — drives the "older jobs aren't searched"
   // banner so client-side filters running after the cap aren't silently lossy.
   const [atFetchCap, setAtFetchCap] = useState(false);
+  // The newest jobs read failed: show "could not be loaded", never "No jobs found" (To-Do 10.5).
+  const [loadError, setLoadError] = useState(false);
   // Field-app parity #6: the FULL filter set, AND-combined. Two copies:
   //   - `draft` is what the user edits in the bar.
   //   - `applied` is what actually drives the query + the visibleJobs memo.
@@ -504,6 +507,7 @@ export default function Jobs() {
         Sentry.captureException(dispError, { tags: { source: 'fetch', action: 'load_jobs_applicator_filter' } });
         // Clear the list: the last one loaded does not match the filters now applied.
         setJobs([]);
+        setLoadError(true);
         toast('error', 'Failed to load jobs');
         setLoading(false);
         return;
@@ -536,6 +540,7 @@ export default function Jobs() {
         Sentry.captureException(shareError, { tags: { source: 'fetch', action: 'load_jobs_customer_filter' } });
         // Clear the list: the last one loaded does not match the filters now applied.
         setJobs([]);
+        setLoadError(true);
         toast('error', 'Failed to load jobs');
         setLoading(false);
         return;
@@ -550,9 +555,11 @@ export default function Jobs() {
     const { data, error } = await query;
     if (superseded()) return;
 
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_jobs' } });
+    // No list is not "No jobs found": treat it as a failed read.
+    if (error || !Array.isArray(data)) {
+      Sentry.captureException(error ?? new Error('Jobs read returned no list'), { tags: { source: 'fetch', action: 'load_jobs' } });
       setJobs([]);
+      setLoadError(true);
       toast('error', 'Failed to load jobs');
       setLoading(false);
       return;
@@ -730,6 +737,7 @@ export default function Jobs() {
     });
     if (superseded()) return;
     setJobs(rows);
+    setLoadError(false);
     setLoading(false);
   }, [applied, toast]);
 
@@ -1754,7 +1762,8 @@ export default function Jobs() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
           <SplitHeading title="Job" accent="Schedule" />
-          {canBulkAction && (
+          {/* Bulk actions act on the selection, so they wait while a failed load hides the rows. */}
+          {canBulkAction && !loadError && (
             <BulkActionBar
               selectedCount={selectedCount}
               actions={bulkActions}
@@ -2056,7 +2065,7 @@ export default function Jobs() {
       {/* P3 remediation: client-side Crop/Chemical/County/State/Field-name filters
           run AFTER the newest-N server cap, so a match older than the window is
           never shown. Be honest about it when the cap is hit. */}
-      {atFetchCap && (
+      {atFetchCap && !loadError && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <Info className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
@@ -2070,6 +2079,7 @@ export default function Jobs() {
         <div className="p-5">
           {/* U13 (#15-21/#111): "Needs Dispatch only" quick filter — jobs
               scheduled with no active per-location dispatch. */}
+          {!loadError && (
           <div className="flex items-center gap-2 mb-2">
             <button
               onClick={() => setNeedsDispatchOnly((v) => !v)}
@@ -2082,6 +2092,11 @@ export default function Jobs() {
               Needs Dispatch only {needsDispatchOnly && `(${jobs.filter((j) => j.needs_dispatch).length})`}
             </button>
           </div>
+          )}
+          {/* The mobile cards have no empty message, so a failed load replaces both views. */}
+          {loadError ? (
+            <LoadFailedState onRetry={() => void fetchJobs()} />
+          ) : (
           <MobileCardList
             rows={displayedJobs}
             getRowKey={(job) => job.id}
@@ -2133,10 +2148,11 @@ export default function Jobs() {
               />
             )}
           />
+          )}
           {/* Bottom totals row — sums the currently-DISPLAYED jobs (visibleJobs
               after the table's in-table search/sort), matching what's on screen
               and what the PRINT footer totals show (criterion #2/#3). */}
-          {displayedJobs.length > 0 && (
+          {!loadError && displayedJobs.length > 0 && (
             <div className="mt-3 flex items-center justify-end gap-6 border-t pt-3 text-sm font-semibold text-nav-dark">
               <span>{displayedJobs.length} job{displayedJobs.length !== 1 ? 's' : ''}</span>
               <span>Tot. ac: <span className="tabular-nums">{totals.totalAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>

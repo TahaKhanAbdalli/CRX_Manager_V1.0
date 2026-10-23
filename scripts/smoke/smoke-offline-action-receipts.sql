@@ -371,35 +371,32 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  -- Since 20261022075000 (Goal 5) a completion must carry saved proof (a signature or ticket photo).
+  -- An offline payload carries none, so the queued completion goes to office review with nothing
+  -- committed; the office finishes it from the delivery page.
   v_result := public.process_offline_action(v_delivery_action, v_delivery_key);
-  IF v_result->>'status' IS DISTINCT FROM 'succeeded'
-     OR v_result->'result'->>'delivery_id' IS DISTINCT FROM v_delivery::text THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: delivery process failed: %', v_result;
-  END IF;
-  IF (v_result->>'attempt_count')::integer IS DISTINCT FROM 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: delivery attempt_count is not 1: %', v_result;
-  END IF;
-
-  SELECT count(*) INTO v_count
-  FROM public.inventory_transactions
-  WHERE delivery_id = v_delivery AND transaction_type = 'delivered';
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: delivery process wrote % delivered ledger rows, expected 1', v_count;
-  END IF;
-
-  v_replay := public.process_offline_action(v_delivery_action, v_delivery_key);
-  IF v_replay IS DISTINCT FROM v_result THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: succeeded delivery process replay changed: % vs %', v_replay, v_result;
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'operation' IS DISTINCT FROM 'complete_delivery' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a queued completion with no evidence was not sent to review: %', v_result;
   END IF;
   SELECT count(*) INTO v_count
   FROM public.inventory_transactions
   WHERE delivery_id = v_delivery AND transaction_type = 'delivered';
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: delivery replay duplicated the ledger (% rows)', v_count;
+  IF v_count <> 0 OR (SELECT status FROM public.deliveries WHERE id = v_delivery) <> 'in_progress' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the refused queued completion changed the delivery (% ledger rows)', v_count;
   END IF;
 
+  BEGIN
+    PERFORM public.process_offline_action(v_delivery_action, v_delivery_key);
+    RAISE EXCEPTION 'SMOKE_FAIL: a reviewed delivery action ran again';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'OFFLINE_ACTION_NEEDS_REVIEW%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected OFFLINE_ACTION_NEEDS_REVIEW, got %', SQLERRM;
+    END IF;
+  END;
   v_status := public.get_offline_action_status(v_delivery_action);
-  IF v_status->>'status' IS DISTINCT FROM 'succeeded'
+  IF v_status->>'status' IS DISTINCT FROM 'needs_review'
      OR v_status ? 'request_payload'
      OR v_status ? 'idempotency_key' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: status result is wrong or leaks private fields: %', v_status;

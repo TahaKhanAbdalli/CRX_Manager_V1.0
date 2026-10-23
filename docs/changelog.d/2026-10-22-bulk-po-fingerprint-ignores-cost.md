@@ -16,5 +16,6 @@
   under the old rule.
 - Proof: `node scripts/smoke/prove-bulk-po-fingerprint-ignores-cost-real-schema.mjs`. The live smoke chain
   `smoke-adversarial-money-inventory-closeout.sql` checks rep-then-admin-with-cost and a date change.
-- `docs/manual/KNOWN_ISSUES.md` (the "Smoke chains rotted by the PO cost lock" entry) and
-  `docs/reference/migration-history.md` updated.
+- `docs/reference/migration-history.md` updated (row 978). The old "Smoke chains rotted by the PO cost lock"
+  write-up now lives unchanged in `docs/manual/archive/KNOWN_ISSUES-history-2026-10.md` (the 2026-10-23 trim
+  dropped it from the open list), so this change no longer edits `KNOWN_ISSUES.md`.

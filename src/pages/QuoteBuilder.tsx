@@ -31,6 +31,7 @@ import Input from '../components/ui/Input';
 import CustomerSearchPicker, { CUSTOMER_SEARCH_SELECT, type CustomerSearchResult } from '../components/customers/CustomerSearchPicker';
 import FieldSearchPicker, { FIELD_SEARCH_SELECT, type FieldSearchResult } from '../components/fields/FieldSearchPicker';
 import { fetchAllRows } from '../lib/pagedRead';
+import { billableAcres } from '../lib/fieldGeometry';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
@@ -135,6 +136,10 @@ interface LocalItem {
   oz_per_acre: number | null;
   price_per_acre: number | null;
   acres: number | null;
+  // Where this page set the acres: a field pick or the Acres box. Not saved, so a loaded line has
+  // neither, and a cleared field keeps its acres even when they equal the field's: the source
+  // cannot be told apart, and guessing could delete typed acres.
+  acres_source?: 'field' | 'typed';
   total_units_needed: number | null;
   unit_size: string | null;
   profit: number;
@@ -160,6 +165,7 @@ type FieldOption = FieldSearchResult & {
   measured_acres: number | null;
   override_acres: number | null;
 };
+
 
 interface ActivePlannedHold {
   product_id: string;
@@ -389,6 +395,8 @@ export default function QuoteBuilder() {
 
   const [customerId, setCustomerId] = useState('');
   const customerIdRef = useLatestRef(customerId);
+  // Whether a customer was picked since the open quote loaded (picking one and back still counts).
+  const customerPickedSinceLoadRef = useRef(false);
   const [tier, setTier] = useState(1);
   const [validDays, setValidDays] = useState(15);
   const [headerNotes, setHeaderNotes] = useState('');
@@ -613,7 +621,10 @@ export default function QuoteBuilder() {
   useLayoutEffect(() => {
     routeQuoteIdRef.current = id ?? null;
   }, [id]);
-  const blocker = useUnsavedChanges(isDirty);
+  // Set right before a navigate() that follows a committed save, so the router's
+  // stale "dirty" check cannot show a false Unsaved Changes prompt (see useUnsavedChanges).
+  const skipUnsavedPromptRef = useRef(false);
+  const blocker = useUnsavedChanges(isDirty, skipUnsavedPromptRef);
 
   // Status-based guards
   const currentStatus = status || 'draft';
@@ -694,7 +705,7 @@ export default function QuoteBuilder() {
     if (!initialLoadDone.current) return;
     if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
-  }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+  }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit, isPlanned]);
 
   // Release initial-load dirty suppression only after React has committed the
   // complete installed snapshot. Timer/frame releases can run before that
@@ -1179,6 +1190,7 @@ export default function QuoteBuilder() {
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
+    customerPickedSinceLoadRef.current = false;
     // The quote read embeds its customer (customer:customers(*)); a quote whose customer did not
     // come back cannot be saved, since the screen cannot show who it is for.
     const loadedCustomer = (q as Quote & { customer?: QuoteCustomer | null }).customer ?? null;
@@ -1377,45 +1389,6 @@ export default function QuoteBuilder() {
     .sort()
     .join(',');
   const unresolvedFieldIds = unresolvedFieldKey ? unresolvedFieldKey.split(',') : [];
-  useEffect(() => {
-    if (!unresolvedFieldKey) {
-      setFieldLoadError(null);
-      return;
-    }
-    let cancelled = false;
-    const ids = unresolvedFieldKey.split(',');
-    const customerIdAtStart = customerIdRef.current;
-    supabase
-      .from('fields')
-      .select(QUOTE_FIELD_SELECT)
-      .in('id', ids)
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          Sentry.captureException(error, { tags: { source: 'fetch', page: 'quote_builder', action: 'load_section_fields' } });
-          setFieldLoadError("This quote's fields could not be loaded. Refresh the page before saving.");
-          return;
-        }
-        const rows = (data || []) as unknown as FieldOption[];
-        if (rows.length > 0) setFields((known) => ({ ...known, ...Object.fromEntries(rows.map((row) => [row.id, row])) }));
-        // The customer may have changed while these were loading: a field that belongs to another
-        // customer is then cleared, as a pick would have cleared it. A plain load never clears a
-        // saved field (CodeRabbit, #1017): a field later moved to another customer stays as saved.
-        const currentCustomerId = customerIdRef.current;
-        const customerChanged = currentCustomerId !== customerIdAtStart;
-        const foreign = new Set(rows
-          .filter((row) => customerChanged && currentCustomerId && row.customer_id !== currentCustomerId)
-          .map((row) => row.id));
-        if (foreign.size > 0) {
-          setSections((prev) => prev.map((sec) => (sec.field_id && foreign.has(sec.field_id) ? { ...sec, field_id: null } : sec)));
-          toast('warning', "The previous customer's field was removed from this quote. Check those lines' acres.");
-        }
-        if (rows.length < ids.length) {
-          setFieldLoadError('A field on this quote no longer exists. Choose the section\'s field again before saving.');
-        }
-      });
-    return () => { cancelled = true; };
-  }, [unresolvedFieldKey, customerIdRef, toast]);
 
   // Repricing lines before products and unit conversions load would convert every unit at a
   // factor of 1, so a tier change waits for them. With no lines there is nothing to reprice.
@@ -1430,6 +1403,7 @@ export default function QuoteBuilder() {
       toast('error', 'Products are still loading. Try again in a moment.');
       return false;
     }
+    customerPickedSinceLoadRef.current = true;
     setCustomerId(cust.id);
     setCustomerRow(cust);
     setCustomerLoadError(null);
@@ -1441,12 +1415,14 @@ export default function QuoteBuilder() {
     recalcAllForTier(cust.assigned_tier);
     // A section's field must belong to the quote's customer: clear any that does not. A saved
     // field still loading by id is kept; the unresolved-field check blocks saving until it loads.
-    // The lines keep their acres (they are the line's own values, as when a field is cleared by
-    // hand), so the user is told to check them (Luna, #1017).
+    // A field-filled acre count is dropped with the field; acres typed by hand are kept, so the
+    // user is told to check them (Luna, #1017).
     const clearedSections = sections.filter((sec) => sec.field_id && fields[sec.field_id] && fields[sec.field_id].customer_id !== cust.id);
     if (clearedSections.length > 0) {
       setSections((prev) => prev.map((sec) => (
-        sec.field_id && fields[sec.field_id] && fields[sec.field_id].customer_id !== cust.id ? { ...sec, field_id: null } : sec
+        sec.field_id && fields[sec.field_id] && fields[sec.field_id].customer_id !== cust.id
+          ? clearSectionField(sec)
+          : sec
       )));
       toast('warning', `The previous customer's field was removed from ${clearedSections.map((sec) => sec.section_name || 'a section').join(', ')}. Check those lines' acres.`);
     }
@@ -1549,6 +1525,93 @@ export default function QuoteBuilder() {
     },
     [products, getTierPrice, getConversionFactor]
   );
+
+  // Clearing a section's field drops the acres that field filled in this session, and keeps acres
+  // typed by hand. A line loaded from the database has no recorded source, so its acres are kept
+  // even when they equal the field's: guessing could overwrite typed acres and bill them (Sol,
+  // #1049). The callers warn the user to check those lines' acres.
+  // The line keeps its unit price (a customer change has already re-priced every line for the new
+  // tier), and nothing is converted: a rate line with no acres needs nothing (rate × no acres), and
+  // a units line's totals do not use acres, only its per-acre figures do. So this needs neither the
+  // product nor the unit conversions, which may still be loading.
+  const clearSectionField = (sec: LocalSection): LocalSection => {
+    const filledByField = (item: LocalItem) => item.acres != null && item.acres_source === 'field';
+    return {
+      ...sec,
+      field_id: null,
+      items: sec.items.map((item) => {
+        if (!filledByField(item)) return item;
+        const cleared: LocalItem = { ...item, acres: null, acres_source: undefined };
+        return item.calc_mode === 'units_direct'
+          ? { ...cleared, oz_per_acre: null, price_per_acre: null }
+          : { ...cleared, total_units_needed: 0, total_price: 0, profit: 0, net_margin: 0 };
+      }),
+    };
+  };
+  const clearSectionFieldRef = useLatestRef(clearSectionField);
+  // The saved field ids whose by-id read has finished (loaded, missing or failed). Until it has, the
+  // acres a field filled in cannot be told apart, so the section's field cannot be cleared or
+  // replaced (Codex and Luna, #1049). Unknown ids count as loading, even before the read starts.
+  const fieldIdsSettledRef = useRef<Set<string>>(new Set());
+  // Saved field ids whose read FAILED: their acres still cannot be told apart, and clearing the
+  // field would also drop the refresh-before-saving warning, so they stay locked until a reload.
+  // A field that no longer exists (read fine, row missing) can be replaced (Codex, #1049).
+  const fieldIdsFailedRef = useRef<Set<string>>(new Set());
+
+  // Load the saved sections' unresolved fields by id (see unresolvedFieldKey above).
+  useEffect(() => {
+    if (!unresolvedFieldKey) {
+      setFieldLoadError(null);
+      return;
+    }
+    let cancelled = false;
+    const ids = unresolvedFieldKey.split(',');
+    const settle = () => { ids.forEach((fieldId) => fieldIdsSettledRef.current.add(fieldId)); };
+    const fail = () => { ids.forEach((fieldId) => fieldIdsFailedRef.current.add(fieldId)); };
+    supabase
+      .from('fields')
+      .select(QUOTE_FIELD_SELECT)
+      .in('id', ids)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        settle();
+        if (error) {
+          fail();
+          Sentry.captureException(error, { tags: { source: 'fetch', page: 'quote_builder', action: 'load_section_fields' } });
+          setFieldLoadError("This quote's fields could not be loaded. Refresh the page before saving.");
+          return;
+        }
+        const rows = (data || []) as unknown as FieldOption[];
+        if (rows.length > 0) setFields((known) => ({ ...known, ...Object.fromEntries(rows.map((row) => [row.id, row])) }));
+        // The customer may have changed while these were loading: a field that belongs to another
+        // customer is then cleared, as a pick would have cleared it. A plain load never clears a
+        // saved field (CodeRabbit, #1017): a field later moved to another customer stays as saved.
+        // What counts is a pick since the open quote loaded, not the customer when the read started:
+        // another quote sharing these field ids may be open by now, and opening it is not a pick; a
+        // pick and a pick back to the saved customer still is (CodeRabbit and Luna, #1049).
+        const currentCustomerId = customerIdRef.current;
+        const customerChanged = customerPickedSinceLoadRef.current;
+        const foreign = new Set(rows
+          .filter((row) => customerChanged && currentCustomerId && row.customer_id !== currentCustomerId)
+          .map((row) => row.id));
+        if (foreign.size > 0) {
+          setSections((prev) => prev.map((sec) => (sec.field_id && foreign.has(sec.field_id)
+            ? clearSectionFieldRef.current(sec)
+            : sec)));
+          toast('warning', "The previous customer's field was removed from this quote. Check those lines' acres.");
+        }
+        if (rows.length < ids.length) {
+          setFieldLoadError('A field on this quote no longer exists. Choose the section\'s field again before saving.');
+        }
+      }, (err: unknown) => {
+        if (cancelled) return;
+        settle();
+        fail();
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', page: 'quote_builder', action: 'load_section_fields' } });
+        setFieldLoadError("This quote's fields could not be loaded. Refresh the page before saving.");
+      });
+    return () => { cancelled = true; };
+  }, [unresolvedFieldKey, customerIdRef, clearSectionFieldRef, toast]);
 
   const recalcAllForTier = (tierNum: number) => {
     setSections((prev) =>
@@ -1710,22 +1773,39 @@ export default function QuoteBuilder() {
       toast('error', 'Products are still loading. Try again in a moment.');
       return false;
     }
+    const currentFieldId = sections.find((sec) => sec._key === sectionKey)?.field_id;
+    if (currentFieldId && !fields[currentFieldId] && fieldIdsFailedRef.current.has(currentFieldId)) {
+      toast('error', "This section's field could not be loaded. Refresh the page before changing it.");
+      return false;
+    }
+    if (currentFieldId && !fields[currentFieldId] && !fieldIdsSettledRef.current.has(currentFieldId)) {
+      toast('error', "This section's field is still loading. Try again in a moment.");
+      return false;
+    }
     if (field) setFields((known) => ({ ...known, [field.id]: field }));
-    updateSectionField(sectionKey, 'field_id', field?.id ?? null);
-    // Documented field-acre precedence: override → measured → legacy total.
-    const effectiveAcres = field?.override_acres ?? field?.measured_acres ?? field?.total_acres;
-    if (effectiveAcres == null) return true;
+    const effectiveAcres = field ? billableAcres(field.override_acres, field.measured_acres, field.total_acres) : null;
+    // Saved lines keep acres whose source is unknown, so the user is told to check them (Luna, #1049).
+    const currentSection = sections.find((sec) => sec._key === sectionKey);
+    if (currentFieldId && currentFieldId !== field?.id && currentSection?.items.some((item) => !!item.acres && item.acres_source === undefined)) {
+      toast('warning', "This section's saved lines keep their acres. Check them against the new field.");
+    }
 
     setSections((prev) =>
       prev.map((section) => {
         if (section._key !== sectionKey) return section;
+        // Clearing or replacing the field first drops the acres the old field filled in, as a
+        // customer change does; typed acres stay (Codex, #1049).
+        const cleared = section.field_id ? clearSectionField(section) : section;
+        const withField = { ...cleared, field_id: field?.id ?? null };
+        if (effectiveAcres == null) return withField;
         return {
-          ...section,
-          items: section.items.map((item) => {
+          ...withField,
+          items: withField.items.map((item) => {
             if ((item.acres ?? 0) !== 0) return item;
             return recalcItem({
               ...item,
               acres: effectiveAcres,
+              acres_source: 'field',
               calc_mode: item.calc_mode === 'units_direct' ? 'units_direct' : 'rate_acres',
             }, tier);
           }),
@@ -2196,48 +2276,63 @@ export default function QuoteBuilder() {
 
   const handleSaveDraft = async () => {
     setSaving(true);
-    const result = await saveQuote('draft');
-    if (result) {
-      setIsDirty(false);
-      toast('success', 'Quote saved as draft');
-      trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
-        message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
-        data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
-      });
-      // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
-      // A frontend logActivity() here would double-log every save.
-      // Planned program hold management
-      if (isPlanned && profile) {
-        const holdIdemKey = plannedHoldsIdem.getKey();
-        const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
-          p_quote_id: result,
-          p_performed_by: profile.id,
-          p_idempotency_key: holdIdemKey,
+    // Always unlock the form (it is locked while saving), whatever the steps below throw.
+    try {
+      const result = await saveQuote('draft');
+      if (result) {
+        setIsDirty(false);
+        toast('success', 'Quote saved as draft');
+        trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
+          message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
+          data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
         });
-        if (holdError) {
-          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
-          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
-          const bindingRejection = getIdempotencyBindingRejection(holdError);
-          if (bindingRejection === 'intent' || bindingRejection === 'actor') plannedHoldsIdem.resetKey();
-          Sentry.captureException(holdError, { tags: { source: 'mutation', action: 'create_planned_holds' } });
-          toast('error', `Failed to create inventory holds: ${sanitizeError(holdError)}`);
+        // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
+        // A frontend logActivity() here would double-log every save.
+        // Planned program hold management
+        if (isPlanned && profile) {
+          // The quote is already saved, so a hold failure must not stop the steps below: a new
+          // quote still has to open its saved page, or the next save would create a second quote.
+          try {
+            const holdIdemKey = plannedHoldsIdem.getKey();
+            const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
+              p_quote_id: result,
+              p_performed_by: profile.id,
+              p_idempotency_key: holdIdemKey,
+            });
+            if (holdError) {
+              // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+              // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+              const bindingRejection = getIdempotencyBindingRejection(holdError);
+              if (bindingRejection === 'intent' || bindingRejection === 'actor') plannedHoldsIdem.resetKey();
+              Sentry.captureException(holdError, { tags: { source: 'mutation', action: 'create_planned_holds' } });
+              toast('error', `Failed to create inventory holds: ${sanitizeError(holdError)}`);
+            }
+            else {
+              assertRpcResult(holdData, 'create_planned_holds');
+              plannedHoldsIdem.resetKey();
+              toast('success', 'Inventory holds created for planned program');
+              await loadActivePlannedHolds(result);
+            }
+          } catch (holdErr) {
+            // An unconfirmed reply keeps the retry key, so the next save replays instead of holding twice.
+            Sentry.captureException(holdErr, { tags: { source: 'mutation', action: 'create_planned_holds' } });
+            toast('error', `The quote was saved, but its inventory holds could not be confirmed: ${sanitizeError(holdErr)}`);
+          }
+        } else if (!isPlanned && wasPlanned) {
+          // save_quote synchronizes planned holds in the same database transaction;
+          // no second client-side table mutation or not-yet-live RPC is needed.
+          setWasPlanned(false);
+          setActivePlannedHolds([]);
         }
-        else {
-          assertRpcResult(holdData, 'create_planned_holds');
-          plannedHoldsIdem.resetKey();
-          toast('success', 'Inventory holds created for planned program');
-          await loadActivePlannedHolds(result);
-        }
-      } else if (!isPlanned && wasPlanned) {
-        // save_quote synchronizes planned holds in the same database transaction;
-        // no second client-side table mutation or not-yet-live RPC is needed.
-        setWasPlanned(false);
-        setActivePlannedHolds([]);
-      }
 
-      if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
+        if (!isEditing) {
+          skipUnsavedPromptRef.current = true;
+          navigate(`/quotes/${result}`, { replace: true });
+        }
+      }
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   // Save as template handler
@@ -3126,6 +3221,7 @@ export default function QuoteBuilder() {
       sendOrderConfirmedEmail(result.order_id!);
       setIsDirty(false);
       setShowDrawModal(false);
+      skipUnsavedPromptRef.current = true;
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
@@ -3242,6 +3338,9 @@ export default function QuoteBuilder() {
 
     // Duplicate order warning: check for recent orders for same customer
     if (customerId) {
+      // Lock the form (and the confirm dialog's Cancel) from the click: this handler converts
+      // from the quote as it is now, so nothing may change or be cancelled during the lookup.
+      setConverting(true);
       try {
         const sevenDaysAgo = localDatePlusDays(-7);
         const { data: recentOrders } = await supabase
@@ -3258,6 +3357,7 @@ export default function QuoteBuilder() {
           const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
           setDuplicateOrderMsg(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
           setDuplicateOrderConfirmOpen(true);
+          setConverting(false);
           return;
         }
       } catch { /* ignore — don't block conversion if check fails */ }
@@ -3393,6 +3493,7 @@ export default function QuoteBuilder() {
 
       // Bug #31 fix: Clear dirty state before navigate to prevent unsaved changes dialog
       setIsDirty(false);
+      skipUnsavedPromptRef.current = true;
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
@@ -3446,6 +3547,7 @@ export default function QuoteBuilder() {
         if (createdOrderId) {
           toast('success', 'The order was created — opening it');
           setIsDirty(false);
+          skipUnsavedPromptRef.current = true;
           navigate(`/orders/${createdOrderId}`);
         } else {
           toast('warning', 'The quote was accepted, but its order could not be found — check the Orders page');
@@ -3582,6 +3684,10 @@ export default function QuoteBuilder() {
     );
   }
 
+  // The quote cannot be edited while a save or order creation runs: an edit made then
+  // would not be in what was written, and the page usually moves on afterwards.
+  const formLocked = saving || converting || drawing;
+
   return (
     <div className="space-y-4">
       <Breadcrumbs items={[
@@ -3618,7 +3724,7 @@ export default function QuoteBuilder() {
               checked={isPlanned}
               onChange={(e) => setIsPlanned(e.target.checked)}
               className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
-              disabled={!canEdit && isEditing}
+              disabled={formLocked || (!canEdit && isEditing)}
             />
             <span className="font-medium">Planned Program</span>
             <HelpTip text="Mark as Planned if the customer intends to buy but hasn't committed yet. This reserves inventory with a hold so it's not sold to someone else. Set the Needed By date so you can forecast when product will move." className="ml-1" />
@@ -4250,6 +4356,7 @@ export default function QuoteBuilder() {
         </Card>
       )}
 
+      <fieldset disabled={formLocked} aria-busy={formLocked} className="space-y-4 min-w-0">
       {!id && quoteTemplates.length > 0 && (
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
           <label className="text-sm font-medium">Start from Template:</label>
@@ -4711,6 +4818,7 @@ export default function QuoteBuilder() {
                                     acres: e.target.value
                                       ? parseFloat(e.target.value)
                                       : null,
+                                    acres_source: 'typed',
                                     calc_mode: item.calc_mode === 'units_direct'
                                       ? 'units_direct' // keep units_direct if typing acres alongside units
                                       : 'rate_acres',
@@ -4835,6 +4943,7 @@ export default function QuoteBuilder() {
           />
         </div>
       </Card>
+      </fieldset>
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />
@@ -4946,7 +5055,7 @@ export default function QuoteBuilder() {
 
       <Modal
         open={confirmConvertOpen}
-        onClose={() => setConfirmConvertOpen(false)}
+        onClose={() => { if (!converting) setConfirmConvertOpen(false); }}
         title="Convert to"
         accent="Order"
       >
@@ -4962,6 +5071,7 @@ export default function QuoteBuilder() {
               variant="secondary"
               showChevron={false}
               onClick={() => setConfirmConvertOpen(false)}
+              disabled={converting}
             >
               Cancel
             </Button>
@@ -5145,7 +5255,8 @@ export default function QuoteBuilder() {
                               max={row.remaining}
                               step="any"
                               value={row.qty}
-                              disabled={row.remaining <= 0}
+                              // Locked while the order is created: a later change would not be in it.
+                              disabled={drawing || row.remaining <= 0}
                               onChange={(e) => {
                                 const next = [...drawRows];
                                 next[idx] = { ...row, qty: e.target.value };

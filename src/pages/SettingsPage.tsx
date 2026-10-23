@@ -217,11 +217,21 @@ export default function SettingsPage() {
   const [usersLoadError, setUsersLoadError] = useState(false);
   // Only the newest users read may change the list or its error state (Try again can overlap a slower read).
   const usersLoadSeqRef = useRef(0);
+  // The settings read failed: the forms would show blank defaults, and saving them would overwrite the
+  // real values, so they are replaced by the failed state and every save is refused (To-Do 10.5).
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
+  // True once a settings read has succeeded: until then the forms hold defaults, not saved values.
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const settingsLoadSeqRef = useRef(0);
 
   const fetchSettings = async () => {
+    const seq = ++settingsLoadSeqRef.current;
     const { data, error } = await supabase.from('app_settings').select('*');
-    if (error) {
+    if (seq !== settingsLoadSeqRef.current) return;
+    // No list is not a load: the forms would show defaults that a save writes over the real values.
+    if (error || !Array.isArray(data)) {
       toast('error', 'Failed to load settings');
+      setSettingsLoadError(true);
       return;
     }
     const settings = (data || []) as AppSetting[];
@@ -246,6 +256,8 @@ export default function SettingsPage() {
     setPreNoticeTemplate(parsePreNotificationTemplate(map['pre_application_notice_template']));
     // #41: blank/absent => the seeded default post-notification wording.
     setPostNoticeTemplate(parsePostNotificationTemplate(map['post_application_notice_template']));
+    setSettingsLoadError(false);
+    setSettingsLoaded(true);
   };
 
   const fetchUsers = async () => {
@@ -280,6 +292,7 @@ export default function SettingsPage() {
   }, [role, navigate]);
 
   const saveSetting = async (key: string, value: string) => {
+    if (settingsLoadError || !settingsLoaded) throw new Error('Settings did not load. Press Try again before saving.');
     const result = await supabase
       .from('app_settings')
       .upsert(
@@ -522,29 +535,33 @@ export default function SettingsPage() {
         if (message !== data?.error) fetchUsers();
       } else {
         // handle_new_user (migration 20261022023000) creates every new login as an inactive,
-        // login-blocked driver named 'Pending user <id>', whatever the signup metadata says, so the
-        // chosen name and role are set and the user is activated here, by an admin. The key is
-        // scoped to the new user so a lost reply for one user never replays onto the next.
+        // login-blocked driver named 'Pending user <id>', whatever the signup metadata says. The
+        // create-user function now sets the chosen name and role and activates the user in the same
+        // request (`activated: true`). Only when it did not (an older deployed function, or its
+        // activation failed) is it done here, by this admin. The key is scoped to the new user so a
+        // lost reply for one user never replays onto the next.
         let activationError: string | null = null;
-        try {
-          const { data: roleData, error: roleError } = await supabase.rpc('admin_update_profile', {
-            target_user_id: newUserId,
-            new_role: newRole,
-            new_full_name: newName,
-            new_phone: newPhone || undefined,
-            new_is_active: true,
-            p_idempotency_key: newUserRoleIdem.getKeyFor(newUserId),
-          });
-          if (roleError) {
-            activationError = /duplicate key|uq_profiles_.*full_name/i.test(String((roleError as { message?: string })?.message ?? ''))
-              ? `Another user is already named ${newName}. The new login (${newEmail}) exists but is blocked: open it, give it a different name and role, and mark it active.`
-              : sanitizeError(roleError);
-          } else {
-            const roleResult = assertRpcResult<{ error?: string }>(roleData, 'admin_update_profile');
-            if (roleResult?.error) activationError = roleResult.error;
+        if (data?.activated !== true) {
+          try {
+            const { data: roleData, error: roleError } = await supabase.rpc('admin_update_profile', {
+              target_user_id: newUserId,
+              new_role: newRole,
+              new_full_name: newName,
+              new_phone: newPhone || undefined,
+              new_is_active: true,
+              p_idempotency_key: newUserRoleIdem.getKeyFor(newUserId),
+            });
+            if (roleError) {
+              activationError = /duplicate key|uq_profiles_.*full_name/i.test(String((roleError as { message?: string })?.message ?? ''))
+                ? `Another user is already named ${newName}. The new login (${newEmail}) exists but is blocked: open it, give it a different name and role, and mark it active.`
+                : sanitizeError(roleError);
+            } else {
+              const roleResult = assertRpcResult<{ error?: string }>(roleData, 'admin_update_profile');
+              if (roleResult?.error) activationError = roleResult.error;
+            }
+          } catch (activationErr: unknown) {
+            activationError = sanitizeError(activationErr);
           }
-        } catch (activationErr: unknown) {
-          activationError = sanitizeError(activationErr);
         }
         if (activationError) {
           toast('error', activationError.startsWith('Another user')
@@ -730,6 +747,14 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <SplitHeading title="App" accent="Settings" />
 
+      {settingsLoadError ? (
+        <Card>
+          <LoadFailedState
+            title="Settings could not be loaded"
+            onRetry={() => void fetchSettings()}
+          />
+        </Card>
+      ) : !settingsLoaded ? null : (
       <Card>
         <CardHeader
           title="Company"
@@ -752,6 +777,7 @@ export default function SettingsPage() {
           <Input label="Address" value={companyAddress} onChange={(e) => setCompanyAddress(e.target.value)} />
         </div>
       </Card>
+      )}
 
       <Card>
         <CardHeader
@@ -835,6 +861,8 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {!settingsLoadError && settingsLoaded && (
+      <>
       <Card>
         <CardHeader
           title="Default"
@@ -1282,6 +1310,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+      </>
+      )}
 
       <Modal open={userModalOpen} onClose={() => setUserModalOpen(false)} title="Add" accent="User">
         <div className="space-y-4">

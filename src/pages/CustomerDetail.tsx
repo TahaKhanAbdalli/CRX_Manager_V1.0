@@ -1808,7 +1808,15 @@ export default function CustomerDetail() {
                             {d.completed_at ? new Date(d.completed_at).toLocaleDateString() : '-'}
                           </td>
                           <td className="px-4 py-3">
-                            {d.signed_by ? (
+                            {/* How the completion was confirmed (completion_evidence, migration 20261022075000):
+                                a no-proof record's signer is office text, never a customer signature. */}
+                            {d.completion_evidence === 'no_proof' ? (
+                              <Badge variant="warning">No proof</Badge>
+                            ) : d.completion_evidence === 'left_at_site' ? (
+                              <Badge variant="info">Left at site</Badge>
+                            ) : d.completion_evidence === 'paper_ticket' ? (
+                              <Badge variant="success">Paper ticket</Badge>
+                            ) : d.signed_by ? (
                               <Badge variant="success">Signed</Badge>
                             ) : d.status === 'completed' ? (
                               <Badge variant="warning">No Sig</Badge>

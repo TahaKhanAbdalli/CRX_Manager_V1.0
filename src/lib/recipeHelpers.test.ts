@@ -100,6 +100,17 @@ describe('recipeItemToChemRowSeed', () => {
     expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), product(), 3).price_per_unit_cents).toBe('600');
   });
 
+  it('MONEY: a missing tier-2/3 price falls back to tier 1, not $0', () => {
+    const unpriced = { ...product(), tier2_price: null, tier3_price: null } as Product;
+    expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), unpriced, 2).price_per_unit_cents).toBe('800');
+    expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), unpriced, 3).price_per_unit_cents).toBe('800');
+  });
+
+  it('MONEY: a stated zero tier price stays zero, not the tier-1 price', () => {
+    const free = { ...product(), tier3_price: 0 } as Product;
+    expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), free, 3).price_per_unit_cents).toBe('0');
+  });
+
   it('tolerates a missing product (deleted/inactive) — falls back to recipe fields', () => {
     const seed = recipeItemToChemRowSeed(recipeItem(), undefined, 1);
     expect(seed.product_name).toBe('Roundup');

@@ -16,6 +16,7 @@
  */
 
 import type { BlendRecipeItem, Product } from '../types';
+import { getStatedTierPriceCents } from './quoteCalc';
 
 /** localStorage key for the per-browser "last used recipe" shortcut. */
 const LAST_RECIPE_KEY = 'crx-last-recipe-id';
@@ -78,8 +79,9 @@ export function recipeItemToChemRowSeed(
   const recipePrice = item.price_per_unit_cents ?? 0;
   let priceCents = recipePrice;
   if (priceCents <= 0 && product) {
-    const tierPrice = tier === 3 ? product.tier3_price : tier === 2 ? product.tier2_price : product.tier1_price;
-    if (tierPrice != null) priceCents = Math.round(tierPrice * 100);
+    // A missing tier-2/3 price falls back to tier 1 (never a silent $0); a stated $0 is kept.
+    const tierPriceCents = getStatedTierPriceCents(product, tier);
+    if (tierPriceCents != null) priceCents = tierPriceCents;
   }
 
   const costCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;

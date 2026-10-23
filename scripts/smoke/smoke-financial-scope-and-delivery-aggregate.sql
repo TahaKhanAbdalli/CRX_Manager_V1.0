@@ -1,6 +1,7 @@
 -- Rollback-only proof for financial customer scope and aggregate delivery stock warnings.
 DO $smoke$
 DECLARE
+  v_ticket_photo uuid;
   v_admin uuid;
   v_sales uuid;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -380,6 +381,13 @@ BEGIN
 
   UPDATE public.deliveries SET status = 'in_progress' WHERE id = v_delivery;
 
+  -- 20261022075000 (Goal 5): a completion names its saved proof; this chain uses a ticket photo.
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata)
+  VALUES ('delivery-photos', 'delivery-photos/' || v_delivery || '/smoke-ticket.jpg', v_admin::text, '{"size": 1024, "mimetype": "image/jpeg"}'::jsonb);
+  INSERT INTO public.delivery_photos (delivery_id, storage_path, image_url, uploaded_by, caption, sort_order)
+  VALUES (v_delivery, 'delivery-photos/' || v_delivery || '/smoke-ticket.jpg', 'x', v_admin, 'Signed paper delivery ticket', 0)
+  RETURNING id INTO v_ticket_photo;
+
   v_result := public.complete_delivery(
     v_delivery,
     'Aggregate Smoke Receiver',
@@ -391,7 +399,9 @@ BEGIN
     NULL,
     NULL,
     v_delivery_key,
-    v_completed_at
+    v_completed_at,
+    'paper_ticket',
+    v_ticket_photo::text
   );
 
   IF COALESCE((v_result->>'stock_warning')::boolean, false) IS DISTINCT FROM true
@@ -461,7 +471,9 @@ BEGIN
     NULL,
     NULL,
     v_delivery_key,
-    v_completed_at
+    v_completed_at,
+    'paper_ticket',
+    v_ticket_photo::text
   );
 
   IF v_replay IS DISTINCT FROM v_result THEN

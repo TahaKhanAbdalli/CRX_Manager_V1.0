@@ -119,7 +119,7 @@ describe('Compliance field listing past the 1,000-row server cap', () => {
     fireEvent.click(screen.getByRole('button', { name: /Applicator Licenses/ }));
     fireEvent.click(screen.getByRole('button', { name: /Field Listing/ }));
 
-    expect(await screen.findByText('Fields could not be loaded. Reload to try again.')).toBeInTheDocument();
+    expect(await screen.findByText('Fields could not be loaded')).toBeInTheDocument();
     expect(screen.queryByText('Total Fields')).not.toBeInTheDocument();
     expect(screen.queryByText('Total Acres')).not.toBeInTheDocument();
     expect(screen.queryByTestId('table-rows')).not.toBeInTheDocument();

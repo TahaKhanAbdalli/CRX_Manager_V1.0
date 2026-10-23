@@ -24,13 +24,14 @@ import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
-import { RECEIPT_NO_EMAIL_MESSAGE, RECEIPT_NOT_SENT_MESSAGE } from '../lib/deliveryCompletionEmail';
+import { RECEIPT_NO_EMAIL_MESSAGE, RECEIPT_NO_EMAIL_ON_FILE_MESSAGE, RECEIPT_NOT_SENT_MESSAGE } from '../lib/deliveryCompletionEmail';
+import { COMPLETED_BY_EARLIER_ATTEMPT_MESSAGE, fetchReceiptRecipient, fetchReceiptRecipientWithin, INVALID_SIGNATURE_MESSAGE, isNetworkFailure, isSignatureDataUrl, isSignatureImageMissing, latestEvidencePhoto, reconcileFailedCompletion, signatureDigest, signatureImagePathFor, storedNoProofReason, uploadSignatureImage } from '../lib/deliveryEvidence';
 import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
-import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt, completedAtForKey } from '../lib/paperTicket';
+import { countOrdinaryPhotos, countPaperTicketPhotos, hasPaperTicketPhoto, MAX_ORDINARY_DELIVERY_PHOTOS, MAX_PAPER_TICKET_PHOTOS, PAPER_TICKET_PHOTO_CAPTION, isValidPaperDeliveredOn, paperDeliveredAt, completedAtForKey, isValidNoProofReason, NO_PROOF_REASON_MAX_CHARS, NO_PROOF_REASON_MIN_CHARS, NO_PROOF_SIGNER, noProofReasonLength } from '../lib/paperTicket';
 import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
@@ -49,7 +50,7 @@ import { deliveryPhotoPath } from '../lib/privatePhotos';
 import { ORDER_ITEM_COLUMNS } from '../lib/costFields';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
-  Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
+  Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType, DeliveryCompletionEvidence, ReceiptRecipient,
   LinkedEntityType,
 } from '../types';
 
@@ -127,7 +128,12 @@ export default function DeliveryDetail() {
 
   // Signature signed URL (generated on demand for privacy)
   const [signedSignatureUrl, setSignedSignatureUrl] = useState<string | null>(null);
+  // The signed URL could not be made: only then (or when the image fails to load) say it cannot be shown.
+  const [signatureUrlFailed, setSignatureUrlFailed] = useState(false);
   const signatureRouteIdRef = useRef(id);
+  // Every photo-list read and local add takes a number; only the newest read may replace the list,
+  // so a slow older read can never drop a photo added (or keep one removed) after it started.
+  const photoSeqRef = useRef(0);
 
   // This route reuses the same component instance. Retire the previous delivery's
   // private signature before paint, and make every async URL response prove it
@@ -135,6 +141,7 @@ export default function DeliveryDetail() {
   useLayoutEffect(() => {
     signatureRouteIdRef.current = id;
     setSignedSignatureUrl(null);
+    setSignatureUrlFailed(false);
   }, [id]);
 
   // Driver completion state
@@ -143,7 +150,12 @@ export default function DeliveryDetail() {
   // Goal 5 paper fallback: a photo of the signed paper ticket replaces the on-screen signature.
   const [usePaperTicket, setUsePaperTicket] = useState(false);
   const [paperDeliveredOn, setPaperDeliveredOn] = useState(todayInBusinessTz());
+  // Admin-only "Record without proof" (office layout): a written reason replaces the customer's proof.
+  const [useNoProof, setUseNoProof] = useState(false);
+  const [noProofReason, setNoProofReason] = useState('');
   const [completing, setCompleting] = useState(false);
+  // Claimed synchronously at the start of a completion, so a second tap never starts a second attempt.
+  const completeClaimRef = useRef(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
@@ -151,6 +163,8 @@ export default function DeliveryDetail() {
   const [driverIssueNotes, setDriverIssueNotes] = useState('');
   const [autoInvoiceId, setAutoInvoiceId] = useState<string | null>(null);
   const [emailOnComplete, setEmailOnComplete] = useState(true);
+  // The receipt address when the customer row is hidden from this user (an assigned driver; see fetchReceiptRecipient).
+  const [receiptRecipient, setReceiptRecipient] = useState<ReceiptRecipient | null>(null);
   const isOnline = useOnlineStatus();
 
   // Edit mode state
@@ -204,6 +218,8 @@ export default function DeliveryDetail() {
     setDriverIssueNotes('');
     setCompleteConfirmOpen(false);
     setUsePaperTicket(false);
+    setUseNoProof(false);
+    setNoProofReason('');
     setPaperDeliveredOn(todayInBusinessTz());
     setPhotos([]);
   }, [id]);
@@ -262,6 +278,12 @@ export default function DeliveryDetail() {
   const canVoid = isAdmin && delivery?.status === 'completed';
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
+  const receiptEmail = customer?.email || receiptRecipient?.email || null;
+  // What complete_delivery checks before it completes (migration 20261022075000).
+  // no_proof is offered only to an admin on the office layout (the server refuses anyone else).
+  const completionEvidence: DeliveryCompletionEvidence = isAdmin && useNoProof ? 'no_proof' : usePaperTicket ? 'paper_ticket' : 'signature';
+  // A delivery recorded without proof is signed with the fixed office text, never a customer's name.
+  const completionSignedBy = completionEvidence === 'no_proof' ? NO_PROOF_SIGNER : signedBy;
   // Mirrors the server's per-delivery coverage guard (U2 #34).
   const hasActiveRelatedInvoice = delivery != null && relatedInvoices.some((invoice) =>
     activeInvoiceCoversDelivery(invoice, delivery.id, delivery.order_id)
@@ -304,6 +326,7 @@ export default function DeliveryDetail() {
       const del = delData as Delivery;
       setDelivery(del);
 
+      const photoSeq = ++photoSeqRef.current;
       try {
         const [custRes, itemsRes, addrRes, driverRes, photosRes] = await Promise.all([
           supabase.from('customers').select('*').eq('id', del.customer_id).maybeSingle(),
@@ -328,6 +351,11 @@ export default function DeliveryDetail() {
         }
 
         setCustomer(custRes.data as Customer | null);
+        setReceiptRecipient(null);
+        // Only an open delivery sends a receipt on completion.
+        if (!custRes.data && (del.status === 'scheduled' || del.status === 'in_progress')) {
+          void fetchReceiptRecipient(del.id).then((recipient) => { if (!isStale()) setReceiptRecipient(recipient); });
+        }
         const loadedItems = (itemsRes.data || []) as unknown as DeliveryItem[];
         setItems(loadedItems);
         const initQtys: Record<string, number> = {};
@@ -335,7 +363,7 @@ export default function DeliveryDetail() {
         setDeliveryQtys(initQtys);
         setAddress(addrRes.data as CustomerAddress | null);
         setDriver(driverRes.data as Profile | null);
-        setPhotos((photosRes.data || []) as DeliveryPhoto[]);
+        if (photoSeq === photoSeqRef.current) setPhotos((photosRes.data || []) as DeliveryPhoto[]);
 
         // Fetch order item context for items display
         if (del.order_id) {
@@ -462,11 +490,17 @@ export default function DeliveryDetail() {
 
           // Generate signed URL for signature (privacy: no permanent public URLs)
           if (del.signature_url) {
-            const { data: signedData } = await supabase.storage
+            const { data: signedData, error: signedErr } = await supabase.storage
               .from('delivery-signatures')
               .createSignedUrl(del.signature_url, 3600); // 1 hour expiry
-            if (signatureRouteIdRef.current === id && signedData?.signedUrl) {
-              setSignedSignatureUrl(signedData.signedUrl);
+            if (signatureRouteIdRef.current === id) {
+              if (signedData?.signedUrl) {
+                setSignedSignatureUrl(signedData.signedUrl);
+                setSignatureUrlFailed(false);
+              } else {
+                if (signedErr) Sentry.captureException(signedErr, { level: 'warning', extra: { context: 'Signed URL for delivery signature', deliveryId: del.id } });
+                setSignatureUrlFailed(true);
+              }
             }
           }
         }
@@ -546,7 +580,7 @@ export default function DeliveryDetail() {
   const isPartialDelivery = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) < item.quantity);
   // Everything the driver can still edit while the signal check runs. Compared after the check so
   // an edit made during it is never silently dropped in favour of the values captured at confirm.
-  const completionInputs = JSON.stringify([signedBy, deliveryQtys, driverIssueType, driverIssueNotes, usePaperTicket, paperDeliveredOn, signatureDataUrl, emailOnComplete]);
+  const completionInputs = JSON.stringify([signedBy, deliveryQtys, driverIssueType, driverIssueNotes, usePaperTicket, paperDeliveredOn, signatureDataUrl, emailOnComplete, completionEvidence, noProofReason]);
   const completionInputsRef = useLatestRef(completionInputs);
   const hasAnyQty = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) > 0);
 
@@ -901,6 +935,7 @@ export default function DeliveryDetail() {
         // refresh read below succeeding.
         const inserted = (photoResult.data || []) as DeliveryPhoto[];
         if (signatureRouteIdRef.current === id) {
+          photoSeqRef.current++; // an older in-flight read must not replace the list without this photo
           setPhotos((prev) => [...prev, ...inserted.filter((row) => !prev.some((p) => p.id === row.id))]);
         }
 
@@ -917,12 +952,13 @@ export default function DeliveryDetail() {
       // partial quantities to full, and the paper-ticket photo is taken right before
       // Complete, so a short delivery would be recorded as full.
       const uploadDeliveryId = id;
+      const photoSeq = ++photoSeqRef.current;
       const { data: refreshedPhotos, error: photosErr } = await supabase
         .from('delivery_photos').select('*').eq('delivery_id', uploadDeliveryId!).order('sort_order');
       if (photosErr) {
         Sentry.captureException(photosErr, { extra: { context: 'Refresh delivery photos after upload' } });
         toast('error', 'Photo saved, but the photo list could not refresh. Reopen the delivery to see it.');
-      } else if (signatureRouteIdRef.current === uploadDeliveryId) {
+      } else if (signatureRouteIdRef.current === uploadDeliveryId && photoSeq === photoSeqRef.current) {
         setPhotos((refreshedPhotos || []) as DeliveryPhoto[]);
       }
     }
@@ -993,13 +1029,33 @@ export default function DeliveryDetail() {
       toast('error', 'This delivery is still loading. Please try again in a moment.');
       return;
     }
-    if (!signedBy.trim()) {
+    if (completionEvidence !== 'no_proof' && !signedBy.trim()) {
       toast('error', 'Please enter a signature name');
       return;
     }
     if (!delivery || !profile) return;
     if (!hasAnyQty) {
       toast('error', 'At least one item must have a quantity greater than 0');
+      return;
+    }
+    if (completionEvidence === 'no_proof') {
+      if (!isValidNoProofReason(noProofReason)) {
+        toast('error', `Write why there is no proof (${NO_PROOF_REASON_MIN_CHARS} to ${NO_PROOF_REASON_MAX_CHARS} characters)`);
+        return;
+      }
+      if (!isValidPaperDeliveredOn(paperDeliveredOn)) {
+        toast('error', 'Enter the delivery date (today or earlier)');
+        return;
+      }
+      setCompleteConfirmOpen(true);
+      return;
+    }
+    if (completionEvidence === 'signature' && !signatureDataUrl) {
+      toast('error', 'Have the customer sign on screen, or tick the paper ticket box and photograph the signed ticket');
+      return;
+    }
+    if (completionEvidence === 'signature' && !isSignatureDataUrl(signatureDataUrl)) {
+      toast('error', INVALID_SIGNATURE_MESSAGE);
       return;
     }
     if (usePaperTicket && !hasPaperTicketPhoto(photos)) {
@@ -1014,26 +1070,60 @@ export default function DeliveryDetail() {
   };
 
   const handleComplete = async () => {
+    if (completeClaimRef.current) return;
+    completeClaimRef.current = true;
+    try {
+      await runComplete();
+    } catch (error: unknown) {
+      // Only a follow-up after a confirmed completion can land here (the call itself is handled).
+      Sentry.captureException(error, { level: 'warning', extra: { context: 'Delivery completion follow-up failed after the delivery completed' } });
+    } finally {
+      completeClaimRef.current = false;
+      setCompleting(false);
+    }
+  };
+
+  const runComplete = async () => {
     if (!delivery || !profile) return;
     setCompleteConfirmOpen(false);
     if (!completionStateMatchesRoute()) {
       toast('error', 'This delivery is still loading. Please try again in a moment.');
       return;
     }
+    // The submitted mode decides every follow-up below (never a checkbox read later).
+    const submittedEvidence = completionEvidence;
+    const usePaperTicket = submittedEvidence === 'paper_ticket';
+    // A paper ticket and a no-proof record both carry the day it was really delivered (back-datable).
+    const usesDeliveredOn = usePaperTicket || submittedEvidence === 'no_proof';
+    if (submittedEvidence === 'signature' && !isSignatureDataUrl(signatureDataUrl)) {
+      toast('error', INVALID_SIGNATURE_MESSAGE);
+      return;
+    }
+    if (submittedEvidence === 'no_proof' && !isValidNoProofReason(noProofReason)) {
+      toast('error', `Write why there is no proof (${NO_PROOF_REASON_MIN_CHARS} to ${NO_PROOF_REASON_MAX_CHARS} characters)`);
+      return;
+    }
     setCompleting(true);
+    const deliveryId = id!;
 
     const quantitiesJson = isPartialDelivery
       ? Object.fromEntries(items.map((item) => [item.id, deliveryQtys[item.id] ?? item.quantity]))
       : null;
 
+    const ticketPhoto = usePaperTicket ? latestEvidencePhoto(photos, PAPER_TICKET_PHOTO_CAPTION) : undefined;
     const intentParams = {
-      p_delivery_id: id!,
-      p_signed_by: signedBy,
+      p_delivery_id: deliveryId,
+      p_signed_by: completionSignedBy,
       p_performed_by: profile.id,
       ...(quantitiesJson ? { p_quantities: quantitiesJson } : {}),
       ...(driverIssueType !== 'none' ? { p_issue_type: driverIssueType } : {}),
       ...(driverIssueNotes.trim() ? { p_issue_notes: driverIssueNotes.trim() } : {}),
-      ...(usePaperTicket && paperDeliveredAt(paperDeliveredOn) ? { p_completed_at: paperDeliveredAt(paperDeliveredOn) } : {}),
+      ...(usesDeliveredOn && paperDeliveredAt(paperDeliveredOn) ? { p_completed_at: paperDeliveredAt(paperDeliveredOn) } : {}),
+      p_evidence: submittedEvidence,
+      // The exact ticket photo the screen shows as saved (the signature's reference comes from the key).
+      ...(ticketPhoto ? { p_evidence_ref: ticketPhoto.id } : {}),
+      // no_proof: the reason exactly as typed (the server collapses whitespace; an exact retry resends it).
+      ...(submittedEvidence === 'no_proof' ? { p_evidence_ref: noProofReason } : {}),
     };
     // check_idempotency replays a saved result by key and operation only, so bind the
     // key to this exact payload: an edited retry (signer, quantities, issue, ticket date)
@@ -1047,9 +1137,13 @@ export default function DeliveryDetail() {
     const completeScope = `complete:${await digestIntentPayload({
       ...intentParams,
       p_completed_at: undefined,
-      delivered_on: usePaperTicket ? paperDeliveredOn : null,
+      delivered_on: usesDeliveredOn ? paperDeliveredOn : null,
+      // A re-drawn signature is a new attempt: new key, new signature file.
+      signature_digest: submittedEvidence === 'signature' && signatureDataUrl ? await signatureDigest(signatureDataUrl) : null,
     })}`;
     const idemKey = completeIdem.getKeyFor(completeScope);
+    // The server accepts only the image at the path it derives from this key; a retry of the key reuses it.
+    const signaturePath = submittedEvidence === 'signature' ? await signatureImagePathFor(deliveryId, idemKey) : undefined;
     const rpcParams: {
       p_delivery_id: string;
       p_signed_by: string;
@@ -1059,89 +1153,89 @@ export default function DeliveryDetail() {
       p_quantities?: Json;
       p_issue_type?: string;
       p_issue_notes?: string;
-    } = { ...intentParams, p_idempotency_key: idemKey };
+      p_evidence: DeliveryCompletionEvidence;
+      p_evidence_ref?: string;
+    } = { ...intentParams, ...(signaturePath ? { p_evidence_ref: signaturePath } : {}), p_idempotency_key: idemKey };
 
     // Goal 5: completing a delivery needs a signal. Nothing is queued to sync later;
     // without a reachable server the delivery stays exactly as it was.
     if (!(await hasSignal())) {
       toast('error', NO_SIGNAL_MESSAGE);
-      setCompleting(false);
       return;
     }
-    // The signal check can take a few seconds; never complete a delivery the user has left.
-    if (signatureRouteIdRef.current !== id) {
-      toast('error', 'This delivery changed before it was completed. Nothing was saved; please retry.');
-      setCompleting(false);
-      return;
-    }
-    if (completionInputsRef.current !== completionInputs) {
-      toast('error', 'Details changed while checking for signal. Nothing was saved; check them and tap Complete Delivery again.');
-      setCompleting(false);
-      return;
+    // The receipt address is read while the delivery is still open (a driver may not see the customer),
+    // after the signal check and for at most a few seconds. A no-proof record sends no receipt.
+    const recipient = submittedEvidence !== 'no_proof' && emailOnComplete && !customer?.email
+      ? (receiptRecipient ?? await fetchReceiptRecipientWithin(deliveryId))
+      : null;
+    // The checks above can take a few seconds; never complete (or upload for) a delivery the user has left.
+    // These checks gate only the DISPATCH: once the call is sent, its result is always reconciled.
+    const stillSameAttempt = () => {
+      if (signatureRouteIdRef.current !== id) {
+        toast('error', 'This delivery changed before it was completed. It was not completed; please retry.');
+        return false;
+      }
+      if (completionInputsRef.current !== completionInputs) {
+        toast('error', 'Details changed while checking for signal. The delivery was not completed; check them and tap Complete Delivery again.');
+        return false;
+      }
+      return true;
+    };
+    if (!stillSameAttempt()) return;
+    // The server completes only once this attempt's signature image is saved, so it goes up first.
+    // A failed upload does not stop the call: after a lost reply the earlier attempt may already have
+    // completed the delivery (storage then refuses the re-upload). The same key replays that
+    // completion, or the server refuses SIGNATURE_IMAGE_MISSING and nothing changes.
+    let signatureUploadError: unknown = null;
+    if (signaturePath && signatureDataUrl) {
+      try {
+        await uploadSignatureImage(signaturePath, signatureDataUrl);
+      } catch (sigErr) {
+        signatureUploadError = sigErr;
+        Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { level: 'warning', extra: { context: 'Signature upload before delivery completion failed; sending the completion anyway' } });
+      }
+      if (!stillSameAttempt()) return;
     }
 
-    try {
-      // Work out the completion time now, after the signal and route checks: if midnight passed
-      // during them, a ticket dated "today" is now a past date and must carry its own timestamp.
-      const { data: completeResult, error } = await supabase.rpc('complete_delivery', {
+    // Sends this attempt exactly: the same inputs and key every time (a lost-reply replay included).
+    // Retire the payload-bound key only after a confirmed result: an empty reply keeps it, so retrying
+    // the same payload replays the server's saved receipt. A replay-binding refusal (another person's
+    // key or an unusable receipt) or SIGNATURE_IMAGE_MISSING (this key's image is not saved and never
+    // will be under it) retires it too, so the next tap is a fresh attempt.
+    const sendCompletion = async (): Promise<unknown> => {
+      // Work out the completion time on the first send, after the signal and route checks: if midnight
+      // passed during them, a date of "today" is now a past date and must carry its own timestamp.
+      const { data, error: rpcError } = await supabase.rpc('complete_delivery', {
         ...rpcParams,
         // A retry of this key resends the first send's value (completedAtForKey).
         p_completed_at: completedAtForKey(sentCompletedAt.current, idemKey, () => (
-          usePaperTicket ? paperDeliveredAt(paperDeliveredOn) : undefined)),
+          usesDeliveredOn ? paperDeliveredAt(paperDeliveredOn) : undefined)),
       });
-      if (error) throw error;
-      // Retire the payload-bound key only after a confirmed result: an empty reply
-      // keeps it, so retrying the same payload replays the server's saved receipt.
-      // A replay-binding refusal (another person's key or an unusable receipt) is retired in the catch.
-      assertRpcResult(completeResult, 'complete_delivery');
-      completeIdem.resetKeyFor(completeScope);
-
-      // Upload signature image if provided. The delivery has ALREADY completed
-      // (complete_delivery succeeded above), so a failed upload must NOT abort
-      // the success flow — track it and warn accurately instead.
-      let signatureUploadFailed = false;
-      if (signatureDataUrl && !usePaperTicket) {
-        try {
-          const base64Data = signatureDataUrl.split(',')[1];
-          const byteCharacters = atob(base64Data);
-          const byteArray = new Uint8Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) {
-            byteArray[i] = byteCharacters.charCodeAt(i);
-          }
-          const blob = new Blob([byteArray], { type: 'image/png' });
-          const filePath = `signatures/${id}.png`;
-          const { error: uploadError } = await supabase.storage
-            .from('delivery-signatures')
-            .upload(filePath, blob, { upsert: true, contentType: 'image/png' });
-          // Supabase Storage RETURNS its error (doesn't throw) — route it to the
-          // catch below so a failed signature upload can't silently complete the
-          // delivery without its signature (Field Mode F4 class).
-          if (uploadError) throw uploadError;
-          // Store the storage path (not a public URL) — signed URLs are
-          // generated on demand for privacy (signatures are PII)
-          const sigResult = await supabase
-            .from('deliveries')
-            .update({ signature_url: filePath })
-            .eq('id', id!)
-            .select();
-          checkMutationResult(sigResult, 'Update delivery signature');
-        } catch (sigErr) {
-          // complete_delivery already succeeded, so the delivery IS completed —
-          // do NOT return (that would skip the invoice/notification/refresh flow)
-          // and do NOT tell the driver to "complete it again" (the completed
-          // status makes that retry unreliable). Warn accurately and let the
-          // completion flow finish; the signature can be re-captured. (Codex P2.)
-          signatureUploadFailed = true;
-          Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Signature upload failed during delivery completion' } });
-          toast('error', 'Delivery completed, but the signature could not be saved. Re-capture it from this delivery.');
+      try {
+        if (rpcError) throw rpcError;
+        assertRpcResult(data, 'complete_delivery');
+      } catch (error: unknown) {
+        if (getIdempotencyBindingRejection(error) || isSignatureImageMissing(error)) {
+          completeIdem.resetKeyFor(completeScope);
         }
+        throw error;
       }
+      completeIdem.resetKeyFor(completeScope);
+      return data;
+    };
+    // An error toast for a delivery the user has already left names it.
+    const forThisDelivery = (message: string) => (signatureRouteIdRef.current === deliveryId ? message : `Delivery ${delivery.delivery_number}: ${message}`);
+
+    // The success path: toasts, activity, notifications and the receipt. Also run after a lost reply
+    // whose identical replay returned the saved result.
+    const finishCompleted = async (completeResult: unknown) => {
+      // The signature image went up before the call; the server recorded signature_url itself.
 
       // Show auto-invoice info if created
       const autoInvoice = completeResult as { auto_invoice?: { invoice_id?: string; invoice_number?: string } } | null;
       const invoiceNum = autoInvoice?.auto_invoice?.invoice_number;
       const invoiceId = autoInvoice?.auto_invoice?.invoice_id;
-      if (invoiceId) setAutoInvoiceId(invoiceId);
+      if (invoiceId && signatureRouteIdRef.current === deliveryId) setAutoInvoiceId(invoiceId);
 
       // U9 (#37): complete_delivery now warns-not-blocks on short stock. It
       // proceeded, flagged the ledger row for review, and notified admins.
@@ -1155,12 +1249,13 @@ export default function DeliveryDetail() {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
           : `Delivery completed. Draft invoice ${invoiceNum} created.`);
-      } else if (!signatureUploadFailed) {
-        // When the signature failed we already showed an accurate warning toast
-        // that says the delivery completed — skip the redundant success toast.
+      } else {
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
-      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${usePaperTicket ? ' (signed paper ticket photo)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
+      const proofText = submittedEvidence === 'no_proof'
+        ? ` (recorded without proof: ${await storedNoProofReason(deliveryId, noProofReason)})`
+        : usePaperTicket ? ' (signed paper ticket photo)' : ' (on-screen signature)';
+      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${proofText}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
 
       // F15: Notify about delivery remainders
       if (isPartialDelivery) {
@@ -1187,7 +1282,7 @@ export default function DeliveryDetail() {
       await notifyDeliveryCompleted(
         delivery.id,
         delivery.delivery_number,
-        customer?.farm_name || 'Unknown',
+        customer?.farm_name || recipient?.farmName || receiptRecipient?.farmName || 'Unknown',
         delivery.assigned_driver,
         delivery.order_id,
         isPartialDelivery
@@ -1196,7 +1291,12 @@ export default function DeliveryDetail() {
       // === Email customer when delivery is completed (opt-out via checkbox) ===
       // Same opt-in as an on-screen signature. The customer keeps the signed paper ticket; a
       // guaranteed email needs a server-side receipt queue (open in the Goal 5 plan).
-      if (emailOnComplete && customer?.email) {
+      const sendTo = customer?.email || recipient?.email || receiptRecipient?.email || null;
+      const sendToName = customer?.contact_name ?? recipient?.contactName ?? receiptRecipient?.contactName ?? null;
+      if (submittedEvidence === 'no_proof') {
+        // No customer confirmed this delivery, so no automatic "your delivery was completed" receipt.
+        toast('info', 'Recorded without proof. No receipt was emailed; the office can send one later with Email Confirmation.');
+      } else if (emailOnComplete && sendTo) {
         try {
           const deliveredItems = items
             .map((item) => {
@@ -1226,7 +1326,7 @@ export default function DeliveryDetail() {
           const html = buildEmailHtml(`
             <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Completed</h2>
             <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
+              Hi${sendToName ? ` ${sendToName}` : ''},
             </p>
             <p style="color:#475569;font-size:14px;line-height:1.6;">
               Your delivery <strong>${delivery.delivery_number}</strong> has been completed.
@@ -1257,7 +1357,7 @@ export default function DeliveryDetail() {
           `);
 
           await sendEmail({
-            to: customer.email,
+            to: sendTo,
             subject: `Delivery ${delivery.delivery_number} Completed — Crop RX Solutions`,
             html,
             email_type: 'delivery_completed',
@@ -1271,24 +1371,59 @@ export default function DeliveryDetail() {
           // The delivery already succeeded; say plainly that the receipt did not go out.
           toast('warning', RECEIPT_NOT_SENT_MESSAGE);
         }
-      } else if (usePaperTicket && emailOnComplete) {
-        toast('warning', RECEIPT_NO_EMAIL_MESSAGE);
+      } else if (emailOnComplete) {
+        // The receipt was wanted but no address could be read here. A visible customer with no email
+        // has none on file; otherwise the customer is hidden from this user and the lookup failed or
+        // timed out. Say so instead of skipping it silently.
+        toast('warning', customer ? RECEIPT_NO_EMAIL_ON_FILE_MESSAGE : RECEIPT_NO_EMAIL_MESSAGE);
       }
 
-      fetchDelivery();
+      if (signatureRouteIdRef.current === deliveryId) fetchDelivery();
+    };
+
+    let completeResult: unknown;
+    try {
+      completeResult = await sendCompletion();
     } catch (error: unknown) {
-      // Any replay-binding refusal (another request's or person's key, or a receipt that can never be
-      // used) retires the key; nothing ran for THIS request. Safe for a completion even if an earlier
-      // attempt committed: the next try runs fresh and the body refuses a record no longer in_progress.
-      // Reload so a completion an earlier attempt already committed shows instead of a stale form.
-      if (getIdempotencyBindingRejection(error)) {
-        completeIdem.resetKeyFor(completeScope);
-        fetchDelivery();
-      }
+      // A binding refusal or SIGNATURE_IMAGE_MISSING retired the key in sendCompletion; nothing ran for
+      // THIS request. Otherwise the key is still held: the reply may have been lost after a commit.
+      const keyHeld = !getIdempotencyBindingRejection(error) && !isSignatureImageMissing(error);
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'complete_delivery' } });
-      toast('error', sanitizeError(error));
+      // Reconcile with the server for THIS delivery. Completed with the key still held: resend the
+      // identical call, which replays the saved result, and run the normal success path.
+      const outcome = await reconcileFailedCompletion({ deliveryId, keyHeld, resend: sendCompletion, context: 'Delivery detail' });
+      if (outcome.kind === 'replayed') {
+        await finishCompleted(outcome.result);
+        return;
+      }
+      if (outcome.kind === 'completed_not_replayed') {
+        toast('error', forThisDelivery(COMPLETED_BY_EARLIER_ATTEMPT_MESSAGE));
+      } else {
+        toast('error', forThisDelivery(sanitizeError(error)));
+        // The upload had already failed for a reason other than the signal: say what it was.
+        if (isSignatureImageMissing(error) && signatureUploadError && !isNetworkFailure(signatureUploadError)) {
+          toast('error', forThisDelivery(sanitizeError(signatureUploadError)));
+        }
+      }
+      if (signatureRouteIdRef.current !== deliveryId) return;
+      // A completion that already committed must show as completed, not as a stale form. Only the
+      // status was read: a full reload would reset the edited partial quantities, which a retry would
+      // then send as full. Still open: refresh only the photos (a refused photo may be gone).
+      if (outcome.kind === 'completed_not_replayed' || outcome.kind === 'closed') {
+        await fetchDelivery();
+      } else if (outcome.kind === 'open') {
+        const photoSeq = ++photoSeqRef.current;
+        const { data: refreshedPhotos, error: photosErr } = await supabase
+          .from('delivery_photos').select('*').eq('delivery_id', deliveryId).order('sort_order');
+        if (photosErr) {
+          Sentry.captureException(photosErr, { level: 'warning', extra: { context: 'Refresh delivery photos after a failed completion', deliveryId } });
+        } else if (signatureRouteIdRef.current === deliveryId && photoSeq === photoSeqRef.current) {
+          setPhotos((refreshedPhotos || []) as DeliveryPhoto[]);
+        }
+      }
+      return;
     }
-    setCompleting(false);
+    await finishCompleted(completeResult);
   };
 
   // ── Resend Delivery Confirmation Email ──────────────────────────────────
@@ -1309,7 +1444,8 @@ export default function DeliveryDetail() {
         ).join('');
 
       // No delivery photos in the customer email (Mason, 2026-10-14).
-      const signatureNote = delivery.signed_by
+      // A delivery recorded without proof has no customer signer to show (its signer is office text).
+      const signatureNote = delivery.signed_by && delivery.completion_evidence !== 'no_proof'
         ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${delivery.signed_by}</strong></p>`
         : '';
 
@@ -1446,9 +1582,9 @@ export default function DeliveryDetail() {
       onClose={() => setCompleteConfirmOpen(false)}
       onConfirm={handleComplete}
       title="Complete Delivery"
-      message={isPartialDelivery
+      message={`${completionEvidence === 'no_proof' ? 'Record this delivery as completed WITHOUT customer proof? Your name and reason are saved with it. ' : ''}${isPartialDelivery
         ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
-        : 'Complete this delivery? This will update inventory and cannot be undone.'}
+        : 'Complete this delivery? This will update inventory and cannot be undone.'}`}
       confirmLabel="Complete Delivery"
       variant="warning"
       loading={completing}
@@ -1627,23 +1763,9 @@ export default function DeliveryDetail() {
             </div>
           </div>
 
-          {/* Signature display (completed deliveries) */}
-          {delivery.status === 'completed' && delivery.signature_url && signedSignatureUrl && (
-            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-              <h3 className="text-white font-semibold mb-3">Signature</h3>
-              <div className="flex items-start gap-4">
-                <img
-                  src={signedSignatureUrl}
-                  alt="Customer signature"
-                  className="border border-gray-600 rounded-lg max-w-xs bg-white"
-                />
-                <div className="text-sm text-gray-400">
-                  <p>Signed by: <span className="font-medium text-white">{delivery.signed_by || '-'}</span></p>
-                  {delivery.completed_at && <p>Completed: {new Date(delivery.completed_at).toLocaleString()}</p>}
-                </div>
-              </div>
-            </div>
-          )}
+          {/* How the completion was confirmed: signature, photo proof, or recorded without proof */}
+          <CompletionProofCards key={`${delivery.id}:${signedSignatureUrl ?? ''}`} delivery={delivery} signedSignatureUrl={signedSignatureUrl} signatureUrlFailed={signatureUrlFailed} dark />
+
 
           {/* Photo upload (driver) */}
           {canUploadPhoto && (
@@ -1820,7 +1942,7 @@ export default function DeliveryDetail() {
                   </div>
                 </>
               )}
-              {customer?.email && (
+              {receiptEmail && (
                 <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                   <input
                     type="checkbox"
@@ -2396,23 +2518,8 @@ export default function DeliveryDetail() {
         </Card>
       )}
 
-      {/* Signature display for completed deliveries */}
-      {delivery.status === 'completed' && delivery.signature_url && signedSignatureUrl && (
-        <Card>
-          <h3 className="text-lg font-semibold font-heading text-nav-dark mb-3">Signature</h3>
-          <div className="flex items-start gap-4">
-            <img
-              src={signedSignatureUrl}
-              alt="Customer signature"
-              className="border border-gray-200 rounded-lg max-w-xs"
-            />
-            <div className="text-sm text-secondary">
-              <p>Signed by: <span className="font-medium text-nav-dark">{delivery.signed_by || '-'}</span></p>
-              {delivery.completed_at && <p>Completed: {new Date(delivery.completed_at).toLocaleString()}</p>}
-            </div>
-          </div>
-        </Card>
-      )}
+      {/* How the completion was confirmed: signature, photo proof, or recorded without proof */}
+      <CompletionProofCards key={`${delivery.id}:${signedSignatureUrl ?? ''}`} delivery={delivery} signedSignatureUrl={signedSignatureUrl} signatureUrlFailed={signatureUrlFailed} dark={false} />
 
       {/* Inventory Warning */}
       {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
@@ -2545,9 +2652,10 @@ export default function DeliveryDetail() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <Input
               label="Signed By"
-              value={signedBy}
+              value={completionSignedBy}
               onChange={(e) => setSignedBy(e.target.value)}
               placeholder="Customer name"
+              disabled={completionEvidence === 'no_proof'}
               required
             />
             <div>
@@ -2575,15 +2683,123 @@ export default function DeliveryDetail() {
             </div>
           )}
 
-          <div className="mb-4 border border-gray-200 rounded-lg p-3 bg-white">
-            <SignatureCanvas
-              onSignatureChange={setSignatureDataUrl}
-              label="Customer Signature (Optional)"
-              height={120}
-            />
-          </div>
+          {completionEvidence !== 'no_proof' && (
+            <div className="flex items-center gap-1 mb-3">
+              <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={usePaperTicket}
+                  onChange={(e) => {
+                    setUsePaperTicket(e.target.checked);
+                    if (e.target.checked) setSignatureDataUrl(null);
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+                />
+                Customer signed a paper ticket
+              </label>
+              <HelpTip text="Use this when the customer signed a paper delivery ticket instead of the screen. A photo of the signed ticket is required in place of the on-screen signature." className="ml-1" />
+            </div>
+          )}
 
-          {customer?.email && (
+          {isAdmin && (
+            <div className="flex items-center gap-1 mb-3">
+              <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useNoProof}
+                  onChange={(e) => {
+                    setUseNoProof(e.target.checked);
+                    if (e.target.checked) { setUsePaperTicket(false); setSignatureDataUrl(null); }
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+                />
+                Record without proof (admin only)
+              </label>
+              <HelpTip text="Only when there is no signature and no ticket photo, for example a delivery confirmed by phone. Your name, the time and your written reason are saved with the delivery. No receipt is emailed automatically." className="ml-1" />
+            </div>
+          )}
+
+          {completionEvidence === 'no_proof' ? (
+            <div className="mb-4 border border-amber-300 rounded-lg p-3 bg-amber-50 space-y-2">
+              <label htmlFor="no-proof-reason" className="flex items-center gap-2 text-sm font-medium text-amber-900">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> Why is there no proof? (required)
+              </label>
+              <textarea
+                id="no-proof-reason"
+                value={noProofReason}
+                onChange={(e) => setNoProofReason(e.target.value)}
+                rows={3}
+                maxLength={2000}
+                placeholder="For example: customer confirmed by phone on 10/21 that all items arrived"
+                aria-describedby="no-proof-reason-count"
+                className="w-full px-3 py-2 text-sm border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+              <p
+                id="no-proof-reason-count"
+                className={`text-xs ${isValidNoProofReason(noProofReason) ? 'text-secondary' : 'text-amber-800'}`}
+              >
+                {noProofReasonLength(noProofReason)} / {NO_PROOF_REASON_MAX_CHARS} characters (at least {NO_PROOF_REASON_MIN_CHARS})
+              </p>
+              <div>
+                <label htmlFor="no-proof-delivered-on" className="block text-sm font-medium text-amber-900 mb-1">Delivered on</label>
+                <input
+                  id="no-proof-delivered-on"
+                  type="date"
+                  value={paperDeliveredOn}
+                  max={todayInBusinessTz()}
+                  onChange={(e) => setPaperDeliveredOn(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+            </div>
+          ) : usePaperTicket ? (
+            <div className="mb-4 border border-gray-200 rounded-lg p-3 bg-white space-y-3">
+              <input
+                ref={paperTicketInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => handlePhotoUpload(e, PAPER_TICKET_PHOTO_CAPTION)}
+                className="hidden"
+              />
+              {hasPaperTicketPhoto(photos) ? (
+                <p className="flex items-center gap-2 text-sm text-green-700">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" /> Photo of the signed ticket saved
+                </p>
+              ) : (
+                <p className="text-sm text-amber-700">A photo of the signed paper ticket is required.</p>
+              )}
+              <div>
+                <label htmlFor="paper-delivered-on-office" className="block text-sm font-medium text-secondary mb-1">Delivered on (date on the ticket)</label>
+                <input
+                  id="paper-delivered-on-office"
+                  type="date"
+                  value={paperDeliveredOn}
+                  max={todayInBusinessTz()}
+                  onChange={(e) => setPaperDeliveredOn(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <Button
+                variant="secondary"
+                icon={<Camera className="w-4 h-4" />}
+                onClick={() => paperTicketInputRef.current?.click()}
+                disabled={uploadingPhoto || !isOnline || countPaperTicketPhotos(photos) >= MAX_PAPER_TICKET_PHOTOS}
+              >
+                {uploadingPhoto ? 'Uploading...' : 'Add Photo of Signed Ticket'}
+              </Button>
+            </div>
+          ) : (
+            <div className="mb-4 border border-gray-200 rounded-lg p-3 bg-white">
+              <SignatureCanvas
+                onSignatureChange={setSignatureDataUrl}
+                label="Customer Signature"
+                height={120}
+              />
+            </div>
+          )}
+
+          {receiptEmail && completionEvidence !== 'no_proof' && (
             <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer mb-4">
               <input
                 type="checkbox"
@@ -2901,6 +3117,99 @@ export default function DeliveryDetail() {
       />
 
       {completeConfirmModal}
+    </div>
+  );
+}
+
+const EVIDENCE_LABELS: Record<string, string> = {
+  signature: 'On-screen signature',
+  paper_ticket: 'Signed paper ticket (photo below)',
+  left_at_site: 'No one present (drop-location photo below)',
+};
+// A value this screen does not know yet (a newer server) still gets a card, with a neutral label.
+const UNKNOWN_EVIDENCE_LABEL = 'Recorded proof (type not shown here)';
+
+/**
+ * How a completed delivery was confirmed, shown on both layouts. Every evidence type gets a text
+ * card, even when the signature image cannot be loaded. The signature image appears only for a
+ * signature completion (or a legacy row from before completion_evidence existed).
+ */
+function CompletionProofCards({ delivery, signedSignatureUrl, signatureUrlFailed, dark }: {
+  delivery: Delivery;
+  signedSignatureUrl: string | null;
+  signatureUrlFailed: boolean;
+  dark: boolean;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const evidence = delivery.completion_evidence ?? null;
+  // A voided delivery recorded without proof keeps its amber card, so that record stays visible.
+  if (delivery.status !== 'completed' && !(delivery.status === 'voided' && evidence === 'no_proof')) return null;
+  const strong = dark ? 'font-medium text-white' : 'font-medium text-nav-dark';
+  const completedLine = delivery.completed_at
+    ? <p>Completed: {new Date(delivery.completed_at).toLocaleString()}</p>
+    : null;
+
+  if (evidence === 'no_proof') {
+    return (
+      <div className={dark
+        ? 'rounded-xl p-5 border border-amber-700 bg-amber-950 text-sm text-amber-200 space-y-0.5'
+        : 'rounded-xl p-5 border border-amber-300 bg-amber-50 text-sm text-amber-900 space-y-0.5'}
+      >
+        <h3 className={`flex items-center gap-2 font-semibold mb-2 ${dark ? 'text-amber-100' : 'text-lg font-heading text-amber-900'}`}>
+          <AlertTriangle className="w-5 h-5 shrink-0" /> Recorded without proof
+        </h3>
+        <p className="font-medium">Recorded by office: no customer signature or photo.</p>
+        <p>Reason: <span className="font-medium whitespace-pre-wrap break-words">{delivery.completion_evidence_ref || '-'}</span></p>
+        <p>Recorded by: <span className="font-medium">{delivery.completion_no_proof_by_name || '-'}</span></p>
+        {delivery.completion_no_proof_at && <p>Recorded at: {new Date(delivery.completion_no_proof_at).toLocaleString()}</p>}
+        {completedLine}
+      </div>
+    );
+  }
+
+  const box = dark
+    ? 'bg-gray-800 rounded-xl p-5 border border-gray-700 text-sm text-gray-400'
+    : 'bg-white rounded-xl p-5 border border-gray-200 shadow-card text-sm text-secondary';
+  const title = dark ? 'text-white font-semibold mb-3' : 'text-lg font-semibold font-heading text-nav-dark mb-3';
+
+  if (evidence && evidence !== 'signature') {
+    return (
+      <div className={`${box} space-y-0.5`}>
+        <h3 className={title}>Proof of Delivery</h3>
+        <p>Signed by: <span className={strong}>{delivery.signed_by || '-'}</span></p>
+        <p>Confirmed by: <span className={strong}>{EVIDENCE_LABELS[evidence] ?? UNKNOWN_EVIDENCE_LABEL}</span></p>
+        {completedLine}
+      </div>
+    );
+  }
+
+  // signature, or a legacy completion (NULL evidence) that has a signature on file.
+  if (evidence !== 'signature' && !delivery.signature_url) return null;
+  const showImage = !!signedSignatureUrl && !imageFailed;
+  // Say it cannot be shown only once that is known: no file on record, the link failed, or the image failed.
+  const imageUnavailable = imageFailed || signatureUrlFailed || !delivery.signature_url;
+  return (
+    <div className={box}>
+      <h3 className={title}>Signature</h3>
+      <div className="flex items-start gap-4 flex-wrap">
+        {showImage ? (
+          <img
+            src={signedSignatureUrl}
+            alt="Customer signature"
+            onError={() => setImageFailed(true)}
+            className={dark ? 'border border-gray-600 rounded-lg max-w-xs bg-white' : 'border border-gray-200 rounded-lg max-w-xs'}
+          />
+        ) : imageUnavailable ? (
+          <p className={dark ? 'text-amber-300' : 'text-amber-700'}>The signature image could not be shown here.</p>
+        ) : (
+          <p role="status" className={dark ? 'text-gray-400' : 'text-secondary'}>Loading signature...</p>
+        )}
+        <div className="space-y-0.5">
+          <p>Signed by: <span className={strong}>{delivery.signed_by || '-'}</span></p>
+          {evidence && <p>Confirmed by: <span className={strong}>{EVIDENCE_LABELS[evidence]}</span></p>}
+          {completedLine}
+        </div>
+      </div>
     </div>
   );
 }
