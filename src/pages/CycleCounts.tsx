@@ -1256,8 +1256,9 @@ export default function CycleCounts() {
               </div>
             )}
 
-            {/* Summary: hidden after a failed line read, where every count would read 0 */}
-            {!itemsFailed && (
+            {/* Summary: hidden after a failed line read (every count would read 0) and while lines
+                load (it would still show the previously opened count's totals) */}
+            {!itemsFailed && !loadingItems && (
             <div className="flex items-center gap-6 text-sm bg-gray-50 rounded-lg p-3">
               <div>
                 <span className="text-gray-500">Products:</span>{' '}

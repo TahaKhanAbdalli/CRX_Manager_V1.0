@@ -239,6 +239,7 @@ describe('Inventory', () => {
     expect(screen.queryByText('No inventory records')).not.toBeInTheDocument();
     expect(screen.queryByText('Total on Floor')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Export CSV/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Add Inventory/ })).toBeDisabled();
 
     H.failing.delete('get_inventory_position');
     H.functions.get_inventory_position = [position];

@@ -1468,7 +1468,7 @@ export default function InventoryPage() {
             <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary" disabled={inventoryFailed}>
               Create Hold
             </Button>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal} disabled={inventoryFailed}>
               Add Inventory
             </Button>
           </>
