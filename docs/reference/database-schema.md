@@ -404,9 +404,9 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | unit_conversions | All authenticated | Admin | Admin | - |
 | invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |
 | invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep | Admin | Admin |
-| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
-| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| allocation_sets | Admin / Sales Rep | - (RPC-only; no API write grant, `20261022040000`) | - (RPC-only) | - (RPC-only) |
+| order_line_allocations | Admin / Sales Rep | - (RPC-only; no API write grant, `20261022040000`) | - (RPC-only) | - (RPC-only) |
+| invoice_line_allocations | Admin / Sales Rep | - (RPC-only; no API write grant, `20261022040000`) | - (RPC-only) | - (RPC-only) |
 | prepay_credits | Admin / Sales Rep | Admin | Admin | Admin |
 | prepay_applications | Admin / Sales Rep | Admin | - | - (no DELETE policy) |
 | financial_audit_log | Admin | Admin / own actor_user_id | - | - |

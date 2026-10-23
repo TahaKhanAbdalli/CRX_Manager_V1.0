@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-22 — Sales reps keep reading every customer's payment allocations
+
+**Decision (Mason, in chat, 2026-10-22: "Reps can see all payments").** The SELECT side of `allocation_sets`, `invoice_line_allocations` and `order_line_allocations` stays as it is: any active admin or sales rep reads every customer's payment allocations (amounts, which invoices a payment covered), through the unchanged `*_select` policies `(is_admin() OR is_sales_rep())`. Migration `20261022040000` (PR #1026, row 970) removes only direct writes.
+**Why.** It matches the decision that reps work any customer (2026-10-09, PRs #907 and #913). The live hole was reps WRITING fake allocations, not reading real ones.
+**What this forbids/implies:** do not narrow these three SELECT policies to the rep's own customers without a new decision from Mason. Writes stay RPC-only (`src/__tests__/paymentAllocationWriteLock.test.ts`).
+
 ## 2026-10-22 — Mason can skip CodeRabbit on one named PR (`skip coderabbit #<PR>`); forgery risk accepted
 
 **Decision (Mason, in chat, 2026-10-22).** "allow me to tell the session to skip coderabbit even if it is money and the
