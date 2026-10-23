@@ -5,6 +5,7 @@ import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, Ch
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
@@ -15,7 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { QUOTE_COLUMNS } from '../lib/costFields';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
@@ -46,6 +47,8 @@ export default function Quotes() {
   const location = useLocation();
   const [quotes, setQuotes] = useState<QuoteRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last list read failed: no rows, so it never reads as "No quotes yet".
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   const [plannedFilter, setPlannedFilter] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -85,21 +88,34 @@ export default function Quotes() {
   const [rolloverRows, setRolloverRows] = useState<BookingRolloverRow[]>([]);
   const [rolloverLoading, setRolloverLoading] = useState(false);
   const [rolloverLoaded, setRolloverLoaded] = useState(false);
+  // The last rollover read failed: "No open bookings." would read as nothing outstanding.
+  const [rolloverFailed, setRolloverFailed] = useState(false);
 
+  // Only the newest rollover read may set the rows: a slower, older one (the panel
+  // closed and reopened while it ran) must not overwrite them (Luna round 1).
+  const rolloverSeq = useRef(0);
   const loadRollover = useCallback(async () => {
+    const seq = ++rolloverSeq.current;
     setRolloverLoading(true);
+    setRolloverFailed(false);
     try {
       const { data, error } = await supabase.rpc('get_open_booking_rollover', { p_customer_id: undefined, p_season: undefined });
+      if (seq !== rolloverSeq.current) return;
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; bookings: BookingRolloverRow[] }>(data, 'get_open_booking_rollover');
-      setRolloverRows(result.bookings || []);
+      // The function always answers with a list; none at all is a failed read.
+      if (!Array.isArray(result.bookings)) throw new Error('get_open_booking_rollover returned no bookings list');
+      setRolloverRows(result.bookings);
       setRolloverLoaded(true);
     } catch (err) {
+      if (seq !== rolloverSeq.current) return;
+      setRolloverRows([]);
+      setRolloverFailed(true);
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'get_open_booking_rollover' } });
       if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can view the booking rollover.');
       else toast('error', sanitizeError(err));
     } finally {
-      setRolloverLoading(false);
+      if (seq === rolloverSeq.current) setRolloverLoading(false);
     }
   }, [toast]);
 
@@ -265,23 +281,26 @@ export default function Quotes() {
   const fetchQuotes = useCallback(async () => {
     const seq = ++fetchSeq.current;
     // Read every page: a single request is silently cut off at the server's row cap.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('quotes')
       .select(`${QUOTE_COLUMNS}, customer:customers(farm_name)`, { count: 'exact' })
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (seq !== fetchSeq.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quotes' } });
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('quotes read returned no list'), { tags: { source: 'fetch', action: 'load_quotes' } });
       toast('error', 'Failed to load quotes. Please try again.');
+      // An older list would look current; none at all would read as "No quotes yet".
+      setQuotes([]);
+      setLoadFailed(true);
       setLoading(false);
       return;
     }
 
     // Seed rows with searchable strings; customer name is denormalized off the join.
-    const quoteList: QuoteRow[] = (data || []).map((q) => ({
+    const quoteList: QuoteRow[] = data.map((q) => ({
       ...(q as Quote),
       customer_name: (q as { customer?: { farm_name?: string } | null }).customer?.farm_name || '',
       product_names: '',
@@ -295,23 +314,24 @@ export default function Quotes() {
     if (quoteIds.length > 0) {
       // Chunked and paged: a full quote list has more ids than one URL holds and
       // more item rows than the server's row cap.
-      const { data: itemRows, error: itemErr } = await fetchAllRowsForIds(quoteIds, (idChunk, from, to) => supabase
+      // pageWithList: a page with no list reports the names as failed, not as "no products".
+      const { data: itemRows, error: itemErr } = await fetchAllRowsForIds(quoteIds, (idChunk, from, to) => pageWithList(supabase
         .from('quote_items')
         .select('id, quote_id, product_id', { count: 'exact' })
         .in('quote_id', idChunk)
         .order('id')
-        .range(from, to));
+        .range(from, to)));
       if (itemErr) {
         Sentry.captureException(itemErr, { tags: { source: 'fetch', action: 'load_quote_items' } });
         productNamesFailed = true;
       } else if (itemRows && itemRows.length > 0) {
         const productIds = [...new Set(itemRows.map((r) => r.product_id).filter(Boolean) as string[])];
-        const { data: prodRows, error: prodErr } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => supabase
+        const { data: prodRows, error: prodErr } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => pageWithList(supabase
           .from('products')
           .select('id, product_name', { count: 'exact' })
           .in('id', idChunk)
           .order('id')
-          .range(from, to));
+          .range(from, to)));
         if (prodErr) {
           Sentry.captureException(prodErr, { tags: { source: 'fetch', action: 'load_quote_products' } });
           productNamesFailed = true;
@@ -331,6 +351,7 @@ export default function Quotes() {
 
     if (seq !== fetchSeq.current) return;
     setQuotes(quoteList);
+    setLoadFailed(false);
     setLoading(false);
     if (productNamesFailed) {
       toast('error', 'Product names could not be loaded, so searching by product may miss quotes. Reload to try again.');
@@ -614,6 +635,8 @@ export default function Quotes() {
               <div className="mt-4 overflow-x-auto">
                 {rolloverLoading ? (
                   <p className="text-sm text-secondary">Loading…</p>
+                ) : rolloverFailed ? (
+                  <LoadFailedState title="The booking rollover could not be loaded" onRetry={loadRollover} />
                 ) : rolloverRows.length === 0 ? (
                   <p className="text-sm text-secondary">No open bookings.</p>
                 ) : (
@@ -676,6 +699,8 @@ export default function Quotes() {
               </Button>
             }
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => { setLoading(true); fetchQuotes(); }}
             filters={
               <div className="flex gap-2 items-center flex-wrap">
                 <select
