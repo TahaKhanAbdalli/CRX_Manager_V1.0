@@ -522,29 +522,33 @@ export default function SettingsPage() {
         if (message !== data?.error) fetchUsers();
       } else {
         // handle_new_user (migration 20261022023000) creates every new login as an inactive,
-        // login-blocked driver named 'Pending user <id>', whatever the signup metadata says, so the
-        // chosen name and role are set and the user is activated here, by an admin. The key is
-        // scoped to the new user so a lost reply for one user never replays onto the next.
+        // login-blocked driver named 'Pending user <id>', whatever the signup metadata says. The
+        // create-user function now sets the chosen name and role and activates the user in the same
+        // request (`activated: true`). Only when it did not (an older deployed function, or its
+        // activation failed) is it done here, by this admin. The key is scoped to the new user so a
+        // lost reply for one user never replays onto the next.
         let activationError: string | null = null;
-        try {
-          const { data: roleData, error: roleError } = await supabase.rpc('admin_update_profile', {
-            target_user_id: newUserId,
-            new_role: newRole,
-            new_full_name: newName,
-            new_phone: newPhone || undefined,
-            new_is_active: true,
-            p_idempotency_key: newUserRoleIdem.getKeyFor(newUserId),
-          });
-          if (roleError) {
-            activationError = /duplicate key|uq_profiles_.*full_name/i.test(String((roleError as { message?: string })?.message ?? ''))
-              ? `Another user is already named ${newName}. The new login (${newEmail}) exists but is blocked: open it, give it a different name and role, and mark it active.`
-              : sanitizeError(roleError);
-          } else {
-            const roleResult = assertRpcResult<{ error?: string }>(roleData, 'admin_update_profile');
-            if (roleResult?.error) activationError = roleResult.error;
+        if (data?.activated !== true) {
+          try {
+            const { data: roleData, error: roleError } = await supabase.rpc('admin_update_profile', {
+              target_user_id: newUserId,
+              new_role: newRole,
+              new_full_name: newName,
+              new_phone: newPhone || undefined,
+              new_is_active: true,
+              p_idempotency_key: newUserRoleIdem.getKeyFor(newUserId),
+            });
+            if (roleError) {
+              activationError = /duplicate key|uq_profiles_.*full_name/i.test(String((roleError as { message?: string })?.message ?? ''))
+                ? `Another user is already named ${newName}. The new login (${newEmail}) exists but is blocked: open it, give it a different name and role, and mark it active.`
+                : sanitizeError(roleError);
+            } else {
+              const roleResult = assertRpcResult<{ error?: string }>(roleData, 'admin_update_profile');
+              if (roleResult?.error) activationError = roleResult.error;
+            }
+          } catch (activationErr: unknown) {
+            activationError = sanitizeError(activationErr);
           }
-        } catch (activationErr: unknown) {
-          activationError = sanitizeError(activationErr);
         }
         if (activationError) {
           toast('error', activationError.startsWith('Another user')
