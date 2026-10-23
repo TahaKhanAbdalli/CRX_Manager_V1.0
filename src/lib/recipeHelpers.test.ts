@@ -111,12 +111,27 @@ describe('recipeItemToChemRowSeed', () => {
     expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), free, 3).price_per_unit_cents).toBe('0');
   });
 
+  it('MONEY: a catalog price fills a recipe line only in the product\'s stock unit, blank otherwise', () => {
+    const perGal = product({ unit_size: 'GAL', product_form: 'liquid', tier1_price: 12.8 });
+    expect(recipeItemToChemRowSeed(recipeItem({ unit: 'gal', price_per_unit_cents: 0 }), perGal, 1).price_per_unit_cents).toBe('1280');
+    // An oz line would need a rounded conversion: blank, so a price is typed.
+    expect(recipeItemToChemRowSeed(recipeItem({ unit: 'oz', price_per_unit_cents: 0 }), perGal, 1).price_per_unit_cents).toBe('');
+  });
+
+  it('MONEY: leaves the price blank when neither the recipe nor the product states one', () => {
+    const unpriced = product({ tier1_price: null, tier2_price: null, tier3_price: null });
+    expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 0 }), unpriced, 2).price_per_unit_cents).toBe('');
+    // A recipe price still overrides.
+    expect(recipeItemToChemRowSeed(recipeItem({ price_per_unit_cents: 950 }), unpriced, 2).price_per_unit_cents).toBe('950');
+  });
+
   it('tolerates a missing product (deleted/inactive) — falls back to recipe fields', () => {
     const seed = recipeItemToChemRowSeed(recipeItem(), undefined, 1);
     expect(seed.product_name).toBe('Roundup');
     expect(seed.unit).toBe('gal');
     expect(seed.cost_per_unit_cents).toBe('0');
-    expect(seed.price_per_unit_cents).toBe('0'); // no product -> no tier price available
+    // No product -> no tier price: left blank so the job's save check asks for one, never a silent $0.
+    expect(seed.price_per_unit_cents).toBe('');
     expect(seed.rate_unit).toBe('');
     expect(seed.vendor).toBe('');
   });

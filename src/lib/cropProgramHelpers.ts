@@ -17,7 +17,7 @@
 
 import type { Product } from '../types';
 import type { RecipeChemRowSeed } from './recipeHelpers';
-import { reconcileChemAutofillUnits } from './chemCalculator';
+import { autofillPriceText, reconcileChemAutofillUnits } from './chemCalculator';
 import { getStatedTierPriceCents } from './quoteCalc';
 
 /** One product line inside a crop program. Mirrors the shape written by
@@ -99,12 +99,11 @@ export function programItemToChemRowSeed(
   product: Product | undefined,
   tier: 1 | 2 | 3,
 ): RecipeChemRowSeed {
-  let priceStockCents = 0;
-  if (product) {
-    // A missing tier-2/3 price falls back to tier 1 (never a silent $0); a stated $0 is kept.
-    const tierPriceCents = getStatedTierPriceCents(product, tier);
-    if (tierPriceCents != null) priceStockCents = tierPriceCents;
-  }
+  // A missing tier-2/3 price falls back to tier 1 (never a silent $0); a stated $0 is kept. Null when
+  // the product states no price: the line's price is then left blank so the job's save check asks
+  // for one instead of billing it at $0.
+  const tierPriceCents = product ? getStatedTierPriceCents(product, tier) : null;
+  const priceStockCents = tierPriceCents ?? 0;
   const costStockCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
   const rate = typeof item.rate === 'number' && Number.isFinite(item.rate) ? item.rate : null;
   // Normalize "Dry oz" → "oz" so the reconciliation below can convert it (dry vs
@@ -136,7 +135,7 @@ export function programItemToChemRowSeed(
     rate_per_acre: rate != null ? rate.toString() : '',
     rate_unit: rateUnit,
     cost_per_unit_cents: reconciled.costPerUnitCents.toString(),
-    price_per_unit_cents: reconciled.pricePerUnitCents.toString(),
+    price_per_unit_cents: autofillPriceText(tierPriceCents, reconciled.pricePerUnitCents),
     diluent_rate: '',
     rei_hours: product?.rei_hours != null ? product.rei_hours.toString() : '',
     phi_days: product?.phi_days != null ? product.phi_days.toString() : '',

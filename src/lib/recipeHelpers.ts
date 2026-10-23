@@ -17,6 +17,7 @@
 
 import type { BlendRecipeItem, Product } from '../types';
 import { getStatedTierPriceCents } from './quoteCalc';
+import { priceTextInLineUnit } from './chemCalculator';
 
 /** localStorage key for the per-browser "last used recipe" shortcut. */
 const LAST_RECIPE_KEY = 'crx-last-recipe-id';
@@ -77,16 +78,19 @@ export function recipeItemToChemRowSeed(
   tier: 1 | 2 | 3,
 ): RecipeChemRowSeed {
   const recipePrice = item.price_per_unit_cents ?? 0;
-  let priceCents = recipePrice;
-  if (priceCents <= 0 && product) {
-    // A missing tier-2/3 price falls back to tier 1 (never a silent $0); a stated $0 is kept.
-    const tierPriceCents = getStatedTierPriceCents(product, tier);
-    if (tierPriceCents != null) priceCents = tierPriceCents;
+  // Blank when neither the recipe nor the product states a price: the job's save check then asks
+  // for one instead of billing the line at $0. A missing tier-2/3 price falls back to tier 1; a
+  // stated $0 is kept.
+  // Unit of the recipe item wins; fall back to the product's pack unit.
+  const unit = item.unit || product?.unit_size || '';
+  // The catalog price is per the product's stock unit, so it is put in the line's unit (blank when
+  // it cannot be).
+  let price = recipePrice > 0 ? recipePrice.toString() : '';
+  if (recipePrice <= 0 && product) {
+    price = priceTextInLineUnit(product.unit_size, unit, getStatedTierPriceCents(product, tier));
   }
 
   const costCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
-  // Unit of the recipe item wins; fall back to the product's pack unit.
-  const unit = item.unit || product?.unit_size || '';
   // rate_unit isn't stored on the recipe item — pull the product's default.
   const rateUnit = product?.rate_unit || '';
 
@@ -98,7 +102,7 @@ export function recipeItemToChemRowSeed(
     rate_per_acre: item.rate_per_acre != null ? item.rate_per_acre.toString() : '',
     rate_unit: rateUnit,
     cost_per_unit_cents: costCents.toString(),
-    price_per_unit_cents: priceCents.toString(),
+    price_per_unit_cents: price,
     diluent_rate: '',
     rei_hours: product?.rei_hours != null ? product.rei_hours.toString() : '',
     phi_days: product?.phi_days != null ? product.phi_days.toString() : '',

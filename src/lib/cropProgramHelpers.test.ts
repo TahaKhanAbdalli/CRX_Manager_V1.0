@@ -116,9 +116,15 @@ describe('programItemToChemRowSeed', () => {
     expect(seed.phi_days).toBe('30');
   });
 
+  it('MONEY: leaves the price blank for a product that states no price', () => {
+    const unpriced = { ...galProduct, tier1_price: null, tier2_price: null, tier3_price: null } as unknown as Product;
+    expect(programItemToChemRowSeed(item, unpriced, 2).price_per_unit_cents).toBe('');
+  });
+
   it('is safe when the product is missing (deleted/inactive) — no price/cost, keeps rate', () => {
     const seed = programItemToChemRowSeed(item, undefined, 2);
-    expect(seed.price_per_unit_cents).toBe('0');
+    // No price is known: blank, so the job's save check asks for one instead of billing $0.
+    expect(seed.price_per_unit_cents).toBe('');
     expect(seed.cost_per_unit_cents).toBe('0');
     expect(seed.rate_per_acre).toBe('32');
     expect(seed.rate_unit).toBe('oz/acre'); // program unit still applies
