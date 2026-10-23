@@ -53,6 +53,9 @@ export const RECEIPT_NOT_SENT_MESSAGE =
 export const RECEIPT_NO_EMAIL_MESSAGE =
   'Delivery completed, but no customer receipt was sent from this phone (no customer email available here). Ask the office to send it with Email Confirmation on this delivery.';
 
+// The customer record IS visible here and has no email: Email Confirmation could not send one either.
+export const RECEIPT_NO_EMAIL_ON_FILE_MESSAGE = 'No customer email on file, so no receipt was sent.';
+
 export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmailParams): Promise<boolean> {
   const { customerEmail, contactName, deliveryNumber, deliveryId, customerId, items, isPartial, signedBy, deliveredOn } = params;
   const receiptDate = deliveredOn ? parseLocalDate(deliveredOn).toLocaleDateString() : new Date().toLocaleDateString();

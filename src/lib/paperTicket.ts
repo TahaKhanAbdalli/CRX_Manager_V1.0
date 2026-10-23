@@ -7,13 +7,42 @@
  * The ticket photo is an ordinary delivery photo carrying this caption, so it is
  * stored, protected and shown exactly like every other delivery photo.
  *
- * The photo requirement is enforced by the app only, at parity with the on-screen
- * signature: complete_delivery requires no completion evidence on either path. A
- * server-enforced link is open in the Goal 5 plan (it needs a complete_delivery change).
+ * Since migration 20261022075000 the server enforces it: complete_delivery takes
+ * p_evidence and refuses a paper_ticket completion without a ticket photo on the
+ * delivery (and a signature completion without its saved image); see deliveryEvidence.ts.
  */
 import { todayInBusinessTz } from './dateUtils';
 
 export const PAPER_TICKET_PHOTO_CAPTION = 'Signed paper delivery ticket';
+// The field stop's "No one present — left at site" path needs a photo of the drop location
+// instead (left_at_site). Both captions must match complete_delivery's evidence check exactly.
+export const LEFT_AT_SITE_PHOTO_CAPTION = 'Left at site — drop location';
+const EVIDENCE_PHOTO_CAPTIONS: ReadonlySet<string> = new Set([PAPER_TICKET_PHOTO_CAPTION, LEFT_AT_SITE_PHOTO_CAPTION]);
+
+// Admin-only "Record without proof" (no_proof): there is no customer signature or photo, so the
+// "Signed by" field never names a customer. complete_delivery requires exactly this text
+// (NO_PROOF_SIGNER_MISMATCH otherwise) and a written reason of 10 to 500 characters.
+export const NO_PROOF_SIGNER = 'No proof — recorded by office';
+export const NO_PROOF_REASON_MIN_CHARS = 10;
+export const NO_PROOF_REASON_MAX_CHARS = 500;
+
+// The reason as the server stores and measures it: btrim(regexp_replace(reason, '[[:space:]]+', ' ', 'g')).
+// Every run of whitespace becomes one space, then the ends are trimmed. In the database's UTF-8 locale
+// [[:space:]] also matches Unicode spaces (e.g. U+2003, U+3000), so every Unicode White_Space
+// character collapses here too. The server counts characters (code points), not UTF-16 units, so
+// emoji count once here too.
+export function normalizeNoProofReason(reason: string): string {
+  return reason.replace(/\p{White_Space}+/gu, ' ').replace(/^ | $/g, '');
+}
+
+export function noProofReasonLength(reason: string): number {
+  return [...normalizeNoProofReason(reason)].length;
+}
+
+export function isValidNoProofReason(reason: string): boolean {
+  const length = noProofReasonLength(reason);
+  return length >= NO_PROOF_REASON_MIN_CHARS && length <= NO_PROOF_REASON_MAX_CHARS;
+}
 
 // A paper-ticket delivery is completed later, once back in signal, so the driver
 // records the day it really happened. That day becomes the delivery and invoice date.
@@ -60,12 +89,12 @@ export function completedAtForKey(
   return sent.get(key);
 }
 
-// Ticket photos do not count toward the 10-photo limit, so a delivery that already has
-// 10 ordinary photos can still be completed on the paper-ticket path.
+// Ticket and drop-location photos do not count toward the 10-photo limit, so a delivery that
+// already has 10 ordinary photos can still be completed on either photo path.
 export const MAX_ORDINARY_DELIVERY_PHOTOS = 10;
 
 export function countOrdinaryPhotos(photos: ReadonlyArray<{ caption?: string | null }>): number {
-  return photos.filter((photo) => photo.caption !== PAPER_TICKET_PHOTO_CAPTION).length;
+  return photos.filter((photo) => !photo.caption || !EVIDENCE_PHOTO_CAPTIONS.has(photo.caption)).length;
 }
 
 // Ticket photos are bounded on their own: a front and a back is enough.
@@ -77,4 +106,15 @@ export function countPaperTicketPhotos(photos: ReadonlyArray<{ caption?: string 
 
 export function hasPaperTicketPhoto(photos: ReadonlyArray<{ caption?: string | null }>): boolean {
   return photos.some((photo) => photo.caption === PAPER_TICKET_PHOTO_CAPTION);
+}
+
+// A drop-location photo is bounded the same way as a ticket photo.
+export const MAX_LEFT_AT_SITE_PHOTOS = 2;
+
+export function countLeftAtSitePhotos(photos: ReadonlyArray<{ caption?: string | null }>): number {
+  return photos.filter((photo) => photo.caption === LEFT_AT_SITE_PHOTO_CAPTION).length;
+}
+
+export function hasLeftAtSitePhoto(photos: ReadonlyArray<{ caption?: string | null }>): boolean {
+  return photos.some((photo) => photo.caption === LEFT_AT_SITE_PHOTO_CAPTION);
 }

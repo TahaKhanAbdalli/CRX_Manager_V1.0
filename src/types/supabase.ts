@@ -2600,6 +2600,11 @@ export type Database = {
           cancelled_at: string | null
           cancelled_by: string | null
           completed_at: string | null
+          completion_evidence: string | null
+          completion_evidence_ref: string | null
+          completion_no_proof_at: string | null
+          completion_no_proof_by: string | null
+          completion_no_proof_by_name: string | null
           created_at: string
           created_by: string
           customer_id: string
@@ -2632,6 +2637,11 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           completed_at?: string | null
+          completion_evidence?: string | null
+          completion_evidence_ref?: string | null
+          completion_no_proof_at?: string | null
+          completion_no_proof_by?: string | null
+          completion_no_proof_by_name?: string | null
           created_at?: string
           created_by: string
           customer_id: string
@@ -2664,6 +2674,11 @@ export type Database = {
           cancelled_at?: string | null
           cancelled_by?: string | null
           completed_at?: string | null
+          completion_evidence?: string | null
+          completion_evidence_ref?: string | null
+          completion_no_proof_at?: string | null
+          completion_no_proof_by?: string | null
+          completion_no_proof_by_name?: string | null
           created_at?: string
           created_by?: string
           customer_id?: string
@@ -12560,6 +12575,8 @@ export type Database = {
         Args: {
           p_completed_at?: string
           p_delivery_id: string
+          p_evidence?: string
+          p_evidence_ref?: string
           p_idempotency_key?: string
           p_issue_notes?: string
           p_issue_type?: string
@@ -13256,6 +13273,10 @@ export type Database = {
         Returns: Json
       }
       get_dashboard_action_items: { Args: { p_limit?: number }; Returns: Json }
+      get_delivery_receipt_recipient: {
+        Args: { p_delivery_id: string }
+        Returns: Json
+      }
       get_detailed_statement_data: {
         Args: { p_as_of_date: string; p_customer_id: string; p_mode?: string }
         Returns: Json
@@ -14997,6 +15018,8 @@ export type Database = {
         Args: {
           p_delivered_on: string
           p_delivery_id: string
+          p_evidence?: string
+          p_evidence_ref?: string
           p_idempotency_key?: string
           p_issue_notes?: string
           p_issue_type?: string

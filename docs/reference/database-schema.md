@@ -39,7 +39,7 @@
 - `purchase_order_import_intents` - RPC-owned global vendor-document claim for bulk PO imports (intent_key, purchase_order_id, first actor provenance). RLS is enabled with no authenticated direct table access; the claim cascades only when the admin-only PO delete workflow removes its PO.
 
 ## Deliveries
-- `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)
+- `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, completion_evidence (signature | paper_ticket | left_at_site | no_proof) and completion_evidence_ref (signature object path, delivery_photos id, or the no-proof reason), plus completion_no_proof_by / completion_no_proof_by_name / completion_no_proof_at (no_proof only, CHECK-enforced both ways), set only by complete_delivery and frozen once recorded (20261022075000), priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)
 - `delivery_items` - Items on delivery (order_item_id, product_id, quantity, quantity_delivered, unit_size, notes, tote_number). There is no `is_non_returnable` column here; that flag is on `receiving_records`.
 - `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
 - `delivery_remainders` - Partial delivery remainder items (original_delivery_id, order_id, order_item_id, customer_id, product_id, quantity_remaining, followup_delivery_id, status: pending/scheduled/fulfilled/cancelled)

@@ -205,19 +205,92 @@ Left open, by design or for later (reviewers on the PR, 2026-10-21):
   rows (FOR SHARE) and then `field_billing_defaults` in SHARE mode before it reads them, so no
   billing-default write can commit until the split does (the same order `save_field` writes them).
 
-## OPEN 2026-10-19 (MED) — a driver's completion receipt can be skipped when the customer row is hidden from them
+## OPEN 2026-10-19 (MED; fix pending apply of `20261022075000`, PR #1024; moves to the archive once applied) — a driver's completion receipt can be skipped when the customer row is hidden from them
 
-The customer receipt email after a delivery (including Goal 5's paper-ticket path, where it follows the
-same opt-in as an on-screen signature) is sent by the phone, and the delivery page and the field stop
-read the customer through the client. Under the current
-`customers_select` policy, an assigned driver may not see the customer of a stop whose
-`scheduled_date` is NULL or older than yesterday, so the page has no email and no receipt is sent.
-Since PR #955, on a **paper-ticket** completion the driver is told no receipt was sent from the phone
-and that the office can send it with **Email Confirmation**. A normal on-screen-signature completion
-still skips the receipt without a warning in this case (unchanged from before Goal 5). **Fix:** read the receipt recipient through an
-authorized RPC (or widen the policy for an assigned driver's open delivery); a server-side receipt
-queue would also cover it. Found by the Codex GitHub review on #955. Source:
-`src/pages/DeliveryDetail.tsx`, `src/pages/FieldStop.tsx` (receipt send after completion).
+The customer receipt email after a delivery is sent by the phone, and the delivery page and the field
+stop read the customer through the client. Under `customers_select`, an assigned driver may not see the
+customer of a stop whose `scheduled_date` is older than yesterday, so the page had no email and sent no
+receipt (on the on-screen-signature path, with no warning). Found by the Codex GitHub review on #955.
+**Fix:** the new read-only `get_delivery_receipt_recipient(p_delivery_id)` returns the customer's name and
+receipt email to an active admin or sales rep, or the delivery's active assigned driver while the delivery
+is scheduled or in progress (another driver, or a closed delivery, is refused with the same message as an
+unknown id). The delivery page (open deliveries only) and the field stop call it when the customer row is not
+visible and use its address for the receipt checkbox and the email. `customers_select` is unchanged.
+Proof: in the browser preview against a local test database, a driver completing a stop scheduled ten
+days ago (shown on the route as "Unknown customer") saw the receipt option, and the page read the
+customer's address through the new function before sending; `smoke-delivery-completion-evidence.sql`
+step h. The email itself is still sent by the phone after the completion; see the next entry.
+
+## DEFERRED 2026-10-21 (MED; Goal 5 follow-up 3) — a customer receipt that fails to send after a completion is not retried
+
+The receipt email is sent by the phone after `complete_delivery` succeeds. If signal drops between the
+two, the delivery is completed but no receipt goes out; the driver is told so
+(`RECEIPT_NOT_SENT_MESSAGE`) and the office can resend it with **Email Confirmation**. A guaranteed
+retry is not small, so it is written down here instead of built:
+
+- **Design.** A new `delivery_receipt_queue` table (delivery id unique, recipient email, status
+  `pending | sent | failed`, attempts, last error, created and sent times; RLS on, no client writes).
+  `complete_delivery` inserts the row in the same transaction as the completion when the caller asks for
+  a receipt (a new `p_send_receipt` flag, fingerprinted), reading the address on the server, so a lost
+  reply can never lose the request. A scheduled job (pg_cron every few minutes, or a Supabase scheduled
+  Edge Function) claims pending rows with `FOR UPDATE SKIP LOCKED`, builds the same receipt the phone
+  builds today (`src/lib/deliveryCompletionEmail.ts`), sends it through `send-email` with the existing
+  idempotency key `delivery-completed-<id>`, and marks it sent; after a few failed attempts it marks it
+  failed and surfaces it to the office. The phone then stops sending the receipt itself.
+- **Why deferred.** It needs a new table, a change to the completion call, server-side email rendering
+  and a new scheduled job (an Edge Function deployment, which needs Mason's approval), and its own
+  review and live test. Owner: the next Goal 5 or Goal 6 change.
+
+## OPEN 2026-10-21 (LOW; follows from `20261022075000`) — completion-evidence leftovers
+
+`20261022075000` (Goal 5 follow-up 2) makes every completion carry server-checked proof:
+`complete_delivery` and `start_and_complete_delivery` take `p_evidence` (`signature`, `paper_ticket`,
+`left_at_site`, or the admin-only `no_proof` with a 10–500 character written reason as `p_evidence_ref`)
+and `p_evidence_ref`, and refuse, changing nothing, unless that exact proof is saved (the signature image
+this attempt uploaded, or the named, correctly captioned photo in the delivery's own folder; for
+`no_proof`, an active admin and the reason, recorded with who and when); the path and reference are recorded in `deliveries.completion_evidence` and
+`completion_evidence_ref`. What it leaves:
+
+1. **Old app versions stop completing.** A phone still running the app from before this change sends no
+   `p_evidence`; an exact retry of a completion it already saved still replays, but a new completion is
+   refused with `COMPLETION_EVIDENCE_REQUIRED` ("this version of the app is out of date") until it reloads. Apply the migration
+   and merge the PR together, outside delivery hours.
+2. **Completions queued offline before Goal 5 (2026-10-19).** They carry no evidence, so
+   `process_offline_action` now refuses them and they go to Offline Work Review (`needs_review`, nothing
+   committed); the office completes them from the delivery page with a signature or a ticket photo.
+3. **Deliveries completed before the change** keep `completion_evidence` NULL.
+4. **Older proof chains** (`smoke-start-and-complete-delivery.sql`, the batch-3a, field-invoice and
+   return-credit chains) complete deliveries without evidence and now stop at
+   `COMPLETION_EVIDENCE_REQUIRED`; the new prover checks that this is their only new failure. Update them
+   to send evidence if they are reused. (The accounting-period, aggregate and offline-receipt chains were
+   updated in this change and pass.)
+5. **Not yet tried on a real phone** (Goal 5's airplane-mode check is still owed).
+6. **Signature files from abandoned attempts stay stored.** Each completion attempt uploads its
+   signature to its own path before the server call, and no rule lets anyone delete those files (so an
+   accepted one can never be replaced). A refused or abandoned attempt leaves its file behind; a
+   service-role cleanup of files no delivery references is a possible follow-up. By design, not a
+   defect (Luna round 3 LOW, refuted 2026-10-22): letting app users delete a not-yet-accepted attempt
+   file would reopen the replace-or-delete window this rule closes, the files are small (live
+   2026-10-22: smallest signature 2,356 bytes), and nothing reads an unreferenced attempt file.
+7. **Older signature rules unchanged.** The four policies for the old fixed path
+   (`signatures/<id>.png`) still let staff replace that image on deliveries completed before this change.
+   Narrowing them is an access change for a follow-up, on Mason's approval.
+8. **Photo proof is not tied to who took it.** Office staff may complete with a ticket photo a driver
+   saved, by design; the server checks the delivery, caption, folder, an image file type and a
+   minimum size (signatures: a PNG of at least 500 bytes; photos: at least 1,000 bytes).
+9. **File contents are not inspected.** The database cannot read a stored file's bytes, so the server
+   trusts the upload's recorded type and size; a deliberately crafted file of the right type and size
+   would pass. The screens only ever upload a real drawn signature or camera photo.
+10. **A file deleted in the same instant as its completion: closed in the same migration (2026-10-22).**
+   Only admins may delete a `delivery-photos` file (`delivery_photos_delete`, live read 2026-10-22), and
+   no screen or Edge Function does; but an admin's own storage call could once slip between a
+   completion's file check and its commit (Luna round 3 MED, then Sol HIGH on `12336f569`). The
+   restrictive rule's helper `_is_accepted_delivery_evidence_object` now first waits for the row lock of
+   the delivery whose folder holds the file, which every completion takes before its checks: a delete
+   during a completion waits, then sees the accepted photo and removes nothing; a delete that goes first
+   makes the completion wait, which then finds the file gone and refuses. The prover runs both orders
+   in two sessions, each failing without the lock. Still outside storage rules by design: the
+   dashboard and service-role tools.
 
 ## FIXED 2026-10-19 (migration `20261019220000` applied live 2026-10-20 02:22 UTC (9:22 PM Central, 2026-10-19), PR #964) — the Deliveries list can leave a scheduled delivery In Progress if signal drops between its two steps
 
