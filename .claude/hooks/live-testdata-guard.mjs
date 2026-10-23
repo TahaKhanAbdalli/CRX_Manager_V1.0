@@ -25,7 +25,9 @@ import { classifySql } from "./live-testdata-lib.mjs";
 
 const REAL_DATA_OK_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
-const LEADING_UTC_TIME_RE = /^\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))/;
+// The time must open the FIRST line (an optional BOM or spaces aside, no blank
+// line before it). CLOCK_SKEW_MS lets a time a few minutes ahead of this clock count.
+const LEADING_UTC_TIME_RE = /^﻿?[ \t]*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))/;
 
 function markerIsFresh(markerPath) {
   let body;

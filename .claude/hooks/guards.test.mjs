@@ -398,11 +398,16 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
   const stateDir = path.join(proj, ".claude", "session-state");
   fs.mkdirSync(stateDir, { recursive: true });
   const marker = path.join(stateDir, "REAL-DATA-OK");
-  const sql = (query) => spawnSync(process.execPath, [path.join(__dirname, "live-testdata-guard.mjs")], {
-    input: JSON.stringify({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql", tool_input: { query } }),
-    encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-  }).stdout;
+  // Every run must exit 0: an empty stdout from a crash must not pass as "allowed".
+  const sql = (query) => {
+    const res = spawnSync(process.execPath, [path.join(__dirname, "live-testdata-guard.mjs")], {
+      input: JSON.stringify({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql", tool_input: { query } }),
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    eq(res.status, 0, `live-testdata-guard exits 0 (${query.slice(0, 40)})`);
+    return res.stdout;
+  };
   ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "no marker: real insert denied (connector-prefixed tool name)");
   // The real leftover marker: no leading timestamp, freshly copied (new mtime) into a worktree.
   fs.writeFileSync(marker, "Mason OK 2026-10-19: read-only cost/margin role check\r\n");
@@ -413,6 +418,8 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
   ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker written 3 h ago is ignored even with a fresh mtime");
   fs.writeFileSync(marker, `${new Date(Date.now() + 60 * 60 * 1000).toISOString()} Mason OK\n`);
   ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker dated an hour in the future is ignored");
+  fs.writeFileSync(marker, `\n${hoursAgo(0.1)} Mason OK\n`);
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker whose first line is blank is ignored");
   fs.writeFileSync(marker, `${hoursAgo(0.1)} Mason OK: real customer fix\n`);
   eq(sql("INSERT INTO customers (name) VALUES ('Real Farm')").trim(), "", "fresh marker: real insert allowed");
   eq(sql("UPDATE customers SET phone = '555-0100' WHERE id = 1").trim(), "", "fresh marker: real update allowed");

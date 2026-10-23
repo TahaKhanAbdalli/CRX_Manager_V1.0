@@ -12,14 +12,18 @@ actions through and guards that blocked harmless ones. This change does the firs
   that real marker: before, `TRUNCATE customers`, `DROP TABLE invoices` and `DELETE FROM payments` were
   allowed; after, all three are refused and plain reads still pass. The marker now counts only when its
   first line is the UTC time it was written and that time is under 2 hours old, and it relaxes only real
-  inserts/updates, money-column updates and RPC calls. Audit-log writes, TRUNCATE, DDL/GRANT, sequence
-  changes, deletes and cancels/voids are always refused, including later in the same batch.
+  inserts/updates, money-column updates and RPC calls. The marker never unlocks audit-log writes,
+  TRUNCATE, DDL/GRANT, sequence changes, deletes or cancels/voids, including later in the same batch.
+  Unchanged and deferred: a batch containing `[E2E]` anywhere still skips the insert, update, delete and
+  cancel/void checks (Luna round 1).
 - Vercel: 36 current connector tools that change live settings had no deny entry (DNS records,
   redirects, domain verification, sandboxes that run commands, team access/SSO, toolbar comments,
-  `get_project_deletion_link`). Added to `permissions.deny`. Read-only tools are unchanged.
-- Secrets: `Read` of real `.env` files (not the `.example` files) and plain `cat`/`type`/`Get-Content`
-  of `.env`, `.env.local` and `.env.production` are now denied. Bash rules match command text only, so
-  they are a speed bump, not a boundary.
+  `get_project_deletion_link`, which only reads but hands out a link that deletes the project). Added to
+  `permissions.deny`. Other read-only tools are unchanged.
+- Secrets: `Read` of real `.env` files (not the `.example` files) and the plain `cat`, `type` and
+  `Get-Content` forms of `.env`, `.env.local` and `.env.production`, plus the `cat ./` spellings, are now
+  denied. Bash rules match command text only, so other spellings still get through: a speed bump, not a
+  boundary.
 - The migration-apply and live-data gates now carry `onFailure: "block"` (Claude Code 2.1.295+), so a
   crashed or timed-out check refuses the call instead of allowing it. `migration-apply-guard.mjs` also
   refuses an unreadable tool call.
