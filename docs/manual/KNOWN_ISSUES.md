@@ -397,7 +397,7 @@ rollback-only live smoke.
 
 **Found in passing — not replay binding.** `reverse_write_off`'s role test
 `(SELECT role … AND is_active) != 'admin'` and `mark_inventory_row_verified`'s `v_role != 'admin'`
-both evaluate to NULL for a deactivated or missing profile, and NULL lets the call through. Batch 1 closes it for `reverse_write_off` (its wrapper requires an active admin); `mark_inventory_row_verified` stays open.
+both evaluate to NULL for a deactivated or missing profile, and NULL lets the call through. Batch 1 closes it for `reverse_write_off` (its wrapper requires an active admin); migration `20261022070000` (migration-history row 974) closes it for `mark_inventory_row_verified` (active admins only, NULL-safe, and its retry-key cache is read only after that check), together with three other role reads that ignored `is_active` (`get_team_board_deliveries`, `get_yesterday_delivery_recap`, `get_ar_reminder_candidates`).
 
 **Screen side (CodeRabbit on PR #942), fixed in batch 1.** The split-check, reverse-write-off and void-payment dialogs used to mint a fresh key on every open (to stop the old cross-record replay), so reopening one after an uncertain response threw away the unresolved key. With the server binding, a retained key used for a different request is refused and then retired, so those three dialogs now keep their key across opens and an unchanged resubmit replays instead of running twice. Other screens in the 2026-09-03 F1 entry keep their existing behavior.
 
