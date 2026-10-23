@@ -897,22 +897,6 @@ export async function downloadStatementPdf(
 
 // ── Batch Statements ─────────────────────────────────────────────────────
 
-export async function generateBatchStatementsPdf(
-  statements: DetailedStatementData[],
-  options?: StatementOptions,
-) {
-  if (statements.length === 0) return null;
-
-  // Generate first statement
-  const doc = await generateStatementPdf(statements[0], options);
-
-  // Append remaining statements on new pages
-  // Note: jsPDF doesn't support easy merging, so we generate them individually
-  // and rely on the caller to handle batch (print-all or zip)
-
-  return doc;
-}
-
 export async function downloadBatchStatements(
   statements: DetailedStatementData[],
   options?: StatementOptions,
