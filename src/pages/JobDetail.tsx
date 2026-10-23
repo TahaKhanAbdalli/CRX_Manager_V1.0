@@ -3818,7 +3818,7 @@ export default function JobDetail() {
         updated[i].cost_per_unit_cents = reconciled.costPerUnitCents.toString();
         // A product that states no price blanks the line's price rather than keeping the
         // previous product's: chemRowDefects then refuses the save until a price is typed.
-        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled.pricePerUnitCents);
+        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled);
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }
