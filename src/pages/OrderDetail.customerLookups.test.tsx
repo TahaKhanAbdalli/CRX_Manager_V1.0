@@ -164,15 +164,33 @@ describe('OrderDetail customer lookups', () => {
     mockTables();
   });
 
-  it('lists active customers in the Bill Split dropdown', async () => {
+  it('searches active customers in the Bill Split picker and saves the picked one', async () => {
+    const shareOps: [string, unknown[]][][] = [];
+    mockTables({ order_shares: () => buildChain((ops) => { shareOps.push(ops); return { data: [], error: null }; }) });
     renderOrder();
-    fireEvent.click(await screen.findByRole('button', { name: /Add Split/ }));
-    const dropdown = (await screen.findByText('Select customer...')).closest('select') as HTMLSelectElement;
-    await waitFor(() => expect(within(dropdown).getByRole('option', { name: 'Active Partner Farm' })).toBeInTheDocument());
-    expect(within(dropdown).getByRole('option', { name: 'Order Farm' })).toBeInTheDocument();
-    expect(within(dropdown).queryByRole('option', { name: 'Retired Owner Farm' })).not.toBeInTheDocument();
+    const addSplit = await screen.findByRole('button', { name: /Add Split/ });
+    await waitFor(() => expect(customerCalls.some((ops) => ops.some(([m]) => m === 'in'))).toBe(true));
+    const customerReadsBefore = customerCalls.length;
+    fireEvent.click(addSplit);
+    // Opening the editor loads no customer list; the picker searches as you type.
+    await screen.findByRole('combobox', { name: 'Bill split customer' });
+    expect(customerCalls).toHaveLength(customerReadsBefore);
+    const picker = screen.getByRole('combobox', { name: 'Bill split customer' });
+    fireEvent.focus(picker);
+    fireEvent.change(picker, { target: { value: 'Farm' } });
+    const list = await screen.findByRole('listbox', { name: 'Bill split customer' });
+    expect(within(list).getByRole('option', { name: /Active Partner Farm/ })).toBeInTheDocument();
+    expect(within(list).getByRole('option', { name: /Order Farm/ })).toBeInTheDocument();
+    expect(within(list).queryByRole('option', { name: /Retired Owner Farm/ })).not.toBeInTheDocument();
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
     expect(mockCaptureException).not.toHaveBeenCalled();
+
+    fireEvent.click(within(list).getByRole('option', { name: /Active Partner Farm/ }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. 35'), { target: { value: '35' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Share' }));
+    await waitFor(() => expect(shareOps.some((ops) => ops.some(([m]) => m === 'insert'))).toBe(true));
+    const insert = shareOps.flat().find(([m]) => m === 'insert')?.[1][0];
+    expect(insert).toMatchObject({ customer_id: 'cust-2', customer_name: 'Active Partner Farm', split_percentage: 35 });
   });
 
   it('names every field owner in the projected split, including an inactive owner', async () => {
@@ -200,17 +218,21 @@ describe('OrderDetail customer lookups', () => {
     );
   });
 
-  it('reports a failed Bill Split customer load instead of opening an empty dropdown', async () => {
+  it('reports a failed Bill Split customer search instead of showing no matches', async () => {
     renderOrder();
-    const addSplit = await screen.findByRole('button', { name: /Add Split/ });
+    fireEvent.click(await screen.findByRole('button', { name: /Add Split/ }));
     mockTables({ customers: () => buildChain(() => ({ data: null, error: { code: '500', message: 'boom' } })) });
-    fireEvent.click(addSplit);
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load customers. Please try again.'));
+    const picker = screen.getByRole('combobox', { name: 'Bill split customer' });
+    fireEvent.focus(picker);
+    fireEvent.change(picker, { target: { value: 'Farm' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Customer search failed.');
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to search Customers');
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'boom' }),
-      { tags: { source: 'fetch', action: 'load_customers_for_bill_split' } },
+      { extra: { context: 'customer_search_picker' } },
     );
-    expect(screen.queryByText('Select customer...')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No matching/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Share' })).toBeDisabled();
   });
 
   it('reports a failed field-split lookup load', async () => {
@@ -242,5 +264,76 @@ describe('OrderDetail customer lookups', () => {
     }
     const badSelect = customersChain(CUSTOMERS, []) as Record<string, (...a: unknown[]) => unknown>;
     expect((await (badSelect.select('id, deleted_at') as Promise<Result>)).error).toMatchObject({ code: '42703' });
+  });
+});
+
+describe('OrderDetail add-product catalog', () => {
+  const PRODUCT = { id: 'p-9', product_name: 'Fungicide Z', tier1_price: 50, manufacturer: 'Acme' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    customerCalls = [];
+    mockRpc.mockImplementation((name: string) => Promise.resolve({ data: name === 'get_admin_cost_fields' ? {} : null, error: null }));
+  });
+
+  async function openCatalog() {
+    renderOrder();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Add Product/ }));
+  }
+
+  it('reads the whole catalog page by page', async () => {
+    const productOps: [string, unknown[]][][] = [];
+    mockTables({ products: () => buildChain((ops) => { productOps.push(ops); return { data: [PRODUCT], error: null }; }) });
+    await openCatalog();
+    expect(await screen.findByText('Fungicide Z')).toBeInTheDocument();
+    const range = productOps[0].find(([m]) => m === 'range');
+    expect(range?.[1]).toEqual([0, 999]);
+    expect(productOps[0].filter(([m]) => m === 'order').map(([, a]) => a[0])).toEqual(['product_name', 'id']);
+  });
+
+  it('an older catalog load that fails late never replaces a newer good one (Codex, #1017)', async () => {
+    // First edit-mode load: held open, then fails. Leaving and re-entering edit mode starts a
+    // second load that succeeds at once. The first one landing last must not win.
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    let productLoads = 0;
+    mockTables({
+      products: () => {
+        productLoads += 1;
+        return productLoads === 1
+          ? buildChain(() => ({ data: null, error: { message: 'catalog down' } }))
+          : buildChain(() => ({ data: [PRODUCT], error: null }));
+      },
+    });
+    // Hold the first load's inventory read so the whole first load stays in flight.
+    let rpcCalls = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_inventory_position') {
+        rpcCalls += 1;
+        if (rpcCalls === 1) return oldGate.then(() => ({ data: [], error: null }));
+      }
+      return Promise.resolve({ data: name === 'get_admin_cost_fields' ? {} : null, error: null });
+    });
+    renderOrder();
+    fireEvent.click(await screen.findByRole('button', { name: /Edit Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Edit Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Add Product/ }));
+    expect(await screen.findByText('Fungicide Z')).toBeInTheDocument();
+
+    releaseOld();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByText('Fungicide Z')).toBeInTheDocument();
+    expect(screen.queryByText(/Products could not be loaded/)).not.toBeInTheDocument();
+  });
+
+  it('a failed catalog read shows an error and offers no products', async () => {
+    mockTables({ products: () => buildChain(() => ({ data: null, error: { message: 'catalog down' } })) });
+    await openCatalog();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load products. Please refresh.'));
+    expect(await screen.findByText(/Products could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByText('Fungicide Z')).not.toBeInTheDocument();
+    expect(screen.queryByText('No products found')).not.toBeInTheDocument();
   });
 });

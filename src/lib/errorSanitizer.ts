@@ -68,6 +68,14 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Return credits are briefly paused while an accounting update finishes. Retry in a moment'],
   [/^ORDER_INVOICE_TERMINAL\b/i,
    'This order invoice is already final and cannot be changed'],
+  // create_invoice_from_order refuses an order split across fields (20261022021000): it is billed
+  // per field owner. The page offers that path once it sees the order's field allocations.
+  [/^ORDER_HAS_FIELD_SPLIT\b/,
+   "Nothing was billed. This order's lines are split across fields, so it is billed by field. Refresh the page, then choose Create Invoice again"],
+  // guard_invoice_terminal_order: an invoice made from an order must be for that order's customer
+  // (since 20261021150000 a governed field split may bill another owner; KNOWN_ISSUES.md 2026-10-22).
+  [/^INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID\b/,
+   "Nothing was billed. An invoice made from an order can only be for that order's customer, and this one would bill someone else. Ask an admin to review the order's field split"],
   // void_order refuses rather than erase money already recorded on the order's draft invoice.
   [/^ORDER_VOID_DRAFT_HAS_APPLIED_MONEY\b/,
    'Nothing was changed. This order\'s draft invoice already has a payment, prepay, write-off or credit recorded. Reverse that first, then void the order'],
@@ -89,6 +97,21 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'An existing return credit is missing its protected cost source. Void or unapply it and contact support before retrying'],
   [/^RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED\b/i,
    'This return would reverse more product cost than the related sales invoices recorded. No changes were saved; review the source invoices and earlier return credits'],
+  // Split-billed orders (20261021155000): each payer returns only what its own invoices billed.
+  [/^RETURN_QUANTITY_EXCEEDS_BILLED_SHARE\b/i,
+   'This order was split between payers. This customer can return only the quantity billed to them, less their other open returns. No changes were saved'],
+  [/^RETURN_SPLIT_SHARE_NOT_BILLED\b/i,
+   'This customer was not billed for this product on the split order, so they cannot return it. No changes were saved'],
+  [/^RETURN_CREDIT_EXCEEDS_BILLED_SHARE\b/i,
+   "This return would credit more than this customer was billed for the product on the split order. Check the customer's split invoice and earlier returns. No changes were saved"],
+  [/^RETURN_SPLIT_INVOICE_NOT_VISIBLE\b/i,
+   "This order was split between payers, and you cannot view this customer's split invoice, so you cannot start their return. Ask an admin to create it. No changes were saved"],
+  [/^RETURN_SPLIT_SHARE_REPRICED\b/i,
+   "An earlier return of this product was cancelled or rejected after this one was made, so this return's credit is out of date. Cancel this return and create it again to price it correctly. No changes were saved"],
+  [/^RETURN_SPLIT_CREDIT_UNBACKED\b/i,
+   "This return credit could not be matched to the customer's own split invoice line, so no credit was issued. Check that the split invoice is still posted"],
+  [/^RETURN_ORDER_CUSTOMER_MISMATCH\b/i,
+   'This customer was not billed on that order. Pick the order\'s customer, or a payer billed on the order\'s posted split invoice'],
   [/invoice_items_return_credit_source_item_fk/i,
    'This source invoice line is retained as return-credit accounting history and cannot be deleted or re-saved. Keep the source invoice unchanged, or permanently delete the already-voided credit memo before editing it'],
   [/duplicate key value violates unique constraint "[^"]+"/i,
@@ -242,7 +265,7 @@ export function sanitizeError(error: unknown): string {
       ? 'Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead'
       : 'Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice';
   }
-  // Reviewed-version binding (20261021200000): the saved invoice changed after the screen loaded it.
+  // Reviewed-version binding (20261022022000): the saved invoice changed after the screen loaded it.
   // The server sentence names the invoice by number and says what to do, so it is kept.
   const changedSinceLoaded = message.match(/^INVOICE_CHANGED_SINCE_LOADED:\s*(.+)$/s);
   if (changedSinceLoaded) return `Nothing was posted. ${changedSinceLoaded[1].trim()}`;

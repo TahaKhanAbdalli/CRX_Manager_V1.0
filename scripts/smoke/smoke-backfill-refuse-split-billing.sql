@@ -353,7 +353,10 @@ BEGIN
 
   BEGIN
     SELECT public.post_invoice_group(
-      v_fake_group, v_admin, 'e2e-h5-fake-group-' || v_suffix
+      v_fake_group, v_admin,
+      (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id)) FROM public.invoices i
+        WHERE i.invoice_group_id = v_fake_group AND i.deleted_at IS NULL),
+      'e2e-h5-fake-group-' || v_suffix
     ) INTO v_res;
     RAISE EXCEPTION 'SMOKE_FAIL: forged audit row bypassed private split provenance';
   EXCEPTION WHEN OTHERS THEN
@@ -584,7 +587,10 @@ BEGIN
   END IF;
 
   SELECT public.post_invoice_group(
-    v_split_group, v_admin, 'e2e-h5-governed-post-' || v_suffix
+    v_split_group, v_admin,
+    (SELECT jsonb_object_agg(i.id, public._invoice_post_version(i.id)) FROM public.invoices i
+      WHERE i.invoice_group_id = v_split_group AND i.deleted_at IS NULL),
+    'e2e-h5-governed-post-' || v_suffix
   ) INTO v_res;
   IF EXISTS (
     SELECT 1 FROM public.invoices

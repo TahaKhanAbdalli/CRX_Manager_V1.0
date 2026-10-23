@@ -1,5 +1,5 @@
 -- =====================================================================================================
--- 20261022030000_cost_columns_admin_only.sql
+-- 20261022091000_cost_columns_admin_only.sql
 --
 -- WHAT: Goal 1 part 3, step 3 -- the cost column lock on the remaining cost tables. Cost, profit and
 --   margin become unreadable and unwritable through the Data API for every API role, admins included:
@@ -53,7 +53,7 @@
 --   would fail with "permission denied" for admins and reps alike. The preflight refuses to run while a
 --   row-type function is executable by authenticated or anon, or while any view reads a cost column.
 --   The one such function, #1018's invoice_post_version(public.invoices), is dropped first: the
---   screens read the version from invoices_postable (20261022025000, a view without cost), and this
+--   screens read the version from invoices_postable (20261022090000, a view without cost), and this
 --   file refuses unless that view and its overload are in place.
 --
 -- PREFLIGHT ALSO PINS (live read 2026-10-22, before this change): which of SELECT, REFERENCES, INSERT
@@ -81,7 +81,7 @@ SET LOCAL lock_timeout = '10s';
 CREATE TEMP TABLE cost_columns_admin_only_tx ON COMMIT DROP AS
 SELECT pg_current_xact_id()::text AS transaction_id;
 
--- The invoice posting version moved to invoices_postable (20261022025000), which carries no cost column.
+-- The invoice posting version moved to invoices_postable (20261022090000), which carries no cost column.
 -- #1018's whole-row overload on public.invoices would fail for everyone once total_cost_cents is
 -- revoked, so it is dropped here, only after the view and its overload are in place (the screens read
 -- the view since that PR's deploy). Absent on a re-apply.
@@ -101,7 +101,7 @@ BEGIN
         IS DISTINCT FROM (SELECT string_agg(attname, ',' ORDER BY attname) FROM pg_attribute
                            WHERE attrelid = 'public.invoices'::regclass AND attnum > 0 AND NOT attisdropped
                              AND attname <> 'total_cost_cents') THEN
-    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: 20261022025000 (invoices_postable) is not applied, or the view drifted';
+    RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: 20261022090000 (invoices_postable) is not applied, or the view drifted';
   END IF;
   -- Both overloads carry the same reviewed body (#1018's rule over _invoice_post_version(id)).
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.invoice_post_version(public.invoices_postable)')), chr(13), ''))
@@ -114,7 +114,7 @@ BEGIN
   IF to_regprocedure('public.invoice_post_version(public.invoices)') IS NOT NULL THEN
     IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.invoice_post_version(public.invoices)')), chr(13), ''))
          IS DISTINCT FROM 'f353b5c3078efb42544ea7b76c7b16e6' THEN
-      RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: invoice_post_version(invoices) drifted from 20261021200000; re-read it before dropping';
+      RAISE EXCEPTION 'COST_LOCK_PREFLIGHT: invoice_post_version(invoices) drifted from 20261022022000; re-read it before dropping';
     END IF;
     DROP FUNCTION public.invoice_post_version(public.invoices);
   END IF;

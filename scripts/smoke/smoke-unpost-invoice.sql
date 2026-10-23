@@ -52,7 +52,7 @@ BEGIN
     VALUES ('[SMOKE] UP-RT-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, 320000, v_admin)
     RETURNING id INTO v_inv;
 
-  PERFORM post_invoice(v_inv, '[SMOKE] up-post-'||v_sfx);
+  PERFORM post_invoice(v_inv, public._invoice_post_version(v_inv), '[SMOKE] up-post-'||v_sfx);
   SELECT * INTO v_invR FROM invoices WHERE id=v_inv;
   IF v_invR.status<>'posted' THEN RAISE EXCEPTION 'SMOKE_FAIL: post_invoice did not post (%)', v_invR.status; END IF;
   IF v_invR.posted_by IS NULL OR v_invR.posted_at IS NULL THEN RAISE EXCEPTION 'SMOKE_FAIL: posted_by/at not stamped'; END IF;
@@ -97,7 +97,7 @@ BEGIN
   IF v_audit_unpost<>1 THEN RAISE EXCEPTION 'SMOKE_FAIL: idempotent replay wrote a 2nd audit row (%)', v_audit_unpost; END IF;
 
   -- Re-post works: the unposted invoice can post again (round-trip is reusable).
-  PERFORM post_invoice(v_inv, '[SMOKE] up-repost-'||v_sfx);
+  PERFORM post_invoice(v_inv, public._invoice_post_version(v_inv), '[SMOKE] up-repost-'||v_sfx);
   SELECT status INTO v_invR.status FROM invoices WHERE id=v_inv;
   IF v_invR.status<>'posted' THEN RAISE EXCEPTION 'SMOKE_FAIL: re-post after unpost failed (%)', v_invR.status; END IF;
 
@@ -105,7 +105,7 @@ BEGIN
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by)
     VALUES ('[SMOKE] UP-MONEY-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, 100000, v_admin)
     RETURNING id INTO v_inv_money;
-  PERFORM post_invoice(v_inv_money, '[SMOKE] up-money-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_money, public._invoice_post_version(v_inv_money), '[SMOKE] up-money-post-'||v_sfx);
   -- Attach money: an allocation row + a non-zero paid_amount_cents header (override the
   -- generated balance via admin_override is NOT needed — paid_amount_cents is a plain col).
   INSERT INTO allocation_sets (entity_type, entity_id, version, is_active, customer_id, total_payment_cents, total_allocated_cents)
@@ -144,7 +144,7 @@ BEGIN
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by)
     VALUES ('[SMOKE] UP-PERIOD-'||v_sfx, v_cust, 'field_application', 'draft', v_period_month + 5, 70000, v_admin)
     RETURNING id INTO v_inv_period;
-  PERFORM post_invoice(v_inv_period, '[SMOKE] up-period-post-'||v_sfx);  -- period still open here
+  PERFORM post_invoice(v_inv_period, public._invoice_post_version(v_inv_period), '[SMOKE] up-period-post-'||v_sfx);  -- period still open here
   -- Now close that month.
   INSERT INTO accounting_periods (period_start, period_end, status, closed_by, closed_at)
     VALUES (v_period_month, (v_period_month + INTERVAL '1 month - 1 day')::date, 'closed', v_admin, now());
@@ -162,7 +162,7 @@ BEGIN
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by)
     VALUES ('[SMOKE] UP-OVERDUE-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, 40000, v_admin)
     RETURNING id INTO v_inv_overdue;
-  PERFORM post_invoice(v_inv_overdue, '[SMOKE] up-od-post-'||v_sfx);
+  PERFORM post_invoice(v_inv_overdue, public._invoice_post_version(v_inv_overdue), '[SMOKE] up-od-post-'||v_sfx);
   -- posted -> overdue is an allowed transition; flip it directly (admin override not needed for overdue).
   PERFORM set_config('app.admin_override','true',true);
   UPDATE invoices SET status='overdue' WHERE id=v_inv_overdue;

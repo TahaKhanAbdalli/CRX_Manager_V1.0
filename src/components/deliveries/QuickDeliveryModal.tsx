@@ -22,7 +22,10 @@ import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import { validateInventoryPositionShape } from '../../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../products/ProductOptionPresentation';
+import { fetchAllRows } from '../../lib/pagedRead';
 import type { Product, Profile, InventoryPositionRow } from '../../types';
+
+const PRODUCTS_FAILED_MESSAGE = 'Products could not be loaded, so items cannot be added or priced. Close and reopen to try again.';
 
 interface QuickItem {
   _key: string;
@@ -70,6 +73,11 @@ export default function QuickDeliveryModal({
 
   // Products
   const [products, setProducts] = useState<Product[]>([]);
+  // The product list failed to load: items cannot be added or priced from it.
+  const [productsFailed, setProductsFailed] = useState(false);
+  // The catalog is re-read on every open; until it lands nothing may be added or priced from it.
+  const [productsLoading, setProductsLoading] = useState(false);
+  const loadSeqRef = useRef(0);
   const [showProductModal, setShowProductModal] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [items, setItems] = useState<QuickItem[]>([]);
@@ -93,19 +101,39 @@ export default function QuickDeliveryModal({
   // Fetch products and drivers on open
   useEffect(() => {
     if (!open) return;
+    // Drop the catalog from the previous open: prices may have changed since.
+    setProducts([]);
+    setProductsFailed(false);
+    setProductsLoading(true);
+    const seq = ++loadSeqRef.current;
     const fetchData = async () => {
       try {
         const [prodResult, driverResult] = await Promise.all([
-          supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
+          // Every active product, page by page: the catalog below filters this list
+          // locally and a customer change re-prices items from it, so a list cut off
+          // at the server's 1,000-row cap would hide products.
+          fetchAllRows((from, to) => supabase
+            .from('products')
+            .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
+            .eq('is_active', true)
+            .order('product_name')
+            .order('id')
+            .range(from, to)),
           // PR-07 follow-up: driver picker only uses d.id + d.full_name; safe via view.
           supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
         ]);
+        // A slower load from an earlier open must not overwrite this one.
+        if (seq !== loadSeqRef.current) return;
+        // No product list rather than an old or partial one: adding and pricing items
+        // stay blocked until the modal is reopened and the list loads.
+        setProductsFailed(Boolean(prodResult.error));
+        setProducts(prodResult.error ? [] : (prodResult.data || []) as unknown as Product[]);
+        setProductsLoading(false);
         if (prodResult.error || driverResult.error) {
           toast('error', 'Failed to load products or drivers. Please close and try again.');
           Sentry.captureException(prodResult.error || driverResult.error, { extra: { context: 'QuickDeliveryModal.fetchData' } });
           return;
         }
-        setProducts((prodResult.data || []) as Product[]);
         setDrivers((driverResult.data || []) as Profile[]);
 
         // Auto-select current user as driver if they're a driver
@@ -113,12 +141,16 @@ export default function QuickDeliveryModal({
           setSelectedDriver(profile.id);
         }
       } catch (err) {
+        if (seq !== loadSeqRef.current) return;
+        setProducts([]);
+        setProductsFailed(true);
+        setProductsLoading(false);
         toast('error', 'Failed to load products or drivers. Please close and try again.');
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.fetchData' } });
       }
     };
     fetchData();
-  }, [open, profile, toast]);
+  }, [open, profile?.id, profile?.role, toast]);
 
   // U9 (#14): stock numbers for the product picker — a SEPARATE non-blocking
   // lookup so the modal (and its tests) never wait on it. Main Warehouse only
@@ -332,6 +364,10 @@ export default function QuickDeliveryModal({
   };
 
   const handleSubmit = async () => {
+    if (productsFailed || productsLoading) {
+      toast('error', productsFailed ? PRODUCTS_FAILED_MESSAGE : 'Products are still loading.');
+      return;
+    }
     if (!selectedCustomer) {
       toast('error', 'Please select a customer');
       return;
@@ -544,10 +580,14 @@ export default function QuickDeliveryModal({
                 size="sm"
                 icon={<Plus className="w-4 h-4" />}
                 onClick={() => { setShowProductModal(true); setProductSearch(''); }}
+                disabled={productsFailed || productsLoading}
               >
                 Add Product
               </Button>
             </div>
+            {productsFailed && (
+              <p role="alert" className="mb-2 text-sm text-red-600">{PRODUCTS_FAILED_MESSAGE}</p>
+            )}
 
             {items.length === 0 ? (
               <div className="text-center py-6 border border-dashed border-gray-200 rounded-lg text-sm text-secondary">
@@ -676,7 +716,7 @@ export default function QuickDeliveryModal({
             <Button
               icon={<Zap className="w-4 h-4" />}
               onClick={() => setShowConfirm(true)}
-              disabled={!selectedCustomer || items.length === 0 || submitting}
+              disabled={!selectedCustomer || items.length === 0 || submitting || productsFailed || productsLoading}
             >
               Create Quick Delivery
             </Button>

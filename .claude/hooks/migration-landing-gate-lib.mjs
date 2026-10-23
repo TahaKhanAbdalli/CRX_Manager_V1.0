@@ -39,6 +39,7 @@ import {
   readCodeRabbitRequirement,
   collectCodexThreads,
 } from "./codex-bot-review-lib.mjs";
+import { findCodeRabbitSkip, skipPullRequestFor, skipStateDirs } from "./coderabbit-skip-lib.mjs";
 
 const PROTECTED_BRANCH_RE = /^(?:main|master|production)$/i;
 
@@ -73,6 +74,9 @@ export function evaluateLandingGate({
   runGit,
   runGh,
   listWorktrees,
+  // The Claude Code session running the apply: Mason's "skip coderabbit" waiver
+  // counts only in the session he said it in (coderabbit-skip-lib.mjs).
+  sessionId,
 } = {}) {
   const dir = String(checkoutDir || "");
   if (!dir) return refuse("the checkout the apply runs from is unknown (fail closed).");
@@ -99,14 +103,14 @@ export function evaluateLandingGate({
   const git = timed(rawGit);
   const gh = timed(rawGh);
   try {
-    return evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees });
+    return evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees, sessionId });
   } catch (error) {
     if (error instanceof OutOfTime) return refuse(OUT_OF_TIME);
     return refuse(`the check itself failed (${error?.message || error}); fail closed.`);
   }
 }
 
-function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
+function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees, sessionId }) {
   const OUT = (error) => error?.constructor?.name === "OutOfTime";
 
   const stem = path.basename(String(migName || "")).replace(/\.sql$/i, "");
@@ -152,7 +156,7 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
   let pr;
   try {
     pr = JSON.parse(gh(["pr", "view", branch, "--json",
-      "number,state,baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup"]));
+      "number,url,state,baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup"]));
   } catch (error) {
     if (OUT(error)) throw error;
     return refuse(`could not find or read the open pull request for branch "${branch}" (${error?.message || error}).`);
@@ -182,7 +186,24 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
   if (coderabbitReview.status === "unreadable" || coderabbitReview.headOid !== head.toLowerCase()) {
     return refuse(`${number}'s CodeRabbit review requirement could not be read for this exact head (fail closed) — re-run on the current head.`);
   }
+  // Mason's "skip coderabbit" in THIS session waives only the missing review
+  // (2026-10-22); the thread check below still runs.
+  let skip = null;
   if (coderabbitReview.status === "missing") {
+    // Only a waiver naming THIS pull request counts (Mason, 2026-10-22: per PR).
+    // Waivers live in the main checkout's state folder, found through git's
+    // shared folder, wherever the apply runs from (a subfolder or another
+    // worktree: Codex App P2 and the final Sol review on #1035). This gate asks
+    // its own deadline-bound git; a failed lookup finds no waiver.
+    let common = "";
+    try { common = String(git(["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(); } catch (error) { if (OUT(error)) throw error; }
+    const where = skipStateDirs([dir], () => common);
+    // A waiver covers this repository's PRs only: GH_REPO or a fork's remote can
+    // point gh at another repository whose PR numbers overlap (Codex App P2 on #1035).
+    const pullRequest = skipPullRequestFor(pr?.url, pr?.number);
+    try { skip = findCodeRabbitSkip({ dirs: where, sessionId, pullRequest, now }); } catch { skip = null; }
+  }
+  if (coderabbitReview.status === "missing" && !skip) {
     return refuse(`${number} needs a clean CodeRabbit review of its current head before its migration applies, because ${coderabbitReview.why}. Post "@coderabbitai full review" once (docs/reference/coderabbit-native-review.md), answer its threads, then re-run.`);
   }
   // CodeRabbit is advisory (2026-10-19), but its unanswered threads block the
@@ -254,5 +275,5 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
   if (!proven) {
     return refuse(`no fresh gpt-6-sol/high proof is bound to ${number}'s head ${head.slice(0, 12)} and base ${baseSha.slice(0, 12)}.`);
   }
-  return { ok: true, pullRequest: pr.number, head };
+  return { ok: true, pullRequest: pr.number, head, ...(skip ? { coderabbitSkippedBy: skip } : {}) };
 }

@@ -19,6 +19,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
@@ -48,6 +49,7 @@ export default function Vendors() {
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -79,10 +81,12 @@ export default function Vendors() {
     if (seq !== fetchSeq.current) return;
     if (error) {
       toast('error', 'Failed to load vendors');
+      setLoadError(true);
       setLoading(false);
       return;
     }
     setVendors((data || []) as Vendor[]);
+    setLoadError(false);
     setLoading(false);
   }, [toast, showInactive]);
 
@@ -288,7 +292,9 @@ export default function Vendors() {
       />
 
       <Card>
-        {!loading && vendors.length === 0 ? (
+        {!loading && loadError ? (
+          <LoadFailedState onRetry={() => void fetchVendors()} />
+        ) : !loading && vendors.length === 0 ? (
           <div className="text-center py-10 text-secondary text-sm">
             {showInactive
               ? 'No inactive vendors.'

@@ -73,7 +73,11 @@ const VENDORS = [
   { id: 'v-1', name: 'Acme Chemical', default_payment_terms: null, default_payment_terms_days: null },
 ];
 
-describe('NewVendorBill PO-overage handling', () => {
+// The 5s wait above cannot help while the whole test is still capped at Vitest's
+// 5s default. Every case here renders the full page and runs at least one save
+// through intent coordination; under CI coverage load the ordinary-overage case
+// timed out at 5000ms on PR #1017 (run 39692337251). Raise the per-test ceiling.
+describe('NewVendorBill PO-overage handling', { timeout: 30_000 }, () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.sessionStorage.clear();

@@ -3,7 +3,7 @@
  * generate-workflow-map.mjs
  *
  * Regenerates docs/app-workflow-map.html by reading the live codebase:
- *   - src/App.tsx               → page routes + roles
+ *   - src/App.tsx + src/appPages.tsx → page routes + roles
  *   - src/components/layout/Sidebar.tsx → nav links
  *   - src/**                    → navigate() calls, supabase.rpc() calls, direct .from().write() calls
  *   - docs/reference/rpc-functions.md   → full RPC catalogue
@@ -112,16 +112,22 @@ function resolveRouteWrapperToPage(name, appSrc) {
 }
 
 // ─────────────────────────────────────────────
-// 1.  Parse App.tsx → routes
+// 1.  Parse App.tsx + src/appPages.tsx → routes
 //
 //  Handles BOTH formats:
 //    JSX:    <Route path="/foo" element={<Foo />} />
 //    Object: { path: 'foo', element: <Foo ... /> }   (createBrowserRouter)
+//
+//  Signed-in pages live in the shared page list (src/appPages.tsx); App.tsx keeps
+//  the sign-in pages, the landing redirect and the dev gallery. A page entry's
+//  first line there carries `key: ... roles: [...]`, which its route lines inherit
+//  unless a route line names its own `roles`.
 // ─────────────────────────────────────────────
 function parseRoutes() {
-  const src = read('src/App.tsx');
+  const src = read('src/App.tsx') + '\n' + read('src/appPages.tsx');
   const routes = [];
   const seen = new Set();
+  let pageRoles = null;
 
   function addRoute(path, component, roles) {
     // Normalise: ensure leading slash, skip wildcard
@@ -138,9 +144,15 @@ function parseRoutes() {
   for (const line of lines) {
     // Helper: extract roles from a line
     function extractRoles(l) {
-      const rm = /allowedRoles=\{\s*(\[[^\]]+\])\s*\}/.exec(l);
-      if (!rm) return ['all'];
+      const rm = /allowedRoles=\{\s*(\[[^\]]+\])\s*\}/.exec(l) || /\broles:\s*(\[[^\]]+\])/.exec(l);
+      if (!rm) return pageRoles ?? ['all'];
       try { return JSON.parse(rm[1].replace(/'/g, '"')); } catch { return ['all']; }
+    }
+
+    // ── A page entry in src/appPages.tsx: { key: 'foo', ..., roles: [...] } ──
+    if (/^\s*key:\s*'[^']+'/.test(line)) {
+      pageRoles = extractRoles(line);
+      continue;
     }
 
     // Helper: extract the actual page component (skip wrapper components like ProtectedRoute/RouteShell)
@@ -540,6 +552,7 @@ function buildGraphData(routes, navLinks, navigateCalls, rpcCallsByFile, docRpcs
   function routeType(r) {
     if (AUTH_PATHS.has(r.path)) return 'page-auth';
     if (r.roles[0] === 'all' || r.roles.length === 0) return 'page-all';
+    if (['admin', 'sales_rep', 'applicator', 'driver'].every(role => r.roles.includes(role))) return 'page-all';
     if (r.roles.length === 1 && r.roles[0] === 'admin') return 'page-admin';
     if (r.roles.includes('admin') && !r.roles.includes('sales_rep')) return 'page-admin';
     return 'page-sales';

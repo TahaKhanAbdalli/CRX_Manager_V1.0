@@ -12,7 +12,7 @@
 >   so it does not block deliveries (still present at the 2026-08-08 check). T4's #40 RPC is **KEEP** per Mason 2026-07-16; only the
 >   `setup-blend-tickets-storage` retirement remains.
 > - **Model names in §5 are July's.** Current Codex routing (GPT-6 class since 2026-09-23, PR #796) is in `docs/reference/codex-model-tuning.md`.
-> - Everything else here is still open; `TODO.md` §1–§2 is the current tracker.
+> - Everything else here is still open; the current tracker is `docs/manual/TO_DO_LIST.md` (since 2026-10-22; it replaced `TODO.md` §1–§2).
 
 ---
 

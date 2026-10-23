@@ -1,4 +1,4 @@
--- Rollback-only live chain for 20261021200000 (Goal 3, "Post uses what was saved and reviewed").
+-- Rollback-only live chain for 20261022022000 (Goal 3, "Post uses what was saved and reviewed").
 -- It plants no rows. Every posting call below is refused before it writes anything; the
 -- full matrix (real posts, two users, a second tab, races, mutations) runs in the container
 -- prover scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs.
@@ -13,14 +13,14 @@ DECLARE
   v_version text;
   v_message text;
   v_result jsonb;
-  -- The computed field lives on public.invoices (20261021200000) until the cost lock
-  -- (20261022030000) drops that overload; from 20261022025000 it is also on invoices_postable.
+  -- The computed field lives on public.invoices (20261022022000) until the cost lock
+  -- (20261022091000) drops that overload; from 20261022090000 it is also on invoices_postable.
   v_field regprocedure := coalesce(to_regprocedure('public.invoice_post_version(public.invoices_postable)'),
                                    to_regprocedure('public.invoice_post_version(public.invoices)'));
 BEGIN
   IF v_field IS NULL
      OR to_regprocedure('public.post_invoice(uuid,text,text)') IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_PREREQ: 20261021200000 is not applied on this database';
+    RAISE EXCEPTION 'SMOKE_PREREQ: 20261022022000 is not applied on this database';
   END IF;
 
   -- The old signatures, which take no version, are gone.
@@ -91,7 +91,9 @@ BEGIN
     ELSE
       EXECUTE 'SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = $1' INTO v_version USING v_any;
     END IF;
-    IF v_version !~ '^v1:[0-9a-f]{64}$' OR v_version IS DISTINCT FROM public._invoice_post_version(v_any) THEN
+    IF v_version IS NULL
+       OR v_version !~ '^v1:[0-9a-f]{64}
+       OR v_version IS DISTINCT FROM public._invoice_post_version(v_any) THEN
       RAISE EXCEPTION 'SMOKE_FAIL: invoice_post_version returned % for an admin', v_version;
     END IF;
   END IF;

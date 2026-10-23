@@ -325,7 +325,7 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
     await login(page);
     const userId = await getUserId(page);
 
-    // Post binds to the versions this caller read (migrations 20261021200000 and 20261022025000:
+    // Post binds to the versions this caller read (migrations 20261022022000 and 20261022090000:
     // the version is read from invoices_postable, whose row has no cost column).
     const loaded = asArray<{ id: string; invoice_post_version: string }>(
       await supabaseRest(page, 'GET', `invoices_postable?invoice_group_id=eq.${createdGroupId}&deleted_at=is.null&select=id,invoice_post_version`),

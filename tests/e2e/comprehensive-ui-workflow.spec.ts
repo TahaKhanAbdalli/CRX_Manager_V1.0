@@ -316,7 +316,7 @@ test.describe.serial('Comprehensive UI Workflow (12 Acts)', () => {
       const found = rows[0] as Record<string, unknown> | undefined;
       expect(found).toBeTruthy();
       if (found) {
-        // Cost is admin-only and not a readable column (20261022030000): read it through the admin function.
+        // Cost is admin-only and not a readable column (20261022091000): read it through the admin function.
         const costs = await supabaseRpc(page, 'get_admin_cost_fields', { p_table: 'products', p_ids: [found.id] }) as Record<string, Record<string, unknown>>;
         const cost = costs?.[found.id as string]?.current_cost;
         // A missing cost must fail the fixture, never become a free product.

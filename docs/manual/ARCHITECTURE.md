@@ -156,13 +156,17 @@ enums, and generated columns that hooks and reviewer agents check against.
 
 ## 5. Frontend map
 
-- **Routing**: `src/App.tsx`. Every page is lazy-loaded (`React.lazy()`) so
-  the initial bundle stays small; routes are wrapped in `ProtectedRoute`
-  with an explicit `allowedRoles` list per route (roles: `admin`,
-  `sales_rep`, `driver`, `applicator`). A route with no role restriction is
-  open to any authenticated user.
+- **Routing**: every signed-in page is one entry in the shared page list
+  `src/appPages.tsx`: its lazy-loaded component (`React.lazy()`, so the
+  initial bundle stays small), its routes, the roles that may open it
+  (`admin`, `sales_rep`, `driver`, `applicator`), and its Settings label.
+  `src/App.tsx` builds the router from it, wrapping each route in
+  `ProtectedRoute` with those roles; the page registry `PAGE_PERMISSIONS`
+  (`src/lib/pagePermissions.ts`) is derived from it; and the sidebar takes
+  each link's role gate from it. `src/routeBaseline.test.tsx` records who can
+  open every route and every role's sidebar.
 - **Pages**: `src/pages/*.tsx` — one file per screen, matched to routes in
-  `App.tsx`.
+  `src/appPages.tsx`.
 - **Shared types**: `src/types/index.ts` is the canonical place for
   TypeScript types shared across pages (statuses, entity shapes). Generated
   Supabase types live separately in `src/types/supabase.ts`.
@@ -330,7 +334,7 @@ duplicated here:
 | The one Supabase client | `src/lib/db.ts` |
 | Shared frontend types | `src/types/index.ts` |
 | Generated DB types | `src/types/supabase.ts` |
-| Route table | `src/App.tsx` |
+| Route table (shared page list) | `src/appPages.tsx` (router built in `src/App.tsx`) |
 | Pages | `src/pages/*.tsx` |
 | Reusable UI components | `src/components/` |
 | Sentry setup | `src/lib/sentry.ts` |

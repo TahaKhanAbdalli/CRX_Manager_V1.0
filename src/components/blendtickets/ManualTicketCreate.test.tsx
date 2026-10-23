@@ -478,4 +478,91 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     expect(mocks.rpc).not.toHaveBeenCalled();
     expect(defaultProps.onComplete).not.toHaveBeenCalled();
   });
+
+  it('a failed product catalog read blocks adding products and creating the ticket (Goal 4)', async () => {
+    mocks.from.mockImplementation((table: string) => chainable(
+      table === 'products'
+        ? { data: null, error: { message: 'catalog read failed' } }
+        : table === 'unit_conversions'
+          ? { data: TEST_UNIT_CONVERSIONS, error: null }
+          : { data: [], error: null },
+    ));
+
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Failed to load Products. Close this window and open it again to retry.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add product/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /create ticket/i })).toBeDisabled();
+    expect(screen.queryByRole('combobox', { name: /Quantity unit for/ })).toBeNull();
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+
+  it('a failed catalog read still lets a recovered uncertain attempt retry its frozen payload', async () => {
+    const persistedAttempt = {
+      version: 1,
+      userId: 'user-1',
+      ticketId: UUIDS[3],
+      idempotencyKey: 'manual-idem-persisted',
+      expiresAt: Date.now() + 60_000,
+      ticketPayload: {
+        customer_id: 'c1',
+        ticket_date: '2026-07-15',
+        ticket_time: null,
+        job_number: null,
+        invoice_number: null,
+        driver_name: 'Recovered Driver',
+        applicator_name: null,
+        mixer_name: null,
+        tank_number: null,
+        vehicle_info: null,
+        field_names: null,
+        total_acres: null,
+        application_rate: null,
+        total_volume: null,
+        total_volume_unit: null,
+        notes: 'Recovered exact intent',
+      },
+      products: [{
+        product_id: 'p1',
+        product_name: 'Roundup PowerMax',
+        quantity: 2,
+        unit: 'Gal',
+        rate_per_acre: 4,
+        rate_per_acre_unit: 'oz',
+        lot_number: null,
+        sequence_order: 1,
+      }],
+    };
+    window.sessionStorage.setItem(
+      'crx:blend-ticket-manual:uncertain:v1:user-1',
+      JSON.stringify(persistedAttempt),
+    );
+    mocks.from.mockImplementation((table: string) => chainable(
+      table === 'products'
+        ? { data: null, error: { message: 'catalog read failed' } }
+        : table === 'unit_conversions'
+          ? { data: TEST_UNIT_CONVERSIONS, error: null }
+          : { data: [], error: null },
+    ));
+
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText(/previous manual ticket save may have completed/i)).toBeInTheDocument();
+    expect(await screen.findByText('Failed to load Products. Close this window and open it again to retry.'))
+      .toBeInTheDocument();
+
+    const retry = screen.getByRole('button', { name: /retry same ticket/i });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(defaultProps.onComplete).toHaveBeenCalledTimes(1));
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.rpc).toHaveBeenCalledWith('create_blend_ticket', expect.objectContaining({
+      p_ticket_id: persistedAttempt.ticketId,
+      p_idempotency_key: persistedAttempt.idempotencyKey,
+      p_ticket_payload: persistedAttempt.ticketPayload,
+      p_products: persistedAttempt.products,
+    }));
+    // The recovered attempt carries its own identity; a fresh key is never minted.
+    expect(mocks.getKey).not.toHaveBeenCalled();
+  });
 });

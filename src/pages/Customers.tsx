@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Upload, Download, FileText, ToggleLeft, AlertTriangle, UserPlus, UserX } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -68,6 +68,9 @@ export default function Customers() {
   const [assignableRepsError, setAssignableRepsError] = useState(false);
   const [repsLoadNonce, setRepsLoadNonce] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  // Only the newest read may change the list or its error state: a slow older read must not overwrite a newer one.
+  const loadSeqRef = useRef(0);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
@@ -77,14 +80,20 @@ export default function Customers() {
   const [exporting, setExporting] = useState(false);
 
   const fetchCustomers = useCallback(async (options: { reportError?: boolean } = {}): Promise<boolean> => {
+    const seq = ++loadSeqRef.current;
     const { data, error, count } = await supabase
       .from('customers')
       .select('*', { count: 'exact' })
       .order('farm_name')
       .limit(CUSTOMER_FETCH_LIMIT);
+    if (seq !== loadSeqRef.current) return false;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_customers' } });
-      if (options.reportError !== false) toast('error', 'Failed to load customers. Please try again.');
+      // A silent refresh's caller keeps the rows on screen and explains the failure itself.
+      if (options.reportError !== false) {
+        toast('error', 'Failed to load customers. Please try again.');
+        setLoadError(true);
+      }
       setLoading(false);
       return false;
     }
@@ -101,6 +110,7 @@ export default function Customers() {
         : count > CUSTOMER_FETCH_LIMIT,
     );
     setCustomers(rows);
+    setLoadError(false);
     setLoading(false);
     return true;
   }, [toast]);
@@ -108,6 +118,11 @@ export default function Customers() {
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
+
+  const retryCustomers = () => {
+    setLoading(true);
+    void fetchCustomers();
+  };
 
   // Assigned-rep names for the column + filter. A failure here only costs the
   // rep label (the id-based filter still works), so it never blocks the list.
@@ -442,7 +457,8 @@ export default function Customers() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex-1">
-          {canBulkAction && (
+          {/* Bulk actions act on the selection, so they wait while the rows are hidden by a failed load. */}
+          {canBulkAction && !loadError && (
             <BulkActionBar
               selectedCount={selectedCount}
               actions={bulkActions}
@@ -470,7 +486,7 @@ export default function Customers() {
         onSuccess={fetchCustomers}
       />
 
-      {truncated && (
+      {truncated && !loadError && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
@@ -480,7 +496,7 @@ export default function Customers() {
         </div>
       )}
 
-      {unassignedCount > 0 && repFilter !== UNASSIGNED_REP && (
+      {!loadError && unassignedCount > 0 && repFilter !== UNASSIGNED_REP && (
         <div className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-secondary">
           <UserX className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <span>
@@ -607,6 +623,8 @@ export default function Customers() {
               </Button>
             }
             loading={loading}
+            loadError={loadError}
+            onRetry={retryCustomers}
             filters={
               <>
                 <select
@@ -655,7 +673,7 @@ export default function Customers() {
                   <option value="missing-crops">Missing crops</option>
                   <option value="ready">Core profile ready</option>
                 </select>
-                {canBulkAction && filtered.length > 0 && (
+                {canBulkAction && !loadError && filtered.length > 0 && (
                   <button
                     onClick={toggleAll}
                     className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"

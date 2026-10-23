@@ -18,6 +18,8 @@ const H = vi.hoisted(() => ({
     lastInsert: null as { table: string; payload: Record<string, unknown> } | null,
     lastUpdate: null as { table: string; payload: Record<string, unknown> } | null,
     lastDelete: null as { table: string } | null,
+    // When set, every later read of the product list fails.
+    failProductReads: false,
   },
 }));
 
@@ -25,18 +27,27 @@ vi.mock('../lib/db', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   function makeFrom(table: string) {
     const op = { type: 'select' as 'select' | 'insert' | 'update' | 'delete' };
+    let range: [number, number] = [0, Number.MAX_SAFE_INTEGER];
+    // Lists are read page by page: serve the requested slice with the full count.
+    const page = (rows: Array<Record<string, unknown>>) =>
+      ({ data: rows.slice(range[0], range[1] + 1), error: null, count: rows.length });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const builder: any = {
       select: () => builder,
       eq: () => builder,
       order: () => builder,
+      range: (from: number, to: number) => { range = [from, to]; return builder; },
       insert: (p: Record<string, unknown>) => { op.type = 'insert'; H.state.lastInsert = { table, payload: p }; return builder; },
       update: (p: Record<string, unknown>) => { op.type = 'update'; H.state.lastUpdate = { table, payload: p }; return builder; },
       delete: () => { op.type = 'delete'; H.state.lastDelete = { table }; return builder; },
       then: (resolve: (v: unknown) => unknown) => {
         if (op.type !== 'select') return resolve({ data: [{ id: 'new-id' }], error: null });
-        if (table === 'products') return resolve({ data: H.state.products, error: null });
-        if (table === 'ingredient_map') return resolve({ data: H.state.mappings, error: null });
+        if (table === 'products') {
+          return resolve(H.state.failProductReads
+            ? { data: null, error: { message: 'connection reset' }, count: null }
+            : page(H.state.products));
+        }
+        if (table === 'ingredient_map') return resolve(page(H.state.mappings));
         return resolve({ data: [], error: null });
       },
     };
@@ -79,6 +90,7 @@ beforeEach(() => {
   H.state.lastInsert = null;
   H.state.lastUpdate = null;
   H.state.lastDelete = null;
+  H.state.failProductReads = false;
 });
 
 afterEach(() => cleanup());
@@ -205,6 +217,36 @@ describe('BrandVsGeneric — ingredient-map management', () => {
 
     await waitFor(() => expect(H.state.lastInsert).not.toBeNull());
     expect(H.state.lastInsert?.payload.generic_product_id).toBe('d2'); // the exact SKU BBB row, not d1
+  });
+
+  it('a failed refresh after a save clears the earlier lists and blocks new mappings (Goal 4 part 3)', async () => {
+    H.state.mappings = [
+      {
+        id: 'm1',
+        fallback_branded_product: 'Roundup PowerMAX',
+        branded_ingredient: 'Glyphosate',
+        generic_product_id: 'p2',
+        generic_has_bulk: false,
+        notes: null,
+        generic_product: GENERIC,
+      },
+    ];
+    render(<BrandVsGeneric />);
+    await waitFor(() => expect(screen.getAllByLabelText('Edit mapping for Roundup PowerMAX').length).toBeGreaterThan(0));
+
+    // Save a new mapping; the reload that follows fails.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add Mapping' }))[0]);
+    const dialogs = await screen.findAllByRole('dialog');
+    const dialog = dialogs[dialogs.length - 1];
+    fireEvent.change(within(dialog).getByPlaceholderText('Search products...'), { target: { value: 'Generic Glyphosate' } });
+    H.state.failProductReads = true;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Mapping' }));
+
+    expect(await screen.findByText(/Products and mappings could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryAllByLabelText('Edit mapping for Roundup PowerMAX')).toHaveLength(0);
+    expect(screen.queryByRole('option', { name: 'Roundup PowerMAX' })).not.toBeInTheDocument();
+    const addButtons = screen.getAllByRole('button', { name: 'Add Mapping' });
+    expect(addButtons[0]).toBeDisabled();
   });
 
   it('hides all write controls from a non-admin (read-only)', async () => {

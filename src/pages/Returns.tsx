@@ -82,6 +82,13 @@ interface ReturnableOrderItem {
   price_per_unit: number;
   quantity_delivered: number;
   quantity_returnable: number;
+  /**
+   * On a split order, what is left of this customer's own billed share of the line (its billed
+   * quantity and cents less its open returns'); null otherwise. Returning all of share_left_qty
+   * credits exactly share_left_cents.
+   */
+  share_left_qty: number | null;
+  share_left_cents: number | null;
   unit_size: string | null;
   section_name: string | null;
   product?: ProductOptionPresentationModel | null;
@@ -274,50 +281,49 @@ export default function Returns() {
     setCustomers((custRes.data || []) as unknown as Customer[]);
   };
 
-  const loadOrderItems = async (orderId: string, preserveDraftItems = false) => {
+  const loadOrderItems = async (orderId: string, customerId: string, preserveDraftItems = false) => {
     const requestId = ++orderItemsRequestRef.current;
     if (!preserveDraftItems) setNewItems([]);
     if (!orderId) { setOrderItems([]); return; }
-    const [itemsResult, priorReturnsResult] = await Promise.all([
-      supabase
-        .from('order_items')
-        .select('id, product_id, product_name, price_per_unit, quantity_delivered, unit_size, section_name, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
-        .eq('order_id', orderId)
-        .gt('quantity_delivered', 0)
-        .order('sort_order'),
-      supabase
-        .from('returns')
-        .select('items:return_items(order_item_id, quantity)')
-        .eq('order_id', orderId)
-        .is('deleted_at', null)
-        .not('status', 'in', '("rejected","cancelled")'),
-    ]);
+    // A query builder runs only when awaited or then()-ed: start the line read now so it runs
+    // alongside the allowance read below.
+    const itemsPromise = supabase
+      .from('order_items')
+      .select('id, product_id, product_name, price_per_unit, quantity_delivered, unit_size, section_name, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
+      .eq('order_id', orderId)
+      .gt('quantity_delivered', 0)
+      .order('sort_order')
+      .then((result) => result);
+    // How much of each delivered line this customer may still return, by create_return's own
+    // rule: on a split order each payer only its billed share (20261021155000). Read on the
+    // server, because a sales rep cannot read the other payers' invoices.
+    const allowancesResult = await supabase.rpc('get_return_line_allowances', { p_order_id: orderId, p_customer_id: customerId });
+    const itemsResult = await itemsPromise;
     // A slower response for the previously selected order must not overwrite the
     // product list for the order currently shown in the form.
     if (requestId !== orderItemsRequestRef.current) return;
-    if (itemsResult.error || priorReturnsResult.error) {
+    let allowances: Array<{ order_item_id: string; returnable_qty: number; share_left_qty: number | null; share_left_cents: number | null }> = [];
+    try {
+      if (itemsResult.error) throw itemsResult.error;
+      if (allowancesResult.error) throw allowancesResult.error;
+      allowances = assertRpcResult(allowancesResult.data, 'get_return_line_allowances');
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'return_order_items' } });
       toast('error', 'Could not determine the remaining returnable quantities');
       setOrderItems([]);
       return;
     }
-    const priorQuantityByOrderItem = new Map<string, number>();
-    const priorReturns = (priorReturnsResult.data || []) as unknown as Array<{
-      items: Array<{ order_item_id: string | null; quantity: number }> | null;
-    }>;
-    for (const priorReturn of priorReturns) {
-      for (const item of priorReturn.items || []) {
-        if (!item.order_item_id) continue;
-        priorQuantityByOrderItem.set(
-          item.order_item_id,
-          (priorQuantityByOrderItem.get(item.order_item_id) || 0) + Number(item.quantity),
-        );
-      }
-    }
-    const returnableItems = ((itemsResult.data || []) as Omit<ReturnableOrderItem, 'quantity_returnable'>[])
-      .map((item) => ({
-        ...item,
-        quantity_returnable: Math.max(0, Number(item.quantity_delivered) - (priorQuantityByOrderItem.get(item.id) || 0)),
-      }))
+    const allowanceByLine = new Map(allowances.map((a) => [a.order_item_id, a]));
+    const returnableItems = ((itemsResult.data || []) as Omit<ReturnableOrderItem, 'quantity_returnable' | 'share_left_qty' | 'share_left_cents'>[])
+      .map((item) => {
+        const allowance = allowanceByLine.get(item.id);
+        return {
+          ...item,
+          quantity_returnable: allowance ? Number(allowance.returnable_qty) : 0,
+          share_left_qty: allowance?.share_left_qty != null ? Number(allowance.share_left_qty) : null,
+          share_left_cents: allowance?.share_left_cents ?? null,
+        };
+      })
       .filter((item) => item.quantity_returnable > 0);
     setOrderItems(returnableItems);
   };
@@ -338,14 +344,41 @@ export default function Returns() {
       .order('order_date', { ascending: false })
       .order('id')
       .range(from, to));
+    // Orders of another customer on which this customer (a field owner, such as a landlord) holds a
+    // posted split invoice: it may return its share of those too (20261021155000). Read on the
+    // server, because a sales rep cannot read that invoice.
+    let splitOrderIds: string[] = [];
+    let splitIdsError: unknown = null;
+    if (!error) {
+      const splitIdsResult = await supabase.rpc('get_split_payer_return_orders', { p_customer_id: customerId });
+      try {
+        if (splitIdsResult.error) throw splitIdsResult.error;
+        splitOrderIds = assertRpcResult<string[]>(splitIdsResult.data, 'get_split_payer_return_orders');
+      } catch (err) {
+        splitIdsError = err;
+      }
+    }
+    const splitOrders = error || splitIdsError || splitOrderIds.length === 0
+      ? { data: [], error: null }
+      : await fetchAllRowsForIds(splitOrderIds, (ids, from, to) => supabase
+        .from('orders')
+        .select('id, order_number, order_date', { count: 'exact' })
+        .in('id', ids)
+        .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to));
     if (requestId !== customerOrdersRequestRef.current) return;
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', action: 'return_customer_orders' } });
+    const loadError = error || splitIdsError || splitOrders.error;
+    if (loadError) {
+      Sentry.captureException(loadError, { tags: { source: 'fetch', action: 'return_customer_orders' } });
       toast('error', "This customer's orders could not be loaded. Pick the customer again to retry.");
       setCustomerOrders([]);
       return;
     }
-    setCustomerOrders((data || []) as Order[]);
+    const orders = [...((data || []) as Order[]), ...((splitOrders.data || []) as Order[])]
+      .sort((x, y) => String(y.order_date).localeCompare(String(x.order_date)) || x.id.localeCompare(y.id));
+    setCustomerOrders(orders);
   };
 
   const openCreate = () => {
@@ -358,7 +391,7 @@ export default function Returns() {
       setCustomerOrders([]);
       setOrderItems([]);
       void loadCustomerOrders(unresolvedCreateIntent.form.customer_id);
-      void loadOrderItems(unresolvedCreateIntent.form.order_id, true);
+      void loadOrderItems(unresolvedCreateIntent.form.order_id, unresolvedCreateIntent.form.customer_id, true);
       setShowCreate(true);
       return;
     }
@@ -919,7 +952,7 @@ export default function Returns() {
                 disabled={createPayloadLocked}
                 onChange={(e) => {
                   setNewForm({ ...newForm, order_id: e.target.value });
-                  loadOrderItems(e.target.value);
+                  loadOrderItems(e.target.value, newForm.customer_id);
                 }}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
@@ -1003,7 +1036,9 @@ export default function Returns() {
                       ))
                       .map((p) => (
                       <option key={p.id} value={p.id} disabled={normalizeReturnPolicy(p.product?.return_policy) === 'no_return'}>
-                        {productOptionLabel({ id: p.product_id, product_name: p.product_name, unit_size: p.unit_size, ...p.product })} — {p.section_name || 'No section'} — ${Number(p.price_per_unit).toFixed(2)}/{p.unit_size || 'ea'} (returnable {p.quantity_returnable} of {p.quantity_delivered})
+                        {productOptionLabel({ id: p.product_id, product_name: p.product_name, unit_size: p.unit_size, ...p.product })} — {p.section_name || 'No section'} — {p.share_left_cents != null && p.share_left_qty != null
+                          ? `${formatCents(p.share_left_cents)} left for ${p.share_left_qty} ${p.unit_size || 'ea'} on this customer's split invoice`
+                          : `$${Number(p.price_per_unit).toFixed(2)}/${p.unit_size || 'ea'}`} (returnable {p.quantity_returnable} of {p.quantity_delivered})
                       </option>
                       ))}
                   </select>

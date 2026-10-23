@@ -379,6 +379,13 @@ export default function JobDetail() {
   // neither can fall back to legacy total_acres while it is unavailable.
   const [fieldsLookupReady, setFieldsLookupReady] = useState(false);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  // Which of the customers/fields/products lists failed to load (Goal 4). While any
+  // did, editing and saving are closed: those lists pick the customer, size the
+  // fields and price the chemicals, and an empty one must never pass for "none".
+  const [lookupLoadFailures, setLookupLoadFailures] = useState<string[]>([]);
+  // True until the newest lookup load has finished: a job edited or saved before its
+  // customer, field and product lists arrive would use partial reference data (Luna, #1017).
+  const [lookupsLoading, setLookupsLoading] = useState(true);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [applicators, setApplicators] = useState<Profile[]>([]);
   // Staff-held license rows per profile (B5 license gates)
@@ -1648,36 +1655,65 @@ export default function JobDetail() {
     setIsDirty(snap !== baselineRef.current);
   }, [formSnapshot, loading, baselineSettleTick]);
 
+  // Bumped on every lookup load: only the newest load may write its lists, so a
+  // double-clicked Retry or a refresh racing the first load never lets an older
+  // result (or an older failure) overwrite a newer one (Codex review, #1017).
+  const lookupsLoadRef = useRef(0);
   const loadLookups = useCallback(async () => {
+    const loadId = ++lookupsLoadRef.current;
+    const superseded = () => loadId !== lookupsLoadRef.current;
+    setLookupsLoading(true);
     setFieldsLookupReady(false);
+    // Customers, fields and products are read page by page (Goal 4): these lists
+    // name billed customers, size fields and price chemicals across the page, so
+    // one request cut off at the server's row cap would silently drop records.
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
-      supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
-      supabase.from('fields').select('*').order('field_name'),
-      supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
+      fetchAllRows((from, to) => supabase.from('customers').select('*', { count: 'exact' }).eq('is_active', true).order('farm_name').order('id').range(from, to)),
+      fetchAllRows((from, to) => supabase.from('fields').select('*', { count: 'exact' }).order('field_name').order('id').range(from, to)),
+      fetchAllRows((from, to) => supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' }).eq('is_active', true).order('product_name').order('id').range(from, to)),
       supabase.from('vehicles').select('*').eq('status', 'active').order('vehicle_name'),
       // PR-07 follow-up: applicator picker only uses a.id + a.full_name + a.role; safe via view.
       supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('blend_recipes').select('*').eq('is_active', true).order('name'),
     ]);
-    setCustomers((custResult.data || []) as Customer[]);
+    if (superseded()) return;
+    const failures: string[] = [];
+    if (custResult.error) {
+      Sentry.captureException(custResult.error, { tags: { source: 'fetch', action: 'load_job_customers' } });
+      toast('error', 'Failed to load Customers. Retry before editing this job.');
+      failures.push('customers');
+    }
+    // A failed read clears the list: never keep a previous or partial one.
+    setCustomers(custResult.error ? [] : (custResult.data || []) as Customer[]);
     if (!fieldResult.error) {
       setAllFields((fieldResult.data || []) as Field[]);
       setFieldsLookupReady(true);
+    } else {
+      Sentry.captureException(fieldResult.error, { tags: { source: 'fetch', action: 'load_job_fields' } });
+      toast('error', 'Failed to load Fields. Retry before editing this job.');
+      setAllFields([]);
+      failures.push('fields');
     }
     if (prodResult.error) {
       Sentry.captureException(prodResult.error, { tags: { source: 'fetch', action: 'load_job_products' } });
       toast('error', 'Failed to load Products. Retry before editing job chemicals.');
+      failures.push('products');
     }
-    let productRows = (prodResult.data || []) as unknown as PickerProduct[];
+    let productRows = prodResult.error ? [] : (prodResult.data || []) as unknown as PickerProduct[];
     try {
       productRows = await withAdminCosts('products', productRows, isAdmin);
     } catch (costErr) {
+      if (superseded()) return;
       // An admin's autofill would otherwise fill a zero cost into the line it saves.
       Sentry.captureException(costErr, { tags: { source: 'fetch', action: 'load_job_product_costs' } });
       toast('error', 'Failed to load Products. Retry before editing job chemicals.');
       productRows = [];
+      if (!failures.includes('products')) failures.push('products');
     }
+    if (superseded()) return;
     setAllProducts(productRows);
+    setLookupLoadFailures(failures);
+    setLookupsLoading(false);
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
@@ -1685,17 +1721,20 @@ export default function JobDetail() {
     // Field-app parity #6: active ground crews for the crew picker.
     const crewResult = await supabase
       .from('ground_crews').select('id, name').eq('is_active', true).order('name');
+    if (superseded()) return;
     setGroundCrews((crewResult.data || []) as { id: string; name: string }[]);
 
     // §5: load the label-rate guardrail policy (warn default; failed/absent => warn).
     const grResult = await supabase
       .from('app_settings').select('setting_value').eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY).maybeSingle();
+    if (superseded()) return;
     setGuardrailMode(parseGuardrailMode((grResult.data as { setting_value?: string } | null)?.setting_value ?? null));
     setGuardrailModeLoaded(true);
 
     // P2-4: load reusable crop-program templates (for "Load Program" into chemicals).
     const cpResult = await supabase
       .from('app_settings').select('setting_value').eq('setting_key', 'crop_programs').maybeSingle();
+    if (superseded()) return;
     setCropPrograms(parseCropPrograms((cpResult.data as { setting_value?: string } | null)?.setting_value ?? null));
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
@@ -1707,6 +1746,7 @@ export default function JobDetail() {
       .not('profile_id', 'is', null)
       .order('id')
       .range(from, to));
+    if (superseded()) return;
     if (licResult.error) {
       Sentry.captureException(licResult.error, { tags: { source: 'fetch', action: 'job_license_gate' } });
       toast('error', 'Applicator licenses could not be loaded, so license checks may show a license as missing. Refresh to try again.');
@@ -2392,6 +2432,14 @@ export default function JobDetail() {
   // admin-override modal (admins only) so the save proceeds only with a LOGGED reason; a
   // non-admin is told to fix the rate (no silent corruption).
   const handleSave = async () => {
+    if (lookupsLoading) {
+      toast('error', 'Customers, fields and products are still loading. Try again in a moment.');
+      return;
+    }
+    if (lookupLoadFailures.length > 0) {
+      toast('error', `This job's ${lookupLoadFailures.join(', ')} could not be loaded. Retry before saving.`);
+      return;
+    }
     // §5 (Codex r6): FAIL CLOSED while the guardrail mode / by-id label data are still
     // loading and the mix has products — an early Save must not skip a block-mode override.
     if (chemRows.some((c) => c.product_id) && (!guardrailModeLoaded || !jobLabelsLoaded)) {
@@ -3709,7 +3757,8 @@ export default function JobDetail() {
     );
   }
 
-  const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress');
+  // A failed customers/fields/products read closes editing until a retry succeeds.
+  const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress') && lookupLoadFailures.length === 0 && !lookupsLoading;
   // U12: the assigned applicator (job-level applicator_id match — mirrors the
   // existing AppliedRecordsManager canEdit gate a few hundred lines down) can
   // see Start/Complete on THEIR OWN job even though isEditable is office-only.
@@ -3874,6 +3923,13 @@ export default function JobDetail() {
           )}
         </div>
       </div>
+
+      {lookupLoadFailures.length > 0 && (
+        <div role="alert" className="flex items-center justify-between gap-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          <span>The {lookupLoadFailures.join(', ')} list could not be loaded, so this job cannot be edited or saved yet.</span>
+          <Button size="sm" variant="secondary" onClick={() => { void loadLookups(); }}>Retry</Button>
+        </div>
+      )}
 
       {/* §2 Watchdog — inline advisory flags for this job (auto-refreshes on open) */}
       {!isNew && id && <WatchdogFlagBanner jobId={id} autoRefresh />}

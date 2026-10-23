@@ -63,7 +63,7 @@ vi.mock('../lib/costFields', async (importOriginal) => ({
 }));
 
 vi.mock('../lib/db', () => ({
-  // The version-bearing reads use the invoices_postable view (20261022025000): same rows as invoices here.
+  // The version-bearing reads use the invoices_postable view (20261022090000): same rows as invoices here.
   supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
@@ -1622,7 +1622,7 @@ describe('InvoiceDetail — an invoice made from scratch takes charge lines only
 });
 
 /**
- * Goal 3 "Post uses what was saved and reviewed" (migration 20261021200000). Post is blocked while
+ * Goal 3 "Post uses what was saved and reviewed" (migration 20261022022000). Post is blocked while
  * the form has unsaved edits, sends the invoice_post_version this screen loaded, and a server
  * refusal because the invoice changed elsewhere reloads the invoice.
  */
@@ -1688,6 +1688,22 @@ describe('InvoiceDetail — Post uses the saved, reviewed invoice', () => {
     fireEvent.change(screen.getByPlaceholderText('Customer PO #'), { target: { value: '' } });
     expect(screen.getByRole('button', { name: /^Post$/ })).toBeEnabled();
     expect(unsavedGuardCalls[unsavedGuardCalls.length - 1]).toBe(false);
+  });
+
+  it('locks the form while Post runs, so nothing typed then is lost to the reload after it', async () => {
+    let finish: (value: unknown) => void = () => {};
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'post_invoice') return { throwOnError: () => new Promise((resolve) => { finish = resolve; }) };
+      return Promise.resolve({ data: null, error: null });
+    });
+    await openLoaded();
+    expect(screen.getByPlaceholderText('Customer PO #')).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Invoice' }));
+    await waitFor(() => expect(screen.getByPlaceholderText('Customer PO #')).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    finish({ data: null, error: null });
+    await waitFor(() => expect(screen.getByPlaceholderText('Customer PO #')).toBeEnabled());
   });
 
   it('reloads the invoice when the server says it changed since this screen loaded it', async () => {

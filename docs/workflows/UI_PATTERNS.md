@@ -9,24 +9,33 @@ Reference for how the CRX Manager frontend is built. Follow these patterns for c
 Follow `.claude/skills/new-page/SKILL.md` — it is the maintained step-by-step source. In short:
 
 1. **Create the page component** in `src/pages/` as a `default` export (required for lazy loading).
-2. **Add the lazy import** in `src/App.tsx`:
+2. **Add the lazy import** in `src/appPages.tsx`, the shared page list:
 
    ```typescript
    const MyNewPage = lazy(() => import('./pages/MyNewPage'));
    ```
 
-3. **Add a route object** to the `RouteShell` children array in `src/App.tsx`. The app uses
-   `createBrowserRouter` route objects, not `<Route>` JSX, and suspense is centralized in
-   `RouteShell` (do not add a per-route `<Suspense>`). Paths there are relative:
+3. **Add one page entry to `APP_PAGES`** in `src/appPages.tsx` (REQUIRED). The router
+   (`src/App.tsx`) builds its `createBrowserRouter` routes from it, each behind
+   `ProtectedRoute` with the page's roles, and `PAGE_PERMISSIONS` in
+   `src/lib/pagePermissions.ts` is derived from it, so never add either by hand. Suspense is
+   centralized in `RouteShell` (do not add a per-route `<Suspense>`). Paths are relative, and
+   the first route is the page's own address:
 
    ```tsx
-   { path: 'my-new-page', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><MyNewPage /></ProtectedRoute> },
+   {
+     key: 'my-new-page', label: 'My New Page', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'],
+     routes: [{ path: 'my-new-page', element: <MyNewPage /> }],
+   },
    ```
 
-4. **Add the `PAGE_PERMISSIONS` entry (REQUIRED)** in `src/lib/pagePermissions.ts`. Without it
-   `ProtectedRoute` redirects users away and `pagePermissions.test.ts` fails.
-5. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
-   (`officeNavigation`, `applicatorNavigation`, or `driverNavigation`).
+4. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
+   (`officeNavigation`, `applicatorNavigation`, or `driverNavigation`). Its `path` must be a
+   page address from `src/appPages.tsx` (a type error otherwise), and which roles see it comes
+   from that page's `roles`.
+5. **Re-record the route baseline** (`UPDATE_ROUTE_BASELINE=1 npx vitest run src/routeBaseline.test.tsx`)
+   and check that the diff of `src/routeBaseline.json` shows only the new page's own rows (routes,
+   sidebar link, permission entry), and nothing about any other page.
 6. **Document it** in `docs/reference/pages-routes.md`, then open the page and verify it.
 
 ---
@@ -68,6 +77,30 @@ useEffect(() => {
   loadCustomers();
 }, []);
 ```
+
+### Choosing a record (pickers)
+A list read stops at 1,000 rows (the PostgREST cap), so never fill a picker from a one-shot list read.
+- **One record to choose:** use a database search box. `CustomerSearchPicker`
+  (`src/components/customers/`), `FieldSearchPicker` (`src/components/fields/`), `ProductSearchPicker`
+  (`src/components/products/`), `OrderSearchPicker` (`src/components/orders/`), `JobSearchPicker`
+  (`src/components/jobs/`) or `PurchaseOrderSearchPicker` (`src/components/purchase-orders/`), all built on
+  `src/components/ui/RecordSearchPicker.tsx`.
+  - Pass the old list's status filter (`statuses`). Order and job searches also match the customer's name.
+  - Label a record read by id with `src/lib/recordLabels.ts`, so it reads the same as a pick.
+  - Where the save requires a record of the page's customer (a blend ticket's job), pass `customerId`.
+  - The page keeps the chosen id and its label. It does not look the record up in a loaded list.
+  - Pass `select` with any extra columns the page needs from the pick, e.g. `assigned_tier` for pricing.
+  - A saved record's label comes from the record's own join or a by-id read. A failed or missing by-id read
+    blocks pricing and saving; it never falls back to a default. A read used only for a label (the saved id
+    is sent unchanged) may show a "could not be loaded" label instead.
+  - Records not to offer go in `excludeIds`, which filters in the database.
+  - Keep the old list's active rule: `activeOnly={false}` where inactive customers were offered.
+  - When a field picker's `customerId` changes, clear a chosen field that belongs to another customer.
+- **The page uses the whole list** (tier pricing, a catalog modal with local search, names on printed
+  sheets): read it completely with `fetchAllRows` (`src/lib/pagedRead.ts`). On failure, clear the list,
+  show an error, and disable the actions that depend on it.
+- For a new kind of record, add a thin wrapper beside the existing ones. Quote search text with
+  `ilikeOrPattern` (`src/lib/recordSearch.ts`) so commas, brackets, `%` and `_` stay literal.
 
 ### Writing data (always use checkMutationResult)
 ```typescript
@@ -173,6 +206,7 @@ import { Plus, Edit, Trash2, Search } from 'lucide-react';
 - Forms: standard controlled inputs with `useState`
 - Loading states: show a spinner or skeleton while `loading === true`
 - Error states: show error message in red text
+- A list whose read failed: show `LoadFailedState` (from `src/components/ui/EmptyState.tsx`, with Try again), or pass `loadError` and `onRetry` to `DataTable`/`EditableDataTable`. Never let a failed read fall through to the empty "No … found" message.
 
 ---
 

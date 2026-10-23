@@ -11,7 +11,7 @@ const { mockFrom, mockToast, mockSentryCaptureException } = vi.hoisted(() => ({
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'order', 'limit', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'or', 'not', 'in', 'is', 'order', 'limit', 'maybeSingle']) chain[name] = method;
   const promise = Promise.resolve(result);
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
@@ -65,6 +65,16 @@ vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockSentryCaptureE
 
 import FieldAppSplitInvoiceEditor from './FieldAppSplitInvoiceEditor';
 
+// Fields and products are search pickers (Goal 4, M38): type into one, then click a result.
+async function searchAndPick(box: string, text: string, option: RegExp) {
+  const input = await screen.findByRole('combobox', { name: box });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
+
+const pickProduct = (name: string) => searchAndPick('Product', 'Pro', new RegExp(`^${name}`));
+
 describe('FieldAppSplitInvoiceEditor picker loading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,7 +101,7 @@ describe('FieldAppSplitInvoiceEditor picker loading', () => {
     });
   });
 
-  it('keeps successful field, Product, and service pickers usable when jobs fail', async () => {
+  it('keeps field, Product, and service pickers usable when the job search fails, and Retry finds the job', async () => {
     render(
       <MemoryRouter>
         <FieldAppSplitInvoiceEditor />
@@ -99,20 +109,44 @@ describe('FieldAppSplitInvoiceEditor picker loading', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Split Billing — New' })).toBeInTheDocument();
-    expect(await screen.findByRole('option', { name: 'North 40' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Source job/).querySelectorAll('option')).toHaveLength(1);
+    const fieldBox = await screen.findByRole('combobox', { name: 'Add a field' });
+    fireEvent.focus(fieldBox);
+    fireEvent.change(fieldBox, { target: { value: 'North' } });
+    expect(await screen.findByRole('option', { name: /North 40/ })).toBeInTheDocument();
+
+    // Jobs are searched, not listed (Goal 4, M38): a failed search says so and offers Retry.
+    const jobBox = screen.getByRole('combobox', { name: 'Source job' });
+    fireEvent.focus(jobBox);
+    fireEvent.change(jobBox, { target: { value: 'JOB-0250' } });
+    expect(await screen.findByText('Job search failed.')).toBeInTheDocument();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({ data: [{ id: 'job-250', job_number: 'JOB-0250', job_date: '2026-02-01', status: 'completed', customer: { farm_name: 'Seed Farm 0250' } }], error: null });
+      }
+      if (table === 'products') {
+        return buildChain({ data: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Exact Product', sku: 'SKU-EXACT', inventory_unit: 'gal', return_policy: 'returnable', is_full_tote_only: false, product_family: { name: 'Family Alpha' } }], error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(await screen.findByRole('option', { name: /JOB-0250 \(2026-02-01\) - Seed Farm 0250/ }));
+    expect(jobBox).toHaveValue('JOB-0250 (2026-02-01) - Seed Farm 0250');
 
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
+    const productBox = await screen.findByRole('combobox', { name: 'Product' });
+    fireEvent.focus(productBox);
+    fireEvent.change(productBox, { target: { value: 'Exact' } });
     expect(await screen.findByRole('option', { name: /Exact Product.*SKU-EXACT/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Service' }));
     expect(await screen.findByRole('option', { name: 'Aerial application' })).toBeInTheDocument();
 
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some field application invoice pickers could not be loaded.'));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to search Jobs');
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Some field application invoice pickers could not be loaded.');
     expect(mockSentryCaptureException).toHaveBeenCalledTimes(1);
     expect(mockSentryCaptureException).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ extra: { context: 'load_field_app_split_invoice_pickers' } }),
+      expect.objectContaining({ extra: { context: 'job_search_picker' } }),
     );
   });
 });
@@ -170,7 +204,7 @@ function mockTables(overrides: { unitError?: Error } = {}) {
 
 /** Add one field with positive acres so validateForSave reaches the unit check. */
 async function addFieldWithAcres() {
-  fireEvent.change(await screen.findByLabelText(/Add a field/), { target: { value: 'field-1' } });
+  await searchAndPick('Add a field', 'North', /North 40/);
   fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
   fireEvent.change(await screen.findByLabelText(/Applied acres/), { target: { value: '40' } });
 }
@@ -189,6 +223,8 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
       </MemoryRouter>,
     );
     await screen.findByRole('heading', { name: 'Split Billing — New' });
+    fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
+    await pickProduct('Liquid Product');
 
     // Without this the unit filter silently degrades: product_form comes back undefined,
     // every unit stays on offer, and the clear-on-form-change guard never fires. The row
@@ -214,12 +250,8 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     expect(within(rateUnit).getByRole('option', { name: 'Gal' })).toBeInTheDocument();
     expect(within(rateUnit).getByRole('option', { name: 'Lb' })).toBeInTheDocument();
 
-    // Held once: selecting a product renders ProductOptionDetails inside the same
-    // <label>, which changes the select's accessible name and breaks a re-query by name.
-    const productSelect = await screen.findByRole('combobox', { name: 'Product' });
-
     // Liquid product → dry units drop out, 'both' units stay.
-    fireEvent.change(productSelect, { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     await waitFor(() => expect(within(screen.getByLabelText(/^Rate unit for/)).queryByRole('option', { name: 'Lb' })).toBeNull());
     const liquidSelect = screen.getByLabelText(/^Rate unit for/);
     expect(within(liquidSelect).getByRole('option', { name: 'Gal' })).toBeInTheDocument();
@@ -227,7 +259,7 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     expect(within(liquidSelect).getByRole('option', { name: 'Ea' })).toBeInTheDocument();
 
     // Dry product → the liquid units drop out instead.
-    fireEvent.change(productSelect, { target: { value: DRY_PRODUCT.id } });
+    await pickProduct('Dry Product');
     await waitFor(() => expect(within(screen.getByLabelText(/^Rate unit for/)).queryByRole('option', { name: 'Gal' })).toBeNull());
     expect(within(screen.getByLabelText(/^Rate unit for/)).getByRole('option', { name: 'Lb' })).toBeInTheDocument();
   });
@@ -241,7 +273,7 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     await screen.findByRole('heading', { name: 'Split Billing — New' });
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
 
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Product' }), { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     const rateUnit = await screen.findByLabelText(/^Rate unit for Liquid Product$/);
     fireEvent.change(rateUnit, { target: { value: 'Gal' } });
     expect((rateUnit as HTMLSelectElement).value).toBe('Gal');
@@ -256,14 +288,13 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     await screen.findByRole('heading', { name: 'Split Billing — New' });
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
 
-    const productSelect = await screen.findByRole('combobox', { name: 'Product' });
-    fireEvent.change(productSelect, { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     fireEvent.change(await screen.findByLabelText(/^Rate unit for/), { target: { value: 'Gal' } });
     expect((screen.getByLabelText(/^Rate unit for/) as HTMLSelectElement).value).toBe('Gal');
 
     // Switching to a dry product leaves 'Gal' — a liquid unit — grandfathered onto the line
     // unless it is cleared. Found by driving the real screen in a browser.
-    fireEvent.change(productSelect, { target: { value: DRY_PRODUCT.id } });
+    await pickProduct('Dry Product');
     await waitFor(() => expect((screen.getByLabelText(/^Rate unit for/) as HTMLSelectElement).value).toBe(''));
     expect(within(screen.getByLabelText(/^Rate unit for/)).queryByRole('option', { name: 'Gal' })).toBeNull();
   });
@@ -277,11 +308,10 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     await screen.findByRole('heading', { name: 'Split Billing — New' });
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
 
-    const productSelect = await screen.findByRole('combobox', { name: 'Product' });
-    fireEvent.change(productSelect, { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     // 'Ea' is a 'both'-type unit, so it survives a liquid → dry switch.
     fireEvent.change(await screen.findByLabelText(/^Rate unit for/), { target: { value: 'Ea' } });
-    fireEvent.change(productSelect, { target: { value: DRY_PRODUCT.id } });
+    await pickProduct('Dry Product');
 
     await waitFor(() => expect(screen.getByLabelText(/^Rate unit for Dry Product$/)).toBeInTheDocument());
     expect((screen.getByLabelText(/^Rate unit for/) as HTMLSelectElement).value).toBe('Ea');
@@ -298,7 +328,7 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     await addFieldWithAcres();
 
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Product' }), { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     fireEvent.change(screen.getByLabelText(/Total quantity/), { target: { value: '10' } });
 
     // The picker could not be populated, so the rate unit is unavoidably blank.
@@ -328,7 +358,7 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
     await addFieldWithAcres();
 
     fireEvent.click(screen.getByRole('button', { name: 'Chemical' }));
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Product' }), { target: { value: LIQUID_PRODUCT.id } });
+    await pickProduct('Liquid Product');
     fireEvent.change(screen.getByLabelText(/Total quantity/), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/ }));
 
@@ -341,5 +371,40 @@ describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
       'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
     );
     expect(mockToast).not.toHaveBeenCalledWith('error', 'Units are still loading. Try saving again in a moment.');
+  });
+});
+
+// ── Goal 4 part 3 (M38): fields are searched, not read from a list capped at 1,000 ──
+describe('FieldAppSplitInvoiceEditor field search picker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTables();
+  });
+
+  it('searches active fields in the database and leaves out a field already added', async () => {
+    const fieldCalls: { eq: unknown[][]; not: unknown[][] } = { eq: [], not: [] };
+    const baseImpl = mockFrom.getMockImplementation()!;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'fields') return baseImpl(table);
+      const chain = buildChain({ data: [{ id: 'field-1', field_name: 'North 40' }], error: null });
+      chain.eq = (...args: unknown[]) => { fieldCalls.eq.push(args); return chain; };
+      chain.not = (...args: unknown[]) => { fieldCalls.not.push(args); return chain; };
+      return chain;
+    });
+    render(
+      <MemoryRouter>
+        <FieldAppSplitInvoiceEditor />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Split Billing — New' });
+    await addFieldWithAcres();
+    expect(fieldCalls.eq).toContainEqual(['is_active', true]);
+    expect(fieldCalls.not).toHaveLength(0);
+
+    // The next search asks the database to leave out the field already on the invoice.
+    const box = screen.getByRole('combobox', { name: 'Add a field' });
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: 'Nor' } });
+    await waitFor(() => expect(fieldCalls.not).toContainEqual(['id', 'in', expect.stringContaining('field-1')]));
   });
 });

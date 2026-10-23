@@ -274,7 +274,7 @@ test.describe.serial('Quote Builder V2 (12 Sprints)', () => {
     }
 
     // Verify a version was created in the DB
-    // snapshot_data is not a readable column (20261022030000); get_quote_versions returns it.
+    // snapshot_data is not a readable column (20261022091000); get_quote_versions returns it.
     const versions = await supabaseRpc(page, 'get_quote_versions', { p_quote_id: S.quoteId });
     const verArr = (asArray(versions, 'quote versions') as Array<Record<string, unknown>>)
       .sort((a, b) => (b.version_number as number) - (a.version_number as number));

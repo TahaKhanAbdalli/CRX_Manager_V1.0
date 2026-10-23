@@ -1,6 +1,6 @@
 ---
 name: deploy-check
-description: Pre-merge checklist for CRX Manager — verifies a branch is safe to land. Since `main` is protected (2026-07-14), landing means branch → draft PR → checks → mark ready (one advisory CodeRabbit review) → Sol → merge, and the merge is what deploys production via Vercel. Use before opening or merging a PR, or before applying migrations to Supabase.
+description: Pre-merge checklist for CRX Manager — verifies a branch is safe to land. Since `main` is protected (2026-07-14), landing means branch → draft PR → checks → mark ready (CodeRabbit reviews only on request) → Sol → merge, and the merge is what deploys production via Vercel. Use before opening or merging a PR, or before applying migrations to Supabase.
 ---
 
 # Pre-Deployment Check
@@ -13,8 +13,9 @@ environment safety, and production readiness.
 Codex, and Mason alike. The landing path is:
 
 **push a branch → open a DRAFT PR → finish required checks → freeze the candidate → mark the PR
-ready (CodeRabbit, advisory since 2026-10-19, reviews it once; fix or refute any comments that
-arrive before the merge, but do not wait for it) → exact-SHA Sol proof → merge with
+ready (CodeRabbit, advisory since 2026-10-19, makes no automatic reviews since 2026-10-21; a
+money or Mason-named PR gets one requested full review; fix or refute any comments that arrive
+before the merge, but do not wait for a review nobody requested) → exact-SHA Sol proof → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
 
@@ -130,9 +131,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
 4. Once required checks are green, freeze the candidate, record its head SHA, and mark the PR
-   ready. CodeRabbit is **advisory** since 2026-10-19 (Mason): it reviews each PR ONCE, when it is
-   marked ready or opened non-draft, never on later pushes; it never submits APPROVED or
-   CHANGES_REQUESTED; and it skips PRs whose title contains `docs(`. GitHub's `protect-main`
+   ready. CodeRabbit is **advisory** since 2026-10-19 (Mason) and never submits APPROVED or
+   CHANGES_REQUESTED. Since 2026-10-21 it makes no automatic reviews: marking ready starts none,
+   and it reviews only when an agent posts `@coderabbitai full review` on a money or Mason-named PR. GitHub's `protect-main`
    ruleset no longer requires an approving review (required status checks stay). If CodeRabbit's
    review arrives before the merge, fix or refute with evidence every comment, in one push. Do not
    wait for it if it has not reviewed by the time checks are green and Sol is clean, and never post
@@ -172,6 +173,6 @@ If blocked: List every issue that needs fixing first.
 - NEVER push/merge if secrets are found in source code
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
-- NEVER mark the PR ready (which triggers CodeRabbit's single review) while implementation or Codex review is still changing the branch
+- NEVER mark the PR ready (which triggers the Codex GitHub App's review) while implementation or Codex review is still changing the branch
 - NEVER merge over a `CHANGES_REQUESTED` verdict; CodeRabbit approval is not required (advisory since 2026-10-19), but every CodeRabbit comment that arrived before the merge must be fixed or refuted with evidence
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive, data-overwriting or access-changing migrations apply only after Mason's own `I approve` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply), through `scripts/apply-migration-file.mjs`

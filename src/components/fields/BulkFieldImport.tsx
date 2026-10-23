@@ -14,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult, rpcAuthErrorMessage } from '../../lib/db';
 import { sanitizeError } from '../../lib/errorSanitizer';
 import { isDefinitiveRpcRejection } from '../../lib/idempotency';
+import { fetchAllRows } from '../../lib/pagedRead';
 import {
   parseShapefileBundle,
   parseShapefileZip,
@@ -143,6 +144,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
   // Step 4: Customer assignment (per-field, with an apply-to-all fast path)
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // A failed customer read empties the list and blocks step 4 (never a short list).
+  const [customersLoadFailed, setCustomersLoadFailed] = useState(false);
+  const [customersLoading, setCustomersLoading] = useState(false);
+  const customerLoadSeqRef = useRef(0);
   // The "apply to all" / fallback customer; per-field overrides live in fieldCustomerAssignments.
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [fieldCustomerAssignments, setFieldCustomerAssignments] = useState<Record<number, string>>({});
@@ -162,16 +167,28 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const [results, setResults] = useState<{ success: number; failed: number; created: number; unknownOutcome: number; errors: string[]; warnings: string[] } | null>(null);
 
   const fetchCustomers = async () => {
-    const { data, error } = await supabase
+    // Only the newest open's read may install the list (an earlier, slower read must not
+    // restore a list after this one failed); until it lands step 4 cannot advance.
+    const seq = ++customerLoadSeqRef.current;
+    setCustomers([]);
+    setCustomersLoading(true);
+    // Every active customer, page by page: one read stops at the server's row cap.
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('customers')
-      .select('id, farm_name')
+      .select('id, farm_name', { count: 'exact' })
       .eq('is_active', true)
       .order('farm_name')
-      .limit(500);
+      .order('id')
+      .range(from, to));
+    if (seq !== customerLoadSeqRef.current) return;
+    setCustomersLoading(false);
     if (error) {
+      setCustomers([]);
+      setCustomersLoadFailed(true);
       toast('error', 'Failed to load customers');
       return;
     }
+    setCustomersLoadFailed(false);
     setCustomers((data || []) as Customer[]);
   };
 
@@ -753,7 +770,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     if (step === 1) return files.length > 0 && fileType !== null && !parsing;
     if (step === 2) return parseResult !== null;
     if (step === 3) return true; // mapping is optional
-    if (step === 4) return allFieldsAssigned(assignableFields, fieldCustomerAssignments, selectedCustomerId);
+    if (step === 4) return !customersLoadFailed && !customersLoading && allFieldsAssigned(assignableFields, fieldCustomerAssignments, selectedCustomerId);
     if (step === 5) return parsedFields.some((f) => f.isValid);
     return false;
   };
@@ -933,7 +950,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         )}
 
         {/* ─── Step 4: Customer Assignment ─── */}
-        {step === 4 && (
+        {step === 4 && customersLoadFailed && (
+          <p role="alert" className="text-sm text-red-600">
+            Customers could not be loaded. Close the importer and open it again to retry.
+          </p>
+        )}
+        {step === 4 && !customersLoadFailed && (
           <FieldCustomerAssignment
             fields={assignableFields}
             customers={customers}

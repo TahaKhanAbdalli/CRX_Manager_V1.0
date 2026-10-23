@@ -7,6 +7,7 @@ import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -19,7 +20,7 @@ import {
   formatApplicationServiceCostDollars,
   parseApplicationServiceCostCents,
 } from '../lib/applicationServiceCosts';
-import type { Vehicle, Customer, CustomerApplicationRate } from '../types';
+import type { Vehicle, CustomerApplicationRate } from '../types';
 
 // Every column of application_services EXCEPT cost_per_acre_cents. That column is
 // our internal per-acre cost — margin, once subtracted from the customer rate —
@@ -56,7 +57,8 @@ export default function ApplicationServiceDetail() {
 
   const [vehicles, setVehicles] = useState<Pick<Vehicle, 'id' | 'vehicle_name'>[]>([]);
   const [overrides, setOverrides] = useState<(CustomerApplicationRate & { _dirty?: boolean })[]>([]);
-  const [customers, setCustomers] = useState<Pick<Customer, 'id' | 'farm_name'>[]>([]);
+  // Farm name of the customer picked for a new override (the picker searches; no list is loaded).
+  const [newOverrideCustomerName, setNewOverrideCustomerName] = useState('');
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   // "We could not read the cost" is NOT the same fact as "the cost is $0.00", and
@@ -76,8 +78,6 @@ export default function ApplicationServiceDetail() {
   useEffect(() => {
     supabase.from('vehicles').select('id, vehicle_name').eq('status', 'active').order('vehicle_name')
       .then(({ data }) => setVehicles((data || []) as Pick<Vehicle, 'id' | 'vehicle_name'>[]));
-    supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name')
-      .then(({ data }) => setCustomers((data || []) as Pick<Customer, 'id' | 'farm_name'>[]));
   }, []);
 
   const fetchService = useCallback(async () => {
@@ -258,6 +258,7 @@ export default function ApplicationServiceDetail() {
       checkMutationResult(result, 'Add customer rate override');
       setOverrides((prev) => [result.data as CustomerApplicationRate, ...prev]);
       setNewOverride({ customer_id: '', rate: '', season: currentSeason().toString(), notes: '' });
+      setNewOverrideCustomerName('');
       if (profile) logActivity({ event: 'app_rate_override_added', description: `Rate override added`, performedBy: profile.id, entityType: 'customer_application_rate', entityId: result.data!.id });
       toast('success', 'Override added');
     } catch (err: unknown) { toast('error', sanitizeError(err)); }
@@ -309,7 +310,16 @@ export default function ApplicationServiceDetail() {
         <h3 className="text-lg font-semibold text-nav-dark mb-4">Customer Rate Overrides</h3>
         <p className="text-sm text-secondary mb-4">Special per-acre rates for specific customers. These override the default rate above.</p>
         <div className="flex items-end gap-3 mb-4 pb-4 border-b border-gray-100">
-          <div className="flex-1"><label className="block text-xs font-medium text-secondary mb-1">Customer</label><select value={newOverride.customer_id} onChange={(e) => setNewOverride((p) => ({ ...p, customer_id: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"><option value="">Select customer...</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.farm_name}</option>)}</select></div>
+          <div className="flex-1"><label className="block text-xs font-medium text-secondary mb-1">Customer</label><CustomerSearchPicker
+            value={newOverride.customer_id}
+            selectedLabel={newOverrideCustomerName}
+            onSelect={(c) => {
+              setNewOverride((p) => ({ ...p, customer_id: c?.id ?? '' }));
+              setNewOverrideCustomerName(c?.farm_name ?? '');
+            }}
+            placeholder="Search customer..."
+            ariaLabel="Rate override customer"
+          /></div>
           <div className="w-28"><label className="block text-xs font-medium text-secondary mb-1">$/Acre</label><input type="number" step="0.01" min={0} value={newOverride.rate} onChange={(e) => setNewOverride((p) => ({ ...p, rate: e.target.value }))} placeholder="8.00" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" /></div>
           <div className="w-24"><label className="block text-xs font-medium text-secondary mb-1">Season</label><input type="number" value={newOverride.season} onChange={(e) => setNewOverride((p) => ({ ...p, season: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" /></div>
           <div className="flex-1"><label className="block text-xs font-medium text-secondary mb-1">Notes</label><input type="text" value={newOverride.notes} onChange={(e) => setNewOverride((p) => ({ ...p, notes: e.target.value }))} placeholder="Optional note" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" /></div>

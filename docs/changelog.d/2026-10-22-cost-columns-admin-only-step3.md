@@ -1,6 +1,6 @@
 ## 2026-10-22 — Goal 1 step 3: cost, profit and margin columns locked on the remaining cost tables
 
-**What changed.** Migration `20261022030000_cost_columns_admin_only` (migration history row 970; written, not
+**What changed.** Migration `20261022091000_cost_columns_admin_only` (migration history row 977; written, not
 yet applied) takes the cost,
 profit and margin columns of `products`, `quotes`, `quote_items`, `quote_versions` (`snapshot_data`), `orders`,
 `order_items`, `invoices`, `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions` out of
@@ -28,6 +28,6 @@ throwaway database, replays every migration, and checks the lock role by role be
 
 **Invoice posting version (2026-10-22).** The lock first removes the old `invoice_post_version` on
 `invoices` (PR #1018), which reads a whole invoice row and would fail for everyone once cost is hidden.
-Screens read the version from `invoices_postable` (migration 20261022025000) since that change, and
+Screens read the version from `invoices_postable` (migration 20261022090000) since that change, and
 the lock refuses to run unless that view and its function are in place. The proof replays both first,
 then shows an admin and a rep still get the version from the view after the lock.

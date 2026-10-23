@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, BellOff, CheckCheck } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
+import EmptyState, { LoadFailedState } from '../components/ui/EmptyState';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -165,7 +165,7 @@ export default function Notifications() {
 
       {loadFailed ? (
         <Card>
-          <p role="alert" className="text-center text-red-600 py-8 text-sm">Notifications could not be loaded. Reload to try again.</p>
+          <LoadFailedState title="Notifications could not be loaded" onRetry={() => void fetchNotifications()} />
         </Card>
       ) : notifications.length === 0 ? (
         <Card>

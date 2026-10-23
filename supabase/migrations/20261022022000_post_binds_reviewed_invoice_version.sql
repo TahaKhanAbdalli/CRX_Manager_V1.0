@@ -126,15 +126,19 @@ AS $fn$
        FROM public.invoice_line_shares ls
        JOIN public.invoice_items ii ON ii.id = ls.invoice_item_id
       WHERE ii.invoice_id = p_invoice_id),
+    -- An allocation may point at the invoice, a split invoice, or only at one of its lines
+    -- (ila_target_check allows invoice_item_id alone), so all three are covered.
     (SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id), '[]'::jsonb)
        FROM public.invoice_line_allocations a
-      WHERE a.invoice_id = p_invoice_id OR a.split_invoice_id = p_invoice_id),
-    -- A split field invoice's locations are keyed by its group with invoice_id NULL.
+      WHERE a.invoice_id = p_invoice_id OR a.split_invoice_id = p_invoice_id
+         OR a.invoice_item_id IN (SELECT ii.id FROM public.invoice_items ii WHERE ii.invoice_id = p_invoice_id)),
+    -- A split field invoice's locations are keyed by its group (invoice_id NULL). A location that
+    -- names the group counts for it whatever its invoice_id, because group lists and PDFs select by
+    -- invoice_group_id alone.
     (SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.id), '[]'::jsonb)
        FROM public.field_app_locations l
       WHERE l.invoice_id = p_invoice_id
-         OR (l.invoice_id IS NULL
-             AND l.invoice_group_id = (SELECT i.invoice_group_id FROM public.invoices i WHERE i.id = p_invoice_id)))
+         OR l.invoice_group_id = (SELECT i.invoice_group_id FROM public.invoices i WHERE i.id = p_invoice_id))
   )::text, 'UTF8')), 'hex')
 $fn$;
 
@@ -199,11 +203,12 @@ BEGIN
    ORDER BY ls.id FOR UPDATE OF ls;
   PERFORM 1 FROM public.invoice_line_allocations a
    WHERE a.invoice_id = ANY (p_invoice_ids) OR a.split_invoice_id = ANY (p_invoice_ids)
+      OR a.invoice_item_id IN (SELECT ii.id FROM public.invoice_items ii WHERE ii.invoice_id = ANY (p_invoice_ids))
    ORDER BY a.id FOR UPDATE;
   PERFORM 1 FROM public.field_app_locations l
    WHERE l.invoice_id = ANY (p_invoice_ids)
-      OR (l.invoice_id IS NULL AND l.invoice_group_id IN (
-            SELECT i.invoice_group_id FROM public.invoices i WHERE i.id = ANY (p_invoice_ids)))
+      OR l.invoice_group_id IN (
+            SELECT i.invoice_group_id FROM public.invoices i WHERE i.id = ANY (p_invoice_ids))
    ORDER BY l.id FOR UPDATE;
   PERFORM 1 FROM public.customers c
    WHERE c.id IN (SELECT i.customer_id FROM public.invoices i WHERE i.id = ANY (p_invoice_ids))
@@ -280,9 +285,9 @@ CREATE TRIGGER trg_serialize_invoice_group_writes
 -- share lock on the parent invoice, which waits for an in-flight post. A line share has no
 -- invoice_id: its INSERT takes a key-share lock on its line instead (the lock its foreign key
 -- would take later, after prevent_invoice_line_shares_edit_after_post has already passed it), and
--- every post locks its lines first, so it waits too and reads the line's invoice afterwards. Group-keyed field
--- locations (invoice_id NULL) check every live member; trg_serialize_invoice_group_writes has
--- already taken the group lock. Draft, unposted, voided, cancelled, soft-deleted and missing
+-- every post locks its lines first, so it waits too and reads the line's invoice afterwards. A field
+-- location that names a group checks every live member of it (as well as its invoice, if it also
+-- names one); trg_serialize_invoice_group_writes has already taken the group lock. Draft, unposted, voided, cancelled, soft-deleted and missing
 -- parents pass. Two writes stay allowed on a posted invoice: return-credit lines inserted into
 -- the credit memo they post with (app.crx_return_credit_lineage), and line updates that change
 -- only cost_cents, return_credit_cogs_cents, tote_number or updated_at. No admin override: a
@@ -333,7 +338,7 @@ BEGIN
       CONTINUE;
     END IF;
     v_invoice := (v_row ->> 'invoice_id')::uuid;
-    v_group := CASE WHEN TG_TABLE_NAME = 'field_app_locations' AND v_invoice IS NULL
+    v_group := CASE WHEN TG_TABLE_NAME = 'field_app_locations'
                     THEN (v_row ->> 'invoice_group_id')::uuid END;
     IF v_invoice IS NOT NULL THEN
       IF TG_OP = 'INSERT' THEN
@@ -359,7 +364,8 @@ BEGIN
         RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this invoice was posted, so its % cannot change; unpost it first', replace(TG_TABLE_NAME, '_', ' ')
           USING ERRCODE = 'check_violation';
       END IF;
-    ELSIF v_group IS NOT NULL THEN
+    END IF;
+    IF v_group IS NOT NULL THEN
       IF EXISTS (SELECT 1 FROM public.invoices
                   WHERE invoice_group_id = v_group AND deleted_at IS NULL AND status IN ('posted', 'paid', 'overdue')) THEN
         RAISE EXCEPTION 'INVOICE_POSTED_LOCKED: this split invoice group was posted, so its field locations cannot change; unpost it first'

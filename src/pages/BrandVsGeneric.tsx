@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { PRODUCT_COLUMNS, withAdminCosts, withAdminNestedCosts } from '../lib/costFields';
+import { fetchAllRows } from '../lib/pagedRead';
 import type { Product, IngredientMap } from '../types';
 
 type MappingRow = IngredientMap & { generic_product: Product | null };
@@ -28,6 +29,7 @@ export default function BrandVsGeneric() {
   const [mappings, setMappings] = useState<MappingRow[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Add / edit form state
   const [formOpen, setFormOpen] = useState(false);
@@ -50,39 +52,58 @@ export default function BrandVsGeneric() {
   const fetchData = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     setLoading(true);
+    // Both lists are read in full, page by page: the pickers, the comparison and
+    // the management table use them whole, and one read stops silently at the
+    // server's 1,000-row cap.
     const [prodRes, mapRes] = await Promise.all([
-      supabase.from('products').select(PRODUCT_COLUMNS).eq('is_active', true).order('product_name'),
-      supabase
+      fetchAllRows((from, to) => supabase
+        .from('products')
+        .select(PRODUCT_COLUMNS, { count: 'exact' })
+        .eq('is_active', true)
+        .order('product_name')
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('ingredient_map')
-        .select(`*, generic_product:products!ingredient_map_generic_product_id_fkey(${PRODUCT_COLUMNS})`)
-        .order('fallback_branded_product'),
+        .select(`*, generic_product:products!ingredient_map_generic_product_id_fkey(${PRODUCT_COLUMNS})`, { count: 'exact' })
+        .order('fallback_branded_product')
+        .order('id')
+        .range(from, to)),
     ]);
 
-    if (prodRes.error || mapRes.error) {
-      Sentry.captureException(prodRes.error || mapRes.error, {
+    // A failed read shows an error and no lists (never an earlier or partial one),
+    // and adding or editing a mapping stays blocked until a load succeeds.
+    const failLoad = (error: unknown) => {
+      Sentry.captureException(error, {
         tags: { source: 'fetch', action: 'load_ingredient_map' },
       });
+      if (seq !== loadSeqRef.current) return;
       toast('error', 'Failed to load ingredient mappings');
+      setProducts([]);
+      setMappings([]);
+      setSelectedProductId('');
+      setLoadFailed(true);
       setLoading(false);
+    };
+
+    if (prodRes.error || mapRes.error) {
+      failLoad(prodRes.error || mapRes.error);
       return;
     }
     // Cost is admin-only (Mason, 2026-10-15).
     let loadedProducts: Product[];
     let loadedMappings: MappingRow[];
     try {
-      loadedProducts = await withAdminCosts('products', (prodRes.data || []) as Product[], isAdmin);
-      loadedMappings = await withAdminNestedCosts('products', (mapRes.data || []) as MappingRow[], 'generic_product', isAdmin);
+      loadedProducts = await withAdminCosts('products', (prodRes.data || []) as unknown as Product[], isAdmin);
+      loadedMappings = await withAdminNestedCosts('products', (mapRes.data || []) as unknown as MappingRow[], 'generic_product', isAdmin);
     } catch (costError) {
-      Sentry.captureException(costError, {
-        tags: { source: 'fetch', action: 'load_ingredient_map' },
-      });
-      toast('error', 'Failed to load ingredient mappings');
-      setLoading(false);
+      failLoad(costError);
       return;
     }
     if (seq !== loadSeqRef.current) return;
     setProducts(loadedProducts);
     setMappings(loadedMappings);
+    setLoadFailed(false);
     setLoading(false);
   }, [isAdmin, toast]);
 
@@ -164,6 +185,16 @@ export default function BrandVsGeneric() {
 
   const handleSave = async () => {
     setFormError('');
+    // The duplicate and product checks below need the complete lists.
+    if (loadFailed) {
+      setFormError('Products and mappings could not be loaded. Reload the page to try again.');
+      return;
+    }
+    // A refresh in flight may not include a mapping just saved (Luna, #1017).
+    if (loading) {
+      setFormError('Products and mappings are still loading. Try again in a moment.');
+      return;
+    }
     const branded = brandedName.trim();
     if (!branded) {
       setFormError('Choose a branded product.');
@@ -471,11 +502,14 @@ export default function BrandVsGeneric() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <CardHeader title="Manage" accent="Mappings" />
             {isAdmin && (
-              <Button icon={<Plus className="w-4 h-4" />} onClick={openAdd}>
+              <Button icon={<Plus className="w-4 h-4" />} onClick={openAdd} disabled={loadFailed || loading}>
                 Add Mapping
               </Button>
             )}
           </div>
+          {loadFailed && (
+            <p role="alert" className="text-sm text-red-600">Products and mappings could not be loaded. Reload the page to try again.</p>
+          )}
           <DataTable<MappingRow>
             data={mappings}
             columns={columns}

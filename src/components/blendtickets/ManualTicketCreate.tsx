@@ -12,6 +12,7 @@ import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem, UnitConversion } from '../../types';
 import { Sentry } from '../../lib/sentry';
 import { PRODUCT_COLUMNS } from '../../lib/costFields';
+import { fetchAllRows } from '../../lib/pagedRead';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../../lib/units';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import UnitSelect from './UnitSelect';
@@ -186,6 +187,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
   const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
@@ -289,16 +291,24 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   useEffect(() => {
     const loadData = async () => {
-      const { data: prodData, error: prodError } = await supabase
+      // Goal 4: the catalog is read whole, page by page; one request would stop
+      // silently at the server's row cap.
+      const { data: prodData, error: prodError } = await fetchAllRows((from, to) => supabase
         .from('products')
-        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
         .eq('is_active', true)
-        .order('product_name');
+        .order('product_name')
+        .order('id')
+        .range(from, to));
       if (prodError) {
         Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to load products' } });
-        setError('Failed to load Products. Retry before creating this ticket.');
+        setError('Failed to load Products. Close this window and open it again to retry.');
+        // Never keep a previous or partial catalog; products and saving stay blocked.
+        setAllProducts([]);
+        setCatalogLoadFailed(true);
       } else {
         setAllProducts((prodData || []) as unknown as PickerProduct[]);
+        setCatalogLoadFailed(false);
       }
 
       // Fetch active blend recipes with their items
@@ -315,6 +325,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }, []);
 
   function applyRecipe(recipeId: string) {
+    // A recipe line takes its rate unit from the catalog, so it waits for a catalog that loaded.
+    if (catalogLoadFailed) return;
     setSelectedRecipeId(recipeId);
     if (!recipeId) return;
 
@@ -370,6 +382,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   function addProduct() {
+    if (catalogLoadFailed) return;
     setProducts([
       ...products,
       {
@@ -403,6 +416,12 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
     if (!formData.customer_id) {
       setError('Please select a customer before saving.');
+      return;
+    }
+
+    // A recovered uncertain attempt re-sends its frozen payload and does not read the catalog.
+    if (catalogLoadFailed && !attemptUncertain) {
+      setError('Failed to load Products. Close this window and open it again to retry.');
       return;
     }
 
@@ -719,6 +738,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
           <select
             value={selectedRecipeId}
             onChange={(e) => applyRecipe(e.target.value)}
+            disabled={catalogLoadFailed}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">-- Choose a recipe --</option>
@@ -737,7 +757,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Products</h2>
-          <Button size="sm" onClick={addProduct}>
+          <Button size="sm" onClick={addProduct} disabled={catalogLoadFailed}>
             <Plus className="h-4 w-4" />
             Add Product
           </Button>
@@ -875,7 +895,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         <Button variant="secondary" onClick={onComplete}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={saving}>
+        <Button onClick={handleSave} disabled={saving || (catalogLoadFailed && !attemptUncertain)}>
           <Save className="h-4 w-4" />
           {saving ? 'Saving...' : attemptUncertain ? 'Retry Same Ticket' : 'Create Ticket'}
         </Button>

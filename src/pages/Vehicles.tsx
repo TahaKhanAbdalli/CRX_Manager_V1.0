@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Truck, Plane, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -29,6 +29,9 @@ export default function Vehicles() {
   const { role } = useAuth();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  // Only the newest read may change the list or its error state: a slow older read must not overwrite a newer one.
+  const loadSeqRef = useRef(0);
   const [typeFilter, setTypeFilter] = useState<VehicleType | ''>('');
   const [statusFilter, setStatusFilter] = useState<VehicleStatus | ''>('');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -38,19 +41,23 @@ export default function Vehicles() {
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   const fetchVehicles = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const { data, error } = await supabase
       .from('vehicles')
       .select('*')
       .order('vehicle_name');
+    if (seq !== loadSeqRef.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_vehicles' } });
       toast('error', 'Failed to load vehicles');
+      setLoadError(true);
       setLoading(false);
       return;
     }
     setVehicles((data || []) as Vehicle[]);
+    setLoadError(false);
     setLoading(false);
   }, [toast]);
 
@@ -191,7 +198,8 @@ export default function Vehicles() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
           <SplitHeading title="Vehicles" accent="& Equipment" />
-          {canBulkAction && (
+          {/* Bulk actions act on the selection, so they wait while the rows are hidden by a failed load. */}
+          {canBulkAction && !loadError && (
             <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
           )}
         </div>
@@ -226,7 +234,7 @@ export default function Vehicles() {
           <option value="inactive">Inactive</option>
           <option value="maintenance">Maintenance</option>
         </select>
-        {canBulkAction && filtered.length > 0 && (
+        {canBulkAction && !loadError && filtered.length > 0 && (
           <button
             onClick={toggleAll}
             className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
@@ -247,6 +255,8 @@ export default function Vehicles() {
             emptyTitle="No vehicles"
             emptyDescription="Add your first vehicle to get started."
             loading={loading}
+            loadError={loadError}
+            onRetry={() => void fetchVehicles()}
           />
         </div>
       </Card>

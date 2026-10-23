@@ -84,6 +84,9 @@ DECLARE
   v_can_bypass_triggers boolean := COALESCE((
     SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user
   ), false);
+  -- 20261022022000 applied: posting takes the loaded invoice version. An older container proof
+  -- replays only up to its own candidate, so every post below calls the signature the database has.
+  v_versioned boolean := to_regprocedure('public.post_invoice(uuid,text,text)') IS NOT NULL;
 BEGIN
   -- Disposable-database mode has no users. Live mode reuses an active admin.
   SELECT id INTO v_admin
@@ -512,11 +515,20 @@ BEGIN
     v_today, v_today + 30, 0, v_admin
   ) RETURNING id INTO v_bound_other_invoice;
 
-  v_bound_version := public._invoice_post_version(v_bound_invoice);
-  PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
-  PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
+  IF v_versioned THEN
+    v_bound_version := public._invoice_post_version(v_bound_invoice);
+    PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
+    PERFORM public.post_invoice(v_bound_invoice, v_bound_version, 'e2e-life-post-bound-' || v_suffix);
+  ELSE
+    PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
+    PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
+  END IF;
   BEGIN
-    PERFORM public.post_invoice(v_bound_other_invoice, public._invoice_post_version(v_bound_other_invoice), 'e2e-life-post-bound-' || v_suffix);
+    IF v_versioned THEN
+      PERFORM public.post_invoice(v_bound_other_invoice, public._invoice_post_version(v_bound_other_invoice), 'e2e-life-post-bound-' || v_suffix);
+    ELSE
+      PERFORM public.post_invoice(v_bound_other_invoice, 'e2e-life-post-bound-' || v_suffix);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL: post_invoice retry key accepted a different invoice';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -1153,11 +1165,15 @@ BEGIN
     UPDATE public.orders SET customer_id = v_other_customer
      WHERE id = v_deleted_order;
     PERFORM set_config('session_replication_role', 'origin', true);
-    PERFORM public.post_invoice(
-      v_deleted_recovery_invoice,
-      public._invoice_post_version(v_deleted_recovery_invoice),
-      'e2e-life-post-customer-drift-' || v_suffix
-    );
+    IF v_versioned THEN
+      PERFORM public.post_invoice(
+        v_deleted_recovery_invoice,
+        public._invoice_post_version(v_deleted_recovery_invoice),
+        'e2e-life-post-customer-drift-' || v_suffix
+      );
+    ELSE
+      PERFORM public.post_invoice(v_deleted_recovery_invoice, 'e2e-life-post-customer-drift-' || v_suffix);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL: recovery poster accepted order/customer drift';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -1177,11 +1193,15 @@ BEGIN
        SET quantity_delivered = quantity + 1
      WHERE delivery_id = v_deleted_delivery;
     PERFORM set_config('session_replication_role', 'origin', true);
-    PERFORM public.post_invoice(
-      v_deleted_recovery_invoice,
-      public._invoice_post_version(v_deleted_recovery_invoice),
-      'e2e-life-post-corrupt-deleted-recovery-' || v_suffix
-    );
+    IF v_versioned THEN
+      PERFORM public.post_invoice(
+        v_deleted_recovery_invoice,
+        public._invoice_post_version(v_deleted_recovery_invoice),
+        'e2e-life-post-corrupt-deleted-recovery-' || v_suffix
+      );
+    ELSE
+      PERFORM public.post_invoice(v_deleted_recovery_invoice, 'e2e-life-post-corrupt-deleted-recovery-' || v_suffix);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL: recovery poster accepted over-delivered history';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -1198,11 +1218,15 @@ BEGIN
       ARRAY[v_deleted_recovery_invoice], v_admin,
       'e2e-life-delete-recovery-' || v_suffix
     );
-    PERFORM public.post_invoice(
-      v_deleted_recovery_invoice,
-      public._invoice_post_version(v_deleted_recovery_invoice),
-      'e2e-life-post-deleted-draft-' || v_suffix
-    );
+    IF v_versioned THEN
+      PERFORM public.post_invoice(
+        v_deleted_recovery_invoice,
+        public._invoice_post_version(v_deleted_recovery_invoice),
+        'e2e-life-post-deleted-draft-' || v_suffix
+      );
+    ELSE
+      PERFORM public.post_invoice(v_deleted_recovery_invoice, 'e2e-life-post-deleted-draft-' || v_suffix);
+    END IF;
     RAISE EXCEPTION 'SMOKE_FAIL: soft-deleted recovery draft was posted';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -1217,11 +1241,15 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected soft-delete/post subtransaction leaked invoice state';
   END IF;
 
-  PERFORM public.post_invoice(
-    v_deleted_recovery_invoice,
-    public._invoice_post_version(v_deleted_recovery_invoice),
-    'e2e-life-post-deleted-recovery-' || v_suffix
-  );
+  IF v_versioned THEN
+    PERFORM public.post_invoice(
+      v_deleted_recovery_invoice,
+      public._invoice_post_version(v_deleted_recovery_invoice),
+      'e2e-life-post-deleted-recovery-' || v_suffix
+    );
+  ELSE
+    PERFORM public.post_invoice(v_deleted_recovery_invoice, 'e2e-life-post-deleted-recovery-' || v_suffix);
+  END IF;
   IF (SELECT status FROM public.invoices WHERE id = v_deleted_recovery_invoice)
        IS DISTINCT FROM 'posted'
      OR EXISTS (

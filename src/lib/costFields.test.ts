@@ -187,14 +187,14 @@ describe('column lists match the schema registry', () => {
   }
 });
 
-// Since 20261022030000 the API roles hold per-column grants on these tables, so a column added later
+// Since 20261022091000 the API roles hold per-column grants on these tables, so a column added later
 // is invisible to every screen (and the SAFE_COLUMNS list that must include it then fails for admins
 // too) until a migration grants it. Every ADD COLUMN after the lock must, in the same file, grant
 // the read privileges the table's other columns carry: SELECT and REFERENCES to authenticated
 // (quote_versions: SELECT only) and SELECT to anon where anon reads the table. Write grants are left
 // to judgement: a column the screens never write is safer without them. Unless it is another cost field.
 const COLUMN_CARVED = [...COST_TABLES, 'quote_versions'];
-const LOCK_STAMP = '20261022030000';
+const LOCK_STAMP = '20261022091000';
 const NO_ANON = ['quote_items', 'quote_versions'];
 
 function requiredGrants(table: string): Array<[privilege: string, role: string]> {
@@ -301,7 +301,7 @@ describe('admin cost helpers', () => {
 });
 
 // The posting version is a computed field: it receives the whole row, so it may only be selected from
-// invoices_postable (migration 20261022025000), whose row has no cost column. On `invoices` it fails
+// invoices_postable (migration 20261022090000), whose row has no cost column. On `invoices` it fails
 // for everyone once the cost column lock revokes total_cost_cents.
 const VERSION_TOKEN = /\binvoice_post_version\b|\bINVOICE_POST_VERSION_COLUMNS\b/;
 

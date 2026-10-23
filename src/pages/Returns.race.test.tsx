@@ -1,19 +1,28 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockFrom, mockRpc, mockToast, mockSentryCaptureException, intentKeys, nextIntentKey } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockSentryCaptureException, intentKeys, nextIntentKey, returnLookups } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
   mockSentryCaptureException: vi.fn(),
   intentKeys: new Map<string, string>(),
   nextIntentKey: { value: 0 },
+  // The Returns screen's read-only lookups (20261021155000), answered apart from mockRpc so each
+  // test's mutation mock stays about mutations.
+  returnLookups: {
+    allowances: [] as Array<{ order_item_id: string; returnable_qty: number; share_mode: boolean }>,
+    splitOrders: [] as string[],
+  },
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'gt', 'is', 'in', 'not', 'order', 'limit', 'single', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'gt', 'is', 'in', 'not', 'neq', 'order', 'limit']) chain[name] = method;
+  // A single-row read resolves to the first row, as PostgREST does.
+  chain.single = () => buildChain(Array.isArray(result.data) ? { ...result, data: result.data[0] ?? null } : result);
+  chain.maybeSingle = chain.single;
   // Paged reads ask for one slice at a time; serve the matching slice so the
   // read ends on an empty page instead of looping on the same rows.
   chain.range = (from: number, to: number) => buildChain(
@@ -32,7 +41,7 @@ function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (resul
   const promise = new Promise<{ data: unknown; error: unknown }>((done) => { resolve = done; });
   const chain: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => chain;
-  for (const name of ['select', 'eq', 'gt', 'is', 'in', 'not', 'order', 'limit', 'single', 'maybeSingle']) chain[name] = method;
+  for (const name of ['select', 'eq', 'gt', 'is', 'in', 'not', 'neq', 'order', 'limit', 'single', 'maybeSingle']) chain[name] = method;
   chain.then = promise.then.bind(promise);
   chain.catch = promise.catch.bind(promise);
   chain.finally = promise.finally.bind(promise);
@@ -40,7 +49,14 @@ function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (resul
 }
 
 vi.mock('../lib/db', async () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
+  supabase: {
+    from: mockFrom,
+    rpc: (name: string, args?: unknown) => {
+      if (name === 'get_return_line_allowances') return Promise.resolve({ data: returnLookups.allowances, error: null });
+      if (name === 'get_split_payer_return_orders') return Promise.resolve({ data: returnLookups.splitOrders, error: null });
+      return mockRpc(name, args);
+    },
+  },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((value) => value),
   // The REAL sanitizeError, never a stub. The previous stub was typed
@@ -109,13 +125,15 @@ describe('Returns loading and retry behavior', () => {
     intentKeys.clear();
     nextIntentKey.value = 0;
     mockRpc.mockResolvedValue({ data: null, error: null });
+    returnLookups.allowances = [];
+    returnLookups.splitOrders = [];
   });
 
   function setupCreateReturnData() {
     let returnableQuantity = 5;
     mockFrom.mockImplementation((table: string) => {
       if (table === 'customers') return buildChain({ data: [{ id: 'customer-1', farm_name: 'Test Farm' }], error: null });
-      if (table === 'orders') return buildChain({ data: [{ id: 'order-1', order_number: 'ORD-1', order_date: '2026-08-01' }], error: null });
+      if (table === 'orders') return buildChain({ data: [{ id: 'order-1', order_number: 'ORD-1', order_date: '2026-08-01', customer_id: 'customer-1' }], error: null });
       if (table === 'order_items') return buildChain({ data: [{
         id: 'order-item-1', product_id: 'product-1', product_name: 'Test Product',
         price_per_unit: 12.34, quantity_delivered: returnableQuantity,
@@ -124,7 +142,11 @@ describe('Returns loading and retry behavior', () => {
       if (table === 'returns') return buildChain({ data: [], error: null });
       return buildChain({ data: [], error: null });
     });
-    return { setReturnableQuantity: (value: number) => { returnableQuantity = value; } };
+    const allow = (value: number) => {
+      returnLookups.allowances = [{ order_item_id: 'order-item-1', returnable_qty: value, share_mode: false }];
+    };
+    allow(returnableQuantity);
+    return { setReturnableQuantity: (value: number) => { returnableQuantity = value; allow(value); } };
   }
 
   async function fillCreateReturn() {

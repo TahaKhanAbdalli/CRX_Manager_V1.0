@@ -26,6 +26,7 @@ import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCen
 import { localToday } from '../../lib/dateUtils';
 import { formatCents as fmt } from '../../lib/money';
 import { fetchAllRows } from '../../lib/pagedRead';
+import { Sentry } from '../../lib/sentry';
 
 interface PrepayBucket {
   id: string;
@@ -62,6 +63,7 @@ export default function PrepayWorkspacePanel() {
   const initialCustomerId = searchParams.get('customer') || '';
 
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [customersFailed, setCustomersFailed] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState(initialCustomerId);
   const [buckets, setBuckets] = useState<PrepayBucket[]>([]);
   const [invoices, setInvoices] = useState<UnpaidInvoice[]>([]);
@@ -77,16 +79,33 @@ export default function PrepayWorkspacePanel() {
   const [applyBucket, setApplyBucket] = useState<PrepayBucket | null>(null);
   const [applyAmounts, setApplyAmounts] = useState<Record<string, string>>({});
 
-  // Fetch customers with prepay balance
+  // Fetch every active customer with a prepay balance, page by page: one read
+  // stops silently at the server's 1,000-row cap. (A search picker cannot keep
+  // the prepay-balance condition, so this stays a complete list.)
   useEffect(() => {
-    supabase
+    let cancelled = false;
+    void fetchAllRows<{ id: string; farm_name: string }>((from, to) => supabase
       .from('customers')
-      .select('id, farm_name')
+      .select('id, farm_name', { count: 'exact' })
       .gt('prepay_balance_cents', 0)
       .eq('is_active', true)
       .order('farm_name')
-      .then(({ data }) => setCustomers(data || []));
-  }, []);
+      .order('id')
+      .range(from, to))
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          Sentry.captureException(error, { tags: { source: 'fetch', page: 'prepay_workspace' } });
+          toast('error', 'Failed to load customers with prepay balances');
+          setCustomers([]);
+          setCustomersFailed(true);
+          return;
+        }
+        setCustomers(data ?? []);
+        setCustomersFailed(false);
+      });
+    return () => { cancelled = true; };
+  }, [toast]);
 
   const fetchData = useCallback(async () => {
     if (!selectedCustomerId) {
@@ -273,10 +292,12 @@ export default function PrepayWorkspacePanel() {
 
       {/* Customer Selector */}
       <Card>
-        <label className="text-sm font-medium text-nav-dark">Customer</label>
+        <label htmlFor="prepay-workspace-customer" className="text-sm font-medium text-nav-dark">Customer</label>
         <select
+          id="prepay-workspace-customer"
           value={selectedCustomerId}
           onChange={(e) => setSelectedCustomerId(e.target.value)}
+          disabled={customersFailed}
           className="mt-1 w-full max-w-md px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">Select a customer with prepay balance...</option>
@@ -284,6 +305,9 @@ export default function PrepayWorkspacePanel() {
             <option key={c.id} value={c.id}>{c.farm_name}</option>
           ))}
         </select>
+        {customersFailed && (
+          <p role="alert" className="mt-2 text-sm text-red-600">Customers with prepay balances could not be loaded. Reload the page to try again.</p>
+        )}
       </Card>
 
       {selectedCustomerId && !loading && loadFailed && (

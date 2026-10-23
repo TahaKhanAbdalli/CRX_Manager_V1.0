@@ -824,4 +824,15 @@ function armAutopilot(stateDir, hoursFromNow) {
   );
 }
 
+// Mason's "skip coderabbit" waiver is session-bound, so this hook must hand the
+// rule book its own session id (Codex App P2 on #1035); the landing gate's use
+// of it is proven behaviourally in migration-apply-lib.test.mjs.
+{
+  const guardSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "migration-apply-guard.mjs"), "utf8");
+  assert.match(guardSource, /ownerSessionId: payload\?\.session_id \?\? payload\?\.sessionId,/,
+    "the MCP apply hook passes its payload's session id to evaluateMigrationApply");
+  assert.doesNotMatch(guardSource, /ownerApprovalDoor\s*:/, "and never opens the owner-approval door");
+  pass++;
+}
+
 console.log(`migration-apply-guard: ${pass} assertions passed`);

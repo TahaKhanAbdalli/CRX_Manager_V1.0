@@ -60,6 +60,17 @@ describe('DataTable', () => {
     expect(screen.getByText('No data found')).toBeInTheDocument();
   });
 
+  it('shows the load-failed state instead of the empty message when loadError is set', () => {
+    const onRetry = vi.fn();
+    render(
+      <DataTable data={[]} columns={columns} emptyTitle="No customers yet" loadError onRetry={onRetry} />
+    );
+    expect(screen.queryByText('No customers yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('This list could not be loaded');
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('shows loading skeletons when loading', () => {
     const { container } = render(
       <DataTable data={data} columns={columns} loading />

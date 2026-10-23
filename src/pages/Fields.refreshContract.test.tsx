@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const rpc = vi.fn();
@@ -36,8 +36,10 @@ vi.mock('../lib/sentry', () => ({
   Sentry: { captureException: vi.fn() },
   initSentry: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
-vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'user-1' } }) }));
+// One stable toast: a new function per render would change fetchFields and reload on every render.
+const mockToast = vi.fn();
+vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'user-1' }, role: 'admin' }) }));
 
 /** Captures the refresh callback the page hands to the import modal. */
 let capturedOnSuccess: (() => boolean | void | Promise<boolean | void>) | null = null;
@@ -83,5 +85,31 @@ describe('Fields — the refresh contract the bulk import depends on', () => {
 
     const result = capturedOnSuccess!();
     await expect(result).resolves.toBe(false);
+  });
+
+  it('hides bulk actions and the field counts once a reload fails', async () => {
+    // Sol, PR #1043: a failed reload shows the load-failed state over the rows, so a bulk
+    // Delete left live would act on fields the user can no longer see.
+    const field = {
+      id: 'f1', field_name: 'North Forty', customer_name: 'Prairie View Farms', total_acres: 40,
+      is_active: true, county: null, crop_type: null, legal_description: null, parent_field_id: null,
+      boundary_geojson: null, centroid_geojson: null,
+    };
+    rpc
+      .mockResolvedValueOnce({ data: [field], error: null })
+      .mockResolvedValue({ data: null, error: { message: 'network failed' } });
+
+    render(<MemoryRouter><Fields /></MemoryRouter>);
+    const row = (await screen.findByText('North Forty')).closest('tr')!;
+    fireEvent.click(row.querySelector('input[type="checkbox"]')!);
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByText(/billable acres/)).toBeInTheDocument();
+
+    await expect(capturedOnSuccess!()).resolves.toBe(false);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('This list could not be loaded'));
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    // Counts left on screen would read as "0 fields" or a stale total next to the failure.
+    expect(screen.queryByText(/billable acres/)).not.toBeInTheDocument();
   });
 });

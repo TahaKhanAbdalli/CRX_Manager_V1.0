@@ -83,7 +83,7 @@ const products = [
 
 function query(data: unknown, error: unknown = null) {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'or', 'order', 'in', 'update']) {
+  for (const method of ['select', 'eq', 'or', 'order', 'in', 'update', 'range']) {
     builder[method] = vi.fn(() => builder);
   }
   builder.then = (resolve: (value: unknown) => void) =>

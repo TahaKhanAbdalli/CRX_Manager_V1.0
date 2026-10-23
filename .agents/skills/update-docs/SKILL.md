@@ -12,8 +12,8 @@ Audit the CRX_Manager_V1.0 documentation for drift against the actual codebase. 
 Run these commands and record each result:
 
 ```bash
-# Page count (lazy-loaded pages in App.tsx)
-grep -c "lazy(" src/App.tsx
+# Page count (lazy-loaded pages: the shared page list plus App.tsx's dev gallery)
+cat src/appPages.tsx src/App.tsx | grep -c "lazy("
 
 # Migration count (SQL files in migrations folder)
 ls supabase/migrations/*.sql | wc -l
@@ -64,20 +64,23 @@ rolled-back, or superseded migration need not have a live counterpart.
 
 ## Step 4: Check pages-routes.md
 
-Read `docs/reference/pages-routes.md`. Then extract all lazy-loaded pages from App.tsx:
+Read `docs/reference/pages-routes.md`. Then extract all lazy-loaded pages from the shared page list (App.tsx keeps only the dev gallery's):
 
 ```bash
-grep "lazy(" src/App.tsx
+grep "lazy(" src/appPages.tsx src/App.tsx
 ```
 
-Also check the route definitions to find paths. `App.tsx` uses `createBrowserRouter` **route
-objects**, so the paths are object properties (`path:`), not JSX attributes (`path=`):
+Also check the route definitions to find paths. Signed-in routes are the `routes` of each page in
+`src/appPages.tsx` (`App.tsx` builds the `createBrowserRouter` routes from them and keeps the
+sign-in pages and the two `invoices/field-app/*` routes), so the paths are object properties
+(`path:`), not JSX attributes (`path=`). Some sit inline after `routes: [`, so match anywhere on
+the line:
 
 ```bash
-grep -nE "^\s*\{?\s*path:" src/App.tsx
+grep -noE "path: '[^']+'" src/appPages.tsx src/App.tsx
 ```
 
-If any page exists in App.tsx but is NOT in pages-routes.md, add it with its route path and a short description. Update the page count in the title if it changed.
+If any page exists in src/appPages.tsx or App.tsx but is NOT in pages-routes.md, add it with its route path and a short description. Update the page count in the title if it changed.
 
 ## Step 5: Check database-schema.md
 

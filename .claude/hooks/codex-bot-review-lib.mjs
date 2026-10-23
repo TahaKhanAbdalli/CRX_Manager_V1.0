@@ -310,8 +310,9 @@ export function evaluateCodexBotReview(pullRequest) {
 }
 
 // ── CodeRabbit's unanswered findings (Mason, 2026-10-19) ─────────────────────
-// CodeRabbit became advisory on 2026-10-19: it reviews a PR once, when it is
-// marked ready, and never approves or requests changes, so nothing it says can
+// CodeRabbit became advisory on 2026-10-19: since 2026-10-21 it reviews a PR
+// only when an agent requests it (no automatic reviews), and it never approves
+// or requests changes, so nothing it says can
 // hold a merge on its own. Its comment threads are the one record of what it
 // found. Every UNRESOLVED CodeRabbit thread on the PR blocks — on ANY commit,
 // not only the head, because CodeRabbit never re-reviews: a fix pushed after its

@@ -18,10 +18,12 @@ export const PROMPT_DEDUPE_BLOCKS = [
 // reports as often as on Mason's words. The overnight handshake they fed is gone.
 // owner-approval-prompt (Mason, 2026-10-09) records his `I approve` reply
 // for a parked migration; it replaced the Windows Hello signature.
+// coderabbit-skip-prompt (Mason, 2026-10-22) records his `skip coderabbit`.
 export const SHARED_PROMPT_MODULES = [
   "./ship-intent-reminder.mjs",
   "./hold-latch-prompt.mjs",
   "./owner-approval-prompt.mjs",
+  "./coderabbit-skip-prompt.mjs",
 ];
 
 export const CLAUDE_ONLY_PROMPT_MODULES = [];

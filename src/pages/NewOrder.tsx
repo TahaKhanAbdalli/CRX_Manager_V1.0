@@ -32,13 +32,18 @@ import { checkRUPCompliance } from '../lib/rupCompliance';
 import { logActivity } from '../lib/activityLogger';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localToday } from '../lib/dateUtils';
-import SearchableSelect from '../components/ui/SearchableSelect';
+import CustomerSearchPicker, { CUSTOMER_SEARCH_SELECT, type CustomerSearchResult } from '../components/customers/CustomerSearchPicker';
+import { fetchAllRows } from '../lib/pagedRead';
 import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { PRODUCT_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type { Product, Customer, InventoryPositionRow } from '../types';
+
+// The order prices from the chosen customer's tier, so the picker reads it with the row.
+const ORDER_CUSTOMER_SELECT = `${CUSTOMER_SEARCH_SELECT}, assigned_tier`;
+type OrderCustomer = CustomerSearchResult & Pick<Customer, 'assigned_tier'>;
 
 interface LocalItem {
   _key: string;
@@ -87,8 +92,19 @@ export default function NewOrder() {
   const rushOrderIdem = useIdempotencyKey('create_rush_order', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
 
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // Customers this page knows by id: the draft's and the link's customer (read at load) plus each
+  // customer picked. The picker searches the database, so no full customer list is loaded.
+  const [customers, setCustomers] = useState<OrderCustomer[]>([]);
+  // Set when the draft's or the link's customer could not be read: that customer is not selected,
+  // and nothing is priced or saved from it.
+  const [customerLoadError, setCustomerLoadError] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  // Set when the product list (or an admin's product costs) failed to load: the list is empty and
+  // adding lines and saving are blocked, so nothing is priced from a missing or partial list.
+  const [productsLoadFailed, setProductsLoadFailed] = useState(false);
+  // True while the newest catalog read is in flight: a role-change reload replaces the list, and
+  // an older one on screen must not be priced from meanwhile (Luna, #1017).
+  const [productsLoading, setProductsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -177,9 +193,15 @@ export default function NewOrder() {
 
   // Restore draft on mount (runs once after loading completes)
   const [draftRestored, setDraftRestored] = useState(false);
+  const unloadedDraftCustomerRef = useRef<string | null>(null);
   useEffect(() => {
     if (!loading && !draftRestored && draft) {
-      setCustomerId(draft.customerId || '');
+      // A draft customer whose row could not be read stays unselected (customerLoadError says why).
+      const draftCustomerId = draft.customerId || '';
+      const draftCustomerLoaded = customers.some((customer) => customer.id === draftCustomerId);
+      // Picking that same customer again later must keep the draft's manual price overrides.
+      unloadedDraftCustomerRef.current = draftCustomerId && !draftCustomerLoaded ? draftCustomerId : null;
+      setCustomerId(draftCustomerLoaded ? draftCustomerId : '');
       setOrderName(draft.orderName || '');
       setOrderDate(draft.orderDate || localToday());
       setCustomerPoNumber(draft.customerPoNumber || '');
@@ -206,18 +228,43 @@ export default function NewOrder() {
   // Only the newest load may install the product list: a role change re-runs this loader while an
   // older (cost-less) load may still be in flight (Luna round 3).
   const loadSeqRef = useRef(0);
+  const customersPreloadedRef = useRef(false);
   const fetchData = useCallback(async () => {
     const seq = ++loadSeqRef.current;
+    setProductsLoading(true);
+    // Only the customers the form opens with are read here, once: the restored draft's and the
+    // link's. A reload after a role change keeps the customers already known.
+    const preloadCustomers = !customersPreloadedRef.current;
+    const draftCustomerId = preloadCustomers ? draft?.customerId || '' : '';
+    const linkCustomerId = preloadCustomers ? customerIdParam : '';
+    const preloadIds = [...new Set([draftCustomerId, linkCustomerId].filter(Boolean))];
     const [customersRes, productsRes] = await Promise.all([
-      supabase.from('customers').select('*').order('farm_name'),
-      supabase.from('products').select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`).eq('is_active', true).order('product_name'),
+      preloadIds.length > 0
+        ? supabase.from('customers').select(ORDER_CUSTOMER_SELECT).in('id', preloadIds)
+        : Promise.resolve({ data: [] as OrderCustomer[], error: null }),
+      fetchAllRows((from, to) => supabase
+        .from('products')
+        .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
+        .eq('is_active', true)
+        .order('product_name')
+        .order('id')
+        .range(from, to)),
     ]);
     const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
+    const preloadedCustomers = customersRes.error ? [] : ((customersRes.data || []) as unknown as OrderCustomer[]);
     if (customersRes.error) {
       Sentry.captureException(customersRes.error, { tags: { source: 'fetch', action: 'load_customers' } });
       toast('error', 'Failed to load customers. Please refresh.');
     }
+    // A customer that failed to load or no longer exists is never priced at a default tier.
+    const missingFromLink = !!linkCustomerId && !preloadedCustomers.some((customer) => customer.id === linkCustomerId);
+    const missingFromDraft = !!draftCustomerId && !preloadedCustomers.some((customer) => customer.id === draftCustomerId);
+    const preloadError = missingFromLink
+      ? 'The customer from the link could not be loaded. Choose the customer before pricing or saving this order.'
+      : missingFromDraft
+        ? 'The customer saved in your draft could not be loaded. Choose the customer again before pricing or saving this order.'
+        : null;
     if (productsRes.error) {
       Sentry.captureException(productsRes.error, { tags: { source: 'fetch', action: 'load_products' } });
       toast('error', 'Failed to load products. Please refresh.');
@@ -241,7 +288,9 @@ export default function NewOrder() {
       }
     }
 
-    let productRows = (productsRes.data || []) as Product[];
+    // A failed read leaves no list at all, never a partial or previous one.
+    let productRows = productsRes.error ? [] : ((productsRes.data || []) as Product[]);
+    let productListFailed = !!productsRes.error;
     try {
       productRows = await withAdminCosts('products', productRows, isAdmin);
     } catch (err) {
@@ -249,13 +298,20 @@ export default function NewOrder() {
       toast('error', 'Failed to load product costs. Please refresh.');
       // Never offer an admin a product list without cost (Luna round 1).
       productRows = [];
+      productListFailed = true;
     }
     if (seq !== loadSeqRef.current) return;
 
-    setCustomers((customersRes.data || []) as Customer[]);
+    if (preloadCustomers) {
+      customersPreloadedRef.current = true;
+      setCustomers((known) => [...known.filter((customer) => !preloadedCustomers.some((row) => row.id === customer.id)), ...preloadedCustomers]);
+      setCustomerLoadError(preloadError);
+    }
     setProducts(productRows);
+    setProductsLoadFailed(productListFailed);
+    setProductsLoading(false);
     setLoading(false);
-  }, [toast, isAdmin]);
+  }, [toast, isAdmin, draft, customerIdParam]);
 
   useEffect(() => {
     fetchData();
@@ -322,22 +378,28 @@ export default function NewOrder() {
     return () => { cancelled = true; };
   }, [customerId, rupProductKey, profile?.id]);
 
-  const customerTier = customers.find((c) => c.id === customerId)?.assigned_tier || 1;
+  const selectedCustomer = customers.find((c) => c.id === customerId);
+  const customerTier = selectedCustomer?.assigned_tier || 1;
 
-  const handleCustomerChange = useCallback((newId: string) => {
-    if (!newId) {
+  const handleCustomerChange = useCallback((customer: OrderCustomer | null) => {
+    if (!customer) {
       // An empty id is a cleared picker, not a re-tiering event; overrides must survive until a REAL customer pick re-tiers.
       setCustomerId('');
       return;
     }
 
-    setCustomerId(newId);
-    // Recalculate all items with the new customer's tier, clearing overrides.
-    const newTier = customers.find((customer) => customer.id === newId)?.assigned_tier || 1;
+    setCustomers((known) => [...known.filter((row) => row.id !== customer.id), customer]);
+    setCustomerLoadError(null);
+    setCustomerId(customer.id);
+    // Recalculate all items with the new customer's tier, clearing overrides, except when this is
+    // the draft's own customer chosen again after its row failed to load: its overrides stand.
+    const keepOverrides = customer.id === unloadedDraftCustomerRef.current;
+    unloadedDraftCustomerRef.current = null;
+    const newTier = customer.assigned_tier || 1;
     setItems((previousItems) =>
-      previousItems.map((item) => recalcItem({ ...item, price_override: null }, newTier))
+      previousItems.map((item) => recalcItem(keepOverrides ? item : { ...item, price_override: null }, newTier))
     );
-  }, [customers, recalcItem]);
+  }, [recalcItem]);
 
   // A delivery or customer detail page can hand a customer into order entry.
   // Apply the query parameter once after the customer list loads, then leave all
@@ -346,8 +408,14 @@ export default function NewOrder() {
     if (loading || customerParamApplied.current) return;
     customerParamApplied.current = true;
 
-    if (customerIdParam && customers.some((customer) => customer.id === customerIdParam)) {
-      handleCustomerChange(customerIdParam);
+    if (!customerIdParam) return;
+    const linkCustomer = customers.find((customer) => customer.id === customerIdParam);
+    if (linkCustomer) {
+      handleCustomerChange(linkCustomer);
+    } else {
+      // The link's customer could not be read (customerLoadError says so): select no customer
+      // rather than keep a draft's, so nothing is priced or saved until the user chooses one.
+      setCustomerId('');
     }
   }, [customerIdParam, customers, handleCustomerChange, loading]);
 
@@ -450,6 +518,19 @@ export default function NewOrder() {
   };
 
   const openProductModal = (itemKey: string) => {
+    if (productsLoadFailed) {
+      toast('error', 'Products failed to load. Refresh the page before adding products.');
+      return;
+    }
+    if (productsLoading) {
+      toast('error', 'Products are still loading. Try again in a moment.');
+      return;
+    }
+    // No pricing for a customer whose row could not be loaded (it would fall back to tier 1).
+    if (customerLoadError && !selectedCustomer) {
+      toast('error', customerLoadError);
+      return;
+    }
     setSelectedItemKey(itemKey);
     setShowProductModal(true);
     setProductSearch('');
@@ -480,7 +561,20 @@ export default function NewOrder() {
 
   const handleSave = async () => {
     if (!customerId) {
-      toast('error', 'Please select a customer');
+      toast('error', customerLoadError ?? 'Please select a customer');
+      return;
+    }
+    // The order is priced from the customer's tier; never save without the customer's row.
+    if (!selectedCustomer) {
+      toast('error', 'The selected customer could not be loaded. Choose the customer again before saving.');
+      return;
+    }
+    if (productsLoadFailed) {
+      toast('error', 'Products failed to load. Refresh the page before saving this order.');
+      return;
+    }
+    if (productsLoading) {
+      toast('error', 'Products are still loading. Try again in a moment.');
       return;
     }
 
@@ -767,18 +861,25 @@ export default function NewOrder() {
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <SearchableSelect
-              label="Customer"
-              required
-              value={customerId}
-              onChange={handleCustomerChange}
-              options={customers.map((customer) => ({
-                value: customer.id,
-                label: customer.farm_name,
-                sublabel: customer.account_number || undefined,
-              }))}
-              placeholder="Search by farm name or account number..."
-            />
+            <div>
+              <label htmlFor="new-order-customer" className="block text-sm font-medium text-nav-dark mb-1">
+                Customer <span className="text-red-500">*</span>
+              </label>
+              {/* The old list read every customer (no active filter), so inactive ones stay findable. */}
+              <CustomerSearchPicker<OrderCustomer>
+                id="new-order-customer"
+                value={customerId}
+                selectedLabel={selectedCustomer?.farm_name ?? ''}
+                onSelect={handleCustomerChange}
+                select={ORDER_CUSTOMER_SELECT}
+                activeOnly={false}
+                placeholder="Search by farm name or account number..."
+                ariaLabel="Customer"
+              />
+              {customerLoadError && (
+                <p role="alert" className="mt-1 text-sm text-red-600">{customerLoadError}</p>
+              )}
+            </div>
 
             {/* Codex round-4 P2: hide Order Name + Order Date in rush/price-later
                 mode — create_rush_order persists neither (it ships at CURRENT_DATE
@@ -853,13 +954,16 @@ export default function NewOrder() {
         <CardHeader
           title="Order Items"
           action={
-            <Button variant="secondary" size="sm" onClick={addItem}>
+            <Button variant="secondary" size="sm" onClick={addItem} disabled={productsLoadFailed || (!!customerLoadError && !selectedCustomer)}>
               <Plus className="w-4 h-4" />
               Add Item
             </Button>
           }
         />
         <div className="p-5 space-y-3">
+          {productsLoadFailed && (
+            <p role="alert" className="text-sm text-red-600">Products failed to load. Refresh the page before adding products or saving this order.</p>
+          )}
           {items.map((item) => (
             <div
               key={item._key}

@@ -2,8 +2,8 @@
 
 ## Role-Based Testing Matrix
 
-Test every feature as each role. Page access follows the route role gates in `src/App.tsx`
-(re-checked 2026-09-27; Sales Rep, Dashboard and Purchase Orders rows re-checked against the code 2026-10-14): "No page access" means the route rejects that role, although related rows
+Test every feature as each role. Page access follows each page's `roles` in the shared page list `src/appPages.tsx`
+(which `src/App.tsx` builds its routes from; `src/routeBaseline.json` records the result for every route and role; re-checked 2026-09-27; Sales Rep, Dashboard and Purchase Orders rows re-checked against the code 2026-10-14): "No page access" means the route rejects that role, although related rows
 may still appear inside pages the role can open, as RLS allows.
 
 | Feature | Admin | Sales Rep | Driver | Applicator |
@@ -193,11 +193,11 @@ Without these, the specs fall back to fixed test-account emails written in the s
 ### Sidebar Navigation Test Expectations
 
 The sidebar uses grouped sections (not a flat list). Role tests checking sidebar text must match the current structure:
-- Admin and sales rep share the office tree (`officeNavigation`): Today, To-Ship, then groups such as Sell & Deliver, Spray Fields, Customers & Fields, Inventory & Buying, Money, Compliance & Records, Insights, Setup & Admin, and Team Board. Items marked `roles: ['admin']` are hidden from sales reps.
+- Admin and sales rep share the office tree (`officeNavigation`): Today, To-Ship, then groups such as Sell & Deliver, Spray Fields, Customers & Fields, Inventory & Buying, Money, Compliance & Records, Insights, Setup & Admin, and Team Board. Links to admin-only pages (`roles: ['admin']` in `src/appPages.tsx`) are hidden from sales reps.
 - Driver sees (`driverNavigation`): My Route, Deliveries, Team Board, Help
 - Applicator sees (`applicatorNavigation`): My Day, My Jobs, Record Book, Team Board, Help
 
-`src/components/layout/Sidebar.tsx` is the source of truth; read it rather than this summary.
+`src/components/layout/Sidebar.tsx` is the source of truth for order and wording, and `src/routeBaseline.json` records every role's sidebar exactly; read them rather than this summary.
 
 When the sidebar structure changes, grep `tests/e2e/role-*.spec.ts` for sidebar text assertions.
 

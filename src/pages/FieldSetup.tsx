@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, MousePointerSquareDashed, Plus, X } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, MapPin, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, MousePointerSquareDashed, Plus, X } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import CRXMap from '../components/map/CRXMap';
 import DrawLayer, { type DrawnPolygon } from '../components/map/DrawLayer';
 import AddressSearch from '../components/map/AddressSearch';
@@ -44,7 +45,7 @@ import {
   FIELD_OBSTACLE_KIND_LABELS,
 } from '../lib/fieldObstacles';
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
-import type { Field, Customer, FieldObstacle, FieldObstacleKind } from '../types';
+import type { Field, FieldObstacle, FieldObstacleKind } from '../types';
 
 interface BillingSplit {
   customer_id: string;
@@ -162,15 +163,11 @@ export default function FieldSetup() {
   const [obstaclePendingDelete, setObstaclePendingDelete] = useState<FieldObstacle | null>(null);
   const csbLookupRequestRef = useRef(0);
 
-  // Customer search for the owner dropdown
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  // Owner (customer) name shown by the owner search picker
   const [ownerName, setOwnerName] = useState('');
 
-  // Customer search for billing split additions
-  const [splitCustomerSearch, setSplitCustomerSearch] = useState('');
-  const [showSplitDropdown, setShowSplitDropdown] = useState(false);
+  // Bumped after each billing-split addition so the add-customer picker starts empty again
+  const [splitPickerKey, setSplitPickerKey] = useState(0);
 
   // Collapsible sections
   const [fsaOpen, setFsaOpen] = useState(false);
@@ -251,16 +248,6 @@ export default function FieldSetup() {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
   }, [field, billingSplits]);
-
-  const fetchCustomers = useCallback(async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, farm_name')
-      .eq('is_active', true)
-      .order('farm_name')
-      .limit(500);
-    setCustomers((data || []) as Customer[]);
-  }, []);
 
   const fetchField = useCallback(async () => {
     if (!id) return;
@@ -375,13 +362,12 @@ export default function FieldSetup() {
   }, [id, toast]);
 
   useEffect(() => {
-    fetchCustomers();
     if (!isNew && id) {
       fetchField();
     } else {
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
-  }, [id, isNew, fetchCustomers, fetchField]);
+  }, [id, isNew, fetchField]);
 
   useEffect(() => {
     if (isNew || !id) {
@@ -480,8 +466,7 @@ export default function FieldSetup() {
       ...prev,
       { customer_id: customerId, customer_name: customerName, split_pct: 0, is_primary: prev.length === 0, notes: '', price_override_cents: null, pricing_note: '' },
     ]);
-    setSplitCustomerSearch('');
-    setShowSplitDropdown(false);
+    setSplitPickerKey((k) => k + 1);
   };
 
   const removeBillingSplit = (idx: number) => {
@@ -924,14 +909,6 @@ export default function FieldSetup() {
     }
   };
 
-  const filteredCustomers = customers.filter((c) =>
-    c.farm_name.toLowerCase().includes(customerSearch.toLowerCase())
-  );
-
-  const filteredSplitCustomers = customers.filter((c) =>
-    c.farm_name.toLowerCase().includes(splitCustomerSearch.toLowerCase())
-  );
-
   if (loading) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
@@ -985,48 +962,17 @@ export default function FieldSetup() {
                 <label className="block text-sm font-medium text-secondary mb-1">
                   Owner (Customer) <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={showCustomerDropdown ? customerSearch : ownerName}
-                    onChange={(e) => {
-                      setCustomerSearch(e.target.value);
-                      setShowCustomerDropdown(true);
-                    }}
-                    onFocus={() => {
-                      setCustomerSearch('');
-                      setShowCustomerDropdown(true);
-                    }}
-                    onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
-                    placeholder="Search customers..."
-                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  />
-                </div>
-                {showCustomerDropdown && (
-                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {filteredCustomers.length === 0 ? (
-                      <div className="px-4 py-3 text-sm text-secondary">No customers found</div>
-                    ) : (
-                      filteredCustomers.slice(0, 20).map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            update('customer_id', c.id);
-                            setOwnerName(c.farm_name);
-                            setShowCustomerDropdown(false);
-                            checkDuplicate(field.field_name || '', c.id);
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm hover:bg-crx-green-tint transition-colors"
-                        >
-                          {c.farm_name}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                <CustomerSearchPicker
+                  value={field.customer_id || ''}
+                  selectedLabel={ownerName}
+                  onSelect={(c) => {
+                    update('customer_id', c?.id ?? '');
+                    setOwnerName(c?.farm_name ?? '');
+                    if (c) checkDuplicate(field.field_name || '', c.id);
+                  }}
+                  placeholder="Search customers..."
+                  ariaLabel="Owner (Customer)"
+                />
               </div>
 
               {/* Duplicate warning */}
@@ -1315,45 +1261,17 @@ export default function FieldSetup() {
                 )}
 
                 {/* Add customer to split */}
-                <div className="relative">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      value={splitCustomerSearch}
-                      onChange={(e) => {
-                        setSplitCustomerSearch(e.target.value);
-                        setShowSplitDropdown(true);
-                      }}
-                      onFocus={() => setShowSplitDropdown(true)}
-                      onBlur={() => setTimeout(() => setShowSplitDropdown(false), 200)}
-                      placeholder="Search customer to add to billing split..."
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                    />
-                  </div>
-                  {showSplitDropdown && splitCustomerSearch && (
-                    <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                      {filteredSplitCustomers.length === 0 ? (
-                        <div className="px-4 py-3 text-sm text-secondary">No customers found</div>
-                      ) : (
-                        filteredSplitCustomers.slice(0, 15).map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => addBillingSplit(c.id, c.farm_name)}
-                            className="w-full text-left px-4 py-2 text-sm hover:bg-crx-green-tint transition-colors flex items-center justify-between"
-                          >
-                            <span>{c.farm_name}</span>
-                            {billingSplits.find((s) => s.customer_id === c.id) && (
-                              <span className="text-xs text-secondary">Already added</span>
-                            )}
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
+                <CustomerSearchPicker
+                  key={splitPickerKey}
+                  value=""
+                  selectedLabel=""
+                  onSelect={(c) => {
+                    if (c) addBillingSplit(c.id, c.farm_name);
+                  }}
+                  excludeIds={billingSplits.map((split) => split.customer_id)}
+                  placeholder="Search customer to add to billing split..."
+                  ariaLabel="Add customer to billing split"
+                />
               </div>
             )}
           </Card>

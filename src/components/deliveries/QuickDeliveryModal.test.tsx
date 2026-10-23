@@ -8,7 +8,7 @@ import QuickDeliveryModal from './QuickDeliveryModal';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey, productReply } = vi.hoisted(() => {
   const mockOrder = vi.fn().mockReturnThis();
   const mockIn = vi.fn().mockReturnThis();
   const mockEq = vi.fn().mockReturnThis();
@@ -33,8 +33,24 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = 
   const mockStockEq = vi.fn().mockResolvedValue({ data: [], error: null });
   const mockStockIn = vi.fn().mockResolvedValue({ data: [], error: null });
   const mockStockSelect = vi.fn().mockReturnValue({ eq: mockStockEq, in: mockStockIn });
+  // The product list is read page by page; this chain serves productReply like the
+  // server: `.range()` slices it, no reply holds more than 1,000 rows, and the
+  // requested count is every row.
+  const productReply: { rows: Array<Record<string, unknown>>; error: { message: string } | null } = { rows: [], error: null };
+  const productChain = () => {
+    let range: [number, number] = [0, Number.MAX_SAFE_INTEGER];
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'order']) chain[m] = () => chain;
+    chain.range = (from: number, to: number) => { range = [from, to]; return chain; };
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(productReply.error
+      ? { data: null, error: productReply.error, count: null }
+      : { data: productReply.rows.slice(range[0], range[1] + 1).slice(0, 1000), error: null, count: productReply.rows.length }).then(resolve);
+    return chain;
+  };
   const mockFrom = vi.fn().mockImplementation((table: string) =>
-    table === 'inventory' || table === 'purchase_order_items'
+    table === 'products'
+      ? productChain()
+      : table === 'inventory' || table === 'purchase_order_items'
       ? { select: mockStockSelect }
       : { select: mockSelect });
 
@@ -43,7 +59,7 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = 
   const mockNavigate = vi.fn();
   const mockResetKey = vi.fn();
 
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey };
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey, productReply };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -54,8 +70,11 @@ vi.mock('../../lib/db', () => ({
   assertRpcResult: (data: unknown) => data,
 }));
 
+// One profile object, as the real AuthContext keeps between renders: the load
+// effect depends on it, so a new object per render would reload forever.
+const AUTH = { profile: { id: 'user-1', role: 'admin' }, role: 'admin' };
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', role: 'admin' }, role: 'admin' }),
+  useAuth: () => AUTH,
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -87,6 +106,8 @@ describe('QuickDeliveryModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRpc.mockResolvedValue({ data: null, error: null });
+    productReply.rows = [];
+    productReply.error = null;
   });
 
   /** Render + flush the useEffect that fetches products/drivers on mount */
@@ -210,5 +231,36 @@ describe('QuickDeliveryModal', () => {
     expect(mockFrom).toHaveBeenCalledWith('products');
     // PR-07 follow-up: drivers now read from profile_public_view.
     expect(mockFrom).toHaveBeenCalledWith('profile_public_view');
+  });
+
+  // Goal 4 part 3: the catalog and the tier re-pricing use the whole product list.
+  const product = (i: number) => ({
+    id: `p-${String(i).padStart(4, '0')}`, product_name: `Product ${String(i).padStart(4, '0')}`,
+    sku: null, unit_size: null, manufacturer: null, tier1_price: 10, tier2_price: null, tier3_price: null,
+  });
+
+  it('offers a product past the server 1,000-row cap', async () => {
+    productReply.rows = Array.from({ length: 1005 }, (_, i) => product(i));
+    await renderModal();
+    fireEvent.click(screen.getByRole('button', { name: /add product/i }));
+    fireEvent.change(await screen.findByPlaceholderText('Search products...'), { target: { value: 'Product 1004' } });
+    expect(await screen.findByText('Product 1004')).toBeInTheDocument();
+  });
+
+  it('a failed product reload clears the earlier list and blocks adding items', async () => {
+    productReply.rows = [product(1)];
+    const { rerender } = await renderModal();
+    expect(screen.getByRole('button', { name: /add product/i })).toBeEnabled();
+
+    // Closed, then reopened while the product read fails.
+    await act(async () => { rerender(<QuickDeliveryModal {...defaultProps} open={false} />); });
+    productReply.error = { message: 'connection reset' };
+    await act(async () => { rerender(<QuickDeliveryModal {...defaultProps} open />); });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add product/i })).toBeDisabled());
+    expect(screen.getByRole('alert')).toHaveTextContent('Products could not be loaded');
+    expect(screen.queryByText('Product 0001')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create quick delivery/i })).toBeDisabled();
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load products or drivers. Please close and try again.');
   });
 });

@@ -48,18 +48,20 @@ import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
 import { getVisitCounts, getVisitCountKey, VISIT_COUNTS_CHANGED_EVENT } from '../../lib/recentPages';
 import { supabase } from '../../lib/db';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../../lib/splitBillingSetting';
+import { rolesForPage, type PagePath } from '../../appPages';
 import type { UserRole } from '../../types';
 import logoWhite from '../../assets/logo_3-01_(3).png';
 
 // --- Types ---
 
+// Links name a page address from the shared page list (src/appPages.tsx), which
+// also decides which roles see them. Order, wording and icons stay here.
 interface NavSubItem {
-  path: string;
+  path: PagePath;
   label: string;
   icon: React.ReactNode;
-  roles?: UserRole[];
   /** Extra base paths that keep this link highlighted (workspace tab siblings). */
-  activePaths?: string[];
+  activePaths?: PagePath[];
 }
 
 interface NavCategory {
@@ -71,12 +73,11 @@ interface NavCategory {
 
 interface StandaloneLink {
   id: string;
-  path: string;
+  path: PagePath;
   label: string;
   icon: React.ReactNode;
-  roles?: UserRole[];
   /** Extra base paths that keep this link highlighted (workspace tab siblings). */
-  activePaths?: string[];
+  activePaths?: PagePath[];
 }
 
 type NavEntry =
@@ -86,8 +87,8 @@ type NavEntry =
 // --- Navigation structure ---
 
 const officeNavigation: NavEntry[] = [
-  { type: 'standalone', link: { id: 'today', path: '/office-cockpit', label: 'Today', icon: <LayoutGrid className="w-5 h-5" />, roles: ['admin', 'sales_rep'] } },
-  { type: 'standalone', link: { id: 'to-ship', path: '/to-ship', label: 'To-Ship (Load-Out Board)', icon: <PackageSearch className="w-5 h-5" />, roles: ['admin', 'sales_rep'] } },
+  { type: 'standalone', link: { id: 'today', path: '/office-cockpit', label: 'Today', icon: <LayoutGrid className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'to-ship', path: '/to-ship', label: 'To-Ship (Load-Out Board)', icon: <PackageSearch className="w-5 h-5" /> } },
   {
     type: 'category',
     category: {
@@ -124,7 +125,7 @@ const officeNavigation: NavEntry[] = [
       id: 'customers-fields', label: 'Customers & Fields', icon: <Users className="w-5 h-5" />,
       items: [
         { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
-        { path: '/call-lists', label: 'Call Lists', icon: <ClipboardList className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/call-lists', label: 'Call Lists', icon: <ClipboardList className="w-4 h-4" /> },
         { path: '/fields', label: 'Fields & Maps', icon: <MapPin className="w-4 h-4" /> },
         { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-4 h-4" /> },
       ],
@@ -143,7 +144,7 @@ const officeNavigation: NavEntry[] = [
         },
         { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
         { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" /> },
-        { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" /> },
       ],
     },
   },
@@ -153,13 +154,13 @@ const officeNavigation: NavEntry[] = [
       id: 'money', label: 'Money', icon: <DollarSign className="w-5 h-5" />,
       items: [
         { path: '/payments', label: 'Record Payments', icon: <DollarSign className="w-4 h-4" /> },
-        { path: '/accounts-receivable', label: 'A/R Workspace', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/prepay', label: 'Prepay', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/accounts-payable', label: 'A/P & Vendor Bills', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/commission-payments', label: 'Commissions', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/month-end', label: 'Month-End Close', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/integrity', label: 'Data Integrity', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/accounts-receivable', label: 'A/R Workspace', icon: <CreditCard className="w-4 h-4" /> },
+        { path: '/prepay', label: 'Prepay', icon: <ArrowLeftRight className="w-4 h-4" /> },
+        { path: '/accounts-payable', label: 'A/P & Vendor Bills', icon: <Receipt className="w-4 h-4" /> },
+        { path: '/commission-payments', label: 'Commissions', icon: <Banknote className="w-4 h-4" /> },
+        { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" /> },
+        { path: '/month-end', label: 'Month-End Close', icon: <CalendarCheck className="w-4 h-4" /> },
+        { path: '/integrity', label: 'Data Integrity', icon: <ShieldAlert className="w-4 h-4" /> },
       ],
     },
   },
@@ -172,8 +173,8 @@ const officeNavigation: NavEntry[] = [
         { path: '/lot-trace', label: 'Lot Trace (recall lookup)', icon: <PackageSearch className="w-4 h-4" /> },
         { path: '/watchdog', label: 'Watchdog Flags', icon: <ShieldAlert className="w-4 h-4" /> },
         { path: '/offline-work-review', label: 'Offline Work Review', icon: <CloudOff className="w-4 h-4" /> },
-        { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/label-data-quality', label: 'Label Data Quality', icon: <DatabaseZap className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" /> },
+        { path: '/label-data-quality', label: 'Label Data Quality', icon: <DatabaseZap className="w-4 h-4" /> },
         { path: '/blend-tickets', label: 'Blend Tickets (OCR)', icon: <Image className="w-4 h-4" /> },
       ],
     },
@@ -184,7 +185,6 @@ const officeNavigation: NavEntry[] = [
     type: 'standalone',
     link: {
       id: 'insights', path: '/dashboard', label: 'Insights', icon: <BarChart3 className="w-5 h-5" />,
-      roles: ['admin', 'sales_rep'],
       activePaths: ['/dashboard', '/reports', '/sales-reports', '/field-profitability', '/financial-dashboard'],
     },
   },
@@ -193,11 +193,11 @@ const officeNavigation: NavEntry[] = [
     category: {
       id: 'setup-admin', label: 'Setup & Admin', icon: <Settings className="w-5 h-5" />,
       items: [
-        { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/application-services', label: 'Application Services (fees)', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" /> },
+        { path: '/application-services', label: 'Application Services (fees)', icon: <Wrench className="w-4 h-4" /> },
+        { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" /> },
         { path: '/getting-started', label: 'Getting Started (help)', icon: <BookOpen className="w-4 h-4" /> },
-        { path: '/settings', label: 'Settings', icon: <Settings className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
       ],
     },
   },
@@ -231,15 +231,15 @@ const SPLIT_BILLING_NAV_ITEM: NavSubItem = {
   path: '/split-billing/new',
   label: 'Split Billing (per line)',
   icon: <Receipt className="w-4 h-4" />,
-  roles: ['admin', 'sales_rep'],
 };
 
 // --- Helpers ---
 
 const STORAGE_KEY = 'crx-sidebar-expanded';
 
-function hasRoleAccess(roles: UserRole[] | undefined, userRole: UserRole | undefined): boolean {
-  if (!roles) return true;
+// The sidebar only renders inside ProtectedRoute, which requires a signed-in profile,
+// so userRole is always set here; undefined hides every link.
+function hasRoleAccess(roles: readonly UserRole[], userRole: UserRole | undefined): boolean {
   return !!userRole && roles.includes(userRole);
 }
 
@@ -251,13 +251,12 @@ function hasRoleAccess(roles: UserRole[] | undefined, userRole: UserRole | undef
  * Returns null when none are accessible (entry hidden).
  */
 function resolveNavPath(
-  roles: UserRole[] | undefined,
   userRole: UserRole | undefined,
   deniedPages: string[],
-  path: string,
-  activePaths?: string[]
-): string | null {
-  if (!hasRoleAccess(roles, userRole)) return null;
+  path: PagePath,
+  activePaths?: PagePath[]
+): PagePath | null {
+  if (!hasRoleAccess(rolesForPage(path), userRole)) return null;
   const candidates = [path, ...(activePaths ?? []).filter((p) => p !== path)];
   for (const candidate of candidates) {
     const pageKey = getPageKeyFromPath(candidate);
@@ -270,7 +269,7 @@ function resolveNavPath(
 
 function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, deniedPages: string[]): NavSubItem[] {
   return items.flatMap((item) => {
-    const target = resolveNavPath(item.roles, userRole, deniedPages, item.path, item.activePaths);
+    const target = resolveNavPath(userRole, deniedPages, item.path, item.activePaths);
     if (!target) return [];
     return [target === item.path ? item : { ...item, path: target }];
   });
@@ -506,7 +505,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     navigation.map((entry) => {
       if (entry.type === 'standalone') {
         const { link } = entry;
-        const target = resolveNavPath(link.roles, userRole, deniedPages, link.path, link.activePaths);
+        const target = resolveNavPath(userRole, deniedPages, link.path, link.activePaths);
         if (!target) return null;
 
         const active = isRouteActive(link.path, link.activePaths);

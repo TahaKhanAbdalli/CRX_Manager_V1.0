@@ -98,7 +98,7 @@ Flag code that would violate a documented lifecycle:
 ### CHECK 11 — Framework rules  — MED
 - New icon package (only `lucide-react` allowed) or CSS framework (only Tailwind; brand `crx-green` `#28A26A`).
 - A second Supabase client (only `src/lib/db.ts`).
-- A new page not lazy-loaded in `App.tsx`.
+- A new page not lazy-loaded in the shared page list `src/appPages.tsx`, or a route or `PAGE_PERMISSIONS` entry added by hand outside it.
 
 ## Output Format
 

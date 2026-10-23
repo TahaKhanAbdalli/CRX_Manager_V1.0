@@ -419,6 +419,22 @@ describe('EditableDataTable', () => {
       expect(changesMap.get('1')).toEqual({ name: 'Product A Modified' });
     });
 
+    it('will not save edits once a failed load hides the rows (PR #1043 review)', () => {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const props = { data: testData, columns, rowKey: 'id' as const, canEdit: true, onSave };
+      const { rerender } = render(<EditableDataTable {...props} />);
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), { target: { value: 'Product A Modified' } });
+
+      rerender(<EditableDataTable {...props} loadError />);
+
+      expect(screen.getByRole('alert')).toHaveTextContent('This list could not be loaded');
+      const saveBtn = screen.getByText(/Save/).closest('button')!;
+      expect(saveBtn).toBeDisabled();
+      fireEvent.click(saveBtn);
+      expect(onSave).not.toHaveBeenCalled();
+    });
+
     it('exits edit mode after successful save', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined);
       render(

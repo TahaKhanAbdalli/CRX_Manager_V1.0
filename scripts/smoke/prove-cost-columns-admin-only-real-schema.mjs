@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for the 20261022030000 candidate: the cost column lock on the remaining twelve
+ * Full-chain proof for the 20261022091000 candidate: the cost column lock on the remaining twelve
  * cost tables (Goal 1 part 3, step 3; cost and margin are admin-only, Mason 2026-10-15).
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a network-disabled Supabase
@@ -52,7 +52,7 @@ const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1' || REUSE;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
-const CANDIDATE = path.join(MIGRATIONS, '20261022030000_cost_columns_admin_only.sql');
+const CANDIDATE = path.join(MIGRATIONS, '20261022091000_cost_columns_admin_only.sql');
 // The column lists the screens read (src/lib/costFields.ts), proven readable under the lock.
 const COST_FIELDS = readFileSync(path.join(ROOT, 'src', 'lib', 'costFields.ts'), 'utf8');
 const screenColumns = (name) => {
@@ -605,14 +605,14 @@ function preflightRefusesDrift() {
   const cases = [
     // A new invoices column also leaves invoices_postable short of it, which the earlier block catches.
     ...LOCKED_TABLES.map((t) => [`ALTER TABLE public.${t} ADD COLUMN zz_prover_new text;`, t === 'invoices'
-      ? /COST_LOCK_PREFLIGHT: 20261022025000 \(invoices_postable\) is not applied, or the view drifted/
+      ? /COST_LOCK_PREFLIGHT: 20261022090000 \(invoices_postable\) is not applied, or the view drifted/
       : new RegExp(`COST_LOCK_PREFLIGHT: ${t} columns are not the ones this grant list covers`)]),
-    // The invoice-version swap (20261022025000) must be in place before the old overload is dropped.
-    ['ALTER VIEW public.invoices_postable RESET (security_invoker);', /COST_LOCK_PREFLIGHT: 20261022025000 \(invoices_postable\) is not applied, or the view drifted/],
+    // The invoice-version swap (20261022090000) must be in place before the old overload is dropped.
+    ['ALTER VIEW public.invoices_postable RESET (security_invoker);', /COST_LOCK_PREFLIGHT: 20261022090000 \(invoices_postable\) is not applied, or the view drifted/],
     ['DROP FUNCTION public.invoice_post_version(public.invoices_postable);', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
     ['GRANT EXECUTE ON FUNCTION public.invoice_post_version(public.invoices_postable) TO anon;', /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices_postable\) is missing or drifted/],
     [`DO $b$ BEGIN EXECUTE format('CREATE OR REPLACE FUNCTION public.invoice_post_version(p_invoice public.invoices) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS %L', (SELECT prosrc FROM pg_proc WHERE oid = 'public.invoice_post_version(public.invoices)'::regprocedure) || E'\\n-- prover: any body edit\\n'); END $b$;`,
-      /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices\) drifted from 20261021200000/],
+      /COST_LOCK_PREFLIGHT: invoice_post_version\(invoices\) drifted from 20261022022000/],
     ['ALTER TABLE public.products DROP COLUMN tier3_gross_margin;', /COST_LOCK_PREFLIGHT: products columns are not the ones/],
     ['DROP FUNCTION public.get_admin_cost_fields(text, uuid[]);', /COST_LOCK_PREFLIGHT: get_admin_cost_fields\(text, uuid\[\]\) is missing/],
     ['DROP FUNCTION public.get_quote_versions(uuid);', /COST_LOCK_PREFLIGHT: get_quote_versions\(uuid\) is missing/],

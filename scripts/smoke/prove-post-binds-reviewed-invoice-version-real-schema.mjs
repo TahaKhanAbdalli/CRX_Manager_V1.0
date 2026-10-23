@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for the 20261021200000 candidate: Goal 3 "Post uses what was saved and reviewed"
+ * Full-chain proof for the 20261022022000 candidate: Goal 3 "Post uses what was saved and reviewed"
  * (docs/plans/2026-10-13-direction-and-goals.md, done-test "Posting"; docs/manual/KNOWN_ISSUES.md
  * "OPEN 2026-10-09"). post_invoice, post_invoice_group and batch_post_invoices take the version of the
  * invoice the screen loaded (the invoice_post_version computed field) and refuse, inside the posting
@@ -27,7 +27,7 @@
  *   group-level field location added after load is refused.
  *   B1 a batch posts the unchanged row and reports the changed row as that row's failure.
  *   C1 a line write made while posting (a trigger standing in for a racing writer) rolls the post back.
- * SWAP (20261022025000, invoices_postable): refuses outside one transaction; then the whole AFTER
+ * SWAP (20261022090000, invoices_postable): refuses outside one transaction; then the whole AFTER
  *   matrix again with every version read from the view; the view's rules (V1-V6: row security as the
  *   caller, a NULL version where the caller may not post, the same hash as the table, read-only,
  *   closed to anon, no cost column); and, under a simulated cost column lock, the table's computed
@@ -55,9 +55,9 @@ const VERBOSE = process.env.CRX_PROVER_VERBOSE === '1';
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
-const CANDIDATE = path.join(MIGRATIONS, '20261021200000_post_binds_reviewed_invoice_version.sql');
-// The invoices_postable swap (20261022025000): applied after the candidate's matrix, then proven too.
-const SWAP = path.join(MIGRATIONS, '20261022025000_invoices_postable_view.sql');
+const CANDIDATE = path.join(MIGRATIONS, '20261022022000_post_binds_reviewed_invoice_version.sql');
+// The invoices_postable swap (20261022090000): applied after the candidate's matrix, then proven too.
+const SWAP = path.join(MIGRATIONS, '20261022090000_invoices_postable_view.sql');
 const PARKED = new Set([
   '20260914100700_customer_document_bytes_server_only.sql',
   '20261015230000_staff_photo_storage_access.sql',
@@ -253,8 +253,8 @@ const edit = (salesman, cents, key, inv = INV) => `public.save_invoice(${j(heade
 // The id of the invoice the last step created, and versions read by a step, kept in session settings.
 const KEEP_ID = (call) => `v := (${call})::text; PERFORM set_config('prover.inv', v, true);`;
 const INV = "current_setting('prover.inv')::uuid";
-// The relation screens read the version from: invoices (20261021200000), then invoices_postable
-// (20261022025000, swapPhase), whose row carries no cost column.
+// The relation screens read the version from: invoices (20261022022000), then invoices_postable
+// (20261022090000, swapPhase), whose row carries no cost column.
 let REL = 'invoices';
 const READ_VERSION = (slot = 'v', inv = INV) => `v := (SELECT public.invoice_post_version(i) FROM public.${REL} i WHERE i.id = ${inv}); PERFORM set_config('prover.${slot}', coalesce(v, ''), true);`;
 const VER = (slot = 'v') => `current_setting('prover.${slot}')`;
@@ -357,6 +357,16 @@ function runAfter() {
     { key: 'P5b admin posts', as: U.ADMIN, stmt: post('p5bp') },
   ]));
 
+  // An allocation linked only to one of the invoice's lines (ila_target_check allows that) is
+  // part of the version too (Sol, PR #1018).
+  add(scenario([
+    { key: 'P5c admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'p5cs')) },
+    { key: 'P5c admin reads version', as: U.ADMIN, stmt: READ_VERSION() },
+    { key: 'P5c line-only allocation added', as: 'owner', stmt: `INSERT INTO public.allocation_sets (id, entity_type, entity_id) VALUES ('${id('5c0')}', 'invoice', ${INV}); INSERT INTO public.invoice_line_allocations (allocation_set_id, invoice_item_id, bill_to_customer_id, split_percentage, amount_cents) SELECT '${id('5c0')}', ii.id, '${CUST}', 100, 2500 FROM public.invoice_items ii WHERE ii.invoice_id = ${INV} ORDER BY ii.id LIMIT 1; v := (SELECT count(*) FROM public.invoice_line_allocations WHERE allocation_set_id = '${id('5c0')}' AND invoice_id IS NULL AND split_invoice_id IS NULL)::text;` },
+    { key: 'P5c admin posts', as: U.ADMIN, stmt: post('p5cp') },
+    { key: 'P5c state', as: 'owner', call: STATE() },
+  ]));
+
   add(scenario([
     { key: 'P6 admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'p6s')) },
     { key: 'P6 admin reads version', as: U.ADMIN, stmt: READ_VERSION() },
@@ -400,6 +410,10 @@ function runAfter() {
     { key: 'P9 admin creates', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'p9s')) },
     { key: 'P9 version read as the owner (the rep cannot read it)', as: 'owner', stmt: READ_VERSION() },
     { key: "P9 rep posts an admin invoice", as: U.REP, stmt: post('p9p') },
+    // The app sends 'withheld' (WITHHELD_POST_VERSION) for a row whose version came back NULL: the rep
+    // is told the invoice is not theirs, and anyone allowed to post it is told to reload.
+    { key: 'P9 rep posts with the withheld placeholder', as: U.REP, stmt: `PERFORM public.post_invoice(${INV}, 'withheld', 'p9w'); v := 'posted';` },
+    { key: 'P9 admin posts with the withheld placeholder', as: U.ADMIN, stmt: `PERFORM public.post_invoice(${INV}, 'withheld', 'p9a'); v := 'posted';` },
     // Called as an RPC with a made-up row, the field answers only for an invoice the caller may post.
     { key: 'P9 rep asks for an admin invoice version with a made-up row', as: U.REP, call: `public.invoice_post_version(jsonb_populate_record(NULL::public.${REL}, jsonb_build_object('id', ${INV})))` },
     { key: 'P9 admin asks with a made-up row', as: U.ADMIN, call: `(public.invoice_post_version(jsonb_populate_record(NULL::public.${REL}, jsonb_build_object('id', ${INV}))) ~ '^v1:')` },
@@ -449,9 +463,27 @@ function runAfter() {
       v := 'added';` },
     { key: 'G7 post after location added', as: U.ADMIN, stmt: postGroup('g7', U.ADMIN) },
   ], group()));
+  // A location naming both a standalone draft and the group (fal_requires_parent allows it, and
+  // admins and reps can write one directly) belongs to the group: it is in the group's version, and
+  // once the group is posted it is refused even though its invoice is still a draft (Codex, PR #1018).
+  add(scenario([
+    { key: 'G7d admin creates a standalone draft', as: U.ADMIN, stmt: KEEP_ID(save(U.ADMIN, 2500, 'g7ds')) },
+    { key: 'G7d admin reads the group', as: U.ADMIN, stmt: READ_MAP() },
+    { key: 'G7d dual-parent location added', as: 'owner', stmt: `
+      INSERT INTO public.fields (id, customer_id, field_name, total_acres) VALUES ('${id('9f2')}', '${CUST}', '[PROVER] Field D', 100), ('${id('9f3')}', '${CUST}', '[PROVER] Field E', 100);
+      INSERT INTO public.field_app_locations (invoice_id, invoice_group_id, field_id, applied_acres, sort_order) VALUES (${INV}, '${G}', '${id('9f2')}', 40, 0);
+      v := 'added';` },
+    { key: 'G7d post after dual-parent location added', as: U.ADMIN, stmt: postGroup('g7d', U.ADMIN) },
+    { key: 'G7d admin reloads and posts', as: U.ADMIN, stmt: `${READ_MAP('map2')} ${postGroup('g7d2', U.ADMIN, MAP('map2'))}` },
+    { key: 'G7d dual-parent location onto the posted group', as: 'owner', stmt: `
+      INSERT INTO public.field_app_locations (invoice_id, invoice_group_id, field_id, applied_acres, sort_order) VALUES (${INV}, '${G}', '${id('9f3')}', 40, 1);
+      v := 'added';` },
+    { key: 'G7d state', as: 'owner', call: `${GSTATE} || ' / ' || ${STATE()}` },
+  ], group()));
   add(scenario([
     { key: 'G5 group read as the owner (the rep cannot read it)', as: 'owner', stmt: READ_MAP() },
     { key: "G5 rep posts an admin group", as: U.REP, stmt: postGroup('g5', U.REP) },
+    { key: 'G5 rep posts with withheld placeholders', as: U.REP, stmt: postGroup('g5w', U.REP, `jsonb_build_object('${GA}', 'withheld', '${GB}', 'withheld')`) },
     { key: 'G5 performed_by is not the caller', as: U.ADMIN, stmt: postGroup('g5b', U.ADMIN2) },
   ], group()));
   add(scenario([
@@ -520,6 +552,9 @@ const AFTER = [
   ['P5 admin posts', CHANGED],
   ['P5b share added', /^ok\|changed$/],
   ['P5b admin posts', CHANGED],
+  ['P5c line-only allocation added', /^ok\|1$/],
+  ['P5c admin posts', CHANGED],
+  ['P5c state', /^ok\|draft:2500$/],
   ['P6 first post', /^ok\|posted$/],
   ['P6 retry, same key and version', /^ok\|posted$/],
   ['P6 posted once', /^ok\|1$/],
@@ -539,6 +574,8 @@ const AFTER = [
   ['P8 authenticated calls _invoice_post_version', /^42501\|/],
   ['P8 authenticated calls _invoice_post_content_version', /^42501\|/],
   ["P9 rep posts an admin invoice", /^P0001\|INVOICE_SCOPE_DENIED/],
+  ['P9 rep posts with the withheld placeholder', /^P0001\|INVOICE_SCOPE_DENIED/],
+  ['P9 admin posts with the withheld placeholder', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice /],
   ['P9 rep asks for an admin invoice version with a made-up row', /^ok\|<null>$/],
   ['P9 admin asks with a made-up row', /^ok\|true$/],
   ['G8 posts with upper-case invoice ids', /^ok\|\{.*"member_count": 2/],
@@ -559,7 +596,13 @@ const AFTER = [
   ['G2s state', /^ok\|PROVER-G-A:draft,PROVER-G-B:draft,PROVER-G-C:draft$/],
   ['G7 group-level location added', /^ok\|added$/],
   ['G7 post after location added', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice PROVER-G-A /],
+  ['G7d dual-parent location added', /^ok\|added$/],
+  ['G7d post after dual-parent location added', /^P0001\|INVOICE_CHANGED_SINCE_LOADED: invoice PROVER-G-A /],
+  ['G7d admin reloads and posts', /^ok\|\{.*"member_count": 2/],
+  ['G7d dual-parent location onto the posted group', /^23514\|INVOICE_POSTED_LOCKED: this split invoice group was posted/],
+  ['G7d state', /^ok\|PROVER-G-A:posted,PROVER-G-B:posted \/ draft:2500$/],
   ["G5 rep posts an admin group", /^P0001\|INVOICE_SCOPE_DENIED/],
+  ['G5 rep posts with withheld placeholders', /^P0001\|INVOICE_SCOPE_DENIED/],
   ['G5 performed_by is not the caller', /^P0001\|ACTOR_MISMATCH/],
   ['G6 rep posts own group', /^ok\|\{.*"member_count": 2/],
   ['G6 state', /^ok\|PROVER-G-A:posted,PROVER-G-B:posted$/],
@@ -919,8 +962,8 @@ async function races() {
 }
 
 // ------------------------------------------------------------------------------------------------
-// The invoices_postable swap (20261022025000): the version moves onto a view without cost columns so
-// it survives the cost column lock (20261022030000). Proven here: the swap refuses outside one
+// The invoices_postable swap (20261022090000): the version moves onto a view without cost columns so
+// it survives the cost column lock (20261022091000). Proven here: the swap refuses outside one
 // transaction; the whole after matrix passes with every version read from the view; the view's rules
 // (row security as the caller, a NULL version where the caller may not post, read-only, closed to
 // anon, the same hash as the table); and, under a simulated cost lock, the table's computed field
@@ -981,7 +1024,7 @@ async function swapPhase() {
   console.log(`[prover] SWAP view rules:\n${vLines.map((l) => l.line).join('\n')}`);
   assert.ok(vLines.every((l) => l.ok), 'a view rule failed');
 
-  // The cost column lock, simulated as 20261022030000 will apply it to invoices.
+  // The cost column lock, simulated as 20261022091000 will apply it to invoices.
   const cols = scalar("SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) FROM pg_attribute WHERE attrelid = 'public.invoices'::regclass AND attnum > 0 AND NOT attisdropped AND attname <> 'total_cost_cents';");
   psql(`BEGIN;
     REVOKE SELECT, REFERENCES ON public.invoices FROM authenticated;

@@ -1,6 +1,6 @@
 import { useState, useMemo, type ReactNode } from 'react';
 import { Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
-import EmptyState from './EmptyState';
+import EmptyState, { LoadFailedState } from './EmptyState';
 import { applyTableSearchSort, type SortDir } from '../../lib/tableSearchSort';
 
 export interface Column<T> {
@@ -23,6 +23,9 @@ interface DataTableProps<T> {
   emptyAction?: ReactNode;
   filters?: ReactNode;
   loading?: boolean;
+  /** The rows failed to load: say so (with Try again when onRetry is set) instead of the empty message. */
+  loadError?: boolean;
+  onRetry?: () => void;
   /**
    * Optional CONTROLLED search/sort. When provided, the parent owns the in-table
    * search term and column sort (so it can reuse `applyTableSearchSort` to print
@@ -48,6 +51,8 @@ export default function DataTable<T extends Record<string, any>>({
   emptyAction,
   filters,
   loading = false,
+  loadError = false,
+  onRetry,
   searchValue,
   onSearchChange,
   sortState,
@@ -111,6 +116,8 @@ export default function DataTable<T extends Record<string, any>>({
             <div key={i} className="h-12 bg-gray-100 rounded animate-pulse" />
           ))}
         </div>
+      ) : loadError ? (
+        <LoadFailedState onRetry={onRetry} />
       ) : filtered.length === 0 ? (
         <EmptyState
           title={emptyTitle}

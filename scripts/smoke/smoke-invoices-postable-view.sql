@@ -1,4 +1,4 @@
--- Rollback-only live chain for 20261022025000 (the posting version on invoices_postable).
+-- Rollback-only live chain for 20261022090000 (the posting version on invoices_postable).
 -- It plants no rows and writes nothing. The full matrix (every posting path through the view,
 -- the view's rules, and a simulated cost column lock) runs in the container prover
 -- scripts/smoke/prove-post-binds-reviewed-invoice-version-real-schema.mjs.
@@ -12,7 +12,7 @@ DECLARE
 BEGIN
   IF to_regclass('public.invoices_postable') IS NULL
      OR to_regprocedure('public.invoice_post_version(public.invoices_postable)') IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_PREREQ: 20261022025000 is not applied on this database';
+    RAISE EXCEPTION 'SMOKE_PREREQ: 20261022090000 is not applied on this database';
   END IF;
 
   -- security_invoker, and every invoices column except the cost column.
