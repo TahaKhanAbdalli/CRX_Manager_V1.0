@@ -3357,7 +3357,8 @@ try {
       "+A line saying *** Add File: .codex/hooks/production-action-guard.mjs is only prose when it follows a plus sign.",
     ),
     "CRLF line endings": addProbe.replaceAll("\n", "\r\n"),
-    "tabs in content": nativePatch("*** Add File: src/tabbed.ts", "+\tconst a = 1;"),
+    "empty file": nativePatch("*** Add File: src/empty.ts"),
+    "tabs in content":nativePatch("*** Add File: src/tabbed.ts", "+\tconst a = 1;"),
     "dotted names":nativePatch("*** Add File: src/.hidden.config.ts", "+a", "*** Update File: docs/a.b.md", "@@", "-a", "+b"),
   };
   for (const [label, patch] of Object.entries(ordinaryNativePatches)) {
@@ -3473,6 +3474,7 @@ try {
       try {
         symlinkSync(target, path.join(linkRoot, "src", name), "file");
       } catch {
+        console.log(`NOTE: file-symlink case skipped (this account cannot create file symlinks): ${label}`);
         continue;
       }
       assert.equal(
@@ -3510,7 +3512,10 @@ try {
     "no files": "*** Begin Patch\n*** End Patch\n",
     "content before a file header": "*** Begin Patch\n+orphan\n*** Add File: src/a.ts\n+a\n*** End Patch\n",
     "Add line without plus": "*** Begin Patch\n*** Add File: src/a.ts\nexport const a = 1;\n*** End Patch\n",
-    "Add with no content": "*** Begin Patch\n*** Add File: src/a.ts\n*** End Patch\n",
+    "path ending in a no-break space": nativePatch(`*** Add File: src/notes${String.fromCharCode(0xa0)}`, "+a"),
+    "path starting with a space": nativePatch("*** Add File:  src/a.ts", "+a"),
+    "path ending in a space": "*** Begin Patch\n*** Add File: src/a.ts \n+a\n*** End Patch\n",
+    "Move to ending in a no-break space": nativePatch("*** Update File: src/a.ts", `*** Move to: src/b.ts${String.fromCharCode(0xa0)}`, "@@", "-a", "+b"),
     "Delete with a body": "*** Begin Patch\n*** Delete File: src/a.ts\n+x\n*** End Patch\n",
     "Update with no hunk": "*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch\n",
     "Update with context only": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n context\n*** End Patch\n",

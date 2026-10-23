@@ -1508,7 +1508,6 @@ export function parseNativePatch(text) {
   let sawMoveWindow = false; // `*** Move to:` is legal only straight after an Update header
   const finishFile = (index) => {
     if (kind === "Update" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Update File section has no added or removed line` };
-    if (kind === "Add" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Add File section has no content` };
     return null;
   };
   for (let i = 1; i < lines.length - 1; i += 1) {
@@ -1517,8 +1516,8 @@ export function parseNativePatch(text) {
     if (header) {
       const unfinished = finishFile(i + 1);
       if (unfinished) return unfinished;
-      const filePath = header[2].trim();
-      if (!filePath) return { ok: false, reason: `line ${i + 1}: a file header has no path` };
+      const filePath = header[2];
+      if (filePath !== filePath.trim()) return { ok: false, reason: `line ${i + 1}: a path with leading or trailing whitespace` };
       const odd = nativePatchPathProblem(filePath);
       if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
       paths.push(filePath);
@@ -1530,8 +1529,8 @@ export function parseNativePatch(text) {
     const move = NATIVE_PATCH_MOVE_RE.exec(line);
     if (move) {
       if (!sawMoveWindow) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` is only valid straight after an Update File header` };
-      const target = move[1].trim();
-      if (!target) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` has no path` };
+      const target = move[1];
+      if (target !== target.trim()) return { ok: false, reason: `line ${i + 1}: a path with leading or trailing whitespace` };
       const odd = nativePatchPathProblem(target);
       if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
       paths.push(target);
