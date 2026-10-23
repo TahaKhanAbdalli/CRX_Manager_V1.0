@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,6 +19,7 @@ import {
   nativePatchEnvelope,
   parseNativePatch,
   protectedBasenameMentioned,
+  realPathThroughLinks,
   pullRequestChecksGreen,
   shellSegmentHead,
   unrecognizedCommandWord,
@@ -3426,6 +3427,68 @@ try {
       `relative protected destination resolves from cwd ${JSON.stringify(eventCwd)} + workdir ${JSON.stringify(workdir)}`,
     );
   }
+  // A destination that is a link (symlink or junction) to a protected file, or lives inside a
+  // linked directory, lands on the protected file, not on the spelled path.
+  const linkRoot = mkdtempSync(path.join(tmpdir(), "crx-native-patch-links-"));
+  try {
+    mkdirSync(path.join(linkRoot, ".codex", "hooks"), { recursive: true });
+    mkdirSync(path.join(linkRoot, ".claude", "session-state"), { recursive: true });
+    mkdirSync(path.join(linkRoot, "src"), { recursive: true });
+    mkdirSync(path.join(linkRoot, "docs"), { recursive: true });
+    writeFileSync(path.join(linkRoot, ".codex", "hooks", "production-action-guard.mjs"), "// guard\n");
+    writeFileSync(path.join(linkRoot, "src", "plain.ts"), "export const a = 1;\n");
+    symlinkSync(path.join(linkRoot, ".codex", "hooks"), path.join(linkRoot, "src", "linked-dir"), "junction");
+    symlinkSync(path.join(linkRoot, ".claude", "session-state"), path.join(linkRoot, "docs", "linked-state"), "junction");
+    symlinkSync(path.join(linkRoot, ".codex", "hooks", "not-created-yet"), path.join(linkRoot, "src", "dangling-dir"), "junction");
+    const linkCases = [
+      ["file inside a linked directory", "src/linked-dir/production-action-guard.mjs", true],
+      ["new file inside a linked proof directory", "docs/linked-state/claude-review-push.json", true],
+      ["a junction whose target does not resolve", "src/dangling-dir/new-file.ts", true],
+      ["linked directory then a dot-dot back out", "src/linked-dir/../../src/plain.ts", false],
+      ["an ordinary existing file", "src/plain.ts", false],
+      ["an ordinary new file", "src/brand-new.ts", false],
+      ["a new file under a missing directory", "src/new-dir/deeper/brand-new.ts", false],
+    ];
+    for (const [label, destination, shouldBlock] of linkCases) {
+      assert.equal(
+        evaluateProductionAction({
+          toolName: "apply_patch",
+          repoDir: linkRoot,
+          eventCwd: linkRoot,
+          toolInput: { command: nativePatch(`*** Update File: ${destination}`, "@@", "-a", "+b") },
+        }).blocked,
+        shouldBlock,
+        `native patch link check (${label})`,
+      );
+    }
+    let fileLink = true;
+    try {
+      symlinkSync(path.join(linkRoot, ".codex", "hooks", "production-action-guard.mjs"), path.join(linkRoot, "src", "notes.ts"), "file");
+      symlinkSync(path.join(linkRoot, ".codex", "hooks", "not-yet-created-guard.mjs"), path.join(linkRoot, "src", "dangling.ts"), "file");
+    } catch {
+      fileLink = false; // creating a file symlink needs a privilege some Windows accounts lack
+    }
+    if (fileLink) {
+      assert.equal(
+        evaluateProductionAction({ toolName: "apply_patch", repoDir: linkRoot, eventCwd: linkRoot, toolInput: { command: nativePatch("*** Update File: src/notes.ts", "@@", "-a", "+b") } }).blocked,
+        true,
+        "a symlink to the guard file is denied",
+      );
+      assert.equal(
+        evaluateProductionAction({ toolName: "apply_patch", repoDir: linkRoot, eventCwd: linkRoot, toolInput: { command: nativePatch("*** Add File: src/dangling.ts", "+x") } }).blocked,
+        true,
+        "a dangling link cannot be resolved, so it is refused",
+      );
+    }
+    assert.equal(
+      realPathThroughLinks("src/brand-new.ts", linkRoot).endsWith(path.join("src", "brand-new.ts")),
+      true,
+      "a missing file resolves to its real parent plus the missing tail",
+    );
+  } finally {
+    rmSync(linkRoot, { recursive: true, force: true });
+  }
+
   const protectedEnvelopeEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", cwd: path.join(projectRoot, ".codex", "hooks"), tool_input: { command: nativePatch("*** Update File: production-action-guard.mjs", "@@", "-a", "+b") } }),
     encoding: "utf8",
@@ -3464,6 +3527,15 @@ try {
     "8.3 short name": nativePatch("*** Update File: .codex/hooks/PRODUC~1.MJS", "@@", "-a", "+b"),
     "wildcard in path": nativePatch("*** Update File: .codex/hooks/production-action-*.mjs", "@@", "-a", "+b"),
     "stray colon": nativePatch("*** Add File: src/a:b.ts", "+a"),
+    // A line break other than LF/CRLF could be read as one by another parser and
+    // hide a header inside what this parser sees as one path or one content line.
+    "U+2028 hiding a Move to": nativePatch(`*** Update File: docs/a.md${String.fromCharCode(0x2028)}*** Move to: .codex/hooks/production-action-guard.mjs`, "@@", "-a", "+b"),
+    "U+2029 in content": nativePatch("*** Add File: src/a.ts", `+a${String.fromCharCode(0x2029)}*** Add File: .codex/hooks/production-action-guard.mjs`),
+    "U+2028 in content": nativePatch("*** Add File: src/a.ts", `+a${String.fromCharCode(0x2028)}b`),
+    "NEL in content": nativePatch("*** Add File: src/a.ts", "+a\u0085b"),
+    "form feed in a path": nativePatch("*** Add File: src/a\fb.ts", "+a"),
+    "vertical tab in content": nativePatch("*** Add File: src/a.ts", "+a\u000bb"),
+    "lone carriage return": "*** Begin Patch\n*** Add File: src/a.ts\r+a\n*** End Patch\n",
     "bad Move to target": nativePatch("*** Update File: src/a.ts", "*** Move to: .claude/session-state/claude-review-push.json.", "@@", "-a", "+b"),
     "empty text": "",
   };

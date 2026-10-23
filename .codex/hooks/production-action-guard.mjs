@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -1487,6 +1487,10 @@ function nativePatchPathProblem(filePath) {
 export function parseNativePatch(text) {
   if (typeof text !== "string") return { ok: false, reason: "the patch is not text" };
   if (text.includes("\0")) return { ok: false, reason: "the patch contains a NUL character" };
+  // Only `\n` / `\r\n` end a line here. Any other line break (a lone CR, VT, FF,
+  // NEL, U+2028, U+2029) could be read as one by a different parser, hiding a
+  // header inside what this one sees as a single path or content line.
+  if (/\r(?!\n)|[\v\f\x85]/.test(text) || text.includes(String.fromCharCode(0x2028)) || text.includes(String.fromCharCode(0x2029))) return { ok: false, reason: "the patch contains a line break other than LF or CRLF" };
   const lines = text.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
   if (lines[0] !== "*** Begin Patch") return { ok: false, reason: "the first line is not `*** Begin Patch`" };
@@ -1573,6 +1577,38 @@ export function nativePatchEnvelope(toolName, toolInput) {
   return { paths: parsed.paths };
 }
 
+// Where a patch destination really lands once symlinks and junctions on its
+// existing part are followed, or `null` when that cannot be determined (a link
+// that does not resolve, an unreadable directory) so the caller refuses. The
+// part of the path that does not exist yet is appended unchanged.
+export function realPathThroughLinks(candidate, baseDir) {
+  const absolute = path.resolve(baseDir, String(candidate));
+  const missing = [];
+  let probe = absolute;
+  for (;;) {
+    let present = true;
+    try {
+      lstatSync(probe);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") return null;
+      present = false;
+    }
+    if (present) {
+      // Present but unresolvable (a dangling link) is NOT "missing": a write
+      // through it would create the file at the link's target.
+      try {
+        return path.join(realpathSync.native(probe), ...missing);
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) return absolute;
+    missing.unshift(path.basename(probe));
+    probe = parent;
+  }
+}
+
 export function evaluateProductionAction({
   toolName = "",
   toolInput = {},
@@ -1646,6 +1682,18 @@ export function evaluateProductionAction({
       protectedHarnessPathMentioned(candidate) || protectedHarnessPathMentioned(joinedWithWorkdir(candidate, actionRepoDir)))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  // The spelled path is not where the write lands when it passes through a
+  // symlink or junction (`src/notes.ts` linked to a guard file). Only this
+  // route follows links, because only this route's destinations are all known.
+  for (const destination of nativePatch?.paths ?? []) {
+    const landed = realPathThroughLinks(destination, actionRepoDir);
+    if (landed === null) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} could not be resolved to the file it would really write (a link that does not resolve, or an unreadable directory), so it is refused (fail closed).`);
+    }
+    if (reviewProofPathMentioned(landed) || protectedHarnessPathMentioned(landed)) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is a link to, or inside a link to, a protected harness or review-proof file (${landed}); it cannot be changed through a direct file-write tool.`);
+    }
   }
 
   if (NODE_REPL_TOOL.test(name)) {
