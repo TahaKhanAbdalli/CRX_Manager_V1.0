@@ -248,6 +248,16 @@ describe('JobDetail recipe pricing tier', () => {
     expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
   });
 
+  it('MONEY: a per-gallon price that is not whole cents per oz is left blank with a warning, not rounded', async () => {
+    // $1.50/gal is 1.17¢/oz: a rounded 1¢ would bill 128 oz at $1.28.
+    const PER_GAL = { ...PRODUCT, id: 'prod-gal', product_name: 'Oz Rate Chem', rate_unit: 'oz/ac', product_form: 'liquid', tier1_price: 1.5, tier2_price: 1.5, tier3_price: 1.5 };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [PER_GAL]);
+    await openChemicalLine();
+    await pickProduct(/Oz Rate Chem/);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('is not a whole number of cents per oz')));
+    expect(priceInput().value).toBe('');
+  });
+
   it('a blank price on a quantity-0 line does not block the save (it bills nothing)', async () => {
     const UNPRICED = { ...PRODUCT, id: 'prod-unpriced', product_name: 'Unpriced Adjuvant', tier1_price: null, tier2_price: null, tier3_price: null };
     serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [UNPRICED]);
