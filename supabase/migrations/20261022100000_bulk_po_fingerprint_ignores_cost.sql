@@ -20,9 +20,10 @@
 -- must carry the same lines and invoice date, cost included: a new bulk import
 -- binds a cost-inclusive request fingerprint (invoice date + lines) to its
 -- idempotency receipt (_bind_replay_receipt_20261015, the house receipt
--- binder), and a retry that changed only a cost gets the conflict instead of a
--- "saved" replay. Header fields such as notes stay outside both fingerprints,
--- as before.
+-- binder), and an admin's retry that changed only a cost gets the conflict
+-- instead of a "saved" replay (a rep's cost never reaches this writer: the
+-- wrapper strips it, so a rep's retry replays). Header fields such as notes
+-- stay outside both fingerprints, as before.
 --
 -- Stored fingerprints: a claim stored before this migration from lines that
 -- carried cost would keep its old hash, so a same-key retry of that request

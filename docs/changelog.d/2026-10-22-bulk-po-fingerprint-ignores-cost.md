@@ -9,8 +9,9 @@
   imported, to check costs in Supplier POs (`BulkPOImport.tsx`); a sales rep's message is unchanged.
 - A changed quantity, product, unit or invoice date is still refused with `BULK_PO_DOCUMENT_CONTENT_CONFLICT`. A
   same-key retry (a lost response) must be the exact request, cost included: the import binds a cost-inclusive request
-  fingerprint to its idempotency receipt (`_bind_replay_receipt_20261015`), so a retry that changed only a cost is
-  refused rather than replayed as saved.
+  fingerprint to its idempotency receipt (`_bind_replay_receipt_20261015`), so an admin's retry that changed only a
+  cost is refused rather than replayed as saved (a rep's cost is stripped before it reaches the database, so a rep's
+  retry replays), and the same key without the bulk-import marker is refused.
 - The migration refuses to apply while any import claim exists (live had none), so no claim keeps a fingerprint made
   under the old rule.
 - Proof: `node scripts/smoke/prove-bulk-po-fingerprint-ignores-cost-real-schema.mjs`. The live smoke chain

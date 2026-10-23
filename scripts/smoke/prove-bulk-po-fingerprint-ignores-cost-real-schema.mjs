@@ -17,13 +17,16 @@
  *   3. Real content changes still conflict for an admin sending cost: quantity, invoice date,
  *      product, unit.
  *   4. Same-key retries (the idempotency replay path): an exact retry replays "saved" with the same
- *      PO; a retry with a changed quantity conflicts; a retry with only a changed cost conflicts before
- *      and replays after (cost is not document content); a rep's exact retry replays.
+ *      PO; a retry with a changed quantity or date conflicts; an admin's retry with only a changed
+ *      cost conflicts before and after (after, through the cost-inclusive receipt binding); the same
+ *      key without the bulk-import marker replays before and is refused after; a rep's retries replay
+ *      (the wrapper strips any cost a rep sends).
  *   5. Stored fingerprints: the same lines and date with and without cost store the same fingerprint
  *      after (two different documents), different before.
  *   6. Grants and security of the replaced writer; the preflight refuses a drifted body, a stored
- *      import claim (fingerprinted by the old rule) and a second apply; MUTATION: stripping only
- *      unit_cost_cents (not unit_cost) brings the conflict back.
+ *      import claim (fingerprinted by the old rule) and a second apply; MUTATIONS: stripping only
+ *      unit_cost_cents (not unit_cost) brings the conflict back; skipping the receipt check replays
+ *      an admin's cost-only retry as saved.
  *
  * Run: node scripts/smoke/prove-bulk-po-fingerprint-ignores-cost-real-schema.mjs   (needs Docker)
  * Prints BULK_PO_FINGERPRINT_IGNORES_COST_PROOF_PASS on success. CRX_PROVER_VERBOSE=1 prints every step.
@@ -36,9 +39,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const NAME = process.env.CRX_PROVER_REUSE_CONTAINER || `crx-po-fp-${process.pid}-${Date.now().toString(36)}`;
-const REUSE = Boolean(process.env.CRX_PROVER_REUSE_CONTAINER);
-const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1' || REUSE;
+// Always a fresh, network-disabled container this run creates: the proof seeds and applies the
+// candidate, so it never runs against an existing database.
+const NAME = `crx-po-fp-${process.pid}-${Date.now().toString(36)}`;
+const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1';
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
@@ -177,6 +181,11 @@ const PROD = id('f1'); // current_cost 22.50 per gal
 const PROD_B = id('f2');
 const VENDOR = '[PROVER] Fingerprint Vendor';
 const DATE = '2026-10-20';
+// Whole cents as a dollars literal, by integer arithmetic only (no float rounding).
+function dollarsText(cents) {
+  assert.ok(Number.isSafeInteger(cents) && cents >= 0, `cents must be a non-negative safe integer: ${cents}`);
+  return `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, '0')}`;
+}
 
 function claims(uid) {
   return `SELECT set_config('request.jwt.claims', '{"sub":"${uid}","role":"authenticated"}', true);
@@ -186,7 +195,7 @@ SELECT set_config('request.jwt.claim.sub', '${uid}', true);`;
 function line({ product = PROD, name = '[PROVER] Chem', qty = 10, unit = 'gal', cents = null } = {}) {
   const base = `'product_id', '${product}', 'product_name', '${name}', 'quantity_ordered', ${qty}, 'unit_size', '${unit}', 'quantity_received', 0, 'notes', NULL`;
   return cents === null ? `jsonb_build_object(${base})`
-    : `jsonb_build_object(${base}, 'unit_cost', ${(cents / 100).toFixed(2)}, 'unit_cost_cents', ${cents})`;
+    : `jsonb_build_object(${base}, 'unit_cost', ${dollarsText(cents)}, 'unit_cost_cents', ${cents})`;
 }
 function bulkImport(actor, ref, key, lines, date = DATE) {
   return `public.save_purchase_order(NULL, jsonb_build_object('po_number', NULL, 'vendor', '${VENDOR}', 'status', 'draft',
@@ -418,7 +427,7 @@ function mutation() {
 
 function main() {
   const started = Date.now();
-  if (!REUSE) buildContainer();
+  buildContainer();
   fidelity();
   if (scalar("SELECT count(*) FROM public.profiles WHERE id::text LIKE '7c720000-%';") === '0') seed();
 
