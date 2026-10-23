@@ -7,9 +7,8 @@
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a network-disabled Supabase
  * PostgreSQL 17 container, replays every ordered post-baseline migration up to the candidate, checks
- * the candidate's md5 pin against the replayed body, seeds an admin and a sales rep, two products,
- * and one COMMITTED rep import (a claim stored before the candidate), then runs one matrix BEFORE and
- * AFTER the candidate. Each scenario is one transaction that always rolls back; each step runs as a
+ * the candidate's md5 pin against the replayed body, seeds an admin and a sales rep and two products
+ * (no stored import claim, as live), then runs one matrix BEFORE and AFTER the candidate. Each scenario is one transaction that always rolls back; each step runs as a
  * PostgREST session (request.jwt.claims + SET LOCAL ROLE authenticated) or the owner.
  *   1. Rep imports a document without cost, then an admin imports it WITH cost under another key:
  *      before CONTENT_CONFLICT, after already_imported on the rep's PO; still one PO, the rep line's
@@ -22,9 +21,9 @@
  *      and replays after (cost is not document content); a rep's exact retry replays.
  *   5. Stored fingerprints: the same lines and date with and without cost store the same fingerprint
  *      after (two different documents), different before.
- *   6. A claim committed BEFORE the candidate by a rep matches an admin import with cost after it.
- *   7. Grants and security of the replaced writer; the preflight refuses a drifted body and a second
- *      apply; MUTATION: stripping only unit_cost_cents (not unit_cost) brings the conflict back.
+ *   6. Grants and security of the replaced writer; the preflight refuses a drifted body, a stored
+ *      import claim (fingerprinted by the old rule) and a second apply; MUTATION: stripping only
+ *      unit_cost_cents (not unit_cost) brings the conflict back.
  *
  * Run: node scripts/smoke/prove-bulk-po-fingerprint-ignores-cost-real-schema.mjs   (needs Docker)
  * Prints BULK_PO_FINGERPRINT_IGNORES_COST_PROOF_PASS on success. CRX_PROVER_VERBOSE=1 prints every step.
@@ -202,8 +201,6 @@ const imp = (actor, ref, key, lines, date) => `(SELECT (r->>'status') || ':' || 
   FROM (SELECT ${bulkImport(actor, ref, key, lines, date)} AS r) s)`;
 // Purchase orders for VENDOR created in this scenario's transaction (now() is its start time).
 const NEW_POS = `(SELECT count(*)::text FROM public.purchase_orders WHERE vendor = '${VENDOR}' AND created_at = now())`;
-// Every purchase order for VENDOR, the committed PRE-1 import included.
-const ALL_POS = `(SELECT count(*)::text FROM public.purchase_orders WHERE vendor = '${VENDOR}')`;
 const LINECOST = (ref) => `(SELECT string_agg(poi.quantity_ordered::int || ':' || poi.unit_cost_cents, ',') FROM public.purchase_order_items poi
     JOIN public.purchase_order_import_intents i ON i.purchase_order_id = poi.purchase_order_id WHERE i.intent_key = public._prover_intent('${ref}'))`;
 const FP = (ref) => `(SELECT content_fingerprint FROM public.purchase_order_import_intents WHERE intent_key = public._prover_intent('${ref}'))`;
@@ -240,14 +237,8 @@ function seed() {
     COMMIT;`);
   assert.equal(scalar(`SELECT string_agg(role || ':' || is_active, ',' ORDER BY created_at) FROM public.profiles WHERE id::text LIKE '7c720000-%';`),
     'admin:true,sales_rep:true', 'the seeded roles are not what the proof needs');
-  // 6. A rep import COMMITTED before the candidate: its stored fingerprint must still match after.
-  psql(`BEGIN;
-    ${claims(U.REP)}
-    SET LOCAL ROLE authenticated;
-    SELECT ${bulkImport(U.REP, 'PRE-1', 'k-pre-rep', [line()])};
-    COMMIT;`);
-  assert.equal(scalar(ALL_POS), '1', 'the committed rep import did not store one PO');
-  console.log('[prover] seeded an admin, a sales rep, two products and one committed rep import (PRE-1)');
+  assert.equal(scalar('SELECT count(*) FROM public.purchase_order_import_intents;'), '0', 'the candidate needs no stored import claim');
+  console.log('[prover] seeded an admin, a sales rep and two products (no stored import claim, as live)');
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -329,12 +320,6 @@ const SCENARIOS = [
     ['the two fingerprints are equal', 'owner', `(${FP('D6-A')} = ${FP('D6-B')})::text`, 'ok|false', 'ok|true'],
     ['a fingerprint is 64 hex characters', 'owner', `(${FP('D6-A')} ~ '^[0-9a-f]{64}$')::text`, 'ok|true', 'same'],
   ] },
-  { name: '6. a claim committed before the candidate', steps: [
-    ['admin imports PRE-1 with cost', U.ADMIN, imp(U.ADMIN, 'PRE-1', 'k-pre-admin', [line({ cents: COST })]), CONFLICT, 'ok|already_imported:true'],
-    ['rep imports PRE-1 again', U.REP, imp(U.REP, 'PRE-1', 'k-pre-rep-2', [line()]), 'ok|already_imported:true', 'same'],
-    ['rep exact retry of the committed import', U.REP, imp(U.REP, 'PRE-1', 'k-pre-rep', [line()]), 'ok|saved:true', 'same'],
-    ['still one PO for the vendor', 'owner', ALL_POS, 'ok|1', 'same'],
-  ] },
 ];
 
 function runMatrix(phase, fixture = '') {
@@ -379,14 +364,21 @@ function security() {
 
 function preflightRefuses(phase) {
   stageText('cand.sql', lf(CANDIDATE));
-  const setup = phase === 'before'
-    ? `CREATE OR REPLACE FUNCTION ${SIG.replace('(uuid,jsonb,jsonb,uuid,text)', '(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)')} RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN NULL; END; $$;`
-    : 'SELECT 1;';
-  const d = docker([...psqlArgs()], { input: `BEGIN;\n${setup}\n\\i /tmp/cand.sql\nROLLBACK;`, allowFailure: true });
-  assert.notEqual(d.status, 0, `the candidate applied over: ${setup}`);
-  assert.match(d.stderr, /BULK_PO_FINGERPRINT_PREFLIGHT: public\._save_purchase_order_ascii_identity_impl\(uuid,jsonb,jsonb,uuid,text\) changed since 2026-10-22/,
-    `wrong refusal:\n${d.stderr}`);
-  console.log(`[prover] PREFLIGHT (${phase}): ${phase === 'before' ? 'a drifted body aborts the candidate' : 'a second apply is refused'}`);
+  const DRIFT = /BULK_PO_FINGERPRINT_PREFLIGHT: public\._save_purchase_order_ascii_identity_impl\(uuid,jsonb,jsonb,uuid,text\) changed since 2026-10-22/;
+  const cases = phase === 'before' ? [
+    ['a drifted body', `CREATE OR REPLACE FUNCTION ${SIG.replace('(uuid,jsonb,jsonb,uuid,text)', '(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)')} RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN NULL; END; $$;`, DRIFT],
+    // A claim stored under the old rule (here a rep import in the same transaction) refuses the apply.
+    ['a stored import claim', `${claims(U.REP)}\nSET LOCAL ROLE authenticated;\nSELECT ${bulkImport(U.REP, 'PF-1', 'k-pf', [line()])};\nRESET ROLE;`,
+      /BULK_PO_FINGERPRINT_PREFLIGHT: 1 stored import claim\(s\) were fingerprinted by the old rule/],
+  ] : [
+    ['a second apply', 'SELECT 1;', DRIFT],
+  ];
+  for (const [label, setup, refusal] of cases) {
+    const d = docker([...psqlArgs()], { input: `BEGIN;\n${setup}\n\\i /tmp/cand.sql\nROLLBACK;`, allowFailure: true });
+    assert.notEqual(d.status, 0, `the candidate applied over ${label}`);
+    assert.match(d.stderr, refusal, `wrong refusal for ${label}:\n${d.stderr}`);
+  }
+  console.log(`[prover] PREFLIGHT (${phase}): ${cases.map(([label]) => label).join(' and ')} ${cases.length > 1 ? 'each abort' : 'is refused by'} the candidate`);
 }
 
 // MUTATION: strip only unit_cost_cents. An admin line still carries unit_cost, so the conflict returns:

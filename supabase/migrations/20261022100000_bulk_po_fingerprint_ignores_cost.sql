@@ -19,12 +19,12 @@
 -- raises BULK_PO_DOCUMENT_CONTENT_CONFLICT, and a same-key retry still compares
 -- against the stored fingerprint.
 --
--- Stored fingerprints: a claim whose lines carried no cost (every rep import
--- since 20261021140000) hashes the same under this rule. A claim stored before
--- this migration from lines that carried cost keeps its old hash, so a later
--- import of that document, or a same-key retry of that request, gets the
--- conflict refusal it gets today (no duplicate, no write). Live had 0 claims on
--- 2026-10-22; re-check just before applying.
+-- Stored fingerprints: a claim stored before this migration from lines that
+-- carried cost would keep its old hash, so a same-key retry of that request
+-- would get the conflict refusal instead of its saved result. Live had 0 claims
+-- on 2026-10-22, so the preflight locks the claim table (no import can commit a
+-- claim while this applies) and refuses to apply while any claim exists; with
+-- none, every stored fingerprint is computed by the new rule.
 --
 -- Only the canonical-items step of _save_purchase_order_ascii_identity_impl
 -- changes; the rest of the body is the live 2026-10-22 body (from
@@ -36,10 +36,19 @@
 -- an admin stored with cost while this rule was live then conflicts on a later
 -- re-import that carries cost (no duplicate, no write).
 
+-- Held until this transaction commits: an import cannot store a claim under the
+-- old rule between the check below and the new body.
+LOCK TABLE public.purchase_order_import_intents IN SHARE MODE;
+
 DO $preflight$
 DECLARE
   v_md5 text;
+  v_claims bigint;
 BEGIN
+  SELECT count(*) INTO v_claims FROM public.purchase_order_import_intents;
+  IF v_claims <> 0 THEN
+    RAISE EXCEPTION 'BULK_PO_FINGERPRINT_PREFLIGHT: % stored import claim(s) were fingerprinted by the old rule; re-plan before applying', v_claims;
+  END IF;
   SELECT md5(replace(prosrc, chr(13), ''))
     INTO v_md5
     FROM pg_proc
