@@ -1,5 +1,6 @@
 import { supabase } from './db';
 import { chunkIds } from './dispatchDisplay';
+import { PAGE_RETURNED_NO_LIST } from './pagedRead';
 
 export interface InvoiceBillingCoverage {
   order_id: string | null;
@@ -44,7 +45,10 @@ export async function fetchActiveInvoiceCoveragePages(orderIds: string[]) {
         .range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1);
 
       if (error) return { data: null, error };
-      const page = (data || []) as ActiveInvoiceCoverageRow[];
+      // A page with no list is a failed read, not "no invoices": callers would show
+      // every order as 0% invoiced or every delivery as unbilled (To-Do 10.5).
+      if (!data) return { data: null, error: { message: PAGE_RETURNED_NO_LIST } };
+      const page = data as ActiveInvoiceCoverageRow[];
       if (page.length === 0) break;
       rows.push(...page);
       from += page.length;

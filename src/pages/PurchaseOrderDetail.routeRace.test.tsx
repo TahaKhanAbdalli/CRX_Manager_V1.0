@@ -167,7 +167,6 @@ vi.mock('../lib/criticalAction', () => ({
 vi.mock('../lib/receivingPdf', () => ({
   generateReceivingPdf: vi.fn(async () => {}),
   downloadReceivingPdf: vi.fn(async () => {}),
-  generateBatchReceivingPdf: vi.fn(async () => {}),
 }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/notificationTriggers', () => ({

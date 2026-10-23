@@ -28,7 +28,7 @@ import {
   type InvoicePdfData,
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
-import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS } from '../lib/costFields';
+import { INVOICE_COLUMNS, INVOICE_ITEM_COLUMNS, INVOICE_POST_VERSION_COLUMNS, INVOICES_POSTABLE } from '../lib/costFields';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
 import SeasonTag from '../components/invoices/SeasonTag';
@@ -137,7 +137,7 @@ export default function Invoices() {
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     // Read every page: a single request is silently cut off at the server's row cap.
     const { data, error } = await fetchAllRows((from, to) => supabase
-      .from('invoices')
+      .from(INVOICES_POSTABLE)
       // invoice_post_version: posting refuses a row changed since this list loaded it.
       .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
       .is('deleted_at', null)
