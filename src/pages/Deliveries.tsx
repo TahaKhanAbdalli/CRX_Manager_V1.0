@@ -31,7 +31,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
 import { hasSignal, NO_SIGNAL_MESSAGE } from '../lib/connectivity';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -389,15 +389,15 @@ export default function Deliveries() {
         query = query.eq('assigned_driver', profile.id);
       }
 
-      return query
+      return pageWithList(query
         .order('scheduled_date', { ascending: false })
         .order('id')
-        .range(from, to);
+        .range(from, to));
     });
     if (seq !== fetchSeq.current) return;
 
-    if (delError) {
-      failLoad(delError);
+    if (delError || !delPages) {
+      failLoad(delError ?? new Error('deliveries read returned no list'));
       return;
     }
     const delData = (delPages || []) as unknown as Array<Delivery & {
@@ -426,25 +426,25 @@ export default function Deliveries() {
     // Each id list is sent in chunks and every chunk is paged, so a long delivery list
     // neither overflows the request URL nor loses rows past the server's row cap.
     const [itemCountsResult, parentsResult, driversResult] = await Promise.all([
-      fetchAllRowsForIds(deliveryIds, (idChunk, from, to) => supabase
+      fetchAllRowsForIds(deliveryIds, (idChunk, from, to) => pageWithList(supabase
         .from('delivery_items')
         // `id` lets the pager drop a line repeated across a page seam.
         .select('id, delivery_id', { count: 'exact' })
         .in('delivery_id', idChunk)
         .order('id')
-        .range(from, to)),
-      fetchAllRowsForIds(parentIds, (idChunk, from, to) => supabase
+        .range(from, to))),
+      fetchAllRowsForIds(parentIds, (idChunk, from, to) => pageWithList(supabase
         .from('customers')
         .select('id, farm_name', { count: 'exact' })
         .in('id', idChunk)
         .order('id')
-        .range(from, to)),
-      fetchAllRowsForIds(driverIds, (idChunk, from, to) => supabase
+        .range(from, to))),
+      fetchAllRowsForIds(driverIds, (idChunk, from, to) => pageWithList(supabase
         .from('profile_public_view')
         .select('id, full_name', { count: 'exact' })
         .in('id', idChunk)
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
     ]);
     if (seq !== fetchSeq.current) return;
 
@@ -493,25 +493,25 @@ export default function Deliveries() {
 
     if (activeIds.length > 0) {
       try {
-        const { data: diData, error: diError } = await fetchAllRowsForIds(activeIds, (idChunk, from, to) => supabase
+        const { data: diData, error: diError } = await fetchAllRowsForIds(activeIds, (idChunk, from, to) => pageWithList(supabase
           .from('delivery_items')
           .select('id, delivery_id, product_id, quantity', { count: 'exact' })
           .in('delivery_id', idChunk)
           .order('id')
-          .range(from, to));
+          .range(from, to)));
         if (seq !== fetchSeq.current) return;
         if (diError) throw diError;
 
         const productIds = [...new Set((diData || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
 
         if (productIds.length > 0) {
-          const { data: invData, error: invError } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => supabase
+          const { data: invData, error: invError } = await fetchAllRowsForIds(productIds, (idChunk, from, to) => pageWithList(supabase
             .from('inventory')
             .select('id, product_id, quantity_available', { count: 'exact' })
             .in('product_id', idChunk)
             .eq('location', 'Main Warehouse')
             .order('id')
-            .range(from, to));
+            .range(from, to)));
           if (seq !== fetchSeq.current) return;
           if (invError) throw invError;
 

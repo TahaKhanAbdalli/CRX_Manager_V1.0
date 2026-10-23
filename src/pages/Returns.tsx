@@ -6,6 +6,7 @@ import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -15,7 +16,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -147,6 +148,8 @@ export default function Returns() {
   const { toast } = useToast();
   const [returns, setReturns] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // The last list read failed: no rows, so it never reads as "No returns yet".
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
 
   // Create modal
@@ -175,6 +178,8 @@ export default function Returns() {
   const [showDetail, setShowDetail] = useState(false);
   const [activeReturn, setActiveReturn] = useState<ReturnRow | null>(null);
   const [detailItems, setDetailItems] = useState<DetailReturnItem[]>([]);
+  // The open return's lines failed to load: say so, never "$0 credit" with live actions.
+  const [detailFailed, setDetailFailed] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const returnDetailRequestRef = useRef(0);
 
@@ -205,7 +210,7 @@ export default function Returns() {
     setLoading(true);
     // PR-07 follow-up: dropped requester FK embed; resolved via profile_public_view.
     const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) =>
-      supabase
+      pageWithList(supabase
         .from('returns')
         .select(`
           *,
@@ -216,19 +221,22 @@ export default function Returns() {
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .order('id')
-        .range(from, to),
+        .range(from, to)),
     );
     if (seq !== fetchSeq.current) return;
 
-    if (error) {
-      Sentry.captureException(error);
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('returns read returned no list'));
       toast('error', 'Failed to load returns');
+      // An older list would look current; none at all would read as "No returns yet".
+      setReturns([]);
+      setLoadFailed(true);
       setLoading(false);
       return;
     }
 
     const requesterIds = [...new Set(
-      ((data || []) as Array<{ requested_by?: string | null }>)
+      (data as Array<{ requested_by?: string | null }>)
         .map((r) => r.requested_by)
         .filter(Boolean) as string[]
     )];
@@ -248,7 +256,7 @@ export default function Returns() {
       (requesters || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) requesterMap[p.id] = p.full_name || 'Unknown'; });
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requested_by?: string | null; items?: unknown[] }>).map((r) => ({
+    const rows = (data as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requested_by?: string | null; items?: unknown[] }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       order_number: r.order?.order_number || null,
@@ -257,6 +265,7 @@ export default function Returns() {
     })) as unknown as ReturnRow[];
     if (seq !== fetchSeq.current) return;
     setReturns(rows);
+    setLoadFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -503,6 +512,7 @@ export default function Returns() {
     setActiveReturn(ret);
     setShowDetail(true);
     setDetailItems([]);
+    setDetailFailed(false);
     setLoadingDetail(true);
 
     try {
@@ -513,18 +523,20 @@ export default function Returns() {
         .order('sort_order');
 
       if (requestId !== returnDetailRequestRef.current) return;
-      if (error) {
-        Sentry.captureException(error, { extra: { context: 'load_return_detail_items', returnId: ret.id } });
+      if (error || !data) {
+        Sentry.captureException(error ?? new Error('return_items read returned no list'), { extra: { context: 'load_return_detail_items', returnId: ret.id } });
         toast('error', 'Failed to load return item details');
         setDetailItems([]);
+        setDetailFailed(true);
       } else {
-        setDetailItems((data || []) as unknown as DetailReturnItem[]);
+        setDetailItems(data as unknown as DetailReturnItem[]);
       }
     } catch (error) {
       if (requestId !== returnDetailRequestRef.current) return;
       Sentry.captureException(error, { extra: { context: 'load_return_detail_items', returnId: ret.id } });
       toast('error', 'Failed to load return item details');
       setDetailItems([]);
+      setDetailFailed(true);
     } finally {
       if (requestId === returnDetailRequestRef.current) setLoadingDetail(false);
     }
@@ -535,6 +547,7 @@ export default function Returns() {
     setShowDetail(false);
     setLoadingDetail(false);
     setDetailItems([]);
+    setDetailFailed(false);
   };
 
   // Workflow actions
@@ -883,6 +896,8 @@ export default function Returns() {
               </Button>
             }
             loading={loading}
+            loadError={loadFailed}
+            onRetry={fetchReturns}
             filters={
               <>
                 <select
@@ -1197,6 +1212,11 @@ export default function Returns() {
               <div className="flex items-center justify-center py-6">
                 <div className="w-6 h-6 border-2 border-crx-green border-t-transparent rounded-full animate-spin" />
               </div>
+            ) : detailFailed ? (
+              <LoadFailedState
+                title="This return's lines could not be loaded"
+                onRetry={() => { void openDetail(activeReturn); }}
+              />
             ) : (
               <ReturnDetailItems items={detailItems} formatCents={formatCents} />
             )}
@@ -1205,8 +1225,9 @@ export default function Returns() {
               <p className="text-sm text-gray-600"><span className="font-medium">Notes:</span> {activeReturn.notes}</p>
             )}
 
-            {/* Workflow Actions */}
-            {isAdmin && (
+            {/* Workflow Actions: only over lines that loaded, so no one approves, receives
+                or credits a return while looking at an empty list and a $0 total. */}
+            {isAdmin && !loadingDetail && !detailFailed && (
               <div className="flex flex-col gap-3 pt-2 border-t sm:flex-row sm:justify-between">
                 <div className="flex flex-wrap gap-2">
                   {activeReturn.status === 'requested' && (

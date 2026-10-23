@@ -82,6 +82,17 @@ describe('activeInvoiceCoversDelivery', () => {
     expect(queries[3].range).toHaveBeenCalledWith(1, 1000);
   });
 
+  it('fails a page that answers with no list instead of reading it as "no invoices" (To-Do 10.5)', async () => {
+    const query = queryReturning([]);
+    query.range = vi.fn(() => Promise.resolve({ data: null, error: null }));
+    vi.mocked(supabase.from).mockImplementation(() => query as never);
+
+    const result = await fetchActiveInvoiceCoveragePages(['order-1']);
+
+    expect(result.data).toBeNull();
+    expect(result.error).not.toBeNull();
+  });
+
   it('keeps order billing coverage limited to active sale invoices', () => {
     expect(activeInvoiceCountsTowardBilling(invoice())).toBe(true);
     expect(activeInvoiceCountsTowardBilling(invoice({ invoice_type: 'credit_memo' }))).toBe(false);
