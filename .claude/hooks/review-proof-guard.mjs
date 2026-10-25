@@ -9,7 +9,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  ENFORCEMENT_SURFACE_PATH_RE,
   extractPatchDestinations,
+  nativePatchEnvelope,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
@@ -83,7 +85,19 @@ const pathCandidateCwd = nestedWorkingDir
   ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
   : eventCwd;
 const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
+// Codex's native patch tool also sends the patch under `command` (observed
+// 2026-10-23). A patch that parses completely is a set of destination paths, not
+// a shell command: its paths join the path candidates below (so a destination on
+// a proof file, the state directory or the enforcement surface is denied like
+// any other path-field write) and the shell scans are skipped, which would
+// otherwise deny a documentation patch merely for naming a proof file in prose.
+// A malformed or conflicting apply_patch envelope is refused.
+const nativePatch = nativePatchEnvelope(toolName, rawToolInput);
+if (nativePatch?.denial) {
+  deny(`REVIEW PROOF GUARD: ${nativePatch.denial}`);
+}
 const rawPathCandidates = [
+  ...(nativePatch?.paths ?? []),
   input.file_path,
   input.filePath,
   input.path,
@@ -166,7 +180,7 @@ if (!readOnlyBuiltin && stateDirCandidates.length > 0 && !isPureAckWrite) {
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
-const command = String(input.command ?? input.cmd ?? "");
+const command = nativePatch ? "" : String(input.command ?? input.cmd ?? "");
 // The shell resolves ANSI-C escapes, drops unquoted backslashes, and joins
 // quote-split tokens before running a command, so `applied-source"-"ledger.json`
 // or `.clau\de` EXECUTES as the real path/verb while a raw-string regex misses
@@ -205,8 +219,8 @@ if (shellCommandViews(command).some((v) => reviewProofPathMentioned(v))) {
 // `command` and would otherwise skip the destructive/cd checks entirely (Opus
 // review 2026-08-19, round 5 — HIGH: a name-only gate is bypassable). Known
 // shell tool names still match so a command-less shell tool is covered too.
-const shellTool = input.command != null || input.cmd != null ||
-  /(?:bash|powershell|pwsh|cmd|shell|terminal|exec|run_command)/i.test(toolName);
+const shellTool = !nativePatch && (input.command != null || input.cmd != null ||
+  /(?:bash|powershell|pwsh|cmd|shell|terminal|exec|run_command)/i.test(toolName));
 
 // Deny targets that enter the state dir, either directly or as a component
 // step (`cd .claude` then `cd session-state` must not assemble the cwd).
@@ -1042,8 +1056,7 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   };
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|supplier-pricing-phase3-private-artifacts\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
-      .test(`/${resolvePathCandidate(candidate)}`);
+    return ENFORCEMENT_SURFACE_PATH_RE.test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {
     deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml through a path field. These decide whether the commit, push, CI, and review gates run at all. Use Edit/Write for a deliberate change, which the `ask` tier in .claude/settings.json gates.");

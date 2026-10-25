@@ -1066,4 +1066,61 @@ for (const command of [
   assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command } }, `cd allowed: ${command}`);
 }
 
+// Native Codex apply_patch with the patch under tool_input.command (observed 2026-10-23). A patch
+// that parses completely is a set of destination paths, not a shell command: destinations on the
+// proof files, the state directory and the enforcement surface are denied like any path-field write,
+// documentation that merely names them in prose is allowed, and any other envelope is refused.
+const nativeCommandPatch = (...sections) => `*** Begin Patch\n${sections.join("\n")}\n*** End Patch\n`;
+for (const { path: target, reason } of protectedPatchTargets) {
+  for (const field of ["command", "cmd"]) {
+    assertEntrypointDenied(
+      { tool_name: "apply_patch", tool_input: { [field]: nativeCommandPatch(`*** Update File: ${target}`, "@@", "-old", "+new") } },
+      reason,
+      `${field} patch to ${target}`,
+    );
+  }
+  assertEntrypointDenied(
+    { tool_name: "apply_patch", tool_input: { command: nativeCommandPatch("*** Update File: docs/guard-notes.md", `*** Move to: ${target}`, "@@", "-old", "+new") } },
+    reason,
+    `command move onto ${target}`,
+  );
+}
+for (const target of [".claude/hooks/migration-apply-guard.mjs", ".codex/hooks/codex-hook-adapter.mjs", "scripts/check-doc-drift.mjs", ".claude/settings.json"]) {
+  assertEntrypointDenied(
+    { tool_name: "apply_patch", tool_input: { command: nativeCommandPatch(`*** Update File: ${target}`, "@@", "-old", "+new") } },
+    /through a path field/,
+    `command patch to enforcement surface ${target}`,
+  );
+}
+assertEntrypointAllowed(
+  { tool_name: "apply_patch", tool_input: { command: nativeCommandPatch("*** Add File: src/ordinary.ts", "+export const ordinary = 1;") } },
+  "ordinary native source edit in tool_input.command",
+);
+assertEntrypointAllowed(
+  { tool_name: "apply_patch", tool_input: { command: nativeCommandPatch(
+    "*** Update File: docs/reference/agent-guardrails.md", "@@", "-old",
+    "+Proof lives in .claude/session-state/claude-review-push.json; the gates are .claude/hooks/migration-apply-guard.mjs and .husky/pre-push.",
+  ) } },
+  "documentation patch that names proof and gate files in prose",
+);
+const wellFormedNative = nativeCommandPatch("*** Add File: src/ordinary.ts", "+export const ordinary = 1;");
+for (const [label, tool_input] of Object.entries({
+  "no End line": { command: "*** Begin Patch\n*** Add File: src/a.ts\n+a\n" },
+  "text after End": { command: `${wellFormedNative}echo done\n` },
+  "command and cmd": { command: wellFormedNative, cmd: wellFormedNative },
+  "command and patch": { command: wellFormedNative, patch: wellFormedNative },
+  "command is an array": { command: ["apply_patch", wellFormedNative] },
+})) {
+  assertEntrypointDenied({ tool_name: "apply_patch", tool_input }, /could not be verified as a well-formed native patch/, `malformed native envelope: ${label}`);
+}
+// Only the exact native tool is taken off the shell route: the same text from a shell tool or an MCP
+// tool is still scanned as a shell command (prose naming a proof file is denied there).
+for (const tool_name of ["Bash", "PowerShell", "mcp__x__apply_patch", "Apply_Patch"]) {
+  assertEntrypointDenied(
+    { tool_name, tool_input: { command: nativeCommandPatch("*** Update File: docs/a.md", "@@", "-old", "+Proof lives in .claude/session-state/claude-review-push.json") } },
+    /review proof/i,
+    `${tool_name} carrying a patch is still scanned as a shell command`,
+  );
+}
+
 console.log("OK - review proof guard checks passed.");

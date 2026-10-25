@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -32,6 +32,9 @@ import {
   mainPushSource,
   mcpMergeRequest,
   mergeRequestKey,
+  nativePatchEnvelope,
+  parseNativePatch,
+  ENFORCEMENT_SURFACE_PATH_RE,
   proofSearchDirs,
   proofValid,
   pullRequestReviewBlocked,
@@ -1441,12 +1444,72 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
   return null;
 }
 
+// The native patch tool's `command`/`cmd` payload is parsed by the shared
+// parseNativePatch / nativePatchEnvelope in codex-push-lib.mjs (see there for the
+// rules); the test suite imports them through here.
+export { nativePatchEnvelope, parseNativePatch };
+
+// Is `child` the same as, or below, `root`? Lexical, with the host's case rules
+// (Windows paths are case-insensitive).
+export function pathIsInside(child, root) {
+  const fold = (value) => (process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value));
+  const relative = path.relative(fold(root), fold(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+// The checkout this guard belongs to: the folder two levels above
+// `.codex/hooks/`. The hook command runs the copy inside the session's own
+// checkout (`$(git rev-parse --show-toplevel)/.codex/hooks/…`), so this is the
+// repository a native patch may edit. It is NOT taken from the event's working
+// directory, which would let a session started in an unrelated folder widen it.
+export function guardCheckoutRoot() {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+// Where a patch destination really lands once symlinks and junctions on its
+// existing part are followed, or `null` when that cannot be determined (a link
+// that does not resolve, an unreadable directory) so the caller refuses. The
+// part of the path that does not exist yet is appended unchanged.
+export function realPathThroughLinks(candidate, baseDir, deadlineMs = Infinity, clock = () => Date.now()) {
+  const absolute = path.resolve(baseDir, String(candidate));
+  const missing = [];
+  let probe = absolute;
+  for (;;) {
+    // Checked between lookups, so one slow path cannot keep the walk going past
+    // the hook's limit: out of time is "cannot resolve", which the caller refuses.
+    if (clock() >= deadlineMs) return null;
+    let present = true;
+    try {
+      lstatSync(probe);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") return null;
+      present = false;
+    }
+    if (present) {
+      // Present but unresolvable (a dangling link) is NOT "missing": a write
+      // through it would create the file at the link's target.
+      try {
+        return path.join(realpathSync.native(probe), ...missing);
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) return absolute;
+    missing.unshift(path.basename(probe));
+    probe = parent;
+  }
+}
+
 export function evaluateProductionAction({
   toolName = "",
   toolInput = {},
   eventCwd = "",
   branch = "",
   repoDir = process.cwd(),
+  // The one folder a native patch may edit; main() passes the checkout this
+  // guard file lives in. A direct caller that omits it gets `repoDir`.
+  patchRoot = "",
   nowMs = Date.now(),
   runGit = defaultRunGit,
   runGh = defaultRunGh,
@@ -1488,8 +1551,15 @@ export function evaluateProductionAction({
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
   const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+  // The native patch tool's `command`/`cmd` payload (see nativePatchEnvelope):
+  // a malformed or conflicting envelope is refused before any path check, and a
+  // fully parsed one contributes every path it touches (the grammar admits no
+  // other destination), then skips the shell inspection further down.
+  const nativePatch = nativePatchEnvelope(name, toolInput);
+  if (nativePatch?.denial) return denied(`CODEX PRODUCTION GATE: ${nativePatch.denial}`);
   const patchDestinations = [rawPatchBody, input.patch, input.diff, input.input, input.changes]
-    .flatMap((payloadText) => extractPatchDestinations(payloadText));
+    .flatMap((payloadText) => extractPatchDestinations(payloadText))
+    .concat(nativePatch?.paths ?? []);
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
@@ -1507,6 +1577,59 @@ export function evaluateProductionAction({
       protectedHarnessPathMentioned(candidate) || protectedHarnessPathMentioned(joinedWithWorkdir(candidate, actionRepoDir)))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  // The spelled path is not where the write lands when it passes through a
+  // symlink or junction (`src/notes.ts` linked to a guard file). Only this
+  // route follows links, because only this route's destinations are all known.
+  const patchRoots = nativePatch ? [patchRoot ? path.resolve(patchRoot) : baseRepoDir] : [];
+  const patchRootsReal = patchRoots.map((root) => {
+    try { return realpathSync.native(root); } catch { return root; }
+  });
+  for (const destination of nativePatch?.paths ?? []) {
+    // A patch edits this repository. A destination outside it (an absolute path
+    // elsewhere on the machine, a workdir that points at another folder) is
+    // refused before any filesystem lookup, so nothing outside is ever touched.
+    const spelled = path.resolve(actionRepoDir, destination);
+    if (!patchRoots.some((root) => pathIsInside(spelled, root))) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is outside the repository (${patchRoots[0] ?? "unknown"}), so it is refused. A native patch may only edit files in this repository.`);
+    }
+    // The caps above bound the work; this is the backstop: a hook killed at its
+    // time limit allows the action, so past the deadline the answer is no.
+    if (clock() >= hardGateDeadlineMs) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
+    const landed = realPathThroughLinks(destination, actionRepoDir, hardGateDeadlineMs, clock);
+    if (landed === null) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} could not be resolved to the file it would really write (a link that does not resolve, or an unreadable directory), so it is refused (fail closed).`);
+    }
+    // A link inside the repository that leads out of it moves the write outside too.
+    if (!patchRootsReal.some((root) => pathIsInside(landed, root))) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} resolves through a link to ${landed}, outside the repository, so it is refused. A native patch may only edit files in this repository.`);
+    }
+    // The review state directory holds the proofs AND Mason's CodeRabbit waivers
+    // (coderabbit-skip-*.json), whose filenames no basename list covers. A path
+    // spelled outside it that lands inside it is a link into it: refused. (A path
+    // spelled inside it is judged by review-proof-guard, which keeps its single
+    // acknowledgment-file exception.) Codex App P1, PR #1083.
+    if (reviewStateDirectoryMentioned(landed) && !reviewStateDirectoryMentioned(spelled)) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} resolves through a link into the wrapper-owned review state directory (${landed}), which holds the review proofs and Mason's waivers; it cannot be changed through a patch.`);
+    }
+    // The gate-deciding files beyond the short protected list (.husky, workflows,
+    // every other hook, the proof/validator scripts): a path-field writer aimed
+    // at one is refused, spelled or reached through a link (Sol, PR #1083).
+    const onEnforcementSurface = (value) => ENFORCEMENT_SURFACE_PATH_RE.test(`/${String(value).replace(/\\/g, "/")}`);
+    if (onEnforcementSurface(path.resolve(actionRepoDir, destination)) || onEnforcementSurface(landed)) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is one of the files that decide whether the commit, push, CI and review gates run (.husky, .github/workflows, .claude/hooks, .codex/hooks, .coderabbit.yaml, the proof and validator scripts). It cannot be changed through a patch; use Edit/Write for a deliberate change.`);
+    }
+    if (reviewProofPathMentioned(landed) || protectedHarnessPathMentioned(landed)) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is a link to, or inside a link to, a protected harness or review-proof file (${landed}); it cannot be changed through a direct file-write tool.`);
+    }
+    // A hard link is the same file under a second name that no path walk can
+    // see through, so an existing file with another name is refused.
+    try {
+      const stat = lstatSync(landed);
+      if (stat.isFile() && stat.nlink > 1) {
+        return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is an existing file with more than one hard link, so it may be another name for a protected file; it is refused (fail closed).`);
+      }
+    } catch { /* the destination does not exist yet: nothing to alias */ }
   }
 
   if (NODE_REPL_TOOL.test(name)) {
@@ -1592,7 +1715,9 @@ export function evaluateProductionAction({
   }
 
   // Measured BEFORE the trim, so the trim never runs over unbounded input.
-  const untrimmedCommand = String(toolInput.command ?? toolInput.cmd ?? "");
+  // A native patch that parsed completely is not a shell command: its paths were
+  // gated above, and reading its text as shell is what refused every source edit.
+  const untrimmedCommand = nativePatch ? "" : String(toolInput.command ?? toolInput.cmd ?? "");
   const command = untrimmedCommand.length > MAX_INSPECTABLE_COMMAND_LENGTH ? untrimmedCommand : untrimmedCommand.trim();
   if (!command) return { blocked: false };
 
@@ -2039,6 +2164,7 @@ async function main() {
     toolInput: payload.tool_input ?? payload.toolInput ?? {},
     eventCwd: payload.cwd ?? "",
     repoDir: process.env.CODEX_PROJECT_DIR || process.cwd(),
+    patchRoot: guardCheckoutRoot(),
     hardGateDeadlineMs: hookDeadlineMs(CODEX_HOOK_TIMEOUT_MS, CODEX_HOOK_RESERVE_MS),
     findCodeRabbitSkip: (pullRequest, budget) => findCodeRabbitSkip({
       dirs: skipStateDirs([payload.cwd, process.env.CODEX_PROJECT_DIR, process.cwd()], undefined, budget),
