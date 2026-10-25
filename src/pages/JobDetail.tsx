@@ -3816,9 +3816,13 @@ export default function JobDetail() {
         );
         updated[i].unit = reconciled.unit;
         updated[i].cost_per_unit_cents = reconciled.costPerUnitCents.toString();
-        // A product that states no price blanks the line's price rather than keeping the
-        // previous product's: chemRowDefects then refuses the save until a price is typed.
-        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled.pricePerUnitCents);
+        // A product that states no price, or one whose price is not whole cents in the line's
+        // unit, blanks the line's price rather than keeping the previous product's (or a rounded
+        // one): chemRowDefects then refuses the save until a price is typed.
+        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled);
+        if (tierPriceCents != null && !reconciled.priceIsExact) {
+          toast('warning', `${p.product_name}: its price per ${p.unit_size} is not a whole number of cents per ${reconciled.unit}, so the price was left blank. Enter the price per ${reconciled.unit} to bill.`);
+        }
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }
