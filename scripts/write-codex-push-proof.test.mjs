@@ -20,6 +20,7 @@ import {
   readyForReviewAt,
   coderabbitReviewInProgress,
   evaluateSolPreflight,
+  readSolPreflightFacts,
   headPushedAt,
   parseGithubSlug,
   SOL_PREFLIGHT_QUIET_MS,
@@ -1315,7 +1316,7 @@ function collisionPromptSkipsWork(prompt) {
   assert.equal(coderabbitReviewInProgress([crStatus("pending", t(61))], now), false, "preflight: a pending over an hour old is a dead review, not one to wait for");
   assert.equal(coderabbitReviewInProgress([crStatus("pending", "not a date")], now), null, "preflight: an undated CodeRabbit status is unreadable");
   assert.equal(coderabbitReviewInProgress([crStatus("pending", "not a date", "someone-else")], now), false, "preflight: an undated status from anyone else is ignored");
-  assert.equal(evaluateSolPreflight({ ...{ headSha: head, pr: { number: 1, draft: false }, codexState: { sha: head, status: "completed" }, codexThreads: { status: "stale" }, coderabbitOpen: 0, coderabbitRequirement: { status: "not-required" }, headPushedMs: now - 60_000, nowMs: now }, coderabbitBusy: null }).ok, false, "preflight: an unreadable CodeRabbit status refuses");
+  assert.equal(evaluateSolPreflight({ ...{ headSha: head, pr: { number: 1, draft: false }, codexState: { sha: head, status: "completed" }, codexThreads: { status: "stale" }, coderabbitOpen: 0, coderabbitRequirement: { status: "not-required" }, headPushedMs: now - 60_000, headContainsBase: true, nowMs: now }, coderabbitBusy: null }).ok, false, "preflight: an unreadable CodeRabbit status refuses");
 
   assert.equal(headPushedAt([{ created_at: t(3) }, { created_at: t(4) }]), now - 4 * 60_000, "preflight: push time = the earliest check suite");
   assert.equal(headPushedAt([]), Number.NaN, "preflight: no check suite gives no push time (a commit's own date is never used)");
@@ -1335,9 +1336,34 @@ function collisionPromptSkipsWork(prompt) {
     coderabbitRequirement: { status: "not-required" },
     waiverFound: false,
     headPushedMs: now - 60_000,
+    headContainsBase: true,
     nowMs: now,
   };
   const check = (changes) => evaluateSolPreflight({ ...quiet, ...changes });
+  assert.match(check({ headContainsBase: false }).problems.join(" "), /does not contain the latest main.*git merge origin\/main/, "preflight: a head missing origin/main refuses (#1075)");
+  assert.equal(check({ headContainsBase: null }).ok, false, "preflight: an unreadable containment check refuses");
+  assert.equal(check({ headContainsBase: undefined }).ok, false, "preflight: a missing containment fact refuses");
+
+  // Against real Git: a head that lacks origin/main is caught before any GitHub read.
+  {
+    const repo = mkdtempSync(path.join(tmpdir(), "crx-preflight-base-"));
+    const git = (...args) => execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", ...args], { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\n");
+      git("add", ".");
+      git("commit", "-qm", "base");
+      const branchHead = git("rev-parse", "HEAD");
+      writeFileSync(path.join(repo, "a.txt"), "main moved\n");
+      git("commit", "-qam", "main moved");
+      const movedMain = git("rev-parse", "HEAD");
+      assert.equal(readSolPreflightFacts(repo, branchHead, movedMain).headContainsBase, false, "preflight: real git sees the head lacks the moved main");
+      assert.equal(readSolPreflightFacts(repo, movedMain, branchHead).headContainsBase, true, "preflight: real git sees a head that contains its base");
+      assert.equal(readSolPreflightFacts(repo, branchHead, "").headContainsBase, null, "preflight: no base sha is unreadable");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }
   assert.deepEqual(check({}), { ok: true, problems: [], notes: [] }, "preflight: a quiet head runs Sol");
   assert.match(check({ pr: null }).problems.join(" "), /no open pull request/, "preflight: no PR refuses");
   assert.match(check({ pr: { number: 1, draft: true } }).problems.join(" "), /still a draft/, "preflight: a draft refuses");
@@ -1386,8 +1412,9 @@ function collisionPromptSkipsWork(prompt) {
   // review workspace or Codex call, and a refusal leaves an existing proof alone.
   const wrapperSource = readFileSync(fileURLToPath(new URL("./write-codex-push-proof.mjs", import.meta.url)), "utf8").replace(/\r\n/g, "\n");
   const runBody = wrapperSource.slice(wrapperSource.indexOf("export function run("));
-  const preflightAt = runBody.indexOf("const preflight = solPreflight(root, headBefore);");
-  assert.ok(preflightAt > 0, "preflight: run() checks the head it will review");
+  const preflightAt = runBody.indexOf("const preflight = solPreflight(root, headBefore, baseBefore);");
+  assert.ok(preflightAt > 0, "preflight: run() checks the head and the exact base it will review");
+  assert.ok(runBody.indexOf("const baseBefore = runGit(") < preflightAt, "preflight: the base is pinned before the check, so a later fetch cannot slip past it");
   assert.ok(preflightAt < runBody.indexOf("reviewWorkspace = createSanitizedReviewWorkspace("), "preflight: before the review workspace or Codex run");
   assert.ok(runBody.indexOf("if (options.carryForward) return runCarryForward(root, options);") < preflightAt, "preflight: carry-forward (no full review) skips it");
   const refusal = runBody.slice(preflightAt, runBody.indexOf("let reviewWorkspace;"));

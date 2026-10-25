@@ -94,7 +94,9 @@
 > one. The minter is the same protected wrapper, so `review-proof-guard.mjs` still blocks hand-written proofs.
 >
 > **Sol pre-flight (Mason, 2026-10-23).** A full `write-codex-push-proof.mjs` run first checks the head is quiet and
-> refuses with no Codex call otherwise: an open non-draft PR whose head is this commit; the Codex GitHub App's summary
+> refuses with no Codex call otherwise: the head contains the exact origin/main the review pins (read once, before the
+> check; that ref is shared by every worktree, so a peer's fetch can move it past the branch, and a clean review of a
+> head that lacks its base can neither merge nor be carried forward — #1075 paid five times, 2026-10-23; Mason, 2026-10-25; named even when GitHub cannot be read); an open non-draft PR whose head is this commit; the Codex GitHub App's summary
 > comment (`codex-review-state:v1`, written by the App's own login) shows a completed review of this commit, or it
 > was pushed, and the PR last marked ready (from its timeline; unreadable never counts as quiet), at least 15 minutes ago
 > with no App review of it started (`SOL_PREFLIGHT_QUIET_MS`; push time = the

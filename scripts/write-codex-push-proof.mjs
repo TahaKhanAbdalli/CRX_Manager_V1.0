@@ -1207,11 +1207,24 @@ export function evaluateSolPreflight({
   waiverFound,
   headPushedMs,
   readyForReviewMs = Number.NaN,
+  headContainsBase,
   nowMs = Date.now(),
 } = {}) {
   const head = String(headSha || "").trim().toLowerCase();
   const problems = [];
   const notes = [];
+  // Sol reviews against the local origin/main, a ref every worktree shares, so a
+  // peer's fetch can move it past this branch. A clean review of a head that
+  // lacks its base can neither merge (GitHub: BEHIND) nor be carried forward, so
+  // it would be paid for again (#1075 paid five times, 2026-10-23).
+  if (headContainsBase === false) {
+    problems.push(
+      "this branch does not contain the latest main this checkout knows about (origin/main). Run " +
+      "`git merge origin/main` (no fetch needed), push, wait for the Codex GitHub App's review of that push, then run Sol.",
+    );
+  } else if (headContainsBase !== true) {
+    problems.push("could not check that this branch contains origin/main. Retry in a minute.");
+  }
   if (!pr) {
     problems.push(
       "no open pull request has this exact commit as its head. Push the branch, open the PR (as a draft), " +
@@ -1348,8 +1361,13 @@ function openPullsAtHead(root, owner, name, headSha) {
   return pulls.filter((pull) => pull?.state === "open" && String(pull?.head?.sha || "").toLowerCase() === headSha.toLowerCase());
 }
 
-export function readSolPreflightFacts(root, headSha) {
+// baseSha is the exact origin/main the review would pin (read once by the caller),
+// so a fetch between this check and the review cannot slip past it.
+export function readSolPreflightFacts(root, headSha, baseSha) {
   const facts = { headSha, pr: null, nowMs: Date.now(), headPushedMs: Number.NaN };
+  facts.headContainsBase = /^[0-9a-f]{40}$/i.test(String(baseSha || ""))
+    ? gitOk(["merge-base", "--is-ancestor", baseSha, headSha], root)
+    : null;
   const slug = parseGithubSlug(runGit(["remote", "get-url", "origin"], { cwd: root }));
   if (!slug) return { ...facts, unreadable: "could not read the origin remote's GitHub owner and name" };
   const { owner, name } = slug;
@@ -1425,9 +1443,13 @@ export function readSolPreflightFacts(root, headSha) {
   return facts;
 }
 
-export function solPreflight(root, headSha) {
-  const facts = readSolPreflightFacts(root, headSha);
-  if (facts.unreadable) return { ok: false, problems: [`${facts.unreadable}. Retry in a minute.`], notes: [], facts };
+export function solPreflight(root, headSha, baseSha) {
+  const facts = readSolPreflightFacts(root, headSha, baseSha);
+  if (facts.unreadable) {
+    // Name a missing main even when GitHub could not be read, so a retry is not the only advice.
+    const problems = facts.headContainsBase === false ? evaluateSolPreflight({ headContainsBase: false }).problems.slice(0, 1) : [];
+    return { ok: false, problems: [...problems, `${facts.unreadable}. Retry in a minute.`], notes: [], facts };
+  }
   return { ...evaluateSolPreflight(facts), facts };
 }
 
@@ -2000,7 +2022,7 @@ export function run(argv = process.argv.slice(2)) {
     process.stdout.write(`[dry-run] Review base (pinned): ${GUARDED_BASE}\n`);
     process.stdout.write(`[dry-run] Would mint proof at: ${codexPushProofPath(root, "<HEAD>")}\n`);
     const head = runGit(["rev-parse", "HEAD"], { cwd: root });
-    const preflight = solPreflight(root, head);
+    const preflight = solPreflight(root, head, runGit(["rev-parse", GUARDED_BASE], { cwd: root }));
     process.stdout.write(
       `[dry-run] Sol pre-flight for ${head.slice(0, 12)}: ${preflight.ok ? "would run" : "would REFUSE"}\n` +
       `${preflightReport(preflight)}\n`,
@@ -2024,7 +2046,7 @@ export function run(argv = process.argv.slice(2)) {
   // Refuse before spending a full Sol review on a head the Codex GitHub App or
   // CodeRabbit has not finished with (see "Sol pre-flight" above). An existing
   // proof is left alone: this refusal says "not yet", not "the review failed".
-  const preflight = solPreflight(root, headBefore);
+  const preflight = solPreflight(root, headBefore, baseBefore);
   if (!preflight.ok) {
     process.stderr.write(
       `SOL PRE-FLIGHT: not running the Sol review of ${headBefore.slice(0, 12)} yet, so no Sol tokens were spent.\n` +
