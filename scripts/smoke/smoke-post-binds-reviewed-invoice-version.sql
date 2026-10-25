@@ -13,8 +13,12 @@ DECLARE
   v_version text;
   v_message text;
   v_result jsonb;
+  -- The computed field lives on public.invoices (20261022022000) until the cost lock
+  -- drops it; from 20261022090000 the view's own invoice_postable_version(invoices_postable) answers too.
+  v_field regprocedure := coalesce(to_regprocedure('public.invoice_postable_version(public.invoices_postable)'),
+                                   to_regprocedure('public.invoice_post_version(public.invoices)'));
 BEGIN
-  IF to_regprocedure('public.invoice_post_version(public.invoices)') IS NULL
+  IF v_field IS NULL
      OR to_regprocedure('public.post_invoice(uuid,text,text)') IS NULL THEN
     RAISE EXCEPTION 'SMOKE_PREREQ: 20261022022000 is not applied on this database';
   END IF;
@@ -82,7 +86,11 @@ BEGIN
   -- The computed field on a real invoice: a SHA-256 version for an admin, equal to the helper.
   SELECT id INTO v_any FROM public.invoices WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 1;
   IF v_any IS NOT NULL THEN
-    SELECT public.invoice_post_version(i) INTO v_version FROM public.invoices i WHERE i.id = v_any;
+    IF to_regclass('public.invoices_postable') IS NOT NULL THEN
+      EXECUTE 'SELECT public.invoice_postable_version(i) FROM public.invoices_postable i WHERE i.id = $1' INTO v_version USING v_any;
+    ELSE
+      EXECUTE 'SELECT public.invoice_post_version(i) FROM public.invoices i WHERE i.id = $1' INTO v_version USING v_any;
+    END IF;
     IF v_version IS NULL
        OR v_version !~ '^v1:[0-9a-f]{64}$'
        OR v_version IS DISTINCT FROM public._invoice_post_version(v_any) THEN
@@ -113,7 +121,7 @@ BEGIN
   IF has_function_privilege('anon', 'public.post_invoice(uuid,text,text)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._invoice_post_version(uuid)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._lock_invoice_post_inputs(uuid[])', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.invoice_post_version(public.invoices)', 'EXECUTE') THEN
+     OR NOT has_function_privilege('authenticated', v_field, 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: posting grants are wrong';
   END IF;
 

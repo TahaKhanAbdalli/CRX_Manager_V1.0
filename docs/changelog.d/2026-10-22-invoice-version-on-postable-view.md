@@ -10,7 +10,7 @@ named back to `invoice_post_version` so the rest of the app is unchanged.
 Nothing about what posting checks changes.
 
 **Why.** The version is a computed field, which receives a whole row, and the database only allows that when the caller
-can read every column. The cost column lock (`20261022091000`, Goal 1 step 3) takes the invoice cost column away from
+can read every column. The cost column lock (`20261022101000`, restamped from `20261022091000`; Goal 1 step 3) takes the invoice cost column away from
 the app's accounts, after which reading the version from `invoices` fails for everyone and invoices could be neither
 opened nor posted. The view's row has no cost column, so the version keeps working. This PR lands first; the lock then
 drops the old version function.

@@ -31,8 +31,8 @@ async function getToken(page: Page): Promise<string> {
  * Make a Supabase REST API call from the browser context.
  *
  * @example
- *   // Fetch all invoices
- *   const invoices = await supabaseRest(page, 'GET', 'invoices?select=*&status=eq.posted');
+ *   // Fetch posted invoices (name the columns: cost columns are not readable, so `*` is refused)
+ *   const invoices = await supabaseRest(page, 'GET', 'invoices?select=id,invoice_number,total_amount_cents&status=eq.posted');
  *
  *   // Fetch with PostgREST embedding
  *   const items = await supabaseRest(page, 'GET', 'orders?select=id,order_items(quantity,price_per_unit)');

@@ -9,6 +9,7 @@ import { test, expect, Page } from '@playwright/test';
 import { login } from './utils/auth';
 import { waitForPageStable, assertCentsEqual } from './utils/math-helpers';
 import { supabaseRest, supabaseRpc, asArray } from './golive/utils/supabase-helpers';
+import { parseDollarsToCents } from '../../src/lib/parseCents';
 
 const RUN = Date.now().toString(36).toUpperCase();
 const TS = new Date().toISOString().split('T')[0];
@@ -201,11 +202,18 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     // Create PO directly via DB for reliability then verify UI shows it
     await nav(page, '/');
     const prods = await supabaseRest(page, 'GET',
-      `products?select=id,product_name,current_cost&id=eq.${S.poProductId}`
+      `products?select=id,product_name&id=eq.${S.poProductId}`
     );
     const prodArr = asArray(prods, 'po product');
     expect(prodArr.length).toBe(1);
-    const prod = prodArr[0] as Record<string, unknown>;
+    // Cost is admin-only and not a readable column (20261022101000): read it through the admin function.
+    const costs = await supabaseRpc(page, 'get_admin_cost_fields', { p_table: 'products', p_ids: [S.poProductId] }) as Record<string, Record<string, unknown>>;
+    const adminCost = costs?.[S.poProductId as string]?.current_cost;
+    // A missing or non-numeric cost must fail here, not later as an unrelated PO failure or a $0 line.
+    const adminCostCents = (typeof adminCost === 'number' || typeof adminCost === 'string') && String(adminCost).trim() !== ''
+      ? parseDollarsToCents(String(adminCost)) : null;
+    expect(adminCostCents, 'no whole-cent admin cost for the PO product').not.toBeNull();
+    const prod: Record<string, unknown> = { ...(prodArr[0] as Record<string, unknown>), current_cost: adminCost };
 
     // Get auto-generated PO number and user ID (both required NOT NULL)
     const userId = await getUserId(page);

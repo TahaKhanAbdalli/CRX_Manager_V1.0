@@ -1411,12 +1411,12 @@
     "post_binds_reviewed_invoice_version": {
       "chain": "smoke-post-binds-reviewed-invoice-version.sql",
       "container_prover": "prove-post-binds-reviewed-invoice-version-real-schema.mjs",
-      "description": "Goal 3 \"Post uses what was saved and reviewed\" (20261022022000). Live, rollback-only, plants no rows: the old posting signatures are gone; post_invoice refuses a NULL key, a blank version and a missing invoice; post_invoice_group refuses an empty version map and a missing group; batch_post_invoices refuses an item without a version; invoice_post_version returns a SHA-256 version for an admin equal to the internal helper; when a standalone draft exists, it is posted with a stale version, refused (INVOICE_CHANGED_SINCE_LOADED) and keeps its status (otherwise the chain prints a SMOKE_SKIP notice for that check); API grants. The full matrix (real posts, a second tab and a second user saving before Post, groups, batch, replay, eight two-connection races, six mutations) runs in the container prover. Terminal rollback.",
+      "description": "Goal 3 \"Post uses what was saved and reviewed\" (20261022022000). Live, rollback-only, plants no rows: the old posting signatures are gone; post_invoice refuses a NULL key, a blank version and a missing invoice; post_invoice_group refuses an empty version map and a missing group; batch_post_invoices refuses an item without a version; the posting version (invoice_postable_version on invoices_postable since 20261022090000, invoice_post_version before it) returns a SHA-256 version for an admin equal to the internal helper; when a standalone draft exists, it is posted with a stale version, refused (INVOICE_CHANGED_SINCE_LOADED) and keeps its status (otherwise the chain prints a SMOKE_SKIP notice for that check); API grants. The full matrix (real posts, a second tab and a second user saving before Post, groups, batch, replay, eight two-connection races, six mutations) runs in the container prover. Terminal rollback.",
       "covers": [
         "post_invoice",
         "post_invoice_group",
         "batch_post_invoices",
-        "invoice_post_version"
+        "invoice_postable_version"
       ],
       "area": [
         "billing",
