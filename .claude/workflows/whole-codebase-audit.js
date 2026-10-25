@@ -150,7 +150,7 @@ const DIMENSIONS = [
   {
     key: 'pdf-output',
     prompt:
-      'Audit the customer-facing PDF generators in src/lib. Read the src/lib *Pdf.ts files (invoicePdf, statementPdf, deliveryPdf, quotePdf, reportPdf, receivingPdf, orderSummaryPdf, orderPickListPdf, loadSheetPdf, yearEndSummaryPdf, wpsNoticePdf — glob src/lib/*Pdf.ts to confirm the full set). Flag: (a) cents rendered without ÷100; (b) off-brand colors (brand crx-green is #28A26A); (c) company address NOT single-sourced from src/lib/companyInfo.ts (West York, IL) — any hardcoded address is a finding; (d) page-overflow / table-width layout risks on long real-world data; (e) missing or broken image-asset references that would fail on a real customer print; (f) unsafe font fallback.',
+      'Audit the customer-facing PDF generators in src/lib. Read the src/lib *Pdf.ts files (invoicePdf, statementPdf, deliveryPdf, quotePdf, reportPdf, receivingPdf, orderSummaryPdf, orderPickListPdf, yearEndSummaryPdf, wpsNoticePdf — glob src/lib/*Pdf.ts to confirm the full set). Flag: (a) cents rendered without ÷100; (b) off-brand colors (brand crx-green is #28A26A); (c) company address NOT single-sourced from src/lib/companyInfo.ts (West York, IL) — any hardcoded address is a finding; (d) page-overflow / table-width layout risks on long real-world data; (e) missing or broken image-asset references that would fail on a real customer print; (f) unsafe font fallback.',
   },
   {
     key: 'money-financial',
