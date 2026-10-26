@@ -180,8 +180,10 @@ function makeFromMock(perTable: Record<string, { data: unknown; error?: unknown 
     chain.maybeSingle = single;
     // The page awaits chains terminated by .order(...) (returning array data).
     // Make .order() ALSO be thenable so `await query.eq(...).order(...)` resolves.
-    const thenable = (resolve: (v: { data: unknown; error: unknown }) => void) =>
-      resolve({ data: result.data, error: result.error || null });
+    // A count read (select with { count: 'exact', head: true }) gets the list's length, as the
+    // server answers it.
+    const thenable = (resolve: (v: { data: unknown; error: unknown; count: number | null }) => void) =>
+      resolve({ data: result.data, error: result.error || null, count: Array.isArray(result.data) ? result.data.length : null });
     chain.then = thenable;
     chain.term = term;
     return chain;
@@ -930,7 +932,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
 });
 
 describe('FieldApplicationInvoice — invoice load ownership', () => {
-  it('reports an unexpected current header rejection and returns to the list without installing controls', async () => {
+  it('reports an unexpected current header rejection as could not be loaded, without installing controls', async () => {
     const fallback = makeFromMock({});
     mockFrom.mockImplementation((table: string) => {
       const chain = fallback(table) as Record<string, unknown>;
@@ -939,8 +941,9 @@ describe('FieldApplicationInvoice — invoice load ownership', () => {
     });
     mockUseParams.mockReturnValue({ id: 'inv-a' });
     await renderPage();
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/field-invoices'));
-    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load invoice');
+    expect(await screen.findByText('This invoice could not be loaded')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Try again/ })).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /^Save$/i })).not.toBeInTheDocument();
   });
 
@@ -1118,7 +1121,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     });
   });
 
-  it('keeps Post unauthorized when the sibling read fails', async () => {
+  it('a failed sibling read shows could not be loaded, with no Save or Post', async () => {
     setupGroup(['draft', 'draft']);
     const base = mockFrom.getMockImplementation()!;
     const failing = makeFromMock({ invoices: { data: null, error: { message: 'sibling read failed' } } });
@@ -1131,11 +1134,9 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
       return chain;
     });
     await renderPage();
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Some invoice details did not load. Reload the page before posting.'));
-
-    fireEvent.click(screen.getByRole('button', { name: /Post Group/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Post Group$/i }));
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('could not read the invoice version')));
+    expect(await screen.findByText('This invoice could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Post Group/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Save$/i })).not.toBeInTheDocument();
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('post_invoice_group');
   });
 

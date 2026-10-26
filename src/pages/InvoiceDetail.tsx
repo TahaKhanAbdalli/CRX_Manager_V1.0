@@ -8,6 +8,7 @@ import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
@@ -173,6 +174,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const isFromScratch = routeArea !== 'field' && isFromScratchInvoice(invoice);
   const [items, setItems] = useState<LineItem[]>([]);
   const [loading, setLoading] = useState(!isNew);
+  // The invoice id whose load failed: the editor is replaced by "could not be loaded" (To-Do 10.5),
+  // so Save cannot write an empty or another invoice's line list over the real one.
+  const [loadFailedId, setLoadFailedId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Customer search
@@ -195,6 +199,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const printingRef = useRef(false);
   // Latest invoice id the route is showing — older in-flight fetches bail (stale guard).
   const activeInvoiceIdRef = useRef<string | undefined>(undefined);
+  // Bumped by every invoice load; only the newest may publish.
+  const invoiceLoadSeqRef = useRef(0);
   const productSearchRequestRef = useRef(0);
   // Add Product's by-id tier lookup: a single flight, bound to the invoice and customer it was
   // asked for. The ref holds the in-flight lookup's token (0 = none); switching invoices clears it.
@@ -441,10 +447,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     fetchRef();
   }, []);
 
-  const fetchInvoice = useCallback(async (invoiceId: string) => {
+  // Throws when a read the editor depends on fails or answers with no list; fetchInvoice below
+  // turns that into the failed state.
+  const loadInvoice = useCallback(async (invoiceId: string, request: number) => {
     // Stale-fetch guard: on rapid invoice-to-invoice navigation an older
-    // in-flight fetch must not render the previous invoice's amounts.
-    const isStale = () => activeInvoiceIdRef.current !== invoiceId;
+    // in-flight fetch must not render the previous invoice's amounts, and an older
+    // load of the same invoice (A -> B -> A, or a reload after Save) must not
+    // replace a newer one.
+    const isStale = () => activeInvoiceIdRef.current !== invoiceId || invoiceLoadSeqRef.current !== request;
     setLoading(true);
     // No baseline and nothing to post while (re)loading; the end of this load sets both.
     setSavedEditSnapshot(null);
@@ -463,7 +473,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       .eq('id', invoiceId)
       .maybeSingle();
     if (isStale()) return;
-    if (pre.error || !pre.data) {
+    if (pre.error) throw pre.error;
+    if (!pre.data) {
       toast('error', 'Invoice not found');
       navigate('/invoices');
       return;
@@ -511,6 +522,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       .single();
 
     if (isStale()) return;
+    // .single() reports a missing (or hidden) row as PGRST116; any other error is a failed read.
+    if (error && error.code !== 'PGRST116') throw error;
     if (error || !data) {
       toast('error', 'Invoice not found');
       navigate('/invoices');
@@ -552,26 +565,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     const loadedDueDate = loadedInvoice.due_date || '';
     let customerPaymentTerms = '';
     if (!loadedPaymentTerms.trim() && loadedInvoice.customer_id) {
-      const { data: customerTerms } = await supabase
+      const { data: customerTerms, error: termsError } = await supabase
         .from('customers')
         .select('payment_terms')
         .eq('id', loadedInvoice.customer_id)
         .maybeSingle();
+      // Unread terms would show a terms-stamped due date as a custom date, which Save then keeps.
+      if (termsError) throw termsError;
+      if (!customerTerms) throw new Error('The customer terms read returned no row');
       customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
       if (isStale()) return;
     }
     // Cost is admin-only (Mason, 2026-10-15). An admin whose cost read fails must not reach
     // the editor: saving it would write zero cost onto every line.
     let costedInvoice = data as unknown as Invoice;
-    try {
-      costedInvoice = (await withAdminCost('invoices', costedInvoice, isAdmin)) as Invoice;
-    } catch (costErr) {
-      if (isStale()) return;
-      Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_invoice_costs' } });
-      toast('error', 'Could not load this invoice\'s costs. Try again.');
-      navigate('/invoices');
-      return;
-    }
+    costedInvoice = (await withAdminCost('invoices', costedInvoice, isAdmin)) as Invoice;
     if (isStale()) return;
     setInvoice(costedInvoice);
     const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;
@@ -648,6 +656,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', delDriverIds);
+        if (isStale()) return;
         ((driverData || []) as { id: string; full_name: string }[]).forEach((p: { id: string; full_name: string }) => { delDriverMap[p.id] = p.full_name; });
       }
       setRelatedDeliveries(
@@ -669,6 +678,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         const { data: qData } = await supabase
           .from('quotes').select('id, quote_number')
           .eq('id', orderWithQuote.quote_id).maybeSingle();
+        if (isStale()) return;
         setParentQuote(qData as { id: string; quote_number: string } | null);
       } else { setParentQuote(null); }
     } else {
@@ -680,7 +690,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
     // A split invoice posts its whole group: keep every member's version as this load saw it.
     const groupVersions: Record<string, string | null> = { [invoiceId]: data.invoice_post_version ?? null };
-    let membersError: unknown = null;
     if (data.invoice_group_id) {
       const { data: members, error } = await supabase
         .from(INVOICES_POSTABLE)
@@ -688,10 +697,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         .eq('invoice_group_id', data.invoice_group_id)
         .is('deleted_at', null);
       if (isStale()) return;
-      membersError = error;
+      if (error) throw error;
+      if (!Array.isArray(members)) throw new Error('The split group read returned no list');
       // A member without an id (impossible; the view types make id nullable) would be left out of
       // the map, and post_invoice_group then refuses the changed membership.
-      for (const m of members ?? []) if (m.id && m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
+      for (const m of members) if (m.id && m.id !== invoiceId) groupVersions[m.id] = m.invoice_post_version ?? null;
     }
 
     // Fetch items
@@ -702,66 +712,45 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       .order('sort_order');
 
     if (isStale()) return;
-    // What Post posts and checks: the saved header and lines from this load. A failed line read
-    // leaves nothing to post, so the credit and RUP warnings never run on a partial invoice. A
-    // failed group-member read does the same, so a read error is not reported as a group change.
-    savedPostRef.current = itemError || membersError ? null : {
-      version: data.invoice_post_version ?? null,
-      customerId: data.customer_id ?? null,
-      totalCents: Number(data.total_amount_cents ?? 0),
-      productIds: ((rawItemData ?? []) as Array<{ product_id: string | null }>)
-        .map((it) => it.product_id)
-        .filter((p): p is string => Boolean(p)),
-      groupVersions,
-    };
-    let itemData = rawItemData;
-    if (itemData) {
-      try {
-        itemData = await withAdminCosts('invoice_items', itemData, isAdmin);
-      } catch (costErr) {
-        if (isStale()) return;
-        Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_invoice_item_costs' } });
-        toast('error', 'Could not load this invoice\'s costs. Try again.');
-        navigate('/invoices');
-        return;
-      }
-      if (isStale()) return;
-    }
-    if (itemData) {
-      setItems(
-        (itemData as unknown as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents?: number | null; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
-          id: it.id,
-          order_item_id: (it.order_item_id as string) ?? null,
-          product_id: it.product_id,
-          product_name: it.product?.product_name || it.description || '',
-          description: it.description,
-          quantity: Number(it.quantity),
-          unit_price_cents: it.unit_price_cents,
-          extended_cents: it.extended_cents,
-          // Absent for non-admins; the server works out their cost on save.
-          cost_cents: it.cost_cents ?? 0,
-          rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-          acres: it.acres ? Number(it.acres) : null,
-          unit_size: it.unit_size ?? null,
-          sort_order: it.sort_order,
-          notes: it.notes as string | null,
-          tote_number: (it.tote_number as string) ?? null,
-          price_source: (it.price_source as LineItem['price_source']) ?? null,
-          quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
-          return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
-          return_credit_source_item_id: (it.return_credit_source_item_id as string) ?? null,
-          charge_type: ((it as Record<string, unknown>).charge_type as InvoiceChargeType) ?? null,
-          is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
-          rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
-          total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
-          total_applied_unit: ((it as Record<string, unknown>).total_applied_unit as string) ?? null,
-          total_applied_gl_lb: (it as Record<string, unknown>).total_applied_gl_lb != null ? Number((it as Record<string, unknown>).total_applied_gl_lb) : null,
-          gl_lb_unit: ((it as Record<string, unknown>).gl_lb_unit as string) ?? null,
-          epa_registration: ((it as Record<string, unknown>).epa_registration as string) ?? null,
-          product_form: ((it as Record<string, unknown>).product_form as string) ?? null,
-        })) as LineItem[]
-      );
-    }
+    // A failed line read must not leave an editable invoice with no lines (or the previous
+    // invoice's): Save would write that list over the real one.
+    if (itemError) throw itemError;
+    if (!Array.isArray(rawItemData)) throw new Error('The invoice line read returned no list');
+    const itemData = await withAdminCosts('invoice_items', rawItemData, isAdmin);
+    if (isStale()) return;
+    setItems(
+      (itemData as unknown as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents?: number | null; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
+        id: it.id,
+        order_item_id: (it.order_item_id as string) ?? null,
+        product_id: it.product_id,
+        product_name: it.product?.product_name || it.description || '',
+        description: it.description,
+        quantity: Number(it.quantity),
+        unit_price_cents: it.unit_price_cents,
+        extended_cents: it.extended_cents,
+        // Absent for non-admins; the server works out their cost on save.
+        cost_cents: it.cost_cents ?? 0,
+        rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
+        acres: it.acres ? Number(it.acres) : null,
+        unit_size: it.unit_size ?? null,
+        sort_order: it.sort_order,
+        notes: it.notes as string | null,
+        tote_number: (it.tote_number as string) ?? null,
+        price_source: (it.price_source as LineItem['price_source']) ?? null,
+        quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
+        return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
+        return_credit_source_item_id: (it.return_credit_source_item_id as string) ?? null,
+        charge_type: ((it as Record<string, unknown>).charge_type as InvoiceChargeType) ?? null,
+        is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
+        rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
+        total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
+        total_applied_unit: ((it as Record<string, unknown>).total_applied_unit as string) ?? null,
+        total_applied_gl_lb: (it as Record<string, unknown>).total_applied_gl_lb != null ? Number((it as Record<string, unknown>).total_applied_gl_lb) : null,
+        gl_lb_unit: ((it as Record<string, unknown>).gl_lb_unit as string) ?? null,
+        epa_registration: ((it as Record<string, unknown>).epa_registration as string) ?? null,
+        product_form: ((it as Record<string, unknown>).product_form as string) ?? null,
+      })) as LineItem[]
+    );
 
     // Fetch shares
     const { data: shareData, error: shareError } = await supabase
@@ -770,24 +759,59 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       .eq('invoice_id', invoiceId)
       .order('sort_order');
     if (isStale()) return;
-    setShares((shareData || []) as InvoiceShare[]);
-    // The version also covers the billing shares: if they did not load, the screen did not show
-    // them, so nothing may be posted from this load.
-    if (shareError) savedPostRef.current = null;
+    // Unread shares would print and email a split invoice without its share breakdown.
+    if (shareError) throw shareError;
+    if (!Array.isArray(shareData)) throw new Error('The invoice share read returned no list');
+    setShares(shareData as InvoiceShare[]);
 
     // Fetch write-offs
-    const { data: woData } = await supabase
+    const { data: woData, error: woError } = await supabase
       .from('write_offs')
       .select('id, amount_cents, reason, created_at, reversed_at')
       .eq('invoice_id', invoiceId)
       .order('created_at');
     if (isStale()) return;
-    setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
+    // Unread write-offs would hide the card, and with it the way to reverse one.
+    if (woError) throw woError;
+    if (!Array.isArray(woData)) throw new Error('The write-off read returned no list');
+    setWriteOffs(woData as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
+    // What Post posts and checks: the saved header and lines from this load, set only once every
+    // read above succeeded, so the credit and RUP warnings never run on a partial invoice.
+    savedPostRef.current = {
+      version: data.invoice_post_version ?? null,
+      customerId: data.customer_id ?? null,
+      totalCents: Number(data.total_amount_cents ?? 0),
+      productIds: (rawItemData as Array<{ product_id: string | null }>)
+        .map((it) => it.product_id)
+        .filter((p): p is string => Boolean(p)),
+      groupVersions,
+    };
     setLoading(false);
     // The screen now matches the saved invoice: take a new unsaved-edit baseline.
     setLoadVersion((v) => v + 1);
   }, [toast, navigate, routeArea, isAdmin]);
+
+  // Any failed read (or a reply with no list) shows "could not be loaded" with Try again in place
+  // of the editor, instead of "Invoice not found", an endless spinner, or a form whose Save could
+  // write over the real invoice (To-Do 10.5).
+  const fetchInvoice = useCallback(async (invoiceId: string) => {
+    // A reload asked for an invoice the page has since left (a Save on A finishing after the move
+    // to B) must not take a request number: that would cancel B's load and leave its spinner up.
+    if (activeInvoiceIdRef.current !== invoiceId) return;
+    const request = ++invoiceLoadSeqRef.current;
+    setLoading(true);
+    setLoadFailedId(null);
+    try {
+      await loadInvoice(invoiceId, request);
+    } catch (err) {
+      if (activeInvoiceIdRef.current !== invoiceId || invoiceLoadSeqRef.current !== request) return;
+      Sentry.captureException(err instanceof Error ? err : new Error(sanitizeError(err)), { tags: { source: 'read', action: 'load_invoice' } });
+      savedPostRef.current = null;
+      setLoadFailedId(invoiceId);
+      setLoading(false);
+    }
+  }, [loadInvoice]);
 
   // Fetch existing invoice
   useEffect(() => {
@@ -1776,6 +1800,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
       </div>
     );
+  }
+
+  if (!isNew && id && loadFailedId === id) {
+    return <LoadFailedState title="This invoice could not be loaded" onRetry={() => fetchInvoice(id)} />;
   }
 
   return (
