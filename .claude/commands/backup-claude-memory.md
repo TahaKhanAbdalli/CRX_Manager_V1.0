@@ -14,7 +14,7 @@ Mason does not type this command name. Run this flow when he says anything like:
 node scripts/backup-claude-memory.mjs --stage <staging-dir>
 ```
 
-The source dir is auto-discovered under `~/.claude/projects/*/memory` (it picks the CRX one holding `MEMORY.md`); pass `--source <dir>` to override. The script copies every `*.md`, re-reads each file to confirm the copy is byte-identical, prunes staged files the source no longer has (file-by-file — never a recursive delete), and writes `manifest.json` with a per-file sha256.
+The source dir is auto-discovered under `~/.claude/projects/*/memory` (it picks the CRX one holding `MEMORY.md`); pass `--source <dir>` to override. The script copies every `*.md` — plus, when the source folder is named `memory` (the auto-discovered default), every `*.md` in its sibling `memory-archive/` (notes the weekly memory sweep retired; staged flat as `archive__<name>`, so the secret scan and verification cover them too) — re-reads each file to confirm the copy is byte-identical, prunes staged files the source no longer has (file-by-file — never a recursive delete), and writes `manifest.json` with a per-file sha256.
 
 It **fails** rather than shipping a bad backup if the source is empty, is missing `MEMORY.md`, or if any copy does not match. A failure means the snapshot is wrong — fix the source path, do not push.
 

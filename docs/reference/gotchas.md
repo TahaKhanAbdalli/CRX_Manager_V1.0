@@ -479,6 +479,44 @@ the collision instead of papering over it.
 
 ---
 
+## Agent workflow traps (moved here from agent memory, 2026-10-25)
+
+These lived only in one machine's agent-memory notes, where a session finds them only by luck. Each has cost a real round before.
+
+| Trap | What to do |
+|------|-----------|
+| A directory-wide add that covers `src/` (`git add src`, `git add docs src`, `git add -A`) sweeps the untracked browser-harness files in `src/__harness__/` (they stub `@supabase/supabase-js`) into the commit — on PR #584 `git add docs src` committed 9 files instead of 5. | Stage explicit file paths only. If it already committed and is unpushed: `git reset --soft HEAD~1`, `git restore --staged <paths>`, recommit. `git rm --cached` is blocked inside `.claude/worktrees/` by the review-proof guard; `git restore --staged` is the working equivalent. |
+| A parked (written, not applied) migration's `docs/reference/migration-history.md` row written as `PARKED … NOT APPLIED` is not recognised; CI fails with "parked header has no applied/retired history record" and points at the SQL file, not the row (PR #614). | The detail cell must match `LOCAL CANDIDATE … NOT APPLIED`, with a 14-digit version and exactly one backticked `<version>_<name>.sql` basename in the row. |
+| `src/lib/rpcContracts.test.ts`'s mutating-RPC scanner strips SQL comments but not string literals, so a read-only function whose `RAISE EXCEPTION` text says "update those splits" is flagged as mutating and fails the "every mutating RPC is classified" test. | After confirming the body has no INSERT/UPDATE/DELETE outside strings, add it to `MUTATOR_INVENTORY_EXEMPT` with a real reason (≥25 chars). After a schema-registry regen, also PRUNE exemptions that no longer match (the stale check fails otherwise). |
+| `node scripts/validate-sql-migrations-approved-set.test.mjs` prints nothing until it exits (~24 min for 141 cases, measured 2026-08-13). A 0-byte log is normal. | Run it in the background; judge liveness from the process list, not the log. Do not merge or edit the worktree while it runs — it executes that worktree's `validate-sql-migrations.sh` directly. |
+| A live `BEGIN … ROLLBACK` proof run only as an admin can pass while the RPC is broken for sales reps: several immutability guards (e.g. `enforce_billed_job_immutability`) return early on `is_admin()`. | For a money RPC that writes billed `jobs` columns, add a scenario acting as a real `sales_rep` (`request.jwt.claims` with that rep's `sub`) and assert success. Set `jobs.invoice_id` in the same statement that flips the status to `invoiced`. |
+| The Sol proof wrapper (`scripts/write-codex-push-proof.mjs`) replaces the WHOLE stderr section with `[STDERR omitted …]` when anything in it looks like a secret — and the `tokens used` run marker lives in stderr. A real BLOCKERS run can therefore show no `tokens used`. | For wrapper runs, evidence Sol ran is the capture header's `Exit code:` (read from the header slice above `## STDOUT` only) plus a terminal `CODEX_PROOF_VERDICT:` line in stdout, or the proof file for HEAD. Use `tokens used` only for your own `codex exec` transcripts. Never infer "never ran" or "no crash" from the redacted section. |
+| `npm test` is `vitest run` only. CI also runs `npm run test:correction-guards` (the node guard suites) and `npm run check:docs`. | Before pushing a migration, hook or guard change, run both locally too. |
+| In a mutating RPC, a check that depends on the clock (for example a one-year date bound) placed before the idempotency replay lookup refuses an exact retry that crosses midnight (#964). | Run clock-dependent validation AFTER the replay lookup, so a replay returns the original result. |
+| In `QuoteBuilder.tsx`, a `navigate()` after a save trips the "Unsaved Changes" prompt unless `skipUnsavedPromptRef.current = true` is set first, and an async write that does not hold a lock flag lets a second click race it (#1047). | Set `skipUnsavedPromptRef.current = true` before any post-write `navigate()`, and hold one of the saving / converting / drawing flags for the whole of any new async write. |
+| A regex that strips SQL comments before a source-text check fails open in BOTH directions: a nested `/* */` hides nothing, and `--` inside a string literal deletes real code. | Never describe such a check as failing closed; treat its result as advisory and keep a real parser or a live check behind it. |
+| A typed em-dash in JSX text can come out of the agent tool pipeline as the six literal characters `—`, which then render on screen. | Write `&mdash;` in JSX text content. |
+| `docs/audits/*-prompt.md` files are the runtime bodies of `.claude/commands` (architecture-weakness-audit, foundation-ultra-review, map-drift-audit), not stale reports. | Grep `.claude/` for the file name before deleting or moving one. |
+
+## Database, money and migration traps (moved here from agent memory, 2026-10-25)
+
+| Trap | What to do |
+|------|-----------|
+| JavaScript `Math.round(-12.5)` is `-12`; PostgreSQL `round(-12.5)` on `numeric` is `-13`. A money preview rounded in JS can disagree with what posting stores. | Money previews must use the same SQL function as posting, never JS rounding. |
+| Adding a component to `invoices.balance_cents` breaks every RPC that recomputes balance or status inline. | Update all of them in the same change: `allocate_payment`, `apply_prepay_to_invoice`, `apply_write_off`, `record_invoice_payment`, `void_payment`, `mark_overdue_invoices`, and `src/lib/reconciliation.ts`. |
+| `unit_conversions.unit` values are join keys (matched through `LOWER()`), so renaming a row can silently rescale money. | Never rename `unit_conversions.unit` rows; add a new row instead. |
+| Adding a quote status value: allowlist guards (`status IN (...)`) exclude it automatically, but denylist guards (`status NOT IN (...)`) silently let it through. | Find and update every `NOT IN` status guard when adding a status. |
+| A DEFERRABLE `FOR EACH ROW` constraint trigger that serializes with per-row advisory-lock keys deadlocks under concurrent writes. An RPC that replaces an RLS policy can quietly widen access. | Use one constant advisory-lock key in such triggers. A replacement policy keeps the original's privilege level. |
+| Live `products` refuses pricing columns on INSERT and any ungoverned pricing UPDATE, so test fixtures that insert priced products fail. | Fixtures insert a pricing-free product, then `set_config('crx.pricing_authorized','phase1a',true)` before the pricing UPDATE. |
+| After changing an RPC signature, PostgREST's schema cache may not resolve it. | Call it with the public anon key: `PGRST202` means the cache cannot find it; `42501` means it resolved and the anon revoke works. |
+| `pg_get_triggerdef()` returns the same text for an enabled and a disabled trigger, so it cannot prove a trigger fires. | Assert `tgenabled::text = 'O'` (or `'A'`). |
+| Renumbering a migration leaves its per-file `.gitattributes` `eol=lf` pin on the old name. On a CRLF checkout, any `digest(prosrc)` self-check in the file then breaks. | Move the pin with the file and grep the whole repo for the old timestamp. |
+| A parked migration's apply proofs minted early, in another session, fail closed: drift-reviewer CHECK 6 needs live `list_migrations` high-water evidence from the applying session. | Mint the apply proofs only in the session that applies it, after recording that evidence. |
+| A parked migration whose md5/baseline preflight fails is obsolete; the live schema has moved past it. | Retire it with the `SUPERSEDED-` prefix. Never refresh its pinned hashes to make it run. |
+| A parked migration without the exact header and pin sends the candidate guard to `unknown` and fails CI. | It needs a bare `-- STATUS: NOT APPLIED` header and an exact `` SQL sha256: `<hex>` `` pin matching its LOCAL CANDIDATE row in `docs/reference/migration-history.md`. |
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.

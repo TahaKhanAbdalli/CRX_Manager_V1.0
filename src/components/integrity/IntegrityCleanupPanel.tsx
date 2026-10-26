@@ -54,7 +54,9 @@ type SentinelAlertType =
   | 'negative_inventory'
   | 'negative_invoice_balance'
   | 'stale_quote_hold'
-  | 'booking_overdraw';
+  | 'booking_overdraw'
+  | 'stuck_job_hold'
+  | 'orphan_quote_hold';
 
 interface IntegrityAlertRow {
   id: string;
@@ -99,6 +101,27 @@ function describeAlert(a: IntegrityAlertRow): { title: string; detail: string } 
         title: 'Booking overdrawn',
         detail: `Drew ${g('quantity_drawn')} vs booked ${g('booking_cap')} (quote ${shortId(d.quote_id)})`,
       };
+    case 'stuck_job_hold': {
+      const job = d.job_id == null ? 'No job is linked'
+        : d.job_missing === true ? `Job ${shortId(d.job_id)} is missing`
+        : d.job_deleted === true ? `Job ${shortId(d.job_id)} is deleted`
+        : `Job ${shortId(d.job_id)} is ${g('job_status')}`;
+      return {
+        title: 'Stuck job hold',
+        detail: `${job}, but a hold of ${g('quantity')} is still active`,
+      };
+    }
+    case 'orphan_quote_hold': {
+      const quote = d.quote_id == null ? 'No quote is linked'
+        : d.quote_missing === true ? `Quote ${shortId(d.quote_id)} is missing`
+        : d.quote_deleted === true ? `Quote ${shortId(d.quote_id)} is deleted`
+        : d.is_planned !== true ? `Quote ${shortId(d.quote_id)} is no longer planned`
+        : `Quote ${shortId(d.quote_id)} is ${g('quote_status')}`;
+      return {
+        title: 'Orphaned program hold',
+        detail: `${quote}, but a program hold of ${g('quantity')} is still active`,
+      };
+    }
     default:
       return { title: String(a.alert_type), detail: '' };
   }

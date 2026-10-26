@@ -2,10 +2,13 @@
 
 **Last verified: 2026-10-26 (America/Chicago)** for KI-01 and KI-73 only (row 11.4 part B, PR #1103): their
 field policies, `_can_see_field` and `get_job_billed_customers` bodies, and the ledger rows of `20261023090000`
-and `20261023100000` (both applied) were re-read live read-only late on 2026-10-25 and again just after midnight. The rest of the file was last verified
-2026-10-23 against `main` at `62ca3b640` (code, migration files, merged PRs); live-database facts were NOT re-read
-for that rewrite: any "applied live" statement outside KI-01/KI-73 is the older record's claim, and every such
-claim is marked as such.
+and `20261023100000` (both applied) were re-read live read-only late on 2026-10-25 and again just after midnight. The
+rest of the file was last verified 2026-10-25 against `main` at `c65b7b351` (code, migration files, merged PRs).
+The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read live, read-only, at 10:52 PM Central:
+the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`, `20261022101000`
+and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and search-path items, and the
+`invoice_postable_version` overload. Every other "applied live" statement below is still the older record's claim,
+marked as such.
 
 This file is the short list of things that are genuinely open, or that someone decided to live with. Everything
 else (fixed, merged, retired, long write-ups, the evidence trail, old section numbers like §0d, §4b, F06) is
@@ -128,8 +131,8 @@ No snapshot/guard migration was found, but the live row count could not be check
 
 ### KI-07 — Other small security gaps
 **MED/LOW · mixed · unassigned**
-- `profiles` may still grant `TRUNCATE`/`TRIGGER` to signed-in users (no revoking migration found; live grants
-  not checked) — UNVERIFIED, LOW-MED.
+- `profiles` still grants `TRUNCATE`/`TRIGGER` to signed-in users (no revoking migration found; confirmed live
+  read-only 2026-10-25 with `has_table_privilege('authenticated', ...)`) — OPEN, LOW-MED.
 - Customer-document post-apply check (browser storage policies removed, Documents tab still works) was never
   recorded; and a removed document cannot be reopened even by an admin — UNVERIFIED, LOW.
 - Three older "reps work any customer" leftovers: signed-in rep click-through of `customer-document-files`
@@ -139,7 +142,8 @@ No snapshot/guard migration was found, but the live row count could not be check
   (`public, pg_temp`, or an exactly empty path with fully-qualified names) does not cover: `fields_acre_authority_guard`,
   `find_overlapping_fields`, `get_field_dashboard`, `get_field_geojson`, `get_fields_geojson_by_ids`,
   `get_fields_with_geojson`, `get_job_fields_with_geojson`, `get_job_proof_data`, `save_field_geometry`,
-  `save_field_polygons`, `set_field_boundary`, `set_field_override_acres` (read-only `execute_sql`, 2026-10-26).
+  `save_field_polygons`, `set_field_boundary`, `set_field_override_acres` (read-only `execute_sql`, 2026-10-26 UTC; same 12 re-read
+  2026-10-25 10:52 PM Central).
   They need `extensions` for PostGIS. Either document a PostGIS exception to the rule or schema-qualify the
   PostGIS calls and drop `extensions` from the path. Promised to CodeRabbit on PR #1065 (thread 4373018174) — LOW.
 
@@ -595,7 +599,7 @@ service-role tools (LOW).
 
 ## Unverified items (could not confirm either way; treat as open until checked)
 
-KI-06 (audit log), KI-07 (profiles TRUNCATE grant, customer-document post-apply check), KI-16 (split-acre
+KI-06 (audit log), KI-07 (customer-document post-apply check), KI-16 (split-acre
 rounding), KI-18 (AR-aging parts), KI-20 (per-delivery split, commission design choices), KI-29/KI-30
 (live-data counts), KI-35 (ledger reconciliation), KI-41 (offline recovery), KI-52 (prover, live-testdata false
 positives). Live-database facts need a read-only query by someone with access.

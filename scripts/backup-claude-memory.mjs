@@ -41,8 +41,8 @@
 // Deps:   none (node builtins only).
 
 import {
-  existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync,
-  renameSync, unlinkSync, writeFileSync,
+  closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+  statSync, renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -130,6 +130,84 @@ const mdFiles = (dir) =>
     .filter((f) => f.toLowerCase().endsWith(".md"))
     .filter((f) => linkStat(path.join(dir, f)).isFile())
     .sort();
+
+// Retired notes. The weekly memory sweep (Mason, 2026-10-25) MOVES finished notes out of
+// `memory/` into the sibling `memory-archive/` instead of deleting them, so the archive is
+// part of what must survive a lost machine. It rides in the SAME flat snapshot, each note
+// renamed `archive__<name>`, so every existing check (plain names, the secret scan, the
+// byte-for-byte copy check, --verify and the remote check) covers it with no new path rules.
+// Only a source literally named `memory` has an archive. Anything that would make archived
+// notes silently drop out of the staged set REFUSES the run instead (Luna, 2026-10-25),
+// because the prune step would then delete their archive__ copies from the snapshot:
+//   * the archive exists but is not a real directory (a link, a file), or cannot be read;
+//   * an archived `.md` entry is not a regular file (a link);
+//   * the archive is missing while the previous snapshot holds archive__ notes (checked in
+//     stage(), which has the previous manifest).
+// Only "does not exist" (ENOENT) means "no archive yet".
+export const ARCHIVE_DIR = "memory-archive";
+export const ARCHIVE_PREFIX = "archive__";
+// Returns `dir` (the archive, only when it EXISTS — the missing-archive prune check keys on
+// it) and `plannedDir` (where the archive lives or will live — the destination overlap check
+// keys on it, so staging into a not-yet-created archive is refused too; Codex App, #1098).
+function archiveSources(source) {
+  const resolved = path.resolve(source);
+  if (path.basename(resolved) !== "memory") return { dir: null, plannedDir: null, entries: [] };
+  const dir = path.join(path.dirname(resolved), ARCHIVE_DIR);
+  const refuse = (why) => ({
+    error:
+      `FAIL: refusing to stage — ${why}\n` +
+      `      Staging without those archived notes would prune them from the backup.\n` +
+      `      Fix the archive folder (${dir}) and re-run. Nothing was written.`,
+  });
+  let info;
+  try {
+    info = linkStat(dir);
+  } catch (err) {
+    if (err?.code === "ENOENT") return { dir: null, plannedDir: dir, entries: [] }; // no archive yet — normal
+    return refuse(`the memory archive could not be read (${err?.code || "error"}).`);
+  }
+  if (!info.isDirectory()) return refuse(`${dir} exists but is not a plain directory (a link or a file).`);
+  let listed;
+  try { listed = dirRead(dir).filter((f) => f.toLowerCase().endsWith(".md")); } catch (err) {
+    return refuse(`the memory archive could not be listed (${err?.code || "error"}).`);
+  }
+  const notRegular = [];
+  for (const f of listed) {
+    try {
+      if (!linkStat(path.join(dir, f)).isFile()) notRegular.push(f);
+    } catch (err) {
+      return refuse(`archived note ${f} could not be checked (${err?.code || "error"}).`);
+    }
+  }
+  if (notRegular.length > 0) return refuse(`archived note(s) are not regular files (links?): ${notRegular.join(", ")}.`);
+  return { dir, plannedDir: dir, entries: listed.sort().map((file) => ({ name: `${ARCHIVE_PREFIX}${file}`, from: path.join(dir, file) })) };
+}
+
+// Read one note through a single file handle and prove the handle is the same regular file
+// the link check saw. A path read alone follows links, so a note swapped for a link between
+// the check and the read would pull in whatever it points at (Luna, 2026-10-25): a swap
+// before the open shows up as a different file identity; a swap after it cannot reach this
+// handle. Used for live and archived notes alike.
+// Identities are compared as BigInt: NTFS file IDs exceed 2^53, so as plain numbers two
+// different files can round to the same `ino` and the swap would go unseen.
+let identityStat = (file) => lstatSync(file, { bigint: true });
+export function __setIdentityStat(fn) { identityStat = fn || ((file) => lstatSync(file, { bigint: true })); }
+function readChecked(file) {
+  let before;
+  try { before = identityStat(file); } catch (err) { return { error: `${file} could not be checked (${err?.code || "error"})` }; }
+  if (!before.isFile()) return { error: `${file} is not a regular file (a link?)` };
+  let fd;
+  try { fd = openSync(file, "r"); } catch (err) { return { error: `${file} could not be opened (${err?.code || "error"})` }; }
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) {
+      return { error: `${file} changed between the check and the read (swapped for a link?)` };
+    }
+    return { buf: readFileSync(fd) };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 // Refuse to write THROUGH a link. The destination check above decides which
 // repository the directory belongs to; a symlink inside it escapes that decision
@@ -636,7 +714,7 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
   );
 }
 
-function assertSafeDestination(outDir, source, names) {
+function assertSafeDestination(outDir, source, names, archiveDir = null) {
   const publishable = destinationIsPublishable(outDir, names);
   if (publishable) return publishable;
   if (isInside(source, outDir)) {
@@ -644,6 +722,11 @@ function assertSafeDestination(outDir, source, names) {
   }
   if (isInside(outDir, source)) {
     return `FAIL: refusing to stage into ${outDir} — it is inside the memory source. Pick a dedicated directory.`;
+  }
+  // The archive is a second source: staging into it (or around it) would write snapshot
+  // files into the notes being backed up, and the next run would stage them again.
+  if (archiveDir && (isInside(archiveDir, outDir) || isInside(outDir, archiveDir))) {
+    return `FAIL: refusing to stage into ${outDir} — it overlaps the memory archive ${archiveDir}. Pick a dedicated directory.`;
   }
   if (!existsSync(outDir)) return null;                       // new directory: nothing to clobber
   if (!statSync(outDir).isDirectory()) return `FAIL: destination is not a directory: ${outDir}`;
@@ -743,12 +826,26 @@ function stage(outDir, sourceArg) {
     console.error(`FAIL: source is missing ${INDEX_FILE} — that is not a memory dir: ${source}`);
     return 1;
   }
+  // A live note named like a staged archive entry would collide with it in the flat snapshot.
+  // Case-blind: Windows file names are, so `ARCHIVE__x.md` and `archive__x.md` are one file.
+  const prefixed = names.filter((name) => name.toLowerCase().startsWith(ARCHIVE_PREFIX));
+  if (prefixed.length > 0) {
+    console.error(`FAIL: refusing to stage — ${prefixed.length} memory note(s) start with "${ARCHIVE_PREFIX}", the prefix reserved for archived notes: ${prefixed.join(", ")}`);
+    return 1;
+  }
+  const archive = archiveSources(source);
+  if (archive.error) {
+    console.error(archive.error);
+    return 1;
+  }
+  const archived = archive.entries;
+  const allNames = [...names, ...archived.map((entry) => entry.name)];
   // The same rule verification applies, applied at the moment the manifest is
   // written rather than only when it is read. A name this tool would later
   // refuse to verify has no business entering a snapshot in the first place —
   // failing here costs one clear message; failing later means a backup that
   // cannot pass its own check.
-  const unstageable = names.map((name) => ({ name, why: unsafeSnapshotName(name) })).filter((n) => n.why);
+  const unstageable = allNames.map((name) => ({ name, why: unsafeSnapshotName(name) })).filter((n) => n.why);
   if (unstageable.length > 0) {
     console.error(`FAIL: refusing to stage — ${unstageable.length} source file name(s) are not plain snapshot names:`);
     for (const bad of unstageable) console.error(`      ${JSON.stringify(bad.name)} ${bad.why}`);
@@ -769,7 +866,15 @@ function stage(outDir, sourceArg) {
   // concurrent session could add a credential to a note after it was cleared
   // (Codex round-4, 2026-07-30). The notes are a few hundred KB; holding them in
   // memory costs nothing and closes the window completely.
-  const entries = names.map((name) => ({ name, buf: readFileSync(path.join(source, name)) }));
+  const entries = [];
+  for (const { name, from } of [...names.map((name) => ({ name, from: path.join(source, name) })), ...archived]) {
+    const read = readChecked(from);
+    if (read.error) {
+      console.error(`FAIL: refusing to stage — ${read.error}. Nothing was written.`);
+      return 1;
+    }
+    entries.push({ name, buf: read.buf });
+  }
   const secrets = scanForSecrets(entries);
   if (secrets.length > 0) {
     console.error(
@@ -781,12 +886,22 @@ function stage(outDir, sourceArg) {
     return 1;
   }
 
-  const destination = assertSafeDestination(outDir, source, names);
+  const destination = assertSafeDestination(outDir, source, allNames, archive.plannedDir);
   if (typeof destination === "string") {
     console.error(destination);
     return 1;
   }
   const prunable = new Set((destination?.previous?.files ?? []).map((entry) => entry.name));
+  // A missing archive while the last snapshot carried archived notes is far likelier a moved
+  // or lost folder than an intentional purge — and pruning would delete them from the backup.
+  if (!archive.dir && [...prunable].some((name) => name.startsWith(ARCHIVE_PREFIX))) {
+    console.error(
+      `FAIL: refusing to stage — the previous snapshot holds archived notes (archive__*), but no\n` +
+      `      memory-archive/ folder sits next to ${source}. Restore the folder and re-run. To drop the\n` +
+      `      archived notes on purpose, create an EMPTY memory-archive/ folder there first. Nothing was written.`
+    );
+    return 1;
+  }
 
   mkdirSync(outDir, { recursive: true });
 
@@ -841,7 +956,7 @@ function stage(outDir, sourceArg) {
   // Only files the PREVIOUS manifest recorded are eligible: this script deletes
   // nothing it did not itself write, so a stray .md that a human put in the
   // staging directory survives instead of being silently destroyed.
-  const keep = new Set(names);
+  const keep = new Set(allNames);
   let pruned = 0;
   for (const stale of mdFiles(outDir)) {
     if (!keep.has(stale) && prunable.has(stale)) {
@@ -868,7 +983,7 @@ function stage(outDir, sourceArg) {
 
   console.log(`Source:  ${source}`);
   console.log(`Staged:  ${outDir}`);
-  console.log(`Files:   ${files.length} (${(totalBytes / 1024).toFixed(1)} KB)${pruned ? `, pruned ${pruned} stale` : ""}`);
+  console.log(`Files:   ${files.length} (${(totalBytes / 1024).toFixed(1)} KB)${archived.length ? `, ${archived.length} of them archived notes` : ""}${pruned ? `, pruned ${pruned} stale` : ""}`);
   console.log(`Verified every staged file against the source. OK.`);
   return 0;
 }

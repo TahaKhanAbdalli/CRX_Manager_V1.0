@@ -1512,6 +1512,21 @@
       "area": [
         "billing"
       ]
+    },
+    "inventory_holds_guards": {
+      "chain": "smoke-inventory-holds-guards.sql",
+      "container_prover": "prove-inventory-holds-guards-real-schema.mjs",
+      "description": "To-Do 0.13, 0.14 and the holds half of 6.9 (REQUIRES 20261025090000). Live, rollback-only, plants [E2E] rows. As a real active admin: (a) a retired product with an open submitted PO line appears in get_inventory_position with its on-order quantity and drops out once the PO is cancelled; (b) create_inventory_hold refuses crop_program, job and NULL hold types with HOLD_TYPE_NOT_ALLOWED and writes nothing, while a manual hold is still created; (c) run_data_integrity_sweep, run as the cron (no signed-in user), reports 0 new stuck_job_hold and orphan_quote_hold on the real data, then exactly 1 of each for a planted job hold on a missing job and a program hold on a missing quote; (d) deleting a product with holds is refused by inventory_holds_product_id_fkey. The container prover replays the baseline and every later migration, shows the chain fails at (a) before the candidate, a sourceless crop_program hold is accepted, the sweep lacks the new checks and a product delete wipes its holds, then applies the candidate and shows the reverse, with grants unchanged and a second apply refused.",
+      "covers": [
+        "get_inventory_position",
+        "_get_inventory_position_cost_impl_20261019",
+        "create_inventory_hold",
+        "run_data_integrity_sweep",
+        "inventory_holds"
+      ],
+      "area": [
+        "inventory"
+      ]
     }
   }
 }
