@@ -48,7 +48,10 @@ const AUDIT_LOG_WRITE_RE = new RegExp(`\\b(?:insert\\s+into|update|delete\\s+fro
 // tables are legitimate scratch space for analysis and stay allowed.
 const DDL_STMT_RE = /(?:^|;)\s*(?:create(?!\s+(?:temp|temporary)\b)(?:\s+or\s+replace)?|alter|drop)\s+\S+/im;
 const GRANT_REVOKE_RE = /(?:^|;)\s*(?:grant|revoke)\b/im;
-const TRUNCATE_RE = /(?:^|;)\s*truncate\b/im;
+// Also inside a DO body, where a statement can follow BEGIN/THEN/ELSE/LOOP
+// (Luna, 2026-10-25: `DO $$ BEGIN TRUNCATE customers; … $$` slipped through).
+// A literal EXECUTE 'TRUNCATE …' (or EXECUTE format('TRUNCATE …')) counts too.
+const TRUNCATE_RE = /(?:^|;|\b(?:begin|then|else|loop))\s*truncate\b|\bexecute\s+(?:format\s*\(\s*)?[eE]?'\s*truncate\b/im;
 
 // Money-ish column assignment (column name on the LEFT of `=`) on a financial table.
 const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
@@ -74,6 +77,23 @@ const DELETE_ANY_RE = new RegExp(`\\bdelete\\s+from\\s+${QUAL}(${tableAlt(BUSINE
 // COMMIT mid-transaction), so unlike a stored function body it must stay visible
 // to the classifier. Matches "DO $tag$" and "DO LANGUAGE plpgsql $tag$".
 const DO_PREFIX_RE = /\bdo(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*$/i;
+// When true, the walkers also treat a backslash inside a PLAIN '…' literal as
+// an escape, as PostgreSQL does with standard_conforming_strings off. A batch
+// can switch that setting off before a DO body is parsed, so
+// isVerifiedRollbackBatch() requires the verdict to hold under BOTH readings
+// (Codex App, #1092). Always false outside that check.
+let plainBackslashEscapes = false;
+// A character that can continue a PostgreSQL identifier (non-ASCII included).
+const IDENT_CHAR_RE = /[A-Za-z0-9_$\u0080-￿]/;
+// A dollar-quote opener, with PostgreSQL's tag rules: non-ASCII letters are
+// allowed in the tag (`$é$`, Codex App on #1092).
+// Matched in place at any length (a tag longer than a fixed window used to be
+// cut short, Codex App on #1092).
+const DOLLAR_TAG_STICKY_RE = /\$([A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/y;
+function matchDollarTag(s, i) {
+  DOLLAR_TAG_STICKY_RE.lastIndex = i;
+  return DOLLAR_TAG_STICKY_RE.exec(s);
+}
 
 // Comments are legal between DO and its dollar quote (`DO /* x */ $$...$$`,
 // `DO -- note\n$$...$$`) and used to hide the executable body from the DO
@@ -113,7 +133,7 @@ function stripDollarQuotedCore(sql, keepBody) {
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        if (escapeString && src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        if ((escapeString || plainBackslashEscapes) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -134,8 +154,11 @@ function stripDollarQuotedCore(sql, keepBody) {
       }
       out += src.slice(i, j); i = j; continue;
     }
-    if (ch === "$") {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+    // As in PostgreSQL's lexer, a `$` right after an identifier character
+    // (non-ASCII letters included: `é$x$`) continues the identifier; it never
+    // opens a dollar quote.
+    if (ch === "$" && !IDENT_CHAR_RE.test(src[i - 1] || "")) {
+      const tag = matchDollarTag(src, i);
       if (tag) {
         const open = tag[0];
         const close = src.indexOf(open, i + open.length);
@@ -186,7 +209,7 @@ export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) 
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        if (escapeString && src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        if ((escapeString || plainBackslashEscapes) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -198,8 +221,8 @@ export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) 
       while (j < n && src[j] !== '"') j++;
       out += src.slice(i, j + 1); i = j + 1; continue;
     }
-    if (ch === "$") {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+    if (ch === "$" && !IDENT_CHAR_RE.test(src[i - 1] || "")) {
+      const tag = matchDollarTag(src, i);
       if (tag) {
         const open = tag[0];
         const close = src.indexOf(open, i + open.length);
@@ -231,6 +254,384 @@ export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) 
     out += ch; i++;
   }
   return out;
+}
+
+// ── Rollback-only smoke batches (2026-10-25) ─────────────────────────────────
+// The post-apply live smoke chains (scripts/smoke/, run through execute_sql)
+// call RPCs, set_config and write fixtures, and prove nothing persists by ending
+// in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. Until #1084 they passed only because
+// any REAL-DATA-OK marker switched every rule off. isVerifiedRollbackBatch()
+// returns true only when PostgreSQL itself must undo the whole batch:
+//   A. BEGIN first, ROLLBACK last, and no other transaction-control statement; or
+//   B. an optional leading BEGIN, then the LAST statement is a DO block whose body
+//      ends with an unconditional RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK…'; END —
+//      no RETURN, COMMIT, ROLLBACK or CALL statement that could skip or split it,
+//      and no outer EXCEPTION handler (the tail rule leaves no room for one).
+//      Without a leading BEGIN, earlier statements may only create pg_temp
+//      functions or temp tables, or be DO blocks free of transaction control:
+//      one query string is one implicit transaction, undone by the final raise.
+// Anything that can act outside the transaction (dblink, pg_background, http
+// calls) disqualifies the batch, wherever it appears. Comments never count.
+//
+// Top-level statements of comment-free SQL, each with its dollar-quoted spans.
+// String literals and dollar quotes are walked in ONE pass, so a quote inside a
+// dollar body or a $tag$ inside a string cannot hide text from the checks.
+// Returns null for an unterminated literal or dollar quote (not verifiable).
+function topLevelStatements(c) {
+  const stmts = [];
+  let cur = { text: "", spans: [] };
+  let i = 0;
+  while (i < c.length) {
+    const ch = c[i];
+    const esc = (ch === "e" || ch === "E") && c[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(c[i - 1] || "");
+    if (ch === "'" || esc) {
+      let j = i + (esc ? 2 : 1);
+      let closed = false;
+      while (j < c.length) {
+        if ((esc || plainBackslashEscapes) && c[j] === "\\") { j += 2; continue; }
+        if (c[j] === "'" && c[j + 1] === "'") { j += 2; continue; }
+        if (c[j] === "'") { j++; closed = true; break; }
+        j++;
+      }
+      if (!closed) return null;
+      cur.text += "''"; i = j; continue;
+    }
+    // A quoted identifier ("begin", "end", "a;b") is a name, not a keyword or a
+    // statement break (security review, 2026-10-25).
+    if (ch === '"') {
+      const close = c.indexOf('"', i + 1);
+      if (close === -1) return null;
+      cur.text += ' "" '; i = close + 1; continue;
+    }
+    if (ch === "$" && !IDENT_CHAR_RE.test(c[i - 1] || "")) {
+      const tag = matchDollarTag(c, i);
+      if (tag) {
+        const close = c.indexOf(tag[0], i + tag[0].length);
+        if (close === -1) return null;
+        cur.spans.push(c.slice(i + tag[0].length, close));
+        cur.text += " $$ "; i = close + tag[0].length; continue;
+      }
+    }
+    if (ch === ";") { stmts.push(cur); cur = { text: "", spans: [] }; i++; continue; }
+    cur.text += ch; i++;
+  }
+  stmts.push(cur);
+  return stmts.map((s) => ({ text: s.text.trim(), spans: s.spans })).filter((s) => s.text);
+}
+const TX_CONTROL_RE = /^(?:begin|start\s+transaction|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|set\s+transaction)\b/i;
+const TX_BEGIN_RE = /^(?:begin(?:\s+(?:transaction|work))?|start\s+transaction)$/i;
+const TX_ROLLBACK_RE = /^(?:rollback|abort)(?:\s+(?:transaction|work))?$/i;
+const DO_STMT_RE = /^do\s*(?:language\s+[a-z_]+\s*)?\$\$\s*(?:language\s+[a-z_]+)?$/i;
+const TEMP_SETUP_RE = /^create\s+(?:(?:or\s+replace\s+)?function\s+pg_temp\.|(?:temp|temporary)\s+table\s)/i;
+const SKIPS_RAISE_RE = /(?:^|;|\b(?:begin|then|else|loop))\s*(?:return|commit|rollback|call)\b/i;
+// Effects a ROLLBACK does not undo: remote calls (dblink, pg_background, http,
+// pg_net), session advisory locks, signalling other backends, server-side file
+// writes, and installing an extension or foreign server, which a batch could then
+// reach through dynamic SQL built from pieces (Luna, 2026-10-25). On 2026-10-25
+// the live database had none of dblink, pg_background, http, pg_net or
+// postgres_fdw installed.
+// The function-call half of OUT_OF_TX_RE, also refused outside a rollback-only
+// batch: none of these is a read, and no rollback undoes them. OUT_OF_TX_RE adds
+// setval/nextval because it reads the full text, supplied function bodies
+// included (Codex App, #1092: a pg_temp helper that calls setval).
+// Server administration calls (log rotation, WAL switches, restore points,
+// backend memory dumps and other pg_log_* writes) also act outside the
+// transaction (Luna round 2, #1092), and server files are matched as a family,
+// read or write: a rollback neither unreads a returned file nor restores a
+// deleted one (Sol, #1092: pg_read_file, pg_file_unlink). Any http extension
+// call (http(), http_*) counts as a remote call.
+export const NON_TX_CALL_RE = /\b(?:dblink\w*|pg_background\w*|http|http_\w+|net\.http_\w+|pg_(?:try_)?advisory_(?:lock|unlock)\w*|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_logical_emit_message|pg_replication_origin\w*|pg_logical_slot_\w*|pg_\w*replication_slot\w*|pg_stat\w*_reset\w*|pg_stat_reset\w*|lo_export|lo_import|pg_file_\w+|pg_read_\w+|pg_ls_\w+|pg_stat_file|pg_logdir_ls|pg_current_logfile\w*|pg_log_\w+|pg_rotate_logfile\w*|pg_create_restore_point|pg_switch_wal|pg_promote|pg_backup_\w+|pg_(?:start|stop)_backup|pg_wal_replay_\w+)\s*\(/i;
+const OUT_OF_TX_RE = /\b(?:dblink\w*|pg_background\w*|http|http_\w+|net\.http_\w+|pg_(?:try_)?advisory_(?:lock|unlock)\w*|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_logical_emit_message|pg_replication_origin\w*|pg_logical_slot_\w*|pg_\w*replication_slot\w*|pg_stat\w*_reset\w*|pg_stat_reset\w*|lo_export|lo_import|pg_file_\w+|pg_read_\w+|pg_ls_\w+|pg_stat_file|pg_logdir_ls|pg_current_logfile\w*|pg_log_\w+|pg_rotate_logfile\w*|pg_create_restore_point|pg_switch_wal|pg_promote|pg_backup_\w+|pg_(?:start|stop)_backup|pg_wal_replay_\w+|setval|nextval)\s*\(|\bcreate\s+(?:extension|server|foreign\s+data\s+wrapper|user\s+mapping)\b|\blanguage\s+['"]?(?:c|internal|plpython\w*|plperlu|pltclu)\b/i;
+const SMOKE_TAIL_RE = /raise\s+exception\s+'SMOKE_PASS_ROLLBACK[^']*'[^;]*;\s*end\s*;?\s*$/i;
+
+// The tail rule alone is not enough: `BEGIN …; EXCEPTION WHEN OTHERS THEN RAISE
+// EXCEPTION 'SMOKE_PASS_ROLLBACK'; END` ends the same way, but its raise runs
+// only when something else failed (security review, 2026-10-25). So the
+// OUTERMOST block may carry no EXCEPTION section at all. Works on the body's
+// statements (strings, quoted identifiers and nested dollar bodies already
+// blanked): an EXCEPTION section keyword can only open a statement or follow
+// BEGIN, so a word such as a variable named `raise` cannot hide one. BEGIN and
+// CASE open a level, a bare END or END CASE closes one, END IF / END LOOP close
+// neither. Any unbalanced count is ambiguous and refuses the batch.
+// A block keyword only counts where PL/pgSQL puts one: at the start of a
+// statement, or right after BEGIN/THEN/ELSE/LOOP/DECLARE — never after a dot,
+// so a column such as `t.begin` or `t.end` is not a delimiter (Codex App,
+// #1092). A CASE expression (CASE … END inside a statement) is ignored whole:
+// neither its CASE nor its END is in such a position.
+function outerBlockHasHandler(stmts) {
+  const stack = [];
+  const OPENERS = new Set(["begin", "then", "else", "loop", "declare"]);
+  // FAIL CLOSED on any keyword used as a name: patching one spelling at a time
+  // did not converge (Codex App found `t.begin`, `THEN begin`, `t . case`).
+  // BEGIN/CASE/END/EXCEPTION next to a dot (spaces allowed), BEGIN anywhere but
+  // a block-opening position, or END mid-statement without an open CASE make
+  // the structure ambiguous, and an ambiguous body is refused.
+  const KEYWORDS = new Set(["begin", "case", "end", "exception"]);
+  for (const s of stmts) {
+    const lower = s.text.toLowerCase();
+    // Whole PostgreSQL identifiers: `case$x` or `end2` is a name, not a keyword.
+    const toks = [...lower.matchAll(/[a-z_\u0080-￿][a-z0-9_$\u0080-￿]*/g)].map((m) => {
+      const before = lower.slice(0, m.index).trimEnd();
+      const after = lower.slice(m.index + m[0].length).trimStart();
+      return { w: m[0], dotted: before.endsWith(".") || after.startsWith(".") };
+    });
+    const words = toks.map((t) => t.w);
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      if (!KEYWORDS.has(w)) continue;
+      if (toks[i].dotted) return true;
+      const top = stack[stack.length - 1];
+      // A CASE statement starts a statement or follows BEGIN/THEN/ELSE/LOOP/
+      // DECLARE and closes only with END CASE at a statement start. Any other
+      // CASE is an expression, whose END is in the same statement. Output
+      // aliases (`PERFORM 1 AS case; … PERFORM 1 AS end`) used to pair across
+      // statements and hide an outer handler (Codex App, ad4206786), so an
+      // expression CASE left open at the end of its statement is ambiguous.
+      if (w === "case") {
+        stack.push(top !== "caseexpr" && (i === 0 || OPENERS.has(words[i - 1])) ? "casestmt" : "caseexpr");
+        continue;
+      }
+      if (w === "end") {
+        const next = words[i + 1];
+        if (top === "caseexpr") { if (next === "case") return true; stack.pop(); continue; }
+        if (top === "casestmt") { if (i !== 0 || next !== "case") return true; stack.pop(); i++; continue; }
+        if (i !== 0) return true;
+        if (next === "if" || next === "loop") { i++; continue; }
+        if (stack.length === 0) return true;
+        stack.pop();
+        continue;
+      }
+      if (w === "begin") {
+        if (top === "caseexpr" || !(i === 0 || OPENERS.has(words[i - 1]))) return true;
+        stack.push("begin");
+        continue;
+      }
+      // exception: a section keyword only at a statement start or right after
+      // BEGIN; elsewhere it is RAISE EXCEPTION or a name, which is harmless.
+      if ((i === 0 || words[i - 1] === "begin") && top !== "caseexpr" && top !== "casestmt" && stack.length <= 1) return true;
+    }
+    if (stack[stack.length - 1] === "caseexpr") return true;
+  }
+  return stack.length !== 0;
+}
+
+// Function-call text as PostgreSQL resolves it: comments removed everywhere
+// (`setval/**/(`) and double quotes dropped (`pg_catalog."setval"(`), so a
+// quoted or commented name cannot slip past a name check (Codex App, #1092).
+// Dropping quotes inside a string literal can only add matches, which refuses.
+export function callNormalizedSql(query) {
+  return stripCommentsQuoteAware(String(query || ""), { intoDollarBodies: true }).replace(/"/g, "");
+}
+
+// A COPY statement whose target is not STDOUT/STDIN (a server file or
+// program). Judged on statement text with string literals, quoted identifiers
+// and dollar bodies blanked (recursing into every dollar body), so a literal
+// such as 'to stdout' inside the copied query cannot stand in for the real
+// destination (Codex App, #1092). Anything unparseable refuses.
+// Nesting past 32 levels is not verifiable (null), so deep input cannot
+// overflow the stack (Luna round 3, #1092).
+function allStatementTexts(sql, out = [], depth = 0) {
+  if (depth > 32) return null;
+  const st = topLevelStatements(sql);
+  if (!st) return null;
+  for (const s of st) {
+    out.push(s.text);
+    for (const body of s.spans) if (!allStatementTexts(body, out, depth + 1)) return null;
+  }
+  return out;
+}
+export function hasServerCopy(sql) {
+  const texts = allStatementTexts(stripCommentsQuoteAware(String(sql || ""), { intoDollarBodies: true }));
+  if (!texts) return /\bcopy\b/i.test(String(sql || ""));
+  return texts.some((s) => {
+    if (!/(?:^|\b(?:begin|then|else|loop))\s*copy\b/i.test(s)) return false;
+    // Judge the direction at the statement's outer depth: a source query such
+    // as `(SELECT * FROM stdin)` is not COPY's own FROM STDIN (Codex App).
+    let outer = s, prev;
+    do { prev = outer; outer = outer.replace(/\([^()]*\)/g, " "); } while (outer !== prev);
+    return /[()]/.test(outer) || !/\b(?:to\s+stdout|from\s+stdin)\b/i.test(outer);
+  });
+}
+
+// Dynamic SQL. EXECUTE runs a string built at run time, so a name assembled from
+// pieces (`EXECUTE 'SELECT set' || 'val(…)'`) is invisible to the name checks
+// above (Sol, #1092). In a rollback-only batch every code-level EXECUTE must run
+// ONE literal whose text those checks already read: a dollar-quoted string, or a
+// plain '…' with no backslash and no comment opener (either can hide a name),
+// followed only by the statement's end, INTO … or USING …. An executed literal is
+// walked as code in turn, as is every dollar-quoted body, so an EXECUTE inside a
+// pg_temp function body or inside executed text is held to the same rule. A
+// literal that is only data ('EXECUTE' as a privilege name) is not code.
+// Returns false (not verifiable) on anything else.
+function plainLiteralEnd(src, i, esc) {
+  let j = i + (esc ? 2 : 1);
+  while (j < src.length) {
+    if ((esc || plainBackslashEscapes) && src[j] === "\\") { j += 2; continue; }
+    if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
+    if (src[j] === "'") return j + 1;
+    j++;
+  }
+  return -1;
+}
+const WORD_AT_RE = /[A-Za-z_\u0080-￿][A-Za-z0-9_$\u0080-￿]*/y;
+const INTO_USING_AT_RE = /(?:into|using)(?![A-Za-z0-9_$\u0080-￿])/iy;
+// (`EXECUTE function USING (1)` runs a variable named function, so the target
+// name may not be INTO or USING.)
+const TRIGGER_TARGET_AT_RE = /(?:function|procedure)\s+(?!(?:into|using)(?![A-Za-z0-9_$]))[A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?\s*\(/iy;
+// Nesting is capped (Luna, #1092): each level rescans its span, so deep nesting
+// would cost depth × length and could overflow the stack. No chain nests past 3.
+const MAX_EXECUTE_NESTING = 16;
+function executeRunsOnlyLiterals(src, depth = 0) {
+  if (depth > MAX_EXECUTE_NESTING) return false;
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    const prev = src[i - 1] || "";
+    const esc = (ch === "e" || ch === "E") && src[i + 1] === "'" && !IDENT_CHAR_RE.test(prev);
+    if (ch === "'" || esc) {
+      i = plainLiteralEnd(src, i, esc);
+      if (i < 0) return false;
+      continue;
+    }
+    if (ch === '"') {
+      const close = src.indexOf('"', i + 1);
+      if (close === -1) return false;
+      i = close + 1; continue;
+    }
+    if (ch === "$" && !IDENT_CHAR_RE.test(prev)) {
+      const tag = matchDollarTag(src, i);
+      if (tag) {
+        const close = src.indexOf(tag[0], i + tag[0].length);
+        if (close === -1 || !executeRunsOnlyLiterals(src.slice(i + tag[0].length, close), depth + 1)) return false;
+        i = close + tag[0].length; continue;
+      }
+    }
+    if (/[A-Za-z_\u0080-￿]/.test(ch) && !IDENT_CHAR_RE.test(prev)) {
+      WORD_AT_RE.lastIndex = i;
+      const word = WORD_AT_RE.exec(src)[0];
+      i += word.length;
+      if (word.toLowerCase() !== "execute") continue;
+      while (/\s/.test(src[i] || "")) i++;
+      // CREATE TRIGGER … EXECUTE FUNCTION|PROCEDURE name(…) names a function;
+      // it runs no text.
+      TRIGGER_TARGET_AT_RE.lastIndex = i;
+      if (TRIGGER_TARGET_AT_RE.test(src)) continue;
+      let text;
+      if (src[i] === "'") {
+        const end = plainLiteralEnd(src, i, false);
+        if (end < 0) return false;
+        text = src.slice(i + 1, end - 1);
+        if (/\\|\/\*|--/.test(text)) return false;
+        text = text.replace(/''/g, "'");
+        // Statement-level checks blank string literals, so executed text gets
+        // them here (Luna round 2: EXECUTE 'COPY … TO PROGRAM …').
+        if (leavesSessionOrServerEffect(text)) return false;
+        i = end;
+      } else {
+        const tag = src[i] === "$" ? matchDollarTag(src, i) : null;
+        if (!tag) return false;
+        const close = src.indexOf(tag[0], i + tag[0].length);
+        if (close === -1) return false;
+        text = src.slice(i + tag[0].length, close);
+        i = close + tag[0].length;
+      }
+      if (!executeRunsOnlyLiterals(text, depth + 1)) return false;
+      while (/\s/.test(src[i] || "")) i++;
+      INTO_USING_AT_RE.lastIndex = i;
+      if (i < src.length && src[i] !== ";" && !INTO_USING_AT_RE.test(src)) return false;
+      continue;
+    }
+    i++;
+  }
+  return true;
+}
+// SQL functions that run a query passed to them as text, the same blind spot as
+// EXECUTE without the keyword (`query_to_xml('SELECT set' || 'val(…)', …)`).
+// No live smoke chain calls one.
+const QUERY_TEXT_CALL_RE = /\b(?:query_to_xml\w*|ts_stat|ts_rewrite)\s*\(/i;
+// Statements whose effect outlives a rollback, judged on statement text with
+// literals blanked (dollar bodies included): COPY to or from a server program or
+// file; LOAD (a library stays loaded) and PREPARE (a prepared statement stays in
+// the session, where a later plain EXECUTE could run it); and a function body in
+// any language but sql or plpgsql, which can build and run SQL without EXECUTE
+// (plperl's spi_exec_query) (Luna round 2, #1092).
+const SESSION_STATEMENT_RE = /(?:^|\b(?:begin|then|else|loop))\s*(?:load|checkpoint|prepare(?!\s+transaction\b))\b/i;
+const OTHER_LANGUAGE_RE = /\blanguage\s+(?!(?:sql|plpgsql)\b)/i;
+// Objects that bind an existing function by bare name, with no `(` for the name
+// checks to see: `CREATE OPERATOR === (FUNCTION = setval)` then `x OPERATOR(===) 1`
+// runs setval (Codex App, #1092). Aggregates, types, casts, conversions, text
+// search objects, access methods, languages, transforms and event triggers bind
+// functions the same way. No live smoke chain defines or alters one, so any of
+// them disqualifies the batch.
+const FUNCTION_BINDING_DDL_RE = /\b(?:create(?:\s+or\s+replace)?|alter)\s+(?:operator|aggregate|type|cast|(?:default\s+)?conversion|text\s+search|access\s+method|(?:trusted\s+)?(?:procedural\s+)?language|transform|event\s+trigger)\b/i;
+function leavesSessionOrServerEffect(sql) {
+  const texts = allStatementTexts(sql);
+  return !texts || hasServerCopy(sql) ||
+    texts.some((s) => SESSION_STATEMENT_RE.test(s) || OTHER_LANGUAGE_RE.test(s) || FUNCTION_BINDING_DDL_RE.test(s));
+}
+
+export function isVerifiedRollbackBatch(query) {
+  if (!verifyRollbackOnce(query)) return false;
+  plainBackslashEscapes = true;
+  try { return verifyRollbackOnce(query); } finally { plainBackslashEscapes = false; }
+}
+
+function verifyRollbackOnce(query) {
+  const c = stripCommentsQuoteAware(String(query || ""), { intoDollarBodies: true });
+  if (OUT_OF_TX_RE.test(callNormalizedSql(query)) || hasServerCopy(query)) return false;
+  const callText = callNormalizedSql(query);
+  if (QUERY_TEXT_CALL_RE.test(callText) || leavesSessionOrServerEffect(c) || !executeRunsOnlyLiterals(c)) return false;
+  // A literal continued on the next line ('a'<newline>'b') inherits an E''
+  // prefix in PostgreSQL, which the walkers here do not model (Codex App,
+  // #1092). No live smoke chain uses one, so such a batch is simply refused.
+  if (/'[ \t]*(?:\r?\n[ \t]*)+'/.test(c)) return false;
+  // A function body written as a quoted string (plain, E'…' or U&'…') hides its
+  // code from the name checks: escapes and comments inside a literal can spell
+  // setval/**/( or any name (Codex App, #1092). Smoke chains use dollar-quoted
+  // bodies, so a batch with any string-literal body is refused. The same holds
+  // for a DO block (`DO 'BEGIN … END'`, `DO LANGUAGE plpgsql E'…'`).
+  if (/\b(?:as|do(?:\s+language\s+['"]?\w+['"]?)?)\s*(?:e|u&)?'/i.test(c)) return false;
+  const st = topLevelStatements(c);
+  if (!st || st.length === 0) return false;
+  const tx = st.map((s, i) => (TX_CONTROL_RE.test(s.text) ? i : -1)).filter((i) => i >= 0);
+  if (st.length >= 2 && TX_BEGIN_RE.test(st[0].text) && TX_ROLLBACK_RE.test(st[st.length - 1].text) &&
+      tx.length === 2 && tx[0] === 0 && tx[1] === st.length - 1) {
+    // Inside BEGIN a DO block cannot commit (PostgreSQL raises), but a COMMIT
+    // or ROLLBACK statement in one still disqualifies the batch, as it always has.
+    return !st.some((s) => DO_STMT_RE.test(s.text) &&
+      s.spans.some((b) => (topLevelStatements(b) || [{ text: "commit" }]).some((x) => /(?:^|\b(?:begin|then|else|loop))\s*(?:commit|rollback)\b/i.test(x.text))));
+  }
+  const lead = TX_BEGIN_RE.test(st[0].text) ? 1 : 0;
+  if (tx.some((i) => !(lead && i === 0))) return false;
+  const last = st[st.length - 1];
+  if (!DO_STMT_RE.test(last.text) || last.spans.length !== 1) return false;
+  const body = last.spans[0];
+  if (!SMOKE_TAIL_RE.test(body)) return false;
+  // Nested dollar bodies (trigger or helper functions built inside the block)
+  // cannot end the DO block or commit, so their RETURNs do not count; string
+  // literals are blanked. Both come from the same one-pass walk of the body.
+  const bodyStmts = topLevelStatements(body);
+  if (!bodyStmts || bodyStmts.some((s) => SKIPS_RAISE_RE.test(s.text))) return false;
+  // The raw tail match above can be fooled by literal contents, e.g.
+  // `PERFORM $m$raise exception 'SMOKE_PASS_ROLLBACK'$m$; END` (Codex App,
+  // #1092). In the tokenized body the last two statements must really be a
+  // RAISE EXCEPTION with a single-quoted message and the closing END.
+  const n = bodyStmts.length;
+  if (n < 2 || !/^end$/i.test(bodyStmts[n - 1].text) ||
+      !/^(?:[\s\S]*\bbegin\s+)?raise\s+exception\s+''(?:\s*,[\s\S]*|\s+using\s[\s\S]*)?$/i.test(bodyStmts[n - 2].text)) return false;
+  // Block labels are refused anywhere in the body: on the outermost block
+  // `EXIT <label>` jumps past the raise, and a labeled inner BEGIN is not
+  // counted as a block (Codex App). No live smoke chain uses a label.
+  if (bodyStmts.some((s) => s.text.includes("<<")) || outerBlockHasHandler(bodyStmts)) return false;
+  // Earlier statements without a leading BEGIN: temp setup, or other DO blocks
+  // free of transaction control. PostgreSQL runs a multi-statement query string
+  // as ONE implicit transaction (simple Query protocol), so the final raise
+  // undoes them too. A leading BEGIN is not needed for that, and leaves the
+  // connection in an aborted transaction after the raise (Luna, 2026-10-25).
+  const doBlockWithoutTxControl = (s) => DO_STMT_RE.test(s.text) && s.spans.length === 1 &&
+    (topLevelStatements(s.spans[0]) || [{ text: "commit" }]).every((x) => !SKIPS_RAISE_RE.test(x.text));
+  if (!lead && !st.slice(0, -1).every((s) => TEMP_SETUP_RE.test(s.text) || doBlockWithoutTxControl(s))) return false;
+  return true;
 }
 
 // ── SELECT-invoked function classification (Codex P1 round 4, PR #352) ───────
@@ -673,10 +1074,16 @@ function classifySqlInner(query, realDataOk) {
   // RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' marker lives inside a DO body, and a
   // COMMIT anywhere (even inside a DO body) must keep disqualifying the batch.
   const t = stripDollarQuoted(q);
+  // A batch PostgreSQL must roll back entirely (isVerifiedRollbackBatch above)
+  // skips the data rules below — audit-log writes, RPC calls, inserts, updates,
+  // deletes, cancels — because none of it can persist. TRUNCATE and sequence
+  // changes are still refused: a sequence change survives a ROLLBACK.
+  const verifiedRollback = isVerifiedRollbackBatch(q);
 
   // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
-  //    Red Line. No [E2E] exemption and no REAL-DATA-OK override.
-  if (AUDIT_LOG_WRITE_RE.test(t)) {
+  //    Red Line. No [E2E] exemption and no REAL-DATA-OK override; a verified
+  //    rollback-only smoke batch is the one exception (nothing it writes persists).
+  if (!verifiedRollback && AUDIT_LOG_WRITE_RE.test(t)) {
     return {
       block: true,
       kind: "audit-log-write",
@@ -693,6 +1100,44 @@ function classifySqlInner(query, realDataOk) {
     };
   }
 
+  // 2b. COPY to or from a server program or file reaches outside the database,
+  //     and no rollback undoes it (Luna, 2026-10-25). Plain COPY … FROM STDIN /
+  //     TO STDOUT is not matched.
+  // Allow-list, not a file-name pattern: a COPY is allowed only TO STDOUT or
+  // FROM STDIN; every other target (a file in any literal form, a program) is
+  // refused (Codex App, #1092: quoted, E'', dollar-quoted, overlong forms).
+  if (hasServerCopy(t)) {
+    return {
+      block: true,
+      kind: "copy-program-or-file",
+      reason: "COPY to or from a server program or file acts outside the database and is never undone by a rollback. Use COPY … FROM STDIN / TO STDOUT, or ask Mason.",
+    };
+  }
+
+  // 2b2. A Unicode-escaped identifier (U&"set\0076al" is setval) can spell any
+  //      name past the checks below, so it is refused outright (Codex App,
+  //      #1092). U&'…' string literals are unaffected; a live smoke chain uses one.
+  //      Reads the ORIGINAL text, so a supplied function body is checked too.
+  if (/(?<![A-Za-z0-9_$\u0080-￿])u&"/i.test(stripCommentsQuoteAware(q, { intoDollarBodies: true }))) {
+    return {
+      block: true,
+      kind: "unicode-escaped-identifier",
+      reason: "This uses a Unicode-escaped identifier (U&\"…\"), which can spell a function or table name the guard cannot read. Write the name plainly.",
+    };
+  }
+
+  // 2c. Calls whose effect no rollback undoes (remote calls, session locks,
+  //     signalling backends, statistics resets, server file I/O) are refused
+  //     everywhere, not only inside a rollback-only batch (Luna, 2026-10-25).
+  const nonTx = NON_TX_CALL_RE.exec(callNormalizedSql(t));
+  if (nonTx) {
+    return {
+      block: true,
+      kind: "non-transactional-call",
+      reason: `This calls "${nonTx[0].replace(/\s*\($/, "")}()", whose effect lives outside the transaction (no rollback undoes it) and is not a read. Ask Mason before running it on the live database.`,
+    };
+  }
+
   // 3. Schema changes (DDL, GRANT/REVOKE) must travel the migration gauntlet —
   //    a rolled-back smoke batch is the one exception. "Rolled back" must be
   //    STRUCTURAL, not textual (Codex 2026-07-05: `SELECT 'SMOKE_PASS_ROLLBACK'`
@@ -700,11 +1145,10 @@ function classifySqlInner(query, realDataOk) {
   //    statement AND ROLLBACK is the last), or a DO-block smoke that force-aborts
   //    via an actual RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. Any statement-anchored
   //    COMMIT disqualifies the batch.
-  const hasCommitStmt = /(?:^|;)\s*commit\b/i.test(q);
-  const txWrapped = /^\s*begin\s*;[\s\S]*;\s*rollback\s*;?\s*$/i.test(q);
-  const smokeAbort = /raise\s+exception\s+'?SMOKE_PASS_ROLLBACK/i.test(q);
-  const rolledBack = !hasCommitStmt && (txWrapped || smokeAbort);
-  if (!rolledBack && (DDL_STMT_RE.test(t) || GRANT_REVOKE_RE.test(t))) {
+  //    Since 2026-10-25 "rolled back" is isVerifiedRollbackBatch(): the older
+  //    textual test let `BEGIN; <DDL>; END; ... ROLLBACK;` through, and END is
+  //    COMMIT (reported by the #1093 session).
+  if (!verifiedRollback && (DDL_STMT_RE.test(t) || GRANT_REVOKE_RE.test(t))) {
     return {
       block: true,
       kind: "raw-ddl",
@@ -722,14 +1166,19 @@ function classifySqlInner(query, realDataOk) {
   //     "void_invoice" and destroy_customer slipped one). A real RPC call goes
   //     through the app. A sequence change is never undone by a ROLLBACK.
   //     currval/lastval remain allowed (true reads).
-  if (/\b(?:setval|nextval)\s*\(/i.test(t)) {
+  if (/\b(?:setval|nextval)\s*\(/i.test(callNormalizedSql(t))) {
     return {
       block: true,
       kind: "sequence-mutation",
       reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead; a real sequence change belongs in a reviewed migration.",
     };
   }
-  const rpc = findNonReadFunctionCall(t);
+  if (verifiedRollback) return { block: false, kind: "rolled-back-smoke" };
+  // findNonReadFunctionCall only scans text that contains SELECT, so a DO body
+  // (`PERFORM save_x()`, `v := save_x()`) or a `CALL proc()` slipped past it
+  // (reported by the #1093 session). Such a batch is scanned as if it were one.
+  const runsCode = /\bdo\s*(?:language\s+[a-z_]+\s*)?\$|\bcall\s+[a-z_"]/i.test(t);
+  const rpc = findNonReadFunctionCall(runsCode ? `SELECT ${t}` : t);
   if (rpc) {
     return {
       block: true,
