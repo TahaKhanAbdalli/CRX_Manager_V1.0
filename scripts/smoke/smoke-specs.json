@@ -1488,6 +1488,20 @@
         "idempotency"
       ]
     },
+    "set_product_margin_floors": {
+      "chain": "smoke-set-product-margin-floors.sql",
+      "description": "Product margin floors (20261025210000, To-Do 0.2): auth probes P1 no-auth, P2 anon, P3 non-admin, P4 forged actor refused with nothing written; an active admin sets 12.5% (stored 0.125); the exact retry replays with no second history row and its receipt bound to the admin; the same key with another floor is refused (IDEMPOTENCY_INTENT_MISMATCH); 14.3% stores exactly 0.143; the same floor again changes nothing; clearing removes the row; the history reads null>0.125>0.143>null with actor and reason; 100% is refused. Container proof of the migration itself: prove-product-margin-floors-real-schema.mjs.",
+      "covers": [
+        "set_product_margin_floors",
+        "product_margin_floors",
+        "product_margin_floor_changes"
+      ],
+      "area": [
+        "pricing",
+        "security",
+        "idempotency"
+      ]
+    },
     "invoices_postable_view": {
       "chain": "smoke-invoices-postable-view.sql",
       "container_prover": "prove-post-binds-reviewed-invoice-version-real-schema.mjs",

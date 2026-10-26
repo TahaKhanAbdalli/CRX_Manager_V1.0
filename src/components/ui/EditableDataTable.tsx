@@ -303,6 +303,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
                 size="sm"
                 icon={<X className="w-4 h-4" />}
                 onClick={handleCancelEdit}
+                disabled={saving}
               >
                 Cancel
               </Button>
@@ -336,6 +337,9 @@ export default function EditableDataTable<T extends Record<string, any>>({
         />
       ) : (
         <div className="overflow-x-auto">
+          {/* Every cell is locked while a save runs: a save closes edit mode and clears the edits it
+              was handed, so anything typed meanwhile would vanish without being saved. */}
+          <fieldset disabled={saving} className="min-w-0">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
@@ -399,6 +403,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
               })}
             </tbody>
           </table>
+          </fieldset>
         </div>
       )}
     </div>

@@ -5,7 +5,8 @@ PRs). The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read
 Central: the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`,
 `20261022101000` and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and
 search-path items, and the `invoice_postable_version` overload. Every other "applied live" statement below is
-still the older record's claim, marked as such.
+still the older record's claim, marked as such. The margin-floor PR (To-Do 0.2) re-read the ledger again on 2026-10-26
+(newest rows `20261023100000` and `20261023090000`), consistent with KI-01.
 
 This file is the short list of things that are genuinely open, or that someone decided to live with. Everything
 else (fixed, merged, retired, long write-ups, the evidence trail, old section numbers like §0d, §4b, F06) is

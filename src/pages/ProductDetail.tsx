@@ -10,6 +10,7 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
 import ProductPriceHistory from '../components/products/ProductPriceHistory';
 import ProductBrandsSection from '../components/products/ProductBrandsSection';
+import ProductMarginFloorCard from '../components/products/ProductMarginFloorCard';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -262,7 +263,9 @@ export default function ProductDetail() {
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
-  const blocker = useUnsavedChanges(isDirty);
+  // The margin floor card saves on its own, so its unsaved edit is tracked apart from the form.
+  const [marginFloorDirty, setMarginFloorDirty] = useState(false);
+  const blocker = useUnsavedChanges(isDirty || marginFloorDirty);
 
   const fetchProduct = useCallback(async (reportError = true): Promise<boolean> => {
     const { data, error } = await supabase.from('products').select(PRODUCT_COLUMNS).eq('id', id!).maybeSingle();
@@ -1510,6 +1513,21 @@ export default function ProductDetail() {
                 {isNew ? 'Create Product' : 'Save Changes'}
               </Button>
             </div>
+          )}
+
+          {/* Below Save Changes: the floor saves on its own, with its own button. */}
+          {/* Only once this product has loaded: until then persistedProduct is still the last
+              product, whose tier margins would be judged against this product's floor. */}
+          {isAdmin && !isNew && id && profile && persistedProduct?.id === id && (
+            // Keyed by product: moving to another product starts a fresh card, so nothing from the
+            // last product's floor, history or in-flight save carries over.
+            <ProductMarginFloorCard
+              key={id}
+              productId={id}
+              tierMargins={[persistedProduct?.tier1_margin, persistedProduct?.tier2_margin, persistedProduct?.tier3_margin]}
+              userId={profile.id}
+              onDirtyChange={setMarginFloorDirty}
+            />
           )}
           </fieldset>
         </div>
