@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 // jsdom does not implement URL.createObjectURL / revokeObjectURL.
 // Stub them so vi.spyOn() in tests can wrap them.
