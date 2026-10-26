@@ -10,6 +10,7 @@ import { runCriticalAction } from '../../lib/criticalAction';
 import { formatCents as fmt } from '../../lib/money';
 import { localToday, parseLocalDate } from '../../lib/dateUtils';
 import { SkeletonTable } from '../ui/Skeleton';
+import { LoadFailedState } from '../ui/EmptyState';
 import CustomerSearchPicker, {
   CUSTOMER_SEARCH_SELECT,
   type CustomerSearchResult,
@@ -70,6 +71,7 @@ export default function CustomerInvoiceSummaryPanel() {
 
   const [rows, setRows] = useState<SummaryInvoiceRow[] | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [printing, setPrinting] = useState(false);
   // Bumped on every customer change and every load, so only the newest load for the
   // current customer may fill the table: a late reply never shows another customer's invoices.
@@ -80,6 +82,7 @@ export default function CustomerInvoiceSummaryPanel() {
     setSelectedCustomer(customer);
     setRows(null);
     setLoadingSummary(false);
+    setLoadFailed(false);
     // Default the Terms input to the customer's payment terms when they're picked
     // (the user can override; still report-only). Only seeds an empty Terms box so
     // we never clobber what the user typed.
@@ -91,24 +94,36 @@ export default function CustomerInvoiceSummaryPanel() {
   const loadSummary = useCallback(async (customerId: string) => {
     const requestId = ++summaryRequestRef.current;
     setLoadingSummary(true);
-    const { data, error } = await supabase
-      .from('invoices')
-      .select(SUMMARY_SELECT)
-      .eq('customer_id', customerId)
-      .in('invoice_type', ['chemical_sale', 'field_application'])
-      .in('status', ['draft', 'unposted'])
-      .is('deleted_at', null)
-      .order('invoice_date', { ascending: true });
-    if (requestId !== summaryRequestRef.current) return;
-
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch_summary', page: 'customer-invoice-summary' } });
+    setLoadFailed(false);
+    // A failed read clears the report: an older summary, "No unposted …" or a $0 Combined
+    // Balance must never stand in for invoices that could not be read (To-Do 10.5).
+    const fail = (err: unknown) => {
+      if (requestId !== summaryRequestRef.current) return;
+      Sentry.captureException(err, { tags: { source: 'fetch_summary', page: 'customer-invoice-summary' } });
       toast('error', 'Failed to load invoice summary');
+      setRows(null);
+      setLoadFailed(true);
       setLoadingSummary(false);
-      return;
+    };
+    let data: unknown;
+    try {
+      const result = await supabase
+        .from('invoices')
+        .select(SUMMARY_SELECT)
+        .eq('customer_id', customerId)
+        .in('invoice_type', ['chemical_sale', 'field_application'])
+        .in('status', ['draft', 'unposted'])
+        .is('deleted_at', null)
+        .order('invoice_date', { ascending: true });
+      if (result.error) return fail(result.error);
+      data = result.data;
+    } catch (err: unknown) {
+      return fail(err);
     }
+    if (requestId !== summaryRequestRef.current) return;
+    if (!Array.isArray(data)) return fail(new Error('The invoice summary read returned no list'));
 
-    const mapped: SummaryInvoiceRow[] = ((data || []) as Array<Record<string, unknown>>).map((r) => ({
+    const mapped: SummaryInvoiceRow[] = (data as Array<Record<string, unknown>>).map((r) => ({
       id: String(r.id),
       invoice_number: String(r.invoice_number ?? ''),
       invoice_type: r.invoice_type as SummaryInvoiceRow['invoice_type'],
@@ -259,6 +274,15 @@ export default function CustomerInvoiceSummaryPanel() {
         </div>
       )}
 
+      {!loadingSummary && loadFailed && selectedCustomer && (
+        <Card>
+          <LoadFailedState
+            title="The invoice summary could not be loaded"
+            onRetry={() => { void loadSummary(selectedCustomer.id); }}
+          />
+        </Card>
+      )}
+
       {!loadingSummary && summary && selectedCustomer && (
         <>
           {/* Statement summary header */}
@@ -293,45 +317,7 @@ export default function CustomerInvoiceSummaryPanel() {
               <SummarySection title="Chemical Sales" rows={summary.chemicalRows} subtotal={summary.chemicalSubtotal} />
               <SummarySection title="Field Application" rows={summary.fieldRows} subtotal={summary.fieldSubtotal} />
 
-              {/* Combined total */}
-              <Card>
-                <div className="flex flex-col items-end gap-1 text-sm">
-                  <div className="flex justify-between w-full max-w-xs">
-                    <span className="text-secondary">Combined Total ({summary.combinedTotal.count})</span>
-                    <span className="font-mono">{fmt(summary.combinedTotal.totalAmountCents)}</span>
-                  </div>
-                  {summary.combinedTotal.paidAmountCents > 0 && (
-                    <div className="flex justify-between w-full max-w-xs">
-                      <span className="text-secondary">Payments</span>
-                      <span className="font-mono text-crx-green">-{fmt(summary.combinedTotal.paidAmountCents)}</span>
-                    </div>
-                  )}
-                  {summary.combinedTotal.prepayAppliedCents > 0 && (
-                    <div className="flex justify-between w-full max-w-xs">
-                      <span className="text-secondary">Prepay Applied</span>
-                      <span className="font-mono text-crx-green">-{fmt(summary.combinedTotal.prepayAppliedCents)}</span>
-                    </div>
-                  )}
-                  {summary.combinedTotal.writeOffCents > 0 && (
-                    <div className="flex justify-between w-full max-w-xs">
-                      <span className="text-secondary">Write-off</span>
-                      <span className="font-mono text-crx-green">-{fmt(summary.combinedTotal.writeOffCents)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between w-full max-w-xs border-t border-gray-200 pt-1 mt-1">
-                    <span className="font-semibold text-nav-dark">Combined Balance</span>
-                    <span className={`font-mono font-semibold ${summary.combinedTotal.balanceCents > 0 ? 'text-red-600' : 'text-crx-green'}`}>
-                      {fmt(summary.combinedTotal.balanceCents)}
-                    </span>
-                  </div>
-                  {summary.combinedTotal.discountEarnedCents > 0 && (
-                    <div className="flex justify-between w-full max-w-xs">
-                      <span className="text-xs text-secondary">Discount Earned (if paid early)</span>
-                      <span className="font-mono text-xs text-secondary">{fmt(summary.combinedTotal.discountEarnedCents)}</span>
-                    </div>
-                  )}
-                </div>
-              </Card>
+              <CombinedTotalCard total={summary.combinedTotal} />
 
               <div className="flex justify-end">
                 <Button
@@ -348,6 +334,50 @@ export default function CustomerInvoiceSummaryPanel() {
         </>
       )}
     </div>
+  );
+}
+
+// ── Combined total card ─────────────────────────────────────────────────────
+function CombinedTotalCard({ total }: { total: SummaryTotals }) {
+  return (
+    <Card>
+      <div className="flex flex-col items-end gap-1 text-sm">
+        <div className="flex justify-between w-full max-w-xs">
+          <span className="text-secondary">Combined Total ({total.count})</span>
+          <span className="font-mono">{fmt(total.totalAmountCents)}</span>
+        </div>
+        {total.paidAmountCents > 0 && (
+          <div className="flex justify-between w-full max-w-xs">
+            <span className="text-secondary">Payments</span>
+            <span className="font-mono text-crx-green">-{fmt(total.paidAmountCents)}</span>
+          </div>
+        )}
+        {total.prepayAppliedCents > 0 && (
+          <div className="flex justify-between w-full max-w-xs">
+            <span className="text-secondary">Prepay Applied</span>
+            <span className="font-mono text-crx-green">-{fmt(total.prepayAppliedCents)}</span>
+          </div>
+        )}
+        {total.writeOffCents > 0 && (
+          <div className="flex justify-between w-full max-w-xs">
+            <span className="text-secondary">Write-off</span>
+            <span className="font-mono text-crx-green">-{fmt(total.writeOffCents)}</span>
+          </div>
+        )}
+        <div className="flex justify-between w-full max-w-xs border-t border-gray-200 pt-1 mt-1">
+          <span className="font-semibold text-nav-dark">Combined Balance</span>
+          <span className={`font-mono font-semibold ${total.balanceCents > 0 ? 'text-red-600' : 'text-crx-green'}`}>
+            {fmt(total.balanceCents)}
+          </span>
+        </div>
+        {total.discountEarnedCents > 0 && (
+          <div className="flex justify-between w-full max-w-xs">
+            <span className="text-xs text-secondary">Discount Earned (if paid early)</span>
+            <span className="font-mono text-xs text-secondary">{fmt(total.discountEarnedCents)}</span>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

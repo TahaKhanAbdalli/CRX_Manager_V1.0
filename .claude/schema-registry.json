@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261026142537",
+    "migrations_high_water": "20261026214418",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -444,6 +444,7 @@
       "20261023090000_field_functions_require_field_access",
       "20261023100000_revoke_load_recipe_into_job_app_access",
       "20261025090000_inventory_holds_and_retired_on_order_guards",
+      "20261025210000_product_margin_floors",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1423,6 +1424,7 @@
     "product_cost_basis_change_rows",
     "product_cost_basis_rollout",
     "product_info_change_set_rows",
+    "product_margin_floor_changes",
     "profile_public_directory",
     "purchase_order_import_intents",
     "purchase_order_item_cost_changes",
@@ -3969,6 +3971,36 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "product_margin_floor_changes",
+      "constraint": "product_margin_floor_changes_is_change",
+      "def": "CHECK ((old_margin_floor IS DISTINCT FROM new_margin_floor))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_margin_floor_changes",
+      "constraint": "product_margin_floor_changes_range",
+      "def": "CHECK ((((old_margin_floor IS NULL) OR ((old_margin_floor >= (0)::numeric) AND (old_margin_floor < (1)::numeric))) AND ((new_margin_floor IS NULL) OR ((new_margin_floor >= (0)::numeric) AND (new_margin_floor < (1)::numeric)))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_margin_floor_changes",
+      "constraint": "product_margin_floor_changes_reason_length",
+      "def": "CHECK (((reason IS NULL) OR ((char_length(reason) >= 1) AND (char_length(reason) <= 500))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_margin_floors",
+      "constraint": "product_margin_floors_range",
+      "def": "CHECK (((margin_floor >= (0)::numeric) AND (margin_floor < (1)::numeric) AND (margin_floor = round(margin_floor, 4))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_margin_floors",
+      "constraint": "product_margin_floors_reason_length",
+      "def": "CHECK (((set_reason IS NULL) OR ((char_length(set_reason) >= 1) AND (char_length(set_reason) <= 500))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "product_supplier_links",
       "constraint": "product_supplier_links_comparable_shape",
       "def": "CHECK (((comparison_status <> 'comparable'::text) OR ((link_status = 'confirmed'::text) AND (inventory_units_per_supplier_unit IS NOT NULL) AND (NULLIF(btrim(conversion_unit), ''::text) IS NOT NULL))))",
@@ -5836,6 +5868,25 @@
         "source_note",
         "confidence",
         "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "product_margin_floor_changes": {
+      "no_default": [
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "product_margin_floors": {
+      "no_default": [
+        "product_id",
+        "margin_floor"
+      ],
+      "with_default": [
         "created_at",
         "updated_at"
       ]
@@ -8218,6 +8269,23 @@
       "reviewed_by",
       "reviewed_at",
       "run_idempotency_key",
+      "created_at",
+      "updated_at"
+    ],
+    "product_margin_floor_changes": [
+      "id",
+      "product_id",
+      "old_margin_floor",
+      "new_margin_floor",
+      "reason",
+      "changed_by",
+      "created_at"
+    ],
+    "product_margin_floors": [
+      "product_id",
+      "margin_floor",
+      "set_by",
+      "set_reason",
       "created_at",
       "updated_at"
     ],

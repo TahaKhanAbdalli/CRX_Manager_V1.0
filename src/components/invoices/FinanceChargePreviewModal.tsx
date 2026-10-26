@@ -19,7 +19,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { fetchAllRows } from '../../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../../lib/pagedRead';
+import { LoadFailedState } from '../ui/EmptyState';
 import type { FinanceChargePreview } from '../../types';
 import { formatCents as fmtCents } from '../../lib/money';
 
@@ -54,13 +55,14 @@ export default function FinanceChargePreviewModal({
     setLoading(true);
     try {
       // Read every page: the server cuts a function's rows off at 1,000, and
-      // "Generate" charges only the customers previewed here.
-      const { data, error } = await fetchAllRows<FinanceChargePreview>((from, to) => supabase
+      // "Generate" charges only the customers previewed here. A page with no list
+      // fails the preview rather than reading as "No finance charges to generate".
+      const { data, error } = await fetchAllRows<FinanceChargePreview>((from, to) => pageWithList(supabase
         .rpc('preview_finance_charges', { p_as_of_date: asOfDate }, { count: 'exact' })
         // The function's own order (customer name), then the unique customer id.
         .order('customer_name')
         .order('customer_id')
-        .range(from, to));
+        .range(from, to)));
       if (error) throw error;
       const rows = assertRpcResult<FinanceChargePreview[]>(data, 'preview_finance_charges');
       if (seq !== previewLoadSeq.current) return;
@@ -188,7 +190,7 @@ export default function FinanceChargePreviewModal({
           </div>
         ) : previewFailed ? (
           // Not "nothing to charge": a failed preview must not read as an empty one.
-          <p role="alert" className="text-center py-8 text-sm text-red-600">The preview could not be loaded. Close and reopen to try again.</p>
+          <LoadFailedState title="The finance charge preview could not be loaded" onRetry={() => { void fetchPreview(); }} />
         ) : previews.length === 0 ? (
           <div className="text-center py-8">
             <Zap className="w-10 h-10 text-gray-300 mx-auto mb-2" />

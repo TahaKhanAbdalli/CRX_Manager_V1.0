@@ -19,6 +19,7 @@ import {
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { Sentry } from '../../lib/sentry';
 import { SkeletonCard } from '../ui/Skeleton';
+import { LoadFailedState } from '../ui/EmptyState';
 import { formatCents as fmt } from '../../lib/money';
 
 // Phase 2 of the As-Applied / Field-Invoice build (read-only reconciliation).
@@ -133,6 +134,11 @@ export default function UnbilledApplicationsPanel() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const [loading, setLoading] = useState(true);
+  // The last read failed: "could not be loaded" shows in place of the backlogs, never
+  // "all caught up" or an older list whose Create Invoice buttons still work (To-Do 10.5).
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Only the newest read may fill the lists; an older one answering late is ignored.
+  const fetchSeqRef = useRef(0);
   const [jobs, setJobs] = useState<UnbilledRow[]>([]);
   const [tickets, setTickets] = useState<UnbilledRow[]>([]);
   const [pendingJobInvoice, setPendingJobInvoice] = useState<PendingJobInvoice | null>(null);
@@ -156,39 +162,59 @@ export default function UnbilledApplicationsPanel() {
   }, []);
 
   const fetchAll = useCallback(async (): Promise<boolean> => {
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
 
-    const [jobsRes, ticketsRes] = await Promise.all([
-      supabase
-        .from('jobs')
-        .select('id, job_number, job_date, total_acres, total_price_cents, customer:customers(farm_name)')
-        .eq('status', 'completed')
-        .is('invoice_id', null)
-        .is('deleted_at', null)
-        .order('job_date', { ascending: true })
-        .limit(QUERY_LIMIT),
-      supabase
-        .from('blend_tickets')
-        .select('id, ticket_number, ticket_date, total_acres, customer:customers(farm_name)')
-        .eq('review_status', 'approved')
-        .eq('payment_status', 'unbilled')
-        .is('deleted_at', null)
-        .order('ticket_date', { ascending: true })
-        .limit(QUERY_LIMIT),
-    ]);
-
-    const firstError = jobsRes.error || ticketsRes.error;
-    if (firstError) {
-      Sentry.captureException(firstError, { tags: { source: 'fetch', page: 'unbilled-applications' } });
+    // A failed read clears the lists, so no older row keeps a live Create Invoice; Bill next
+    // is hidden while loadFailed and comes back only over a list a later read returned.
+    const fail = (err: unknown) => {
+      if (seq !== fetchSeqRef.current) return false;
+      Sentry.captureException(err, { tags: { source: 'fetch', page: 'unbilled-applications' } });
       toast('error', 'Failed to load unbilled applications');
+      setJobs([]);
+      setTickets([]);
+      setPendingJobInvoice(null);
+      setLoadFailed(true);
       setLoading(false);
       return false;
-    }
+    };
 
-    setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date', 'total_price_cents'));
-    setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
-    setLoading(false);
-    return true;
+    try {
+      const [jobsRes, ticketsRes] = await Promise.all([
+        supabase
+          .from('jobs')
+          .select('id, job_number, job_date, total_acres, total_price_cents, customer:customers(farm_name)')
+          .eq('status', 'completed')
+          .is('invoice_id', null)
+          .is('deleted_at', null)
+          .order('job_date', { ascending: true })
+          .limit(QUERY_LIMIT),
+        supabase
+          .from('blend_tickets')
+          .select('id, ticket_number, ticket_date, total_acres, customer:customers(farm_name)')
+          .eq('review_status', 'approved')
+          .eq('payment_status', 'unbilled')
+          .is('deleted_at', null)
+          .order('ticket_date', { ascending: true })
+          .limit(QUERY_LIMIT),
+      ]);
+      if (seq !== fetchSeqRef.current) return false;
+
+      const firstError = jobsRes.error || ticketsRes.error;
+      if (firstError) return fail(firstError);
+      // No error but no list is a failed read too, not an empty backlog.
+      if (!Array.isArray(jobsRes.data) || !Array.isArray(ticketsRes.data)) {
+        return fail(new Error('The unbilled applications read returned no list'));
+      }
+
+      setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date', 'total_price_cents'));
+      setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
+      setLoadFailed(false);
+      setLoading(false);
+      return true;
+    } catch (err: unknown) {
+      return fail(err);
+    }
   }, [toast]);
 
   const refreshAndReconcile = useCallback(async () => {
@@ -336,7 +362,7 @@ export default function UnbilledApplicationsPanel() {
         <div>
           <h2 className="text-xl font-semibold font-heading text-nav-dark">Unbilled Applications</h2>
           <p className="text-xs text-secondary mt-0.5">
-            Applied work that has not been turned into a field invoice yet — {totalUnbilled} item(s) across 2 billing backlogs.
+            Applied work that has not been turned into a field invoice yet{loadFailed ? '.' : ` — ${totalUnbilled} item(s) across 2 billing backlogs.`}
           </p>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:flex">
@@ -349,7 +375,7 @@ export default function UnbilledApplicationsPanel() {
         </div>
       </div>
 
-      {lastCreatedMessage && (
+      {lastCreatedMessage && !loadFailed && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
             <CheckCircle2 className="w-5 h-5 text-crx-green shrink-0" />
@@ -368,6 +394,15 @@ export default function UnbilledApplicationsPanel() {
         </div>
       )}
 
+      {loadFailed ? (
+        <Card>
+          <LoadFailedState
+            title="Unbilled applications could not be loaded"
+            onRetry={() => { void refreshAndReconcile(); }}
+          />
+        </Card>
+      ) : (
+      <>
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {sections.map((s) => (
@@ -455,6 +490,8 @@ export default function UnbilledApplicationsPanel() {
           </div>
         </Card>
       ))}
+      </>
+      )}
 
       <ConfirmModal
         open={pendingJobInvoice !== null}

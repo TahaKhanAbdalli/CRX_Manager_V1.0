@@ -273,9 +273,10 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     confirmCreateInvoice();
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load unbilled applications'));
-    const createButton = await screen.findByRole('button', { name: 'Create Invoice' });
-    expect(createButton).toBeDisabled();
-    fireEvent.click(createButton);
+    // To-Do 10.5: the failed refresh shows "could not be loaded", never the older rows.
+    expect(await screen.findByText('Unbilled applications could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText('J-TRANSFER-4004')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create Invoice' })).toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Create Invoice' })).toBeNull();
     expect(mockRpc).toHaveBeenCalledTimes(1);
     expect(mockResetKey).not.toHaveBeenCalled();
@@ -319,12 +320,10 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Bill next (1 left)' }));
     confirmCreateInvoice();
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load unbilled applications'));
-    await screen.findByText('J-TRANSFER-4005');
-    expect(mockRpc).toHaveBeenCalledTimes(2);
-
-    const billNext = screen.getByRole('button', { name: 'Bill next (1 left)' });
-    expect(billNext).toBeDisabled();
-    fireEvent.click(billNext);
+    // To-Do 10.5: the failed refresh shows "could not be loaded" with no rows and no Bill next.
+    expect(await screen.findByText('Unbilled applications could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText('J-TRANSFER-4005')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Bill next/ })).toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Create Invoice' })).toBeNull();
     expect(mockRpc).toHaveBeenCalledTimes(2);
 

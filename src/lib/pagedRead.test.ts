@@ -267,6 +267,12 @@ describe('pageWithList', () => {
     expect(await fetchAllRows<Row>(() => pageWithList(noList()))).toEqual({ data: null, error: { message: PAGE_RETURNED_NO_LIST } });
   });
 
+  it('fails a read whose page answers with something other than a list, which fetchAllRows alone throws on', async () => {
+    const notList = () => Promise.resolve({ data: { unexpected: true } as unknown as Row[], error: null, count: null });
+    await expect(fetchAllRows<Row>(notList)).rejects.toThrow();
+    expect(await fetchAllRows<Row>(() => pageWithList(notList()))).toEqual({ data: null, error: { message: PAGE_RETURNED_NO_LIST } });
+  });
+
   it('passes a real page, an empty page and an error through unchanged', async () => {
     const page = { data: [{ id: 'a' }], error: null, count: 1 };
     expect(await pageWithList(Promise.resolve(page))).toBe(page);
