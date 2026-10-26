@@ -654,7 +654,7 @@ DECLARE
   v_q jsonb;
   v_c jsonb;
   v_child_table text;
-  v_sql text;
+  v_verb text;
   v_sections jsonb;
 BEGIN
   IF v_quote IS NULL OR v_customer IS NULL OR v_product IS NULL THEN
@@ -669,14 +669,22 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated role could not read owned parent versions';
   END IF;
 
+  -- Each table/verb pair runs one literal EXECUTE (the live-data guard refuses EXECUTE of a
+  -- variable); an unlisted pair raises CASE_NOT_FOUND, which is not caught below, so it fails.
   FOREACH v_child_table IN ARRAY ARRAY['quote_sections', 'quote_items', 'customer_addresses'] LOOP
-    FOREACH v_sql IN ARRAY ARRAY[
-      format('INSERT INTO public.%I DEFAULT VALUES', v_child_table),
-      format('UPDATE public.%I SET id = id WHERE false', v_child_table),
-      format('DELETE FROM public.%I WHERE false', v_child_table)
-    ] LOOP
+    FOREACH v_verb IN ARRAY ARRAY['insert', 'update', 'delete'] LOOP
       BEGIN
-        EXECUTE v_sql;
+        CASE v_child_table || ' ' || v_verb
+          WHEN 'quote_sections insert' THEN EXECUTE 'INSERT INTO public.quote_sections DEFAULT VALUES';
+          WHEN 'quote_sections update' THEN EXECUTE 'UPDATE public.quote_sections SET id = id WHERE false';
+          WHEN 'quote_sections delete' THEN EXECUTE 'DELETE FROM public.quote_sections WHERE false';
+          WHEN 'quote_items insert' THEN EXECUTE 'INSERT INTO public.quote_items DEFAULT VALUES';
+          WHEN 'quote_items update' THEN EXECUTE 'UPDATE public.quote_items SET id = id WHERE false';
+          WHEN 'quote_items delete' THEN EXECUTE 'DELETE FROM public.quote_items WHERE false';
+          WHEN 'customer_addresses insert' THEN EXECUTE 'INSERT INTO public.customer_addresses DEFAULT VALUES';
+          WHEN 'customer_addresses update' THEN EXECUTE 'UPDATE public.customer_addresses SET id = id WHERE false';
+          WHEN 'customer_addresses delete' THEN EXECUTE 'DELETE FROM public.customer_addresses WHERE false';
+        END CASE;
         RAISE EXCEPTION 'SMOKE_FAIL: authenticated direct child DML succeeded on %', v_child_table;
       EXCEPTION WHEN insufficient_privilege THEN
         NULL;

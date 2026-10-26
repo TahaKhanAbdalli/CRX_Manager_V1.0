@@ -12,6 +12,10 @@
 --   * get_inventory_position gives a sales rep the same rows as an admin, none carrying current_cost.
 -- The below-cost refusal message and save_quote's reply need a write to exercise, so they are proven
 -- only in the disposable database (scripts/smoke/prove-cost-margin-admin-only-rpc-leaks-real-schema.mjs).
+-- Each report runs as one literal EXECUTE '…' INTO v_count, picked by its number in a CASE: the
+-- live-data guard refuses EXECUTE of a variable (it cannot read text built at run time). v_reports
+-- holds the same text, used only to name the report in failure messages; branch N of every CASE
+-- runs exactly v_reports[N].
 DO $$
 DECLARE
   v_reports text[] := ARRAY[
@@ -23,6 +27,7 @@ DECLARE
     'SELECT count(*) FROM (SELECT public.dashboard_summary()) s'
   ];
   v_report text;
+  v_i integer;
   v_role text;
   v_uid uuid;
   v_admin uuid;
@@ -84,13 +89,21 @@ BEGIN
     IF v_role = 'admin' THEN v_admin := v_uid; END IF;
     IF v_role = 'sales_rep' THEN v_rep := v_uid; END IF;
 
-    FOREACH v_report IN ARRAY v_reports LOOP
+    FOR v_i IN 1..array_length(v_reports, 1) LOOP
+      v_report := v_reports[v_i];
       v_refused := false;
       BEGIN
         PERFORM set_config('request.jwt.claims', json_build_object('sub', v_uid, 'role', 'authenticated')::text, true);
         PERFORM set_config('request.jwt.claim.sub', v_uid::text, true);
         EXECUTE 'SET LOCAL ROLE authenticated';
-        EXECUTE v_report INTO v_count;
+        CASE v_i
+          WHEN 1 THEN EXECUTE 'SELECT count(*) FROM public.get_gross_sales_report(''2000-01-01'', ''2100-01-01'', ''product'')' INTO v_count;
+          WHEN 2 THEN EXECUTE 'SELECT count(*) FROM public.get_inventory_cost_report()' INTO v_count;
+          WHEN 3 THEN EXECUTE 'SELECT count(*) FROM public.get_field_profitability(NULL)' INTO v_count;
+          WHEN 4 THEN EXECUTE 'SELECT count(*) FROM public.get_profitability_report(''product'')' INTO v_count;
+          WHEN 5 THEN EXECUTE 'SELECT count(*) FROM public.get_bottom_line_pnl(''2000-01-01'', ''2100-01-01'')' INTO v_count;
+          WHEN 6 THEN EXECUTE 'SELECT count(*) FROM (SELECT public.dashboard_summary()) s' INTO v_count;
+        END CASE;
         EXECUTE 'RESET ROLE';
       EXCEPTION WHEN OTHERS THEN
         EXECUTE 'RESET ROLE';
@@ -109,13 +122,21 @@ BEGIN
 
   -- A signed-in id with no active profile, and a signed-out visitor.
   v_uid := gen_random_uuid();
-  FOREACH v_report IN ARRAY v_reports LOOP
+  FOR v_i IN 1..array_length(v_reports, 1) LOOP
+    v_report := v_reports[v_i];
     v_refused := false;
     BEGIN
       PERFORM set_config('request.jwt.claims', json_build_object('sub', v_uid, 'role', 'authenticated')::text, true);
       PERFORM set_config('request.jwt.claim.sub', v_uid::text, true);
       EXECUTE 'SET LOCAL ROLE authenticated';
-      EXECUTE v_report INTO v_count;
+      CASE v_i
+        WHEN 1 THEN EXECUTE 'SELECT count(*) FROM public.get_gross_sales_report(''2000-01-01'', ''2100-01-01'', ''product'')' INTO v_count;
+        WHEN 2 THEN EXECUTE 'SELECT count(*) FROM public.get_inventory_cost_report()' INTO v_count;
+        WHEN 3 THEN EXECUTE 'SELECT count(*) FROM public.get_field_profitability(NULL)' INTO v_count;
+        WHEN 4 THEN EXECUTE 'SELECT count(*) FROM public.get_profitability_report(''product'')' INTO v_count;
+        WHEN 5 THEN EXECUTE 'SELECT count(*) FROM public.get_bottom_line_pnl(''2000-01-01'', ''2100-01-01'')' INTO v_count;
+        WHEN 6 THEN EXECUTE 'SELECT count(*) FROM (SELECT public.dashboard_summary()) s' INTO v_count;
+      END CASE;
       EXECUTE 'RESET ROLE';
     EXCEPTION WHEN OTHERS THEN
       EXECUTE 'RESET ROLE';
@@ -133,7 +154,14 @@ BEGIN
       PERFORM set_config('request.jwt.claims', '', true);
       PERFORM set_config('request.jwt.claim.sub', '', true);
       EXECUTE 'SET LOCAL ROLE anon';
-      EXECUTE v_report INTO v_count;
+      CASE v_i
+        WHEN 1 THEN EXECUTE 'SELECT count(*) FROM public.get_gross_sales_report(''2000-01-01'', ''2100-01-01'', ''product'')' INTO v_count;
+        WHEN 2 THEN EXECUTE 'SELECT count(*) FROM public.get_inventory_cost_report()' INTO v_count;
+        WHEN 3 THEN EXECUTE 'SELECT count(*) FROM public.get_field_profitability(NULL)' INTO v_count;
+        WHEN 4 THEN EXECUTE 'SELECT count(*) FROM public.get_profitability_report(''product'')' INTO v_count;
+        WHEN 5 THEN EXECUTE 'SELECT count(*) FROM public.get_bottom_line_pnl(''2000-01-01'', ''2100-01-01'')' INTO v_count;
+        WHEN 6 THEN EXECUTE 'SELECT count(*) FROM (SELECT public.dashboard_summary()) s' INTO v_count;
+      END CASE;
       EXECUTE 'RESET ROLE';
     EXCEPTION WHEN insufficient_privilege THEN
       EXECUTE 'RESET ROLE';

@@ -6,6 +6,7 @@ import {
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
@@ -193,6 +194,9 @@ export default function FieldAppSplitInvoiceEditor() {
 
   // Flag gate: null = still reading, false = OFF (render notice), true = ON (render editor).
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
+  // A failed setting read is not "turned off" (To-Do 10.5): it says so, with Try again.
+  const [flagReadFailed, setFlagReadFailed] = useState(false);
+  const [flagReadAttempt, setFlagReadAttempt] = useState(0);
 
   // Picker data
   // Rate unit is a PICKER, not free text, so an operator can no longer invent a unit the
@@ -249,6 +253,10 @@ export default function FieldAppSplitInvoiceEditor() {
   const [posted, setPosted] = useState(false);
   // #H: while a reopened set loads, and to lock the read-only reopen view.
   const [reopenLoading, setReopenLoading] = useState(false);
+  // The saved set whose reopen failed: "could not be loaded" with Try again in place of an empty
+  // review card (To-Do 10.5).
+  const [reopenFailedId, setReopenFailedId] = useState<string | null>(null);
+  const [reopenAttempt, setReopenAttempt] = useState(0);
   // Dirty guard (Codex P1 #5): Post commits the last SAVED draft from the DB. After a Save,
   // editing any field/line/percentage/price/header must disable Post until a re-save — else the
   // operator posts stale amounts. Track the saved input signature vs the current one.
@@ -266,20 +274,23 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('app_settings')
           .select('setting_value')
           .eq('setting_key', SPLIT_BILLING_SETTING_KEY)
           .maybeSingle();
+        if (error) throw error;
         if (!cancelled) {
           setFlagEnabled(parseSplitBillingEnabled((data as { setting_value?: string } | null)?.setting_value ?? null));
         }
-      } catch {
-        if (!cancelled) setFlagEnabled(false);
+      } catch (err) {
+        if (cancelled) return;
+        Sentry.captureException(err, { extra: { context: 'load_split_billing_setting' } });
+        setFlagReadFailed(true);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [flagReadAttempt]);
 
   // ── Load pickers once the feature is enabled ─────────────────────────────
   useEffect(() => {
@@ -617,8 +628,10 @@ export default function FieldAppSplitInvoiceEditor() {
       .not('invoice_group_id', 'is', null)
       .order('invoice_number');
     if (invErr) throw invErr;
+    // A reply with no list is a failed read, not a set with no invoices (To-Do 10.5).
+    if (!Array.isArray(invRows)) throw new Error('The split invoice read returned no list');
     if (stale()) return false;
-    const invoices = ((invRows as Array<Record<string, unknown>> | null) ?? []).map((r) => ({
+    const invoices = (invRows as Array<Record<string, unknown>>).map((r) => ({
       id: r.id as string,
       invoice_number: (r.invoice_number as string | null) ?? null,
       customer_id: r.customer_id as string,
@@ -626,7 +639,7 @@ export default function FieldAppSplitInvoiceEditor() {
       send_disposition: ((r.send_disposition as string) === 'suppressed_zero_total' ? 'suppressed_zero_total' : 'normal') as ResultInvoice['send_disposition'],
       status: (r.status as string) || 'draft',
     }));
-    const loadedVersions = ((invRows as Array<{ id: string; invoice_group_id: string | null; invoice_post_version?: string | null }> | null) ?? [])
+    const loadedVersions = (invRows as Array<{ id: string; invoice_group_id: string | null; invoice_post_version?: string | null }>)
       .map((r) => ({ id: r.id, invoice_group_id: r.invoice_group_id, invoice_post_version: r.invoice_post_version ?? null }));
     setResultInvoices(invoices);
     // "Posted" means every child is in a COMMITTED status — NOT merely "not draft" (Codex round-3
@@ -653,8 +666,9 @@ export default function FieldAppSplitInvoiceEditor() {
       .select('id, invoice_id, description')
       .in('invoice_id', invoiceIds);
     if (itemErr) throw itemErr; // Codex r5 P1: a swallowed read error must not leave Post enabled on unseen data
+    if (!Array.isArray(itemRows)) throw new Error('The split invoice line read returned no list');
     const itemMap = new Map<string, { invoice_id: string; description: string }>();
-    ((itemRows as Array<Record<string, unknown>> | null) ?? []).forEach((it) => {
+    (itemRows as Array<Record<string, unknown>>).forEach((it) => {
       itemMap.set(it.id as string, { invoice_id: it.invoice_id as string, description: (it.description as string) || '' });
     });
 
@@ -667,7 +681,8 @@ export default function FieldAppSplitInvoiceEditor() {
       .select('invoice_item_id, customer_id, unit_price_cents, amount_cents')
       .in('invoice_item_id', itemIds);
     if (shareErr) throw shareErr; // Codex r5 P1: surface, don't silently render an incomplete split
-    const shares: ResultShare[] = ((shareRows as Array<Record<string, unknown>> | null) ?? []).map((s) => {
+    if (!Array.isArray(shareRows)) throw new Error('The split line share read returned no list');
+    const shares: ResultShare[] = (shareRows as Array<Record<string, unknown>>).map((s) => {
       const item = itemMap.get(s.invoice_item_id as string);
       return {
         invoice_id: item?.invoice_id ?? '',
@@ -835,6 +850,14 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       setReopenLoading(true);
+      setReopenFailedId(null);
+      // This editor stays mounted between saved sets: drop the previous set's review card and
+      // posting state, so none of it shows under this set's address.
+      setResultInvoices([]);
+      setResultShares([]);
+      setPosted(false);
+      setInvoiceGroupId(null);
+      postVersionsRef.current = [];
       try {
         const { data: setRow, error } = await supabaseUntyped
           .from('field_app_billing_sets')
@@ -869,15 +892,26 @@ export default function FieldAppSplitInvoiceEditor() {
         const readbackComplete = await loadResults(row.id);
         if (readbackComplete) setInvoiceGroupId(row.invoice_group_id ?? null);
       } catch (err) {
-        if (!cancelled) toast('error', sanitizeError(err));
+        if (cancelled) return;
+        Sentry.captureException(err, { extra: { context: 'reopen_split_invoice' } });
+        setReopenFailedId(routeSetId);
       } finally {
         if (!cancelled) setReopenLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [flagEnabled, routeSetId, loadResults, navigate, toast]);
+  }, [flagEnabled, routeSetId, reopenAttempt, loadResults, navigate, toast]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  if (flagReadFailed) {
+    return (
+      <LoadFailedState
+        title="Split billing could not be loaded"
+        onRetry={() => { setFlagReadFailed(false); setFlagReadAttempt((n) => n + 1); }}
+      />
+    );
+  }
+
   if (flagEnabled === null) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -910,6 +944,20 @@ export default function FieldAppSplitInvoiceEditor() {
     );
   }
 
+  if (isReopen && reopenFailedId === routeSetId) {
+    return (
+      <LoadFailedState
+        title="This split billing draft could not be loaded"
+        onRetry={() => setReopenAttempt((n) => n + 1)}
+      />
+    );
+  }
+
+  // A reopened set is still loading, or this mounted editor still holds the previous saved set's
+  // results (it is not remounted between /split-billing/:id addresses, and those are cleared only
+  // once the reopen effect runs): show neither its review card nor its Post.
+  const reopenBusy = isReopen && (reopenLoading || billingSetId !== routeSetId);
+
   const resultsByCustomer = resultInvoices.map((inv) => ({
     invoice: inv,
     lines: resultShares.filter((s) => s.invoice_id === inv.id),
@@ -940,7 +988,7 @@ export default function FieldAppSplitInvoiceEditor() {
             variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
-            disabled={!invoiceGroupId || posted || dirtyAfterSave || saving || posting}
+            disabled={!invoiceGroupId || reopenBusy || posted || dirtyAfterSave || saving || posting}
             loading={posting}
             onClick={openPostConfirm}
             title={dirtyAfterSave ? 'You have unsaved changes — re-save the draft before posting.' : undefined}
@@ -956,13 +1004,13 @@ export default function FieldAppSplitInvoiceEditor() {
         </div>
       )}
 
-      {isReopen && reopenLoading && (
+      {reopenBusy && (
         <div className="flex items-center justify-center py-10">
           <div className="w-6 h-6 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
-      {isReopen && !reopenLoading && (
+      {isReopen && !reopenBusy && (
         <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800">
           {posted
             ? 'This split invoice group is posted and read-only.'
@@ -1322,7 +1370,7 @@ export default function FieldAppSplitInvoiceEditor() {
       </>)}
 
       {/* Authoritative results after save */}
-      {resultInvoices.length > 0 && (
+      {!reopenBusy && resultInvoices.length > 0 && (
         <Card>
           <CardHeader title="Split Result (server-computed)" accent={posted ? 'Posted' : 'Draft'} />
           <div className="space-y-4">

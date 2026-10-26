@@ -390,7 +390,11 @@ BEGIN
   -- --------------------------------------------------------------------------------------------
   -- 9b. Every other wrapper refuses a keyless call too (apply_write_off was step 4), including a
   --     direct keyless apply_prepay_to_invoice outside the batch path's transaction marker.
+  --     Each call is written out plainly (branch N of the CASE), because the live-data guard
+  --     refuses EXECUTE of a variable; v_sql is the same call as text, used only to name it in
+  --     failure messages.
   -- --------------------------------------------------------------------------------------------
+  v_i := 0;
   FOREACH v_sql IN ARRAY ARRAY[
     format('SELECT public.void_payment(%L::uuid, %L, %L::uuid, NULL)', v_set_2, '[SMOKE] keyless', v_admin),
     format('SELECT public.delete_prepay_credit(%L::uuid, %L, %L::uuid, NULL)', v_credit_2, '[SMOKE] keyless', v_admin),
@@ -403,8 +407,21 @@ BEGIN
            jsonb_build_array(jsonb_build_object('prepay_credit_id', v_credit_3, 'invoice_id', v_inv[7], 'amount_cents', 100)), v_admin),
     format('SELECT public.batch_void_invoices(ARRAY[%L::uuid], %L, %L::uuid, NULL)', v_inv[7], '[SMOKE] keyless', v_admin)
   ] LOOP
+    v_i := v_i + 1;
     BEGIN
-      EXECUTE v_sql;
+      CASE v_i
+        WHEN 1 THEN PERFORM public.void_payment(v_set_2, '[SMOKE] keyless', v_admin, NULL);
+        WHEN 2 THEN PERFORM public.delete_prepay_credit(v_credit_2, '[SMOKE] keyless', v_admin, NULL);
+        WHEN 3 THEN PERFORM public.edit_prepay_credit(v_credit_2, 1000, NULL, NULL, NULL, v_admin, NULL);
+        WHEN 4 THEN PERFORM public.reverse_write_off(v_wo_2, '[SMOKE] keyless', v_admin, NULL);
+        WHEN 5 THEN PERFORM public.apply_prepay_to_invoice(v_credit_3, v_inv[7], 100, v_admin, NULL);
+        WHEN 6 THEN PERFORM public.create_prepay_check_splits(v_customer, '[SMOKE]-RPB-KEYLESS-' || v_suffix,
+                      '[{"label":"A","amount_cents":100}]'::jsonb, v_admin, NULL, 100);
+        WHEN 7 THEN PERFORM public.batch_apply_prepayments(
+                      jsonb_build_array(jsonb_build_object('prepay_credit_id', v_credit_3, 'invoice_id', v_inv[7], 'amount_cents', 100)),
+                      v_admin, NULL);
+        WHEN 8 THEN PERFORM public.batch_void_invoices(ARRAY[v_inv[7]], '[SMOKE] keyless', v_admin, NULL);
+      END CASE;
       RAISE EXCEPTION 'SMOKE_FAIL: a keyless call ran: %', v_sql;
     EXCEPTION WHEN OTHERS THEN
       IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;

@@ -27,6 +27,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import Modal from '../components/ui/Modal';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
 import {
@@ -291,6 +292,9 @@ export default function FieldApplicationInvoice() {
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [loadedInvoice, setLoadedInvoice] = useState<{ id: string; route: number } | null>(null);
+  // The load (invoice id and route) that failed: the editor is replaced by "could not be loaded"
+  // (To-Do 10.5), so Save cannot write an empty chemical or location list over the real one.
+  const [loadFailed, setLoadFailed] = useState<{ id: string; route: number } | null>(null);
   const [filedDate, setFiledDate] = useState<string | null>(null);
   // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
   // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
@@ -971,7 +975,9 @@ export default function FieldApplicationInvoice() {
     return invoiceNumber || null;
   }, [jobNumber, siblings, invoiceNumber]);
 
-  const fetchInvoice = useCallback(async () => {
+  // Throws when a read the editor depends on fails or answers with no list; fetchInvoice below
+  // turns that into the failed state.
+  const loadInvoice = useCallback(async () => {
     if (!id || invoiceLoadRef.current.id !== id) return;
     const request = ++invoiceLoadRef.current.request;
     const isCurrentLoad = () => invoiceLoadRef.current.id === id
@@ -989,7 +995,8 @@ export default function FieldApplicationInvoice() {
       .eq('id', id)
       .maybeSingle();
     if (!isCurrentLoad()) return;
-    if (chkErr || !chk) {
+    if (chkErr) throw chkErr;
+    if (!chk) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
       return;
@@ -1010,11 +1017,15 @@ export default function FieldApplicationInvoice() {
     const hasJobOrBlend = (chk as { job_id?: string | null }).job_id
         || (chk as { blend_ticket_id?: string | null }).blend_ticket_id;
     if (hasJobOrBlend) {
-      const { count: locCount } = await supabase
+      const { count: locCount, error: locCountError } = await supabase
         .from('field_app_locations')
         .select('field_id', { count: 'exact', head: true })
         .eq('invoice_id', id);
       if (!isCurrentLoad()) return;
+      // An unread count is not "no locations": that would send a transferred per-acre invoice
+      // to the quantity-line editor.
+      if (locCountError) throw locCountError;
+      if (typeof locCount !== 'number') throw new Error('The field location count read returned no count');
       if (!locCount || locCount === 0) {
         navigate(`/field-invoices/${id}`, { replace: true });
         return;
@@ -1032,6 +1043,8 @@ export default function FieldApplicationInvoice() {
 
     if (!isCurrentLoad()) return;
 
+    // .single() reports a missing (or hidden) row as PGRST116; any other error is a failed read.
+    if (error && error.code !== 'PGRST116') throw error;
     if (error || !rawInv) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
@@ -1042,16 +1055,7 @@ export default function FieldApplicationInvoice() {
     // the editor: re-saving it would write zero cost onto every chemical line.
     // The view's generated types make every column nullable; this row was read by its id.
     const loadedInv = { ...rawInv, id };
-    let inv = loadedInv;
-    try {
-      inv = (await withAdminCost('invoices', loadedInv, isAdmin)) ?? loadedInv;
-    } catch (costErr) {
-      if (!isCurrentLoad()) return;
-      Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_costs' } });
-      toast('error', 'Failed to load invoice');
-      navigate('/field-invoices');
-      return;
-    }
+    const inv = (await withAdminCost('invoices', loadedInv, isAdmin)) ?? loadedInv;
     if (!isCurrentLoad()) return;
 
     const invoice = inv as Record<string, unknown>;
@@ -1153,12 +1157,15 @@ export default function FieldApplicationInvoice() {
     // Customers tab can render the ChemMan "<jobnumber>-<NNN>" split-ref. A pure
     // engine-built invoice (no job_id) falls back to the primary invoice number.
     if (srcJobId) {
-      const { data: jobRow } = await supabase
+      const { data: jobRow, error: jobError } = await supabase
         .from('jobs')
         .select('job_number, status, job_date')
         .eq('id', srcJobId)
         .maybeSingle();
       if (!isCurrentLoad()) return;
+      // An unread job would quietly date the PHI check and the post notice from the invoice.
+      if (jobError) throw jobError;
+      if (!jobRow) throw new Error('The source job read returned no row');
       setJobNumber((jobRow as { job_number?: string } | null)?.job_number ?? null);
       // #41: source job status gates the post-notification action (completed/invoiced).
       setJobStatus(((jobRow as { status?: string } | null)?.status as JobStatus | undefined) ?? null);
@@ -1237,7 +1244,6 @@ export default function FieldApplicationInvoice() {
       cents && cents > 0 ? (cents / 100).toFixed(2) : '';
 
     // If grouped, load sibling invoices for the banner
-    let sibsError: unknown = null;
     if (groupId) {
       const { data: sibs, error: sibsReadError } = await supabase
         .from(INVOICES_POSTABLE)
@@ -1246,35 +1252,35 @@ export default function FieldApplicationInvoice() {
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (!isCurrentLoad()) return;
-      // A failed sibling read leaves the group map incomplete, so Post stays unauthorized below.
-      sibsError = sibsReadError;
-      if (sibs) {
-        // Post sends every member this load saw; this invoice keeps the version read with its row.
-        for (const s of sibs as Array<{ id: string; invoice_post_version?: string | null }>) {
-          if (s.id !== id) loadedVersions[s.id] = s.invoice_post_version ?? null;
-        }
-        setSiblings(
-          (sibs as Array<Record<string, unknown>>).map((s) => ({
-            id: s.id as string,
-            invoice_number: (s.invoice_number as string) || '',
-            customer_id: s.customer_id as string,
-            customer_name: ((s.customer as { farm_name?: string } | null)?.farm_name) || '',
-            total_amount_cents: (s.total_amount_cents as number) || 0,
-            status: (s.status as InvoiceStatus) || 'draft',
-          }))
-        );
-        // #33: Discount Earned draft for the whole group, keyed by each member's
-        // CUSTOMER_ID (the key the Customers-tab editor reads/writes). One invoice
-        // row per customer in a split, so customer_id is a stable 1:1 key.
-        const discMap: Record<string, { dollars: string; date: string }> = {};
-        (sibs as Array<Record<string, unknown>>).forEach((s) => {
-          discMap[s.customer_id as string] = {
-            dollars: centsToDollars(s.discount_earned_cents as number | null),
-            date: (s.discount_date as string | null) || '',
-          };
-        });
-        setDiscountByCustomer(discMap);
+      // Unread siblings would let a group with a posted member be edited here, and Save would
+      // zero every member's Discount Earned.
+      if (sibsReadError) throw sibsReadError;
+      if (!Array.isArray(sibs)) throw new Error('The split group read returned no list');
+      // Post sends every member this load saw; this invoice keeps the version read with its row.
+      for (const s of sibs as Array<{ id: string; invoice_post_version?: string | null }>) {
+        if (s.id !== id) loadedVersions[s.id] = s.invoice_post_version ?? null;
       }
+      setSiblings(
+        (sibs as Array<Record<string, unknown>>).map((s) => ({
+          id: s.id as string,
+          invoice_number: (s.invoice_number as string) || '',
+          customer_id: s.customer_id as string,
+          customer_name: ((s.customer as { farm_name?: string } | null)?.farm_name) || '',
+          total_amount_cents: (s.total_amount_cents as number) || 0,
+          status: (s.status as InvoiceStatus) || 'draft',
+        }))
+      );
+      // #33: Discount Earned draft for the whole group, keyed by each member's
+      // CUSTOMER_ID (the key the Customers-tab editor reads/writes). One invoice
+      // row per customer in a split, so customer_id is a stable 1:1 key.
+      const discMap: Record<string, { dollars: string; date: string }> = {};
+      (sibs as Array<Record<string, unknown>>).forEach((s) => {
+        discMap[s.customer_id as string] = {
+          dollars: centsToDollars(s.discount_earned_cents as number | null),
+          date: (s.discount_date as string | null) || '',
+        };
+      });
+      setDiscountByCustomer(discMap);
     } else {
       setSiblings([]);
       // #33: single (un-split) invoice — its own Discount Earned, keyed by the
@@ -1302,27 +1308,27 @@ export default function FieldApplicationInvoice() {
       : await locQuery.eq('invoice_id', id);
 
     if (!isCurrentLoad()) return;
+    if (locsError) throw locsError;
+    if (!Array.isArray(locs)) throw new Error('The field location read returned no list');
 
-    if (locs) {
-      setLocations(
-        (locs as Array<Record<string, unknown>>).map((l) => {
-          const field = l.field as { field_name: string; crop_type: string | null; total_acres: number | null; measured_acres: number | null; override_acres: number | null; customer: { farm_name: string } | null } | null;
-          return {
-            field_id: l.field_id as string,
-            field_name: field?.field_name || 'Unknown',
-            map_number: l.map_number as number | null,
-            total_acres: (l.total_acres as number | null) ?? field?.total_acres ?? null,
-            system_acres: billableAcres(field?.override_acres, field?.measured_acres, field?.total_acres),
-            planted_acres: l.planted_acres as number | null,
-            applied_acres: l.applied_acres as number | null,
-            crop_type: (l.crop_type as string | null) ?? field?.crop_type ?? null,
-            wind_direction: l.wind_direction as string | null,
-            sort_order: l.sort_order as number,
-            customer_name: field?.customer?.farm_name,
-          };
-        })
-      );
-    }
+    setLocations(
+      (locs as Array<Record<string, unknown>>).map((l) => {
+        const field = l.field as { field_name: string; crop_type: string | null; total_acres: number | null; measured_acres: number | null; override_acres: number | null; customer: { farm_name: string } | null } | null;
+        return {
+          field_id: l.field_id as string,
+          field_name: field?.field_name || 'Unknown',
+          map_number: l.map_number as number | null,
+          total_acres: (l.total_acres as number | null) ?? field?.total_acres ?? null,
+          system_acres: billableAcres(field?.override_acres, field?.measured_acres, field?.total_acres),
+          planted_acres: l.planted_acres as number | null,
+          applied_acres: l.applied_acres as number | null,
+          crop_type: (l.crop_type as string | null) ?? field?.crop_type ?? null,
+          wind_direction: l.wind_direction as string | null,
+          sort_order: l.sort_order as number,
+          customer_name: field?.customer?.farm_name,
+        };
+      })
+    );
 
     const { data: rawItems, error: itemsError } = await supabase
       .from('invoice_items')
@@ -1331,82 +1337,78 @@ export default function FieldApplicationInvoice() {
       .order('sort_order');
 
     if (!isCurrentLoad()) return;
-    let items = rawItems;
-    if (items) {
-      try {
-        items = await withAdminCosts('invoice_items', items, isAdmin);
-      } catch (costErr) {
-        if (!isCurrentLoad()) return;
-        Sentry.captureException(costErr, { tags: { source: 'read', action: 'load_field_invoice_item_costs' } });
-        toast('error', 'Failed to load invoice');
-        navigate('/field-invoices');
-        return;
-      }
-      if (!isCurrentLoad()) return;
-    }
+    // A failed line read must not leave an editable invoice with no chemicals: Save would write
+    // that empty list over the real lines.
+    if (itemsError) throw itemsError;
+    if (!Array.isArray(rawItems)) throw new Error('The invoice line read returned no list');
+    const items = await withAdminCosts('invoice_items', rawItems, isAdmin);
+    if (!isCurrentLoad()) return;
 
-    if (items) {
-      // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
-      // label fields (max_label_rate / unit / rei / phi) from products for the lines that
-      // have a product_id. Without this, a REOPENED over-label invoice would read as
-      // 'no_label_max' and block mode would not require an override. A failed/empty fetch
-      // degrades gracefully (no label data => the line shows "no label max on file").
-      const productIds = Array.from(
-        new Set((items as Array<Record<string, unknown>>).map((it) => it.product_id as string | null).filter((x): x is string => !!x)),
-      );
-      const labelByProduct = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }>();
-      if (productIds.length > 0) {
-        const { data: prodRows } = await supabase
-          .from('products')
-          .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
-          .in('id', productIds);
-        if (!isCurrentLoad()) return;
-        for (const p of (prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }> | null) ?? []) {
-          labelByProduct.set(p.id, {
-            max_label_rate: p.max_label_rate,
-            max_label_rate_unit: p.max_label_rate_unit,
-            rei_hours: p.rei_hours,
-            phi_days: p.phi_days,
-          });
-        }
+    // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
+    // label fields (max_label_rate / unit / rei / phi) from products for the lines that
+    // have a product_id. Without this, a REOPENED over-label invoice would read as
+    // 'no_label_max' and block mode would not require an override. A failed read fails the
+    // load, since it would read the same way.
+    const productIds = Array.from(
+      new Set((items as Array<Record<string, unknown>>).map((it) => it.product_id as string | null).filter((x): x is string => !!x)),
+    );
+    const labelByProduct = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }>();
+    if (productIds.length > 0) {
+      const { data: prodRows, error: prodError } = await supabase
+        .from('products')
+        .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
+        .in('id', productIds);
+      if (!isCurrentLoad()) return;
+      if (prodError) throw prodError;
+      if (!Array.isArray(prodRows)) throw new Error('The product label read returned no list');
+      // Every staff member reads every product, so a missing one is a bad read: its line would
+      // look like it has no label maximum.
+      if (prodRows.length < productIds.length) throw new Error('The product label read left out a product');
+      for (const p of prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }>) {
+        labelByProduct.set(p.id, {
+          max_label_rate: p.max_label_rate,
+          max_label_rate_unit: p.max_label_rate_unit,
+          rei_hours: p.rei_hours,
+          phi_days: p.phi_days,
+        });
       }
-      setChemicals(
-        (items as Array<Record<string, unknown>>).map((it, idx) => {
-          const pid = it.product_id as string | null;
-          const label = pid ? (labelByProduct.get(pid) ?? null) : null;
-          return {
-            id: (it.id as string) || `chem_${idx}`,
-            product_id: it.product_id as string | null,
-            product_name: (it.description as string) || '',
-            rate_per_acre: it.rate_per_acre as number | null,
-            rate_unit: (it.rate_unit as string) || 'oz',
-            quantity: (it.quantity as number) || 0,
-            unit: (it.unit_size as string) || 'oz',
-            unit_price_cents: (it.unit_price_cents as number) || 0,
-            price_unit: (it.unit_size as string) || 'oz',
-            extended_cents: (it.extended_cents as number) || 0,
-            // Absent for non-admins; the server works out their cost on save.
-            unit_cost_cents: (it.cost_cents as number) || 0,
-            sort_order: (it.sort_order as number) || idx,
-            // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
-            warehouse: (it.warehouse as string | null) ?? null,
-            vendor: (it.vendor as string | null) ?? null,
-            product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
-            epa_registration: (it.epa_registration as string | null) || undefined,
-            // U4 (Codex R4): rehydrate manual pricing — a persisted manual price
-            // (price_source='manual') or ANY product-less line (no tier fallback
-            // exists) must reload as manual_override=true, or the next save would
-            // treat the price as tier-derived and zero a custom line's charge.
-            manual_override: (it.price_source as string | null) === 'manual' || it.product_id == null,
-            // §5: hydrated label data (null when the product has none / fetch failed).
-            max_label_rate: label?.max_label_rate ?? null,
-            max_label_rate_unit: label?.max_label_rate_unit ?? null,
-            rei_hours: label?.rei_hours ?? null,
-            phi_days: label?.phi_days ?? null,
-          };
-        })
-      );
     }
+    setChemicals(
+      (items as Array<Record<string, unknown>>).map((it, idx) => {
+        const pid = it.product_id as string | null;
+        const label = pid ? (labelByProduct.get(pid) ?? null) : null;
+        return {
+          id: (it.id as string) || `chem_${idx}`,
+          product_id: it.product_id as string | null,
+          product_name: (it.description as string) || '',
+          rate_per_acre: it.rate_per_acre as number | null,
+          rate_unit: (it.rate_unit as string) || 'oz',
+          quantity: (it.quantity as number) || 0,
+          unit: (it.unit_size as string) || 'oz',
+          unit_price_cents: (it.unit_price_cents as number) || 0,
+          price_unit: (it.unit_size as string) || 'oz',
+          extended_cents: (it.extended_cents as number) || 0,
+          // Absent for non-admins; the server works out their cost on save.
+          unit_cost_cents: (it.cost_cents as number) || 0,
+          sort_order: (it.sort_order as number) || idx,
+          // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
+          warehouse: (it.warehouse as string | null) ?? null,
+          vendor: (it.vendor as string | null) ?? null,
+          product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
+          epa_registration: (it.epa_registration as string | null) || undefined,
+          // U4 (Codex R4): rehydrate manual pricing — a persisted manual price
+          // (price_source='manual') or ANY product-less line (no tier fallback
+          // exists) must reload as manual_override=true, or the next save would
+          // treat the price as tier-derived and zero a custom line's charge.
+          manual_override: (it.price_source as string | null) === 'manual' || it.product_id == null,
+          // §5: hydrated label data (null when the product has none).
+          max_label_rate: label?.max_label_rate ?? null,
+          max_label_rate_unit: label?.max_label_rate_unit ?? null,
+          rei_hours: label?.rei_hours ?? null,
+          phi_days: label?.phi_days ?? null,
+        };
+      })
+    );
 
     const { data: shareData, error: sharesError } = await supabase
       .from('invoice_shares')
@@ -1415,30 +1417,33 @@ export default function FieldApplicationInvoice() {
       .order('sort_order');
 
     if (!isCurrentLoad()) return;
+    if (sharesError) throw sharesError;
+    if (!Array.isArray(shareData)) throw new Error('The invoice share read returned no list');
 
-    if (shareData) {
-      setShares(
-        (shareData as Array<Record<string, unknown>>).map((s) => ({
-          customer_id: s.customer_id as string,
-          customer_name: (s.customer_name as string) || '',
-          is_primary: (s.is_primary as boolean) || false,
-          total_acres: (s.acres as number) || 0,
-          split_pct: (s.split_percentage as number) || 0,
-        }))
-      );
-    }
+    setShares(
+      (shareData as Array<Record<string, unknown>>).map((s) => ({
+        customer_id: s.customer_id as string,
+        customer_name: (s.customer_name as string) || '',
+        is_primary: (s.is_primary as boolean) || false,
+        total_acres: (s.acres as number) || 0,
+        split_pct: (s.split_percentage as number) || 0,
+      }))
+    );
 
     // #24: Applied Info carry-over — read the source job's as-applied legal
     // record(s) for the read-only panel. Only when this invoice came from a job.
     if (srcJobId) {
-      const { data: recs } = await supabase
+      const { data: recs, error: recsError } = await supabase
         .from('job_applied_records')
         .select(APPLIED_RECORD_SELECT)
         .eq('job_id', srcJobId)
         .order('application_date', { ascending: false })
         .order('created_at', { ascending: false });
       if (!isCurrentLoad()) return;
-      setAppliedRecords((recs as JobAppliedRecordRow[]) ?? []);
+      // Unread records would say no as-applied record was entered on the job.
+      if (recsError) throw recsError;
+      if (!Array.isArray(recs)) throw new Error('The as-applied record read returned no list');
+      setAppliedRecords(recs as JobAppliedRecordRow[]);
     } else {
       setAppliedRecords([]);
     }
@@ -1463,14 +1468,33 @@ export default function FieldApplicationInvoice() {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
-    if (sibsError || locsError || itemsError || sharesError) {
-      Sentry.captureException(sibsError || locsError || itemsError || sharesError, { tags: { context: 'field_app_invoice_load' } });
-      toast('error', 'Some invoice details did not load. Reload the page before posting.');
-    } else {
-      postVersionsRef.current = loadedVersions;
-    }
+    postVersionsRef.current = loadedVersions;
     setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
   }, [id, toast, navigate, isAdmin]);
+
+  // Any failed read (or a reply with no list) shows "could not be loaded" with Try again in place
+  // of the editor (To-Do 10.5), including a reload after Save, Post, Unpost or Void. It never
+  // throws, so a failed reload is not reported as a failed save.
+  const fetchInvoice = useCallback(async () => {
+    // loadInvoice bumps the request counter before its first await, so this reads its own request.
+    const load = loadInvoice();
+    const started = { ...invoiceLoadRef.current };
+    try {
+      await load;
+    } catch (err) {
+      const current = invoiceLoadRef.current;
+      if (!id || current.id !== started.id || current.route !== started.route || current.request !== started.request) return;
+      Sentry.captureException(err instanceof Error ? err : new Error(sanitizeError(err)), { tags: { context: 'field_app_invoice_load' } });
+      postVersionsRef.current = {};
+      setLoadedInvoice(null);
+      setLoadFailed({ id, route: started.route });
+    }
+  }, [id, loadInvoice]);
+
+  const retryLoad = () => {
+    setLoadFailed(null);
+    void fetchInvoice();
+  };
 
   useEffect(() => {
     // Invalidate any in-flight load for the previous identity BEFORE resetting state,
@@ -1489,15 +1513,8 @@ export default function FieldApplicationInvoice() {
   }, [id]);
 
   useEffect(() => {
-    const startedRoute = invoiceLoadRef.current.route;
-    const expectedRequest = invoiceLoadRef.current.request + 1;
-    void fetchInvoice().catch(() => {
-      const current = invoiceLoadRef.current;
-      if (current.id !== id || current.route !== startedRoute || current.request !== expectedRequest) return;
-      toast('error', 'Failed to load invoice');
-      navigate('/field-invoices');
-    });
-  }, [fetchInvoice, id, toast, navigate]);
+    void fetchInvoice();
+  }, [fetchInvoice]);
 
   // U16b: surface fields using all-inclusive grower-share pricing. This follows the
   // currently selected/loaded locations, so it works for both a saved invoice and a
@@ -2896,6 +2913,11 @@ export default function FieldApplicationInvoice() {
   const handleCancel = () => {
     navigate('/field-invoices');
   };
+
+  // eslint-disable-next-line react-hooks/refs -- the failed load is bound to the route it ran under, like the gate below
+  if (!isNew && loadFailed?.id === id && loadFailed.route === invoiceLoadRef.current.route) {
+    return <LoadFailedState title="This invoice could not be loaded" onRetry={retryLoad} />;
+  }
 
   // eslint-disable-next-line react-hooks/refs -- route only advances in the [id] effect when id changes, and that render already shows Loading (id or route mismatch); a load then either ends in setLoadedInvoice (a re-render with the new route) or navigates away, so this gate cannot show a stale invoice
   if (!isNew && (loadedInvoice?.id !== id || loadedInvoice.route !== invoiceLoadRef.current.route)) {

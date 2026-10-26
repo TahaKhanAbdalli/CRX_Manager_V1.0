@@ -37,12 +37,23 @@ function tableAlt(tables) {
 // valid SQL forms. Codex P1 2026-07-13 round 3: `UPDATE "public"."customers"`
 // evaded the earlier `(?:public\.)?` prefix entirely.
 const QUAL = `(?:"?public"?\\s*\\.\\s*)?"?`;
-const INSERT_RE = new RegExp(`\\binsert\\s+into\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
-const DELETE_RE = new RegExp(`\\bdelete\\s+from\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
-const CANCEL_VOID_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b[\\s\\S]*?\\bset\\b[\\s\\S]*?status\\s*=\\s*'(cancelled|voided)'`, "i");
+// `UPDATE ONLY t` and `DELETE FROM ONLY t` are the same writes, and MERGE can
+// insert, update and delete (2026-10-25).
+const DML_VERB = `insert\\s+into|update(?:\\s+only)?|delete\\s+from(?:\\s+only)?|merge\\s+into(?:\\s+only)?`;
+
+// Every INSERT/UPDATE/DELETE on a live business table, wherever it sits: a
+// statement, a data-modifying CTE, a DO body, or a string literal (dynamic SQL).
+// FIX 5 (2026-07-13) made ANY update count, not only money columns and
+// cancel/void; the same standard covers deletes from non-financial tables
+// (CodeRabbit, PR #352), and the AP/prepay/inventory tables joined the list in
+// Codex P1 2026-07-13.
+// `(?:"|\b)`, not `"?\b`: after a quoted name the closing quote must be part of
+// the match, or the INSERT head check below sees a stray `"` (Luna round 3).
+const WRITE_RE = new RegExp(`\\b(${DML_VERB})\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})(?:"|\\b)`, "gi");
+const CANCEL_VOID_SET_RE = /\bset\b[\s\S]*?status\s*=\s*'(?:cancelled|voided)'/i;
 
 // Any hand-written touch of the append-only audit log — [E2E] does NOT exempt this.
-const AUDIT_LOG_WRITE_RE = new RegExp(`\\b(?:insert\\s+into|update|delete\\s+from)\\s+${QUAL}financial_audit_log\\b`, "i");
+const AUDIT_LOG_WRITE_RE = new RegExp(`\\b(?:${DML_VERB})\\s+${QUAL}financial_audit_log\\b`, "i");
 
 // Statement-anchored DDL (start of batch or after a `;`). `create temp`/`temporary`
 // tables are legitimate scratch space for analysis and stay allowed.
@@ -54,24 +65,7 @@ const GRANT_REVOKE_RE = /(?:^|;)\s*(?:grant|revoke)\b/im;
 const TRUNCATE_RE = /(?:^|;|\b(?:begin|then|else|loop))\s*truncate\b|\bexecute\s+(?:format\s*\(\s*)?[eE]?'\s*truncate\b/im;
 
 // Money-ish column assignment (column name on the LEFT of `=`) on a financial table.
-const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
 const MONEY_COL_RE = /\b[a-z_]*(?:cents|amount|total|balance|price|rate|paid)[a-z_]*\s*=/i;
-
-// FIX 5 (2026-07-13 audit — "live-testdata UPDATE gap"): ANY UPDATE against a
-// live business table, without [E2E]/REAL-DATA-OK, is a real-data write just
-// like an un-marked INSERT — even when it doesn't touch a money column or set
-// a cancel/void status. (Before this, "UPDATE customers SET phone = ...
-// WHERE id = 5" with no [E2E] marker sailed straight through.) This is a
-// catch-all checked AFTER the more specific INSERT/DELETE/cancel-void/
-// money-column rules above, so their more specific "kind"/message still wins
-// when they match; this only fires for everything else.
-const UPDATE_ANY_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
-
-// Same catch-all standard for DELETE: the financial-table DELETE rule above
-// missed non-financial business tables (customers, products, quotes, ...) — a
-// raw `DELETE FROM customers` sailed through (CodeRabbit critical follow-up,
-// PR #352: consequential now that execute_sql auto-approves under dontAsk).
-const DELETE_ANY_RE = new RegExp(`\\bdelete\\s+from\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
 
 // A DO body is hand-written SQL that EXECUTES immediately (a DO block can even
 // COMMIT mid-transaction), so unlike a stored function body it must stay visible
@@ -81,7 +75,8 @@ const DO_PREFIX_RE = /\bdo(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*$/i;
 // an escape, as PostgreSQL does with standard_conforming_strings off. A batch
 // can switch that setting off before a DO body is parsed, so
 // isVerifiedRollbackBatch() requires the verdict to hold under BOTH readings
-// (Codex App, #1092). Always false outside that check.
+// (Codex App, #1092), and classifySql() refuses a query either reading refuses
+// (Codex App, #1093). False outside those two checks.
 let plainBackslashEscapes = false;
 // A character that can continue a PostgreSQL identifier (non-ASCII included).
 const IDENT_CHAR_RE = /[A-Za-z0-9_$\u0080-￿]/;
@@ -111,6 +106,15 @@ function stripTrailingComments(s) {
     t = t.replace(/--[^\r\n]*$/, "");
   } while (t !== prev);
   return t;
+}
+
+// The dollar-quote opening at src[i], or null. Matches PostgreSQL's scanner
+// (2026-10-25, Luna): a tag may hold any non-ASCII character and has no length
+// cap, and a `$` that continues an identifier (`a$x$` is one name) opens
+// nothing. The old ASCII-only, 66-character form missed `$xé$`, so a `--`
+// inside such a string was stripped as a comment along with the real SQL after it.
+function dollarTagAt(src, i) {
+  return IDENT_CHAR_RE.test(src[i - 1] || "") ? null : matchDollarTag(src, i);
 }
 
 // Strip dollar-quoted string bodies ($function$...$function$, $$...$$, any
@@ -572,8 +576,10 @@ function leavesSessionOrServerEffect(sql) {
 
 export function isVerifiedRollbackBatch(query) {
   if (!verifyRollbackOnce(query)) return false;
+  // Restore rather than reset: classifySql() may already be on its escaped pass.
+  const prev = plainBackslashEscapes;
   plainBackslashEscapes = true;
-  try { return verifyRollbackOnce(query); } finally { plainBackslashEscapes = false; }
+  try { return verifyRollbackOnce(query); } finally { plainBackslashEscapes = prev; }
 }
 
 function verifyRollbackOnce(query) {
@@ -1062,7 +1068,19 @@ export function classifySql(query, { realDataOk = false } = {}) {
   const q = String(query || "");
   if (isKnownSweepPredicate(q)) return { block: false, kind: "known-sweep-predicate" };
   if (isKnownSweepQuery(q)) return { block: false, kind: "known-sweep-query" };
-  return classifySqlInner(q, realDataOk);
+  // A batch can turn standard_conforming_strings off before a DO body is parsed,
+  // and then a backslash ends a plain string early: `PERFORM '\'; --'; UPDATE …`
+  // hides the UPDATE as a comment under the standard reading (Codex App, #1093).
+  // So a query with a backslash is judged under both readings, and either
+  // refusal refuses it, as isVerifiedRollbackBatch() already does.
+  const standard = classifySqlInner(q, realDataOk);
+  if (standard.block || !q.includes("\\")) return standard;
+  const prev = plainBackslashEscapes;
+  plainBackslashEscapes = true;
+  try {
+    const escaped = classifySqlInner(q, realDataOk);
+    return escaped.block ? escaped : standard;
+  } finally { plainBackslashEscapes = prev; }
 }
 
 function classifySqlInner(query, realDataOk) {
@@ -1073,6 +1091,18 @@ function classifySqlInner(query, realDataOk) {
   // The rolled-back-smoke structure below still reads the ORIGINAL text: the
   // RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' marker lives inside a DO body, and a
   // COMMIT anywhere (even inside a DO body) must keep disqualifying the batch.
+  // A dollar-quote tag glued to a letter or digit (`a$x$`, `1$x$`) is read one
+  // way after a name and another after a number; either wrong guess can hide SQL
+  // as a string or a comment, so the ambiguous spelling is refused outright
+  // (automated security review, 2026-10-25).
+  if (/[A-Za-z0-9_$\u0080-￿]\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.test(q)) {
+    return {
+      block: true,
+      kind: "ambiguous-dollar-quote",
+      reason: "This SQL has a dollar quote ($tag$ or $$) written right after a letter or digit, which can be read as part of a name or as a string. Put a space before the dollar quote.",
+    };
+  }
+
   const t = stripDollarQuoted(q);
   // A batch PostgreSQL must roll back entirely (isVerifiedRollbackBatch above)
   // skips the data rules below — audit-log writes, RPC calls, inserts, updates,
@@ -1187,77 +1217,338 @@ function classifySqlInner(query, realDataOk) {
     };
   }
 
-  // Comments removed, so `-- [E2E]` or `/* [E2E] */` cannot exempt anything below.
-  const code = stripCommentsQuoteAware(t);
+  // Comments removed, DO bodies included, so `-- [E2E]` or `/* [E2E] */` cannot
+  // exempt anything below.
+  const code = stripCommentsQuoteAware(t, { intoDollarBodies: true });
+  const scan = findWrites(code);
+  if (scan.block) return scan;
+  const real = scan.writes.filter((w) => !w.fake);
+  const isFin = (w) => FINANCIAL_TABLES.includes(w.table);
 
-  let m;
-
-  // 4. Deletes and cancels/voids. The [E2E] exemption is judged PER STATEMENT:
-  //    a statement is exempt only when its own code (not a comment) carries the
-  //    marker. Before 2026-10-23 one [E2E] anywhere in the batch exempted every
-  //    statement, so `DELETE FROM invoices WHERE id = 7; -- [E2E]` was allowed
-  //    (Luna). Splitting on every `;` can cut a string literal; the piece then
-  //    lacks the marker and is refused, which is the safe direction.
-  for (const stmt of code.split(";")) {
-    if (stmt.includes("[E2E]")) continue;
-    if ((m = DELETE_RE.exec(stmt))) {
+  // 4. Deletes, cancels/voids and MERGEs that do not target [E2E] rows, and any
+  //    insert or update spelled inside a string literal (its SET list cannot be
+  //    read). Never relaxed.
+  for (const w of real) {
+    if (w.verb === "merge") {
+      return {
+        block: true,
+        kind: "real-merge",
+        reason: `This MERGEs into the live business table "${w.table}". MERGE can update, insert and delete in one statement, so it is refused even for [E2E] rows and with REAL-DATA-OK; write the separate INSERT/UPDATE/DELETE statements instead.`,
+      };
+    }
+    if (w.dynamic && w.verb !== "delete") {
+      return {
+        block: true,
+        kind: "dynamic-sql-write",
+        reason: `This SQL spells an ${w.verb.toUpperCase()} of the live business table "${w.table}" inside a string literal (dynamic SQL such as EXECUTE '…'). The guard cannot read what it changes, so it is refused even with REAL-DATA-OK: write the statement out plainly. For a catalog search, break up the words (e.g. ILIKE '%${w.verb}%${w.table}%').`,
+      };
+    }
+    if (w.verb === "delete" && isFin(w)) {
       return {
         block: true,
         kind: "financial-delete",
-        reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
+        reason: `This DELETEs from the live financial table "${w.table}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration. ${E2E_TARGET_HINT}`,
       };
     }
-    if ((m = CANCEL_VOID_RE.exec(stmt))) {
+    if (w.verb === "update" && isFin(w) && CANCEL_VOID_SET_RE.test(w.text)) {
       return {
         block: true,
         kind: "financial-cancel",
-        reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. REAL-DATA-OK does not cover cancels or voids.`,
+        reason: `This cancels/voids a real record in "${w.table}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. REAL-DATA-OK does not cover cancels or voids. ${E2E_TARGET_HINT}`,
       };
     }
-    if ((m = DELETE_ANY_RE.exec(stmt))) {
+    if (w.verb === "delete") {
       return {
         block: true,
         kind: "real-delete",
-        reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
+        reason: `This DELETEs from the live business table "${w.table}" without targeting [E2E] fake rows. Deleting real records is Mason's call — surface the record IDs instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration. ${E2E_TARGET_HINT}`,
       };
     }
   }
+  if (realDataOk) return { block: false };
 
-  // 4b. Clearly-fake test data is fine for ordinary data writes. (Unchanged: a
-  //     batch-wide marker, a comment included, still exempts inserts/updates.)
-  if (t.includes("[E2E]")) return { block: false };
-
-  if (!realDataOk && (m = INSERT_RE.exec(t))) {
+  // 5. Ordinary writes that do not target [E2E] rows (a fresh REAL-DATA-OK relaxes these).
+  let w = real.find((x) => x.verb === "insert");
+  if (w) {
     return {
       block: true,
       kind: "real-insert",
-      reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${REAL_WRITE_OVERRIDE_HINT}`,
+      reason: `This INSERTs into the live business table "${w.table}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${E2E_TARGET_HINT} ${REAL_WRITE_OVERRIDE_HINT}`,
     };
   }
-  // 5. Money-amount edits on financial tables (SET clause only, not the WHERE part).
-  if (!realDataOk && (m = FIN_UPDATE_RE.exec(t))) {
-    const afterSet = t.slice(m.index).match(/\bset\b([\s\S]*)/i);
-    const setClause = afterSet ? afterSet[1].split(/\bwhere\b/i)[0] : "";
-    if (MONEY_COL_RE.test(setClause)) {
-      return {
-        block: true,
-        kind: "financial-amount-update",
-        reason: `This UPDATEs a money column on the live financial table "${m[1]}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead.`,
-      };
-    }
+  // Money-amount edits on financial tables (SET clause only, not the WHERE part).
+  w = real.find((x) => x.verb === "update" && isFin(x) &&
+    MONEY_COL_RE.test((x.text.match(/\bset\b([\s\S]*)/i)?.[1] ?? "").split(/\bwhere\b/i)[0]));
+  if (w) {
+    return {
+      block: true,
+      kind: "financial-amount-update",
+      reason: `This UPDATEs a money column on the live financial table "${w.table}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead. ${E2E_TARGET_HINT}`,
+    };
   }
-
-  // 6. FIX 5 catch-all: any OTHER UPDATE against a real (non-[E2E]) business
-  //    table — same standard already applied to INSERT above.
-  if (!realDataOk && (m = UPDATE_ANY_RE.exec(t))) {
+  w = real.find((x) => x.verb === "update");
+  if (w) {
     return {
       block: true,
       kind: "real-update",
-      reason: `This UPDATEs the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${REAL_WRITE_OVERRIDE_HINT}`,
+      reason: `This UPDATEs the live business table "${w.table}" without targeting [E2E] fake rows. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${E2E_TARGET_HINT} ${REAL_WRITE_OVERRIDE_HINT}`,
     };
   }
 
   return { block: false };
+}
+
+// ── The [E2E] fake-data exemption, judged per write (2026-10-25) ─────────────
+// A write is exempt only when the write ITSELF shows it touches [E2E] rows:
+//   - an INSERT … VALUES has, in EVERY row, a value that is exactly a string
+//     literal containing [E2E] (and is not ON CONFLICT … DO UPDATE, which can
+//     overwrite a real row); INSERT … SELECT does not show its rows, so it is
+//     never exempt;
+//   - an UPDATE or DELETE has, at the top level of its own WHERE clause, a
+//     conjunct `<column> = | LIKE '<text containing [E2E]>'`, joined to
+//     the rest only by AND, with no OR, no USING/FROM join and nothing nested.
+//     ANDing that conjunct narrows the write to rows that carry the marker, so
+//     `DELETE FROM invoices WHERE id = 7 AND notes = '[E2E]'` touches invoice 7
+//     only if invoice 7 is itself marked. Nothing else counts: a marker in a
+//     comment, in another statement, in the SET list, in a subquery
+//     (`id IN (SELECT 7 FROM customers WHERE name LIKE '[E2E]%')`), after an OR,
+//     or as a tautology (`'[E2E]' = '[E2E]'`).
+// Before 2026-10-23 one [E2E] anywhere in the batch exempted everything; until
+// 2026-10-25 it still exempted every insert/update (comment included), and a
+// delete with the marker anywhere in it (Luna, PR #1084).
+// A regex classifier cannot see what a subquery or a foreign key reaches, so
+// whatever it cannot prove is refused: clearing [E2E] child rows needs a marker
+// on the child row itself, or a delete of the marked parent.
+const E2E_TARGET_HINT = "To work on fake data, an INSERT … VALUES must have an '[E2E]…' string value in every row, and an UPDATE or DELETE needs `AND <column> LIKE '[E2E]%'` (or `= '[E2E] …'`) at the top level of its own WHERE clause, outside any DO block (where a name may be a variable); a marker in a comment, another statement, the SET list or a subquery does not count.";
+
+const MARKER_IDENT = `(?:"[^"]+"|[a-z_][a-z0-9_$]*)`;
+// `=` and LIKE only: ILIKE would also match a real row named "[e2e] …" (Luna round 3).
+const MARKER_PREDICATE_RE = new RegExp(`^(${MARKER_IDENT})(?:\\s*\\.\\s*(${MARKER_IDENT}))?\\s*(?:=|like)\\s*'((?:[^']|'')*)'$`, "i");
+// Bare words that parse as values, not columns, so they can never name a marked row.
+const VALUE_KEYWORDS = new Set(["true", "false", "null", "user", "current_user", "session_user", "current_role",
+  "system_user", "current_catalog", "current_schema", "current_date", "current_time", "current_timestamp",
+  "localtime", "localtimestamp"]);
+
+// A same-length copy of `code` with the contents of single-quoted literals and
+// quoted identifiers blanked, plus a flag for each character inside a
+// single-quoted literal and for each inside a dollar-quoted span. Dollar quotes
+// are code here: classifySqlInner already blanked every body except a DO
+// block's, whose statements execute. An unterminated quote runs to the end, so
+// nothing after it can be exempt.
+function maskQuotes(code) {
+  const n = code.length;
+  const masked = code.split("");
+  const inLiteral = new Uint8Array(n);
+  const inDollar = new Uint8Array(n);
+  let dollarEnd = 0;
+  let i = 0;
+  while (i < n) {
+    const ch = code[i];
+    if (ch === "$" && i >= dollarEnd) {
+      const tag = dollarTagAt(code, i);
+      if (tag) {
+        const close = code.indexOf(tag[0], i + tag[0].length);
+        dollarEnd = close === -1 ? n : close + tag[0].length;
+        inDollar.fill(1, i, dollarEnd);
+        i += tag[0].length; continue;
+      }
+    }
+    const escapeString = (ch === "e" || ch === "E") && code[i + 1] === "'" &&
+      !/[A-Za-z0-9_$]/.test(code[i - 1] || "");
+    if (ch === "'" || escapeString) {
+      const start = i + (escapeString ? 2 : 1);
+      let j = start, end = n;
+      while (j < n) {
+        if (escapeString && code[j] === "\\") { j += Math.min(2, n - j); continue; }
+        if (code[j] === "'" && code[j + 1] === "'") { j += 2; continue; }
+        if (code[j] === "'") { end = j; j++; break; }
+        j++;
+      }
+      for (let k = start; k < end; k++) { masked[k] = " "; inLiteral[k] = 1; }
+      i = j; continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n && code[j] !== '"') j++;
+      for (let k = i + 1; k < j; k++) masked[k] = " ";
+      i = j + 1; continue;
+    }
+    i++;
+  }
+  return { masked: masked.join(""), inLiteral, inDollar };
+}
+
+// Only what sits at parenthesis depth 0; anything nested (and the parens) becomes spaces.
+function topLevel(s) {
+  let depth = 0, out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "(") depth++;
+    out += depth === 0 && ch !== ")" && ch !== "(" ? ch : " ";
+    if (ch === ")") depth--;
+  }
+  return out;
+}
+
+// Where the write starting at `start` ends: its `;`, or the `)` closing the CTE it sits in.
+function writeEnd(masked, start) {
+  let depth = 0;
+  for (let i = start; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === ";") return i;
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth < 0) return i;
+  }
+  return masked.length;
+}
+
+function isMarkerPredicate(conjunct) {
+  const m = MARKER_PREDICATE_RE.exec(conjunct.trim());
+  return !!m && m[3].includes("[E2E]") && (!!m[2] || !VALUE_KEYWORDS.has(m[1].toLowerCase()));
+}
+
+// One VALUES row, text[s..e) inside its parentheses: true when one of its
+// values is exactly a string literal containing [E2E].
+function rowCarriesMarker(text, masked, s, e) {
+  let depth = 0, from = s;
+  for (let i = s; i <= e; i++) {
+    const ch = i < e ? masked[i] : ",";
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      const value = text.slice(from, i).trim();
+      if (/^'(?:[^']|'')*'$/.test(value) && value.includes("[E2E]")) return true;
+      from = i + 1;
+    }
+  }
+  return false;
+}
+
+// `headLen` is the length of the `INSERT INTO t` / `UPDATE t` / `DELETE FROM t` head.
+function targetsFakeRows(verb, text, masked, inLiteral, headLen) {
+  // A comment or dollar quote left at code level means the text could not be
+  // cleaned, so code and data cannot be told apart.
+  if (/--|\/\*|\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.test(masked)) return false;
+  // With standard_conforming_strings off (settable per session, even in an earlier
+  // call) a backslash escapes a quote in an ordinary string, so where a literal
+  // ends cannot be known from the text (Luna round 3).
+  if (text.includes("\\")) return false;
+  const flat = topLevel(masked);
+  if (verb === "insert") {
+    // Every row of a plain VALUES list must carry the marker: one marked row
+    // does not make its neighbours fake, and a literal in RETURNING marks
+    // nothing. INSERT … SELECT and DEFAULT VALUES do not show their rows.
+    if (/\bon\s+conflict\b[\s\S]*\bdo\s+update\b/i.test(flat)) return false;
+    const values = flat.search(/\bvalues\b/i);
+    if (values === -1) return false;
+    if (!/^\s*(?:as\s+\S+\s*)?(?:overriding\s+(?:system|user)\s+value\s*)?$/i.test(flat.slice(headLen, values))) return false;
+    let depth = 0, rowStart = 0, rows = 0;
+    for (let i = values + "values".length; i < masked.length; i++) {
+      const ch = masked[i];
+      if (ch === "(") { if (depth++ === 0) rowStart = i + 1; continue; }
+      if (ch === ")") {
+        if (--depth === 0) {
+          if (!rowCarriesMarker(text, masked, rowStart, i)) return false;
+          rows++;
+        }
+        continue;
+      }
+      if (depth > 0 || /[\s,]/.test(ch)) continue;
+      // After the rows only ON CONFLICT … DO NOTHING or RETURNING may follow
+      // (not UNION, ORDER BY or another row source).
+      return rows > 0 && /^(?:on\s+conflict\b|returning\b)/i.test(flat.slice(i));
+    }
+    return rows > 0 && depth === 0;
+  }
+  const afterVerb = flat.slice(headLen);
+  if (/\b(?:from|using)\b/i.test(afterVerb)) return false;
+  const where = flat.search(/\bwhere\b/i);
+  if (where === -1) return false;
+  const bodyStart = where + "where".length;
+  // OR or BETWEEN anywhere after WHERE (RETURNING included, so a column that
+  // merely looks like RETURNING cannot hide one) makes the AND-split unsound.
+  if (/\b(?:or|between)\b/i.test(flat.slice(bodyStart))) return false;
+  const returning = flat.slice(bodyStart).search(/\breturning\b/i);
+  const bodyEnd = returning === -1 ? flat.length : bodyStart + returning;
+  const body = flat.slice(bodyStart, bodyEnd);
+  let from = bodyStart;
+  for (const and of body.matchAll(/\band\b/gi)) {
+    if (isMarkerPredicate(text.slice(from, bodyStart + and.index))) return true;
+    from = bodyStart + and.index + 3;
+  }
+  return isMarkerPredicate(text.slice(from, bodyEnd));
+}
+
+// Every write on a live business table in `code`, each with its own text and
+// whether it provably targets [E2E] rows: `{ block: false, writes }`, or a
+// refusal when the text hides what it writes. A write found inside a string
+// literal is marked `dynamic` (EXECUTE '…', or text that only looks like SQL):
+// it is never exempt and its extent is not measured, which keeps a literal
+// packed with write keywords linear instead of quadratic.
+function findWrites(code) {
+  const { masked, inLiteral, inDollar } = maskQuotes(code);
+  // U&"custome\0072s" is the customers table, spelled so no name list can match it.
+  if (/\bu&"/i.test(masked)) {
+    return {
+      block: true,
+      kind: "unicode-identifier",
+      reason: "This SQL spells a name with a Unicode escape (U&\"…\"), which hides which table it touches. Write the name plainly.",
+    };
+  }
+  // EXECUTE in a DO body runs SQL assembled at run time ('UPDATE ' || 'customers …'),
+  // which no text check can read.
+  for (const m of masked.matchAll(/\bexecute\b/gi)) {
+    if (inDollar[m.index]) {
+      return {
+        block: true,
+        kind: "dynamic-sql",
+        reason: "This DO block runs dynamic SQL with EXECUTE, so the guard cannot see what it writes; it is refused even with REAL-DATA-OK. Write each statement out plainly.",
+      };
+    }
+  }
+  // COPY … FROM loads rows (from a server file, or a shell command with
+  // FROM PROGRAM) without any INSERT; COPY (query) TO only reads.
+  // Real statements end at their own `;` or `)`, so their extents barely overlap;
+  // only malformed text (writes with no terminator) makes them pile up.
+  let budget = 8 * code.length + 100000;
+  const tooTangled = {
+    block: true,
+    kind: "unclassifiable-writes",
+    reason: "This SQL holds so many overlapping, unterminated writes to live business tables that the guard cannot check them in time, so it is refused. End each statement with `;`.",
+  };
+  for (const m of masked.matchAll(/\bcopy\b/gi)) {
+    const end = writeEnd(masked, m.index);
+    if ((budget -= end - m.index) < 0) return tooTangled;
+    if (/\bfrom\b/i.test(topLevel(masked.slice(m.index, end)))) {
+      return {
+        block: true,
+        kind: "copy-from",
+        reason: "COPY … FROM loads rows into a live table (or runs a program with FROM PROGRAM) and is never done through execute_sql, even with REAL-DATA-OK. Write [E2E] rows with INSERT … VALUES.",
+      };
+    }
+  }
+  const writes = [];
+  for (const m of code.matchAll(WRITE_RE)) {
+    const start = m.index;
+    const verb = m[1].toLowerCase().match(/^(insert|update|delete|merge)/)[1];
+    const table = m[2].toLowerCase();
+    if (inLiteral[start] || verb === "merge") {
+      writes.push({ verb, table, text: m[0], fake: false, dynamic: !!inLiteral[start] });
+      continue;
+    }
+    const end = writeEnd(masked, start);
+    if ((budget -= end - start) < 0) return tooTangled;
+    const text = code.slice(start, end);
+    // Inside a DO body any name in a WHERE may be a PL/pgSQL variable, not a
+    // column: `AND v_note = '[E2E]'` is always true, and a block label or a
+    // session-wide `plpgsql.variable_conflict = use_variable` can even capture a
+    // qualified `c.name`. So a DO-body UPDATE/DELETE is never provably fake (its
+    // VALUES literals still are, so marked inserts in smoke blocks pass).
+    const fake = !(inDollar[start] && verb !== "insert") &&
+      targetsFakeRows(verb, text, masked.slice(start, end), inLiteral.subarray(start, end), m[0].length);
+    writes.push({ verb, table, text, fake, dynamic: false });
+  }
+  return { block: false, writes };
 }
 
 // ── Destructive-migration classifier (Mason's settled 2026-07-13 policy) ─────
