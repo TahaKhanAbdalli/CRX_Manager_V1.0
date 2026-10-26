@@ -22,6 +22,9 @@ import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { hasPageAccess } from '../lib/pagePermissions';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import {
+  assertInvoiceLinesLoaded,
+  batchInvoicePrintToast,
+  buildBatchInvoicePdfData,
   generateBatchInvoicePdf,
   groupReturnCreditDisplayItems,
   mapInvoicePdfItem,
@@ -398,10 +401,9 @@ export default function Invoices() {
     setShowBatchPrintDialog(false);
     await runCriticalAction({
       action: async () => {
-        // Fetch full data for each selected invoice
-        const pdfDataList: InvoicePdfData[] = [];
-
-        for (const inv of selectedInvoices) {
+        // Fetch full data for each selected invoice. An invoice whose lines could not be
+        // read is skipped and named; the rest still print.
+        const { list: pdfDataList, skipped } = await buildBatchInvoicePdfData(selectedInvoices, async (inv) => {
           // Fetch customer details
           const { data: cust, error: custError } = await supabase
             .from('customers')
@@ -413,11 +415,13 @@ export default function Invoices() {
           }
 
           // Fetch items with product details
-          const { data: items } = await supabase
+          const { data: items, error: itemsError } = await supabase
             .from('invoice_items')
             .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name, epa_registration, product_form)`)
             .eq('invoice_id', inv.id)
             .order('sort_order');
+          // Checked against the same total the PDF prints (total_amount_cents below).
+          assertInvoiceLinesLoaded(itemsError, items, inv.total_amount_cents || 0);
 
           // Fetch shares
           const { data: shares } = await supabase
@@ -464,17 +468,18 @@ export default function Invoices() {
             balance_cents: inv.balance_cents || 0,
             options,
           };
-          pdfDataList.push(pdfData);
-        }
+          return pdfData;
+        });
 
         if (pdfDataList.length === 0) {
           throw new Error('No invoices to print');
         }
 
-        await generateBatchInvoicePdf(pdfDataList);
+        const { failures } = await generateBatchInvoicePdf(pdfDataList);
+        const done = batchInvoicePrintToast(pdfDataList.length - failures.length, skipped, failures);
+        toast(done.type, done.message);
       },
       toast,
-      successMessage: `Printed invoice(s) to PDF`,
       setLoading: setPrinting,
       sentryTag: 'batch_print_invoices',
     });

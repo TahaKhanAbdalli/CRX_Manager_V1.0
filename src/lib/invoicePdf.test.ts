@@ -640,8 +640,28 @@ describe('generateBatchInvoicePdf', () => {
         balance_cents: 32000,
       }),
     ];
-    const doc = await generateBatchInvoicePdf(invoices);
+    const { doc, failures } = await generateBatchInvoicePdf(invoices);
     expect(doc).toBeDefined();
+    expect(failures).toEqual([]);
     expect(mockDoc.save).toHaveBeenCalled();
+  });
+
+  it('reports an invoice whose PDF failed to build instead of counting it as printed', async () => {
+    let calls = 0;
+    mockDoc.text.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) throw new Error('render failed');
+    });
+    const { failures } = await generateBatchInvoicePdf([
+      makeInvoiceData({ invoice_number: 'INV-2026-0001' }),
+      makeInvoiceData({ invoice_number: 'INV-2026-0002' }),
+    ]);
+    mockDoc.text.mockReset();
+    expect(failures).toHaveLength(1);
+  });
+
+  it('downloads a batch of one invoice (a batch can drop to one after a skip)', async () => {
+    await generateBatchInvoicePdf([makeInvoiceData({ invoice_number: 'INV-2026-0003' })]);
+    expect(mockDoc.save).toHaveBeenCalledWith('INV-2026-0003.pdf');
   });
 });
