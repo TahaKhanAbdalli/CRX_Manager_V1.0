@@ -493,18 +493,16 @@ Mason's REAL-DATA-OK.
   follow the same rule (HIGH; 5 of 5 rows live for the real applicator on 2026-10-25, Central). Part B
   (`20261023110000`, row 983, written and container-proven 2026-10-25, NOT applied) closes it, plus: the
   `field_billing_defaults`/`application_record_fields` driver reads above; direct `field_polygons` writes by any
-  applicator (made office-only); `field_app_locations`/`_shares` reads (office-only); a split-job assignee's view
-  of the job's other fields (also across jobs that share a field, through the new `_can_see_job_field`); and
+  applicator (made office-only); `field_app_locations`/`_shares` reads (office-only); and
   `get_job_billed_customers` letting any applicator through on a job with no whole-job applicator (NULL gate).
-  Left after part B: an assignee still reads `price_override_cents`/`pricing_note` for their own fields (row 11.3
-  column work); a crew assignee whose role is not applicator reads their field's billing split and spray-record
-  acres but not the field row (LOW); anon reads of four `TO public` field tables now error instead of returning
-  nothing (LOW, fails closed). **Open question before the apply:** on a split job the Chemical Application
-  Report, applicator sheet and loader worksheet for a per-field assignee would list only their own field's acres
-  beside the whole job's product totals (`job_chemicals` is job-wide), which misstates the rate on an official
-  record (0 split assignments live, 2026-10-25).
+  Mason decided 2026-10-25 that someone sent to a job sees the entire job (`DECISION_LOG.md`), so part B also
+  widens `_can_see_field`'s dispatch leg to every field of the dispatched job and keeps the job pages job-wide;
+  that resolves the split-job report mismatch a per-field view would have caused. Left after part B: anon reads
+  of four `TO public` field tables now error instead of returning nothing (LOW, fails closed); a crew member
+  whose role is driver keeps the crew job and its map but not the field tables (by design).
 - Opposite gap: dispatch-only applicators cannot read their assigned fields' shares, application records and
-  details, attachments, or job-attachment photos (LOW).
+  details, attachments, or job-attachment photos (LOW). Mason's 2026-10-25 decision (they see the entire job and
+  ticket) means these should be widened to the dispatch route too; not built.
 
 ### KI-74 — More cost exposure and prerequisites (extends KI-02)
 **HIGH/MED · OPEN · security/money · Mason**
