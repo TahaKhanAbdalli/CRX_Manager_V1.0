@@ -51,8 +51,9 @@ Until 2026-10-26 02:10 UTC (9:10 PM Central, 2026-10-25), any signed-in account,
 returned every customer's field boundaries, owners, billing splits, balances and the company-wide overdue list,
 because the functions never checked who was asking. Applicators can also read every field-table row, not only
 the fields they were dispatched to (still open). Proven by read-only impersonation on 2026-10-22. Planned as
-three parts: A (functions, PR #1065, applied live and merged), B (tables), C (the job route). Parts B and C have
-no PR. Related lows: dispatched
+three parts: A (functions, PR #1065, applied live and merged), B (tables), C (the job route). Part B is written
+and proven in a disposable database, NOT applied (`20261023110000_field_tables_follow_field_access`, history row
+983; KI-73); part C has no PR. Related lows: dispatched
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
 Status 2026-10-23: part A was written and not yet applied (`20261023090000_field_functions_require_field_access`,
@@ -489,7 +490,19 @@ Mason's REAL-DATA-OK.
   started). Part A's `_can_see_field` already ends whole-job access when `jobs.deleted_at` is set, for the
   field-map lookups only.
 - Applicators read every `fields` row, and `field_polygons`, crop history, obstacles and `field_app_locations`
-  follow the same rule (HIGH; part B, not started; 5 of 5 rows live for the real applicator on 2026-10-26).
+  follow the same rule (HIGH; 5 of 5 rows live for the real applicator on 2026-10-25, Central). Part B
+  (`20261023110000`, row 983, written and container-proven 2026-10-25, NOT applied) closes it, plus: the
+  `field_billing_defaults`/`application_record_fields` driver reads above; direct `field_polygons` writes by any
+  applicator (made office-only); `field_app_locations`/`_shares` reads (office-only); a split-job assignee's view
+  of the job's other fields (also across jobs that share a field, through the new `_can_see_job_field`); and
+  `get_job_billed_customers` letting any applicator through on a job with no whole-job applicator (NULL gate).
+  Left after part B: an assignee still reads `price_override_cents`/`pricing_note` for their own fields (row 11.3
+  column work); a crew assignee whose role is not applicator reads their field's billing split and spray-record
+  acres but not the field row (LOW); anon reads of four `TO public` field tables now error instead of returning
+  nothing (LOW, fails closed). **Open question before the apply:** on a split job the Chemical Application
+  Report, applicator sheet and loader worksheet for a per-field assignee would list only their own field's acres
+  beside the whole job's product totals (`job_chemicals` is job-wide), which misstates the rate on an official
+  record (0 split assignments live, 2026-10-25).
 - Opposite gap: dispatch-only applicators cannot read their assigned fields' shares, application records and
   details, attachments, or job-attachment photos (LOW).
 
