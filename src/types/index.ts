@@ -4160,7 +4160,9 @@ export type IntegrityAlertType =
   | 'negative_inventory'
   | 'negative_invoice_balance'
   | 'stale_quote_hold'
-  | 'booking_overdraw';
+  | 'booking_overdraw'
+  | 'stuck_job_hold'
+  | 'orphan_quote_hold';
 
 export interface IntegrityAlert {
   id: string;
