@@ -271,8 +271,8 @@ on `invoices` it fails once a column is revoked. **Any `ALTER TABLE … ADD COLU
 `GRANT` for the new column in the same migration.** Tables in this state today:
 `public.application_services` **and `public.products`**, and (since `20261021141000` went live on 2026-10-22, ledger `20261022002748`)
 **`public.purchase_orders` and `public.purchase_order_items`**, whose `SELECT`/`REFERENCES` grants for
-`authenticated` and `SELECT` for `anon` list every column except the purchase cost ones. Once
-`20261022101000_cost_columns_admin_only` (Goal 1 step 3; written, not yet applied) is live, the same holds
+`authenticated` and `SELECT` for `anon` list every column except the purchase cost ones. Since
+`20261022101000_cost_columns_admin_only` (Goal 1 step 3) went live on 2026-10-25 (ledger `20261025223447`), the same holds
 for **`products`, `quotes`, `quote_items`, `quote_versions`, `orders`, `order_items`, `invoices`,
 `invoice_items`, `jobs`, `job_chemicals`, `blend_ticket_products` and `commissions`**: every column
 except cost, profit and margin (the `COST_COLUMNS` of `src/lib/costFields.ts`, plus

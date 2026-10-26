@@ -36,7 +36,7 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
 Highest-priority open items, in order: KI-01 (field data readable by any signed-in user), KI-02 (cost and
-margin still readable at the table level), KI-10 (about 69 functions still replay a saved answer on the retry
+margin: the table-level lock is live since 2026-10-25; the server-function audit is still owed), KI-10 (about 69 functions still replay a saved answer on the retry
 key alone), KI-04 (tools with no permission rule run without a prompt), KI-18 (UTC/browser-clock season can
 suppress the pre-harvest safety warning).
 
@@ -54,27 +54,28 @@ PR #1065 draft, not merged), B (tables), C (the job route). Parts B and C have n
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
 
-### KI-02 — Product cost and margin are still readable through table columns
-**HIGH · PARTIAL · security/money · Mason (step 3 apply approval)**
+### KI-02 — Product cost and margin: server functions not yet fully audited
+**MED · PARTIAL · security/money · follow-up audit unassigned**
 Mason decided cost and margin are admin-only. Screens and report functions were changed (migrations
 `20261019010000`, `20261019230000`) and purchase-order cost is locked (`20261021140000`, `20261021141000`,
-PR #980). Still open: sales reps, drivers and applicators who query the database directly can read the raw cost
-columns (product cost; quote, order and invoice line cost), and reps can infer cost by trial-and-error quote
-prices. The supporting `invoices_postable` view is live (PR #1057, ledger `20261023223853`); the final column
-lock is written as `20261022101000_cost_columns_admin_only` (not yet applied) and waits on Mason's approval. Once
-applied, neither signed-in users (`authenticated`, admins included) nor signed-out visitors (`anon`) can read or
-write a cost, profit or margin column directly (the server-only `service_role` key is unchanged) on `products`, `quotes`,
-`quote_items`, `quote_versions`, `orders`, `order_items`, `invoices`, `invoice_items`, `jobs`, `job_chemicals`,
-`blend_ticket_products` or `commissions`; admins read cost through `get_admin_cost_fields`. Two residuals stay
-accepted by Mason (2026-10-21): commission amount and rate together imply profit, and below-cost refusals let a
-rep narrow a cost by trial and error. Includes the older sub-items "reps can recover application-service cost" and "retire the old
-`admin_set_application_service_cost` function" (no caller left in `src/`; no DROP migration exists).
-Follow-up (Mason, 2026-10-25, kept out of the column lock): column grants cannot limit owner-rights (SECURITY
+PR #980). **The column lock is live:** `20261022101000_cost_columns_admin_only` (PR #1089, applied 2026-10-25
+22:34 UTC on Mason's in-chat approval, ledger `20261025223447`). Neither signed-in users (`authenticated`, admins
+included) nor signed-out visitors (`anon`) can read or write a cost, profit or margin column directly on
+`products`, `quotes`, `quote_items`, `quote_versions`, `orders`, `order_items`, `invoices`, `invoice_items`, `jobs`,
+`job_chemicals`, `blend_ticket_products` or `commissions` (read live after the apply: 0 of 30 such columns readable
+by either role; the server-only `service_role` key is unchanged); admins read cost through `get_admin_cost_fields`.
+Two residuals stay accepted by Mason (2026-10-21): commission amount and rate together imply profit, and below-cost
+refusals let a rep narrow a cost by trial and error. Includes the older sub-items "reps can recover
+application-service cost" and "retire the old `admin_set_application_service_cost` function" (no caller left in
+`src/`; no DROP migration exists).
+Still open (Mason, 2026-10-25, kept out of the column lock): column grants cannot limit owner-rights (SECURITY
 DEFINER) functions. The 45 signed-in-executable ones whose body names a cost field were read live on 2026-10-25,
 but 22 more that reach cost only through inner helper functions (`create_quote_version`, `save_invoice`,
-`price_order`, `save_job` and others) are not yet traced, and nothing re-checks function bodies after a later
-change. Owed: audit those 22 call chains, and add a standing DB invariant sweep that flags any signed-in-executable
-function returning cost, profit or margin to a non-admin.
+`price_order`, `save_job` and others) are not yet traced, nor are definer functions that serialize a whole row to
+JSON (`to_jsonb`/`row_to_json`), and nothing re-checks function bodies after a later change. Owed: audit those call
+chains, and add a standing DB invariant sweep that flags any signed-in-executable function returning cost, profit or
+margin to a non-admin. The same follow-up makes the cost-lock proof script record each ledger-only migration once
+(CodeRabbit, PR #1089).
 
 ### KI-03 — Reps do not yet have the decided invoice and commission-split scoping
 **MED · OPEN · security/money · Mason decided, build unassigned**
@@ -465,8 +466,8 @@ Commission amount plus rate can reveal a rep's profit, and Quick Receive reveals
 (MED). The computed field `invoice_post_version` reads the whole invoice row, so revoking invoice columns can break
 posting: the cost-column lock must ship with a column-safe version design in the same change (MED). **Done in
 `20261022090000` (PR #1057, applied live 2026-10-23):** the version is a computed field, `invoice_postable_version`, on
-the `invoices_postable` view (every column but `total_cost_cents`), the seven screens read it there, and the cost lock then drops the
-`invoices` overload.
+the `invoices_postable` view (every column but `total_cost_cents`), the seven screens read it there, and the cost lock
+(`20261022101000`, applied live 2026-10-25) dropped the `invoices` overload.
 
 ### KI-75 — Retry-key detail (extends KI-10, KI-11)
 **HIGH on money paths · OPEN · money**
