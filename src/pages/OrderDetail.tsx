@@ -1331,6 +1331,7 @@ export default function OrderDetail() {
         orderNumber={order.order_number}
         deliveries={deliveries.map(d => ({ id: d.id, number: d.delivery_number }))}
         invoices={invoices.map(i => ({ id: i.id, number: i.invoice_number }))}
+        invoicesMayBeHidden={!isAdmin}
         currentEntity="order"
         currentEntityId={order.id}
       />
@@ -1609,8 +1610,26 @@ export default function OrderDetail() {
           </>)}
         </div>
 
-        {/* AR summary — derived from linked invoices (single source of truth) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-100">
+        {/* AR summary — derived from linked invoices (single source of truth).
+            Non-admins only see invoices they created or are the salesman on
+            (invoices RLS), so for them these totals can be partial or empty
+            even when the order is billed and paid — never show a bare $0.00. */}
+        {!isAdmin && invoices.length === 0 ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-4 pt-4 border-t border-gray-100">
+            <p className="text-sm text-secondary">
+              You can&apos;t view any invoices for this order. Ask the office whether it has been billed or paid.
+            </p>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/payments')}>
+              Record Payment →
+            </Button>
+          </div>
+        ) : (<>
+        {!isAdmin && (
+          <p className="text-xs text-secondary mt-4 pt-4 border-t border-gray-100">
+            Totals below include only the invoices you created or are the salesman on. The office sees the full amounts.
+          </p>
+        )}
+        <div className={`grid grid-cols-2 sm:grid-cols-4 gap-4 ${isAdmin ? 'mt-4 pt-4 border-t border-gray-100' : 'mt-2'}`}>
           <div>
             <p className="text-xs text-secondary">Total Invoiced</p>
             <p className="text-sm font-medium text-nav-dark">{fmt(totalInvoiced)}</p>
@@ -1641,6 +1660,7 @@ export default function OrderDetail() {
             </Button>
           </div>
         </div>
+        </>)}
       </Card>
 
       {order.notes && (

@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261026030708",
+    "migrations_high_water": "20261026142537",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -443,6 +443,7 @@
       "20261022101000_cost_columns_admin_only",
       "20261023090000_field_functions_require_field_access",
       "20261023100000_revoke_load_recipe_into_job_app_access",
+      "20261025090000_inventory_holds_and_retired_on_order_guards",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2001,7 +2002,9 @@
         "negative_inventory",
         "negative_invoice_balance",
         "stale_quote_hold",
-        "booking_overdraw"
+        "booking_overdraw",
+        "stuck_job_hold",
+        "orphan_quote_hold"
       ],
       "constraints": [
         "integrity_alerts_alert_type_check"
