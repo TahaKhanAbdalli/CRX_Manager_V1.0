@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
-import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../../lib/pagedRead';
 
 interface Transaction {
   id: string;
@@ -121,6 +121,8 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
   const [error, setError] = useState('');
   const [position, setPosition] = useState<InventoryPositionSummary | null>(null);
   const loadSeq = useRef(0);
+  // Bumped by Try again: reruns the load below without closing the dialog.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!open || !productId) return;
@@ -136,7 +138,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
     (async () => {
       // Every transaction, page by page: one request stops at the server's row
       // cap, which would cut a busy product's ledger short (Goal 4 M23).
-      const { data, error: err } = await fetchAllRows((from, to) => supabase
+      const { data, error: err } = await fetchAllRows((from, to) => pageWithList(supabase
         .from('inventory_transactions')
         .select(`
           *,
@@ -147,7 +149,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         .eq('product_id', productId)
         .order('created_at', { ascending: true })
         .order('id')
-        .range(from, to));
+        .range(from, to)));
       if (seq !== loadSeq.current) return;
       if (err) {
         setError(sanitizeError(err));
@@ -161,7 +163,16 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         setLoading(false);
         return;
       }
-      const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+      // No position at all is a failed read: say so instead of loading forever.
+      let positionRows: InventoryPositionRow[];
+      try {
+        positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        if (!Array.isArray(positionRows)) throw new Error('get_inventory_position returned no list');
+      } catch (positionErr) {
+        setError(sanitizeError(positionErr));
+        setLoading(false);
+        return;
+      }
       setPosition(summarizeInventoryPosition(positionRows, productId));
       const performerIds = [...new Set(
         ((data || []) as Array<{ performed_by?: string | null }>)
@@ -189,7 +200,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
       setTransactions(enriched as Transaction[]);
       setLoading(false);
     })();
-  }, [open, productId]);
+  }, [open, productId, reloadKey]);
 
   const reviewCount = transactions.filter((transaction) => transaction.requires_review).length;
 
@@ -198,7 +209,14 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
       <p className="text-sm text-secondary mb-4">{productName}</p>
 
       {loading && <p className="text-sm text-secondary py-8 text-center">Loading transactions...</p>}
-      {error && <p className="text-sm text-red-600 py-4">{error}</p>}
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 py-4 text-sm text-red-600">
+          <span>{error}</span>
+          <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="font-medium underline hover:no-underline">
+            Try again
+          </button>
+        </div>
+      )}
 
       {!loading && !error && position && (
         <div className="flex flex-wrap gap-4 mb-3 text-xs text-secondary">
