@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import Card, { CardHeader } from '../ui/Card';
 import Select from '../ui/Select';
 import { sanitizeError } from '../../lib/errorSanitizer';
+import { timeFraction } from '../../lib/sellPriceHistory';
 import {
   formatSupplierCents,
   getProductPriceHistory,
@@ -114,6 +115,11 @@ export default function ProductPriceHistory({
     (current, item) => current === null || item.value > current ? item.value : current,
     null,
   );
+  // The date axis spans the earliest to the latest plotted point.
+  const axis = useMemo(() => {
+    const times = plotted.map(({ point }) => point.occurred_at).sort((a, b) => Date.parse(a) - Date.parse(b));
+    return { start: times[0] ?? '', end: times[times.length - 1] ?? '' };
+  }, [plotted]);
   const selectedBasis = [...(history?.points ?? [])]
     .reverse()
     .find((point) => point.stream === 'selected_cost_basis') ?? null;
@@ -198,8 +204,9 @@ export default function ProductPriceHistory({
             >
               <line x1="5" x2="95" y1="90" y2="90" stroke="#d1d5db" strokeWidth="0.7" />
               <line x1="5" x2="5" y1="10" y2="90" stroke="#d1d5db" strokeWidth="0.7" />
-              {plotted.map(({ point, value }, index) => {
-                const x = plotted.length === 1 ? 50 : 5 + ((index * 90) / (plotted.length - 1));
+              {plotted.map(({ point, value }) => {
+                // Placed by date (To-Do 0.4), not evenly spaced: a gap in the chart is a gap in time.
+                const x = 5 + timeFraction(point.occurred_at, axis.start, axis.end) * 90;
                 const y = chartPosition(value, minimum, maximum);
                 return (
                   <circle
@@ -215,6 +222,10 @@ export default function ProductPriceHistory({
                 );
               })}
             </svg>
+            <div className="mt-1 flex justify-between text-xs text-secondary tabular-nums">
+              <span>{formatBusinessDate(axis.start)}</span>
+              <span>{formatBusinessDate(axis.end)}</span>
+            </div>
             <div className="mt-2 flex flex-wrap gap-3 text-xs text-secondary">
               {Object.entries(streamLabels).map(([stream, label]) => (
                 <span key={stream} className="inline-flex items-center gap-1">

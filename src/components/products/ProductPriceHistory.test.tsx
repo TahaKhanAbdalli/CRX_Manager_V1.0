@@ -104,4 +104,29 @@ describe('ProductPriceHistory', () => {
     expect(screen.queryByText('supplier unknown')).not.toBeInTheDocument();
     expect(screen.getByText('CRX selected basis')).toBeInTheDocument();
   });
+
+  it('places points on a real date axis, not evenly spaced (To-Do 0.4)', async () => {
+    const point = (id: string, at: string, cents: bigint) => ({
+      stream: 'selected_cost_basis' as const, source_id: id, vendor_id: null, supplier_name: null,
+      cost_cents: cents, normalized_cost_cents: cents, occurred_at: at, detail: 'pricing_worksheet', provenance: {},
+    });
+    mockGetHistory.mockResolvedValue({
+      product_id: 'product-2',
+      summary: {
+        product_id: 'product-2', supplier_quote_count: 0, comparable_quote_count: 0,
+        replacement_cost_cents: null, replacement_cost_as_of: null, best_supplier: null,
+        last_paid_cents: null, last_paid_as_of: null, recent_po_weighted_average_cents: null,
+        recent_po_window: 'trailing_12_months', comparison_status: 'cannot_compare', suppliers: [],
+      },
+      suppliers: [],
+      // Jul 1, Jul 2 and Jul 31: a day apart, then 29 days.
+      points: [point('a', '2026-07-01T00:00:00Z', 1_000n), point('b', '2026-07-02T00:00:00Z', 1_100n), point('c', '2026-07-31T00:00:00Z', 1_200n)],
+    });
+    render(<ProductPriceHistory productId="product-2" />);
+    const chart = await screen.findByRole('img', { name: 'Product supplier price history chart' });
+    const xs = [...chart.querySelectorAll('circle')].map((c) => Number(c.getAttribute('cx')));
+    expect(xs[0]).toBeCloseTo(5);
+    expect(xs[1]).toBeCloseTo(5 + 90 / 30);
+    expect(xs[2]).toBeCloseTo(95);
+  });
 });

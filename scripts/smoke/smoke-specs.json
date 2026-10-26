@@ -1514,6 +1514,18 @@
       "area": [
         "inventory"
       ]
+    },
+    "cost_history_starting_snapshot": {
+      "chain": "smoke-price-history-snapshot.sql",
+      "container_prover": "prove-price-history-snapshot-real-schema.mjs",
+      "description": "Sell-price history starting point (20261026140000, To-Do 0.4). Live, rollback-only, plants one [SMOKE] product. Every product has exactly one starting_snapshot row, unattributed and recording no change; re-running the snapshot INSERT adds nothing; a real change with no changed_by is refused (cost_history_changed_by_required); deleting a product with history is refused by cost_history_product_id_fkey and the history stays; a sales rep reads no history and an admin reads it. The container prover shows the reverse before the candidate (no snapshot, a delete cascades the history away) and covers preflight drift and a refused second apply.",
+      "covers": [
+        "cost_history"
+      ],
+      "area": [
+        "pricing",
+        "security"
+      ]
     }
   }
 }

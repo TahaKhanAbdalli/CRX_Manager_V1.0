@@ -1,6 +1,8 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-25 (America/Chicago)** against `main` at `c65b7b351` (code, migration files, merged
+**Last verified: 2026-10-26 (America/Chicago)** for the migration ledger (read-only, 2026-10-26 afternoon
+Central: 1063 rows; newest `20261025090000_inventory_holds_and_retired_on_order_guards`, row 983, applied live; nothing
+newer). The rest was last verified 2026-10-25 against `main` at `c65b7b351` (code, migration files, merged
 PRs). The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read live, read-only, at 10:52 PM
 Central: the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`,
 `20261022101000` and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and

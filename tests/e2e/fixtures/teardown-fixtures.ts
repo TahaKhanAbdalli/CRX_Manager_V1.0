@@ -73,6 +73,12 @@ async function deleteByPrefix(
   );
 
   const text = await resp.text();
+  // A refused delete removes nothing; say so instead of reporting 0 rows. Products whose price was
+  // ever changed are refused on purpose since 20261026140000: their price history is kept.
+  if (!resp.ok) {
+    console.warn(`  ! ${table}: delete refused (${resp.status}): ${text.slice(0, 200)}`);
+    return 0;
+  }
   try {
     const rows = JSON.parse(text);
     return Array.isArray(rows) ? rows.length : 0;

@@ -1728,7 +1728,7 @@ export type Database = {
           change_set_id: string | null
           change_source: string
           changed_at: string
-          changed_by: string
+          changed_by: string | null
           id: string
           new_cost: number | null
           new_pricing_version: number | null
@@ -1754,7 +1754,7 @@ export type Database = {
           change_set_id?: string | null
           change_source: string
           changed_at?: string
-          changed_by: string
+          changed_by?: string | null
           id?: string
           new_cost?: number | null
           new_pricing_version?: number | null
@@ -1780,7 +1780,7 @@ export type Database = {
           change_set_id?: string | null
           change_source?: string
           changed_at?: string
-          changed_by?: string
+          changed_by?: string | null
           id?: string
           new_cost?: number | null
           new_pricing_version?: number | null
