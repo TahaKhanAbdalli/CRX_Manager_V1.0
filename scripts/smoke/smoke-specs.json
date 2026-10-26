@@ -1475,6 +1475,20 @@
         "security"
       ]
     },
+    "field_tables_follow_field_access": {
+      "chain": "smoke-field-tables-follow-field-access.sql",
+      "container_only": true,
+      "container_prover": "prove-field-tables-follow-field-access-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-field-tables-follow-field-access-real-schema.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] logins (auth.users rows), customers, fields, billing splits, a spray record, a job and a dispatch, which the LIVE-DATA GUARD refuses. Covers 20261023110000 (To-Do row 11.4, part B): an applicator dispatched to one field of a two-field job reads only that field from fields, field_billing_defaults and job_fields, and gets only it from get_job_fields_with_geojson and only its billed customer from get_job_billed_customers (each now filtered by _can_see_field); a driver reads no field_billing_defaults or application_record_fields rows; the admin still reads both fields, both splits and both billed customers. The prover adds the whole-job and crew routes, cancelled, expired and deleted-job dispatches, an inactive applicator, an entity_recipient, every narrowed table and function, get_dispatch_board_jobs and get_jobs_billed_customers, and mutation tests. Fail-first: step a fails before the migration. Terminal rollback.",
+      "covers": [
+        "_can_see_field",
+        "get_job_fields_with_geojson",
+        "get_job_billed_customers"
+      ],
+      "area": [
+        "security"
+      ]
+    },
     "upsert_product_brand": {
       "chain": "smoke-upsert-product-brand.sql",
       "description": "Product brands (20261022086500): auth probes P1 no-auth, P2 anon, P3 non-admin refused with nothing written (no actor parameter, so no forged-actor probe); an active admin adds a brand; the exact retry replays the same row with its receipt bound to the admin; an edit with the version it read bumps row_version; a stale edit is refused (BRAND_CHANGED); the same name in another case is refused (BRAND_NAME_TAKEN). Container proof of the migration itself: prove-product-brands.mjs.",
