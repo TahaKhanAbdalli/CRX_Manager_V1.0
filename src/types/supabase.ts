@@ -11572,6 +11572,7 @@ export type Database = {
         }
         Returns: Json
       }
+      _can_see_field: { Args: { p_field_id: string }; Returns: boolean }
       _cancel_order_idem_impl_20260721: {
         Args: {
           p_idempotency_key?: string

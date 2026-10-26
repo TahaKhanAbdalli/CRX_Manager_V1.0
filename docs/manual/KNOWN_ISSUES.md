@@ -35,7 +35,8 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
-Highest-priority open items, in order: KI-01 (field data readable by any signed-in user), KI-02 (cost and
+Highest-priority open items, in order: KI-01 (applicators still read every field-table row; the database
+functions were fixed live 2026-10-26, part A), KI-02 (cost and
 margin: the table-level lock is live since 2026-10-25; the server-function audit is still owed), KI-10 (about 69 functions still replay a saved answer on the retry
 key alone), KI-04 (tools with no permission rule run without a prompt), KI-18 (UTC/browser-clock season can
 suppress the pre-harvest safety warning).
@@ -45,20 +46,26 @@ suppress the pre-harvest safety warning).
 ## Security and access
 
 ### KI-01 — Drivers and applicators can read every customer's fields and some money totals
-**HIGH · OPEN · security · Mason approval needed to narrow permissions; fix in flight as draft PR #1065**
-Any signed-in account, including drivers and applicators, can call database functions that return every
-customer's field boundaries, owners, billing splits, balances and the company-wide overdue list, because the
-functions never check who is asking. Applicators can also read every field-table row, not only the fields
-they were dispatched to. Proven by read-only impersonation on 2026-10-22. Planned as three parts: A (functions,
-PR #1065 draft, not merged), B (tables), C (the job route). Parts B and C have no PR. Related lows: dispatched
+**HIGH · PARTIAL · security · Mason approval needed to narrow permissions; part A applied live, parts B and C not started**
+Until 2026-10-26 02:10 UTC (9:10 PM Central, 2026-10-25), any signed-in account, including drivers and applicators, could call database functions that
+returned every customer's field boundaries, owners, billing splits, balances and the company-wide overdue list,
+because the functions never checked who was asking. Applicators can also read every field-table row, not only
+the fields they were dispatched to (still open). Proven by read-only impersonation on 2026-10-22. Planned as
+three parts: A (functions, PR #1065, applied live and merged), B (tables), C (the job route). Parts B and C have
+no PR. Related lows: dispatched
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
-Status 2026-10-23: part A is written and NOT applied (`20261023090000_field_functions_require_field_access`,
+Status 2026-10-23: part A was written and not yet applied (`20261023090000_field_functions_require_field_access`,
 history row 980). It adds `_can_see_field`, filters the two field-map lookups by it, makes the other field and money
 functions office-only (plus three uncalled ones the review found), and was proven in a disposable copy of the
 schema (`scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs`): each applicator sees only
-its assigned fields, everyone else none, office staff unchanged. It stays open until applied and re-checked live.
-Until part B narrows `job_fields`, an applicator sent to one field of a split job gets no weather centroid on Job
+its assigned fields, everyone else none, office staff unchanged.
+Status 2026-10-26: part A is APPLIED LIVE (02:10:16 UTC, 9:10 PM Central on 2026-10-25; ledger `20261026021016`,
+history row 980) on Mason's own `I approve`, and PR #1065 merged as `9ad2cb000`. Re-checked live (read-only
+impersonation, counts only): the real applicator gets 2 fields from the field-map lookup (its 2 open dispatches;
+it was 5) and is refused the all-fields map; a driver gets 0; an admin gets all 5. Still open: the applicator
+reads all 5 rows of the `fields` table directly (part B), and the whole-job applicator route has no end (part
+C, KI-73). No in-app click-through as an applicator was done. Until part B narrows `job_fields`, an applicator sent to one field of a split job gets no weather centroid on Job
 Detail when the job's first field is not theirs (0 split assignments live, 2026-10-22).
 
 ### KI-02 — Product cost and margin: server functions not yet fully audited
@@ -124,6 +131,13 @@ No snapshot/guard migration was found, but the live row count could not be check
 - Three older "reps work any customer" leftovers: signed-in rep click-through of `customer-document-files`
   still owed — LOW.
 - A staff viewer can mint a temporary photo link (Mason accepted this, see accepted list KI-60).
+- 12 live SECURITY DEFINER functions set `search_path` to `public, extensions, pg_temp`, which the written rule
+  (`public, pg_temp`, or an exactly empty path with fully-qualified names) does not cover: `fields_acre_authority_guard`,
+  `find_overlapping_fields`, `get_field_dashboard`, `get_field_geojson`, `get_fields_geojson_by_ids`,
+  `get_fields_with_geojson`, `get_job_fields_with_geojson`, `get_job_proof_data`, `save_field_geometry`,
+  `save_field_polygons`, `set_field_boundary`, `set_field_override_acres` (read-only `execute_sql`, 2026-10-26).
+  They need `extensions` for PostGIS. Either document a PostGIS exception to the rule or schema-qualify the
+  PostGIS calls and drop `extensions` from the path. Promised to CodeRabbit on PR #1065 (thread 4373018174) — LOW.
 
 ---
 
@@ -418,6 +432,12 @@ Escape on the below-cost prompt also closes the Import Orders dialog while the u
 (`src/components/orders/BulkOrderImport.tsx`; a fix sits on closed PR #350's branch); the return-credit prover
 is pre-apply and two test hardenings were not carried; GraphQL ref updates are not inspected locally (the
 server-side ruleset is the boundary).
+`src/types/supabase.ts` cannot be swapped wholesale for a fresh live type generation (checked 2026-10-26): the
+generator drops hand-kept entries (the `invoice_postable_version` computed field on `invoices_postable`, which
+`InvoiceDetail`, `Invoices`, `OfficeCockpit` and `OrderDetail` select; nullable columns on table-returning reports
+such as `get_quote_versions`), so the typecheck fails, and it adds about 60 live helpers the file lacks, which
+moves two `rpcContracts.test.ts` classifications. Records PRs add only the entries their migration changes, compared
+against a live generation.
 
 ---
 
@@ -455,17 +475,21 @@ live-sweep predicate (`quote-versions-rpc-owned`) was declined at its prompt, an
 Mason's REAL-DATA-OK.
 
 ### KI-73 — More field-access holes (extends KI-01; To-Do row 11.4, plus row 11.7)
-**HIGH · OPEN · security · Mason approval to narrow permissions**
-- `global_search` lets any signed-in user search customer names and contacts, order/invoice/delivery numbers and
-  farm names; `get_notes_for_entity` lets any signed-in user with a record ID read its team notes (HIGH).
-  Part A (PR #1065, not applied) closes both: search returns nothing to field roles and notes follow the linked
-  record. `team_notes` itself still admits every active profile, so the Team Board shows field roles every note;
+**HIGH · PARTIAL · security · Mason approval to narrow permissions**
+- FIXED LIVE 2026-10-26 02:10 UTC (9:10 PM Central, 2026-10-25) by part A (PR #1065, history row 980, ledger `20261026021016`): `global_search` let any
+  signed-in user search customer names and contacts, order/invoice/delivery numbers and farm names, and
+  `get_notes_for_entity` let any signed-in user with a record ID read its team notes. Now search returns nothing
+  to field roles and notes follow the linked record (`get_notes_for_entity` runs as the caller, checked live). `team_notes` itself still admits every active profile, so the Team Board shows field roles every note;
   Mason decided 2026-10-23 to keep that for now (To-Do row 11.11, `DECISION_LOG.md`).
 - Every active account reads every `customer_addresses` row (To-Do row 11.7; HIGH).
 - Drivers can read every customer's billing splits and spray-record field/acres data through
   `field_billing_defaults` and `application_record_fields` (MED).
 - Whole-job applicators keep access to completed, cancelled and soft-deleted jobs indefinitely, and dispatch access
-  can survive a job deletion; affected functions include `start_job` and `complete_job` (HIGH).
+  can survive a job deletion; affected functions include `start_job` and `complete_job` (HIGH; part C, not
+  started). Part A's `_can_see_field` already ends whole-job access when `jobs.deleted_at` is set, for the
+  field-map lookups only.
+- Applicators read every `fields` row, and `field_polygons`, crop history, obstacles and `field_app_locations`
+  follow the same rule (HIGH; part B, not started; 5 of 5 rows live for the real applicator on 2026-10-26).
 - Opposite gap: dispatch-only applicators cannot read their assigned fields' shares, application records and
   details, attachments, or job-attachment photos (LOW).
 

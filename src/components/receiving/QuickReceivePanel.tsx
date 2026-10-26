@@ -38,7 +38,7 @@ import type {
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
 import { PRODUCT_COLUMNS } from '../../lib/costFields';
-import { fetchAllRows } from '../../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../../lib/pagedRead';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -120,6 +120,8 @@ export default function QuickReceivePanel() {
   const [productsFailed, setProductsFailed] = useState(false);
   // Until the catalog read finishes, picking would search an empty list (CodeRabbit, #1017).
   const [productsLoading, setProductsLoading] = useState(true);
+  // Bumped by Try again: reruns the catalog read below.
+  const [catalogReloadKey, setCatalogReloadKey] = useState(0);
   const [vendors, setVendors] = useState<string[]>([]);
 
   /* ─── product search modal ─── */
@@ -151,17 +153,20 @@ export default function QuickReceivePanel() {
 
   /* ─── load products + vendors ─── */
   useEffect(() => {
+    // A read that lands after unmount or after a newer retry must not set state.
+    let cancelled = false;
     (async () => {
       // Every active product, page by page: the product search filters this list
       // locally and the vendor list is built from it, so a read cut off at the
       // server's 1,000-row cap would hide products and vendors.
-      const { data, error } = await fetchAllRows((from, to) => supabase
+      const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
         .from('products')
         .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
         .eq('is_active', true)
         .order('product_name')
         .order('id')
-        .range(from, to));
+        .range(from, to)));
+      if (cancelled) return;
       if (error) {
         Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quick_receive_products' } });
         toast('error', 'Failed to load Products. Retry before receiving inventory.');
@@ -181,9 +186,10 @@ export default function QuickReceivePanel() {
       const uv = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
       setVendors(uv.sort());
     })();
-  // Toast identity is not a data dependency; this catalog loads once per panel mount.
+    return () => { cancelled = true; };
+  // Toast identity is not a data dependency; this catalog loads once per panel mount (and on Try again).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [catalogReloadKey]);
 
   /* ─── item crud ─── */
   const addItem = () => {
@@ -650,7 +656,16 @@ export default function QuickReceivePanel() {
               </Button>
             </div>
             {productsFailed && (
-              <p role="alert" className="mb-3 text-sm text-red-600">Products could not be loaded, so items cannot be added or matched. Reload the page to try again.</p>
+              <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-red-600">
+                <span>Products could not be loaded, so items cannot be added or matched.</span>
+                <button
+                  type="button"
+                  onClick={() => { setProductsLoading(true); setCatalogReloadKey((k) => k + 1); }}
+                  className="font-medium underline hover:no-underline"
+                >
+                  Try again
+                </button>
+              </div>
             )}
 
             {items.length === 0 ? (
