@@ -114,13 +114,20 @@ export default defineConfig({
   },
   build: {
     sourcemap: 'hidden',
-    rollupOptions: {
+    // Vite 8 raised its default browser floor (Safari 16.0 -> 16.4); keep the
+    // Vite 7 floor so field staff on older iPhones and iPads still load the app.
+    target: ['chrome107', 'edge107', 'firefox104', 'safari16'],
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-supabase': ['@supabase/supabase-js'],
-          'vendor-ui': ['lucide-react'],
-          'vendor-mapbox': ['mapbox-gl'],
+        // Vite 8 (Rolldown) dropped the object form of manualChunks; these
+        // groups produce the same four vendor chunks.
+        codeSplitting: {
+          groups: [
+            { name: 'vendor-react', test: /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/ },
+            { name: 'vendor-supabase', test: /[\\/]node_modules[\\/]@supabase[\\/]/ },
+            { name: 'vendor-ui', test: /[\\/]node_modules[\\/]lucide-react[\\/]/ },
+            { name: 'vendor-mapbox', test: /[\\/]node_modules[\\/]mapbox-gl[\\/]/ },
+          ],
         },
       },
     },
