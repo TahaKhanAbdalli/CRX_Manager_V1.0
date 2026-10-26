@@ -18,6 +18,7 @@ import {
   SNAPSHOT_KIND,
   __setGitSpawn,
   __setDirRead,
+  __setIdentityStat,
   __setLinkStat,
   __setRemoteRead,
   __setVisibilityProbe,
@@ -1271,6 +1272,186 @@ try {
       __setDirRead(null);
       __setLinkStat(null);
     }
+  }
+
+  // ── retired notes in the sibling memory-archive/ ride along (2026-10-25) ─────
+  // The weekly memory sweep MOVES finished notes to <project>/memory-archive/. They
+  // must reach the off-site snapshot too, flat, as archive__<name>, and every existing
+  // check must cover them. Built under its own parent so no other case's source has a
+  // sibling archive.
+  {
+    const project = fresh("archive-project");
+    const memoryDir = path.join(project, "memory");
+    const archiveDir = path.join(project, "memory-archive");
+    mkdirSync(memoryDir); mkdirSync(archiveDir);
+    writeFileSync(path.join(memoryDir, INDEX_FILE), "# Memory Index\n- [a](a.md)\n");
+    writeFileSync(path.join(memoryDir, "a.md"), "live note\n");
+    writeFileSync(path.join(archiveDir, "old.md"), "retired note\n");
+    writeFileSync(path.join(archiveDir, "notes.txt"), "not a note\n");
+    const out = path.join(root, "staged-archive");
+    eq(quiet(() => stage(out, memoryDir)), 0, "staging a memory dir with a sibling archive succeeds");
+    const names = readManifest(out).files.map((entry) => entry.name).sort();
+    eq(JSON.stringify(names), JSON.stringify([INDEX_FILE, "a.md", "archive__old.md"]), "archived .md notes are staged as archive__<name>, other files are not");
+    eq(readFileSync(path.join(out, "archive__old.md"), "utf8"), "retired note\n", "the archived note is copied byte-for-byte");
+    eq(quiet(() => verify(out)), 0, "a snapshot carrying archived notes verifies");
+
+    // Restaging after the archive gains a note keeps working; one that leaves the
+    // archive (moved back into memory/) is pruned from the snapshot under its old name.
+    writeFileSync(path.join(memoryDir, "old.md"), "retired note\n");
+    unlinkSync(path.join(archiveDir, "old.md"));
+    eq(quiet(() => stage(out, memoryDir)), 0, "restaging after a note is restored from the archive succeeds");
+    const after = readManifest(out).files.map((entry) => entry.name).sort();
+    eq(JSON.stringify(after), JSON.stringify([INDEX_FILE, "a.md", "old.md"]), "a restored note is staged under its live name and its archive__ copy is pruned");
+    ok(!existsSync(path.join(out, "archive__old.md")), "the pruned archive__ file is gone from the snapshot dir");
+
+    // A secret in an ARCHIVED note blocks the whole run, exactly like one in a live note.
+    writeFileSync(path.join(archiveDir, "leak.md"), "token: ghp_" + "a".repeat(36) + "\n");
+    const leaked = path.join(root, "staged-archive-leak");
+    eq(quiet(() => stage(leaked, memoryDir)), 1, "a secret in an archived note refuses the stage");
+    ok(!readdirSafe(leaked), "nothing is written when an archived note holds a secret");
+    unlinkSync(path.join(archiveDir, "leak.md"));
+
+    // A live note that already uses the reserved prefix would collide in the flat snapshot.
+    writeFileSync(path.join(memoryDir, "archive__clash.md"), "x\n");
+    eq(quiet(() => stage(path.join(root, "staged-archive-clash"), memoryDir)), 1, "a live note named archive__* refuses the stage");
+    unlinkSync(path.join(memoryDir, "archive__clash.md"));
+
+    // Staging INTO the archive (or a folder holding it) would write snapshot files into the
+    // notes being backed up (Luna, 2026-10-25).
+    eq(quiet(() => stage(archiveDir, memoryDir)), 1, "staging into the memory archive itself is refused");
+    eq(quiet(() => stage(path.join(archiveDir, "snap"), memoryDir)), 1, "staging into a folder inside the archive is refused");
+    ok(!existsSync(path.join(archiveDir, MANIFEST)) && !existsSync(path.join(archiveDir, "snap")), "nothing was written into the archive");
+
+    // An archive that exists but is not a real directory must REFUSE, never be skipped:
+    // skipping would stage "no archived notes" and prune the archive__ files from the snapshot.
+    {
+      const p2 = fresh("archive-not-a-dir");
+      const mem2 = path.join(p2, "memory");
+      mkdirSync(mem2);
+      writeFileSync(path.join(mem2, INDEX_FILE), "# idx\n");
+      mkdirSync(path.join(p2, "memory-archive"));
+      writeFileSync(path.join(p2, "memory-archive", "kept.md"), "archived\n");
+      const out2 = path.join(root, "staged-archive-not-a-dir");
+      eq(quiet(() => stage(out2, mem2)), 0, "first stage with a real archive succeeds");
+      rmSync(path.join(p2, "memory-archive"), { recursive: true, force: true });
+      writeFileSync(path.join(p2, "memory-archive"), "I am a file, not a folder\n");
+      eq(quiet(() => stage(out2, mem2)), 1, "an archive that is a file refuses the stage");
+      ok(existsSync(path.join(out2, "archive__kept.md")), "the refused run did not prune the archived note from the snapshot");
+      eq(quiet(() => verify(out2)), 0, "the previous snapshot still verifies after the refused run");
+    }
+
+    // Luna round 2: every way archived notes could silently drop out of the staged set refuses.
+    {
+      const p3 = fresh("archive-vanish");
+      const mem3 = path.join(p3, "memory");
+      const arch3 = path.join(p3, "memory-archive");
+      mkdirSync(mem3); mkdirSync(arch3);
+      writeFileSync(path.join(mem3, INDEX_FILE), "# idx\n");
+      writeFileSync(path.join(arch3, "kept.md"), "archived\n");
+      const out3 = path.join(root, "staged-archive-vanish");
+      eq(quiet(() => stage(out3, mem3)), 0, "baseline stage with an archive succeeds");
+      // (a) the archive folder disappears (renamed/moved) while the snapshot still holds archive__ notes
+      rmSync(arch3, { recursive: true, force: true });
+      eq(quiet(() => stage(out3, mem3)), 1, "a vanished archive refuses when the last snapshot held archived notes");
+      ok(existsSync(path.join(out3, "archive__kept.md")), "the refused run kept the archived note in the snapshot");
+      // ...and an EMPTY archive folder is the explicit way to drop them on purpose
+      mkdirSync(arch3);
+      eq(quiet(() => stage(out3, mem3)), 0, "an empty archive folder lets the archived notes be pruned on purpose");
+      ok(!existsSync(path.join(out3, "archive__kept.md")), "the intentional prune removed the archived note");
+      // (b) an archived .md that is a link (simulated through the link-stat seam) refuses
+      writeFileSync(path.join(arch3, "linked.md"), "x\n");
+      __setLinkStat((p) => {
+        const real = lstatSync(p);
+        if (p === path.join(arch3, "linked.md")) return Object.assign(Object.create(Object.getPrototypeOf(real)), real, { isFile: () => false, isSymbolicLink: () => true });
+        return real;
+      });
+      try {
+        eq(quiet(() => stage(out3, mem3)), 1, "an archived note that is a link refuses the stage instead of being skipped");
+      } finally {
+        __setLinkStat(null);
+      }
+      // (c) an archive that exists but cannot be read (any error other than ENOENT) refuses
+      __setLinkStat((p) => {
+        if (p === arch3) { const e = new Error("denied"); e.code = "EACCES"; throw e; }
+        return lstatSync(p);
+      });
+      try {
+        eq(quiet(() => stage(out3, mem3)), 1, "an unreadable archive (EACCES) refuses the stage");
+      } finally {
+        __setLinkStat(null);
+      }
+    }
+
+    // Luna round 3.
+    {
+      const p4 = fresh("archive-round3");
+      const mem4 = path.join(p4, "memory");
+      const arch4 = path.join(p4, "memory-archive");
+      mkdirSync(mem4); mkdirSync(arch4);
+      writeFileSync(path.join(mem4, INDEX_FILE), "# idx\n");
+      writeFileSync(path.join(arch4, "swapped.md"), "archived\n");
+      writeFileSync(path.join(mem4, "live.md"), "live\n");
+      const out4 = path.join(root, "staged-archive-round3");
+      // (a) a note whose checked identity differs from the handle that is read = swapped for a
+      // link between check and read. Simulated by reporting another file's identity at the check.
+      // BigInt identity (+1n is exact; +1 on a Number above 2^53 can round back to the same id).
+      const swapCheck = (target) => (p) => {
+        const real = lstatSync(p, { bigint: true });
+        if (p !== target) return real;
+        return Object.assign(Object.create(Object.getPrototypeOf(real)), real, { ino: real.ino + 1n });
+      };
+      for (const target of [path.join(arch4, "swapped.md"), path.join(mem4, "live.md")]) {
+        __setIdentityStat(swapCheck(target));
+        try {
+          eq(quiet(() => stage(out4, mem4)), 1, `a note swapped between check and read refuses: ${path.basename(target)}`);
+        } finally {
+          __setIdentityStat(null);
+        }
+        ok(!existsSync(out4), "nothing is written when a note was swapped");
+      }
+      // (b) the reserved prefix is case-blind (Windows names are)
+      writeFileSync(path.join(mem4, "ARCHIVE__swapped.md"), "x\n");
+      eq(quiet(() => stage(out4, mem4)), 1, "a live note named ARCHIVE__* (any case) refuses the stage");
+      unlinkSync(path.join(mem4, "ARCHIVE__swapped.md"));
+      // (c) an error while checking ONE archived note refuses with a diagnostic, not a crash
+      __setLinkStat((p) => {
+        if (p === path.join(arch4, "swapped.md")) { const e = new Error("busy"); e.code = "EBUSY"; throw e; }
+        return lstatSync(p);
+      });
+      try {
+        const run = captured(() => stage(out4, mem4));
+        eq(run.value, 1, "an error checking one archived note refuses the stage");
+        ok(/could not be checked \(EBUSY\)/.test(run.said), "and says which note and why");
+      } finally {
+        __setLinkStat(null);
+      }
+      eq(quiet(() => stage(out4, mem4)), 0, "with nothing swapped the same source stages");
+      eq(readFileSync(path.join(out4, "archive__swapped.md"), "utf8"), "archived\n", "the checked read copies the note's bytes");
+    }
+
+    // Codex App (#1098): staging into the archive's location while it does NOT exist yet would
+    // write snapshot files where the next run reads archived notes from. Refuse it too.
+    {
+      const p5 = fresh("archive-absent-overlap");
+      const mem5 = path.join(p5, "memory");
+      mkdirSync(mem5);
+      writeFileSync(path.join(mem5, INDEX_FILE), "# idx\n");
+      const absentArchive = path.join(p5, "memory-archive");
+      eq(quiet(() => stage(absentArchive, mem5)), 1, "staging into a not-yet-created archive folder is refused");
+      eq(quiet(() => stage(path.join(absentArchive, "snap"), mem5)), 1, "staging inside a not-yet-created archive folder is refused");
+      ok(!existsSync(absentArchive), "the refused runs did not create the archive folder");
+      eq(quiet(() => stage(path.join(root, "staged-absent-ok"), mem5)), 0, "staging elsewhere with no archive still succeeds");
+    }
+
+    // Only a source literally named `memory` has an archive.
+    const other = fresh("archive-other");
+    const notMemory = path.join(other, "notes");
+    mkdirSync(notMemory); mkdirSync(path.join(other, "memory-archive"));
+    writeFileSync(path.join(notMemory, INDEX_FILE), "# idx\n");
+    writeFileSync(path.join(other, "memory-archive", "x.md"), "x\n");
+    const otherOut = path.join(root, "staged-archive-other");
+    eq(quiet(() => stage(otherOut, notMemory)), 0, "a source not named memory stages");
+    eq(readManifest(otherOut).files.length, 1, "a source not named memory picks up no archive");
   }
 
   // ── the CLI still runs when invoked directly ──────────────────────────────
