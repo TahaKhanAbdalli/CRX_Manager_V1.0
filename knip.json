@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/main.tsx", "src/setupTests.ts"],
+  "project": ["src/**/*.{js,jsx,ts,tsx}"],
+  "ignore": ["src/types/supabase.ts"],
+  "playwright": false
+}

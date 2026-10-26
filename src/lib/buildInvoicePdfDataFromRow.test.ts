@@ -22,12 +22,25 @@ vi.mock('./db', () => ({
   supabase: { from: mockFrom },
 }));
 
-import { buildInvoicePdfDataFromRow } from './invoicePdf';
+const { mockCapture } = vi.hoisted(() => ({ mockCapture: vi.fn() }));
+vi.mock('./sentry', () => ({ Sentry: { captureException: mockCapture } }));
+
+import {
+  buildInvoicePdfDataFromRow,
+  buildBatchInvoicePdfData,
+  batchInvoicePrintToast,
+  InvoiceLinesUnavailableError,
+  type InvoicePdfData,
+} from './invoicePdf';
+
+// One saved line, so the line-read guard sees a normal invoice.
+const ONE_LINE = { description: 'Herbicide', quantity: 1, unit_price_cents: 100000, extended_cents: 100000 };
 
 // The DB rows each table returns for the invoice under test.
 interface PerTable {
   customers?: Record<string, unknown> | null;
-  invoice_items?: Array<Record<string, unknown>>;
+  invoice_items?: Array<Record<string, unknown>> | null;
+  invoice_items_error?: { message: string } | null;
   invoice_shares?: Array<Record<string, unknown>>;
   invoices?: Record<string, unknown> | null; // the #33 billing re-fetch
 }
@@ -45,10 +58,13 @@ function installFromMock(per: PerTable) {
       error: null,
     });
     const arrayData =
-      table === 'invoice_items' ? per.invoice_items ?? []
+      table === 'invoice_items' ? (per.invoice_items === undefined ? [] : per.invoice_items)
       : table === 'invoice_shares' ? per.invoice_shares ?? []
       : [];
-    chain.order = vi.fn().mockResolvedValue({ data: arrayData, error: null });
+    chain.order = vi.fn().mockResolvedValue({
+      data: arrayData,
+      error: table === 'invoice_items' ? per.invoice_items_error ?? null : null,
+    });
     // invoice_shares is awaited directly after .eq(...) (no .order()); make the chain
     // thenable so `await supabase.from('invoice_shares').select(...).eq(...)` resolves.
     chain.then = (resolve: (v: { data: unknown; error: unknown }) => void) =>
@@ -89,7 +105,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     // the DB values so the PDF prints the discount line + Terms.
     installFromMock({
       customers: { billing_address: '1 Rd', city: 'Town', state: 'IL', zip: '60000', account_number: 'A1', payment_terms: 'Customer default terms' },
-      invoice_items: [],
+      invoice_items: [ONE_LINE],
       invoice_shares: [],
       invoices: {
         discount_earned_cents: 2500,
@@ -115,7 +131,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
   it('falls back to the customer default Terms when the invoice has no payment_terms', async () => {
     installFromMock({
       customers: { payment_terms: 'Customer default terms' },
-      invoice_items: [],
+      invoice_items: [ONE_LINE],
       invoice_shares: [],
       invoices: { discount_earned_cents: 0, payment_terms: null, purchase_order_ref: null, due_date: null, header_notes: null, footer_notes: null },
     });
@@ -130,7 +146,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     // Those must win over whatever is currently persisted.
     installFromMock({
       customers: { payment_terms: 'Customer default terms' },
-      invoice_items: [],
+      invoice_items: [ONE_LINE],
       invoice_shares: [],
       invoices: {
         discount_earned_cents: 2500, // stale persisted value
@@ -166,7 +182,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     // the re-fetch (null is "provided", only undefined triggers the fallback).
     installFromMock({
       customers: { payment_terms: null },
-      invoice_items: [],
+      invoice_items: [ONE_LINE],
       invoice_shares: [],
       invoices: { discount_earned_cents: 2500, payment_terms: 'Net 15', purchase_order_ref: 'PO-OLD' },
     });
@@ -178,5 +194,92 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     expect(data.discount_earned_cents).toBe(0);
     expect(data.payment_terms).toBeUndefined(); // cleared, no customer default either
     expect(data.purchase_order_ref).toBeUndefined();
+  });
+});
+
+describe('buildInvoicePdfDataFromRow — B3 line-read guard', () => {
+  it('refuses the PDF when the invoice_items read fails', async () => {
+    installFromMock({ invoice_items: null, invoice_items_error: { message: 'network' } });
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toBeInstanceOf(InvoiceLinesUnavailableError);
+  });
+
+  it('refuses the PDF when the read returns no lines under a non-zero total', async () => {
+    installFromMock({ invoice_items: [] });
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toThrow('Could not load the invoice lines');
+  });
+
+  it('refuses a credit (negative total) with no lines too', async () => {
+    installFromMock({ invoice_items: [] });
+    await expect(buildInvoicePdfDataFromRow(listRow({ total_amount_cents: -5000 }))).rejects.toBeInstanceOf(InvoiceLinesUnavailableError);
+  });
+
+  it('still prints a $0 invoice that has no lines', async () => {
+    installFromMock({ invoice_items: [] });
+    const data = await buildInvoicePdfDataFromRow(listRow({ total_amount_cents: 0, balance_cents: 0 }));
+    expect(data.items).toEqual([]);
+  });
+
+  it('prints a normal invoice with its lines', async () => {
+    installFromMock({ invoice_items: [ONE_LINE] });
+    const data = await buildInvoicePdfDataFromRow(listRow());
+    expect(data.items).toHaveLength(1);
+  });
+});
+
+describe('buildBatchInvoicePdfData — skip and name a bad invoice', () => {
+  const ok = (n: string) => ({ invoice_number: n } as InvoicePdfData);
+
+  it('skips the invoice whose lines failed, names it, and keeps the others in order', async () => {
+    const rows = [{ invoice_number: 'INV-1' }, { invoice_number: 'INV-2' }, { invoice_number: 'INV-3' }];
+    const { list, skipped } = await buildBatchInvoicePdfData(rows, async (r) => {
+      if (r.invoice_number === 'INV-2') throw new InvoiceLinesUnavailableError();
+      return ok(r.invoice_number);
+    });
+    expect(list.map((d) => d.invoice_number)).toEqual(['INV-1', 'INV-3']);
+    expect(skipped).toEqual(['INV-2']);
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the batch, naming every invoice, when all of them were skipped', async () => {
+    const rows = [{ invoice_number: 'INV-1' }, { invoice_number: 'INV-2' }];
+    await expect(buildBatchInvoicePdfData(rows, async () => { throw new InvoiceLinesUnavailableError(); }))
+      .rejects.toThrow('INV-1, INV-2');
+  });
+
+  it('builds at most 5 invoices at a time and keeps the selection order', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ invoice_number: `INV-${i}` }));
+    let running = 0;
+    let peak = 0;
+    const { list } = await buildBatchInvoicePdfData(rows, async (r) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((res) => setTimeout(res, 1));
+      running -= 1;
+      return ok(r.invoice_number);
+    });
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(list.map((d) => d.invoice_number)).toEqual(rows.map((r) => r.invoice_number));
+  });
+
+  it('any other error still fails the whole batch', async () => {
+    await expect(buildBatchInvoicePdfData([{ invoice_number: 'INV-1' }], async () => { throw new Error('boom'); }))
+      .rejects.toThrow('boom');
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('the finished-batch toast names the skipped invoices', () => {
+    expect(batchInvoicePrintToast(2, [])).toEqual({ type: 'success', message: 'Printed 2 invoice(s)' });
+    const warn = batchInvoicePrintToast(1, ['INV-2']);
+    expect(warn.type).toBe('warning');
+    expect(warn.message).toContain('Skipped INV-2');
+  });
+
+  it('the toast names PDFs that failed to build and shortens a long list', () => {
+    const failed = batchInvoicePrintToast(3, [], ['INV-9']);
+    expect(failed.type).toBe('warning');
+    expect(failed.message).toContain('Printed 3 invoice(s).');
+    expect(failed.message).toContain('Could not make the PDF for INV-9');
+    const many = Array.from({ length: 8 }, (_, i) => `INV-${i}`);
+    expect(batchInvoicePrintToast(0, many).message).toContain('INV-0, INV-1, INV-2, INV-3, INV-4 and 3 more');
   });
 });

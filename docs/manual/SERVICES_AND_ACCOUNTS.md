@@ -96,9 +96,10 @@ template is `.env.example`.
 - **Keys:** `VITE_SENTRY_DSN` (browser; Vercel env and GitHub secret), `SENTRY_DSN` (Edge
   Function secret), `SENTRY_AUTH_TOKEN` (Vercel env, build-time upload only). A DSN only lets
   someone send errors in, so it is not sensitive; the auth token is.
-- **Check needed:** `vite.config.ts` falls back to the org name `crx-solutions`, but the real
-  Sentry org is `crop-rx-solutions`. Unless Vercel sets `SENTRY_ORG`, source-map upload goes to
-  the wrong org. Mason to confirm `SENTRY_ORG` is set in Vercel.
+- **Org name:** `vite.config.ts` defaults to `crop-rx-solutions` (fixed 2026-10-26; it used to
+  default to `crx-solutions`, and every production source-map upload failed with "Project not
+  found"). A `SENTRY_ORG` value in Vercel would override that default, so if the upload fails
+  again, check that setting first. The Vercel build log shows the upload result.
 - **Plan / cost:** Mason to confirm.
 
 ### 5. Resend (outgoing email)

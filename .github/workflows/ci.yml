@@ -374,6 +374,12 @@ jobs:
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run lint
 
+      - name: Code-health ratchet (no new oversized, tangled, or unused code)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        env:
+          CODE_HEALTH_BASE: origin/${{ github.base_ref || 'main' }}
+        run: npm run check:code-health
+
       - name: Run TypeScript type check
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run typecheck

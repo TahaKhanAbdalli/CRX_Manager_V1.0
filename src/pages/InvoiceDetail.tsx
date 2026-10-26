@@ -22,7 +22,7 @@ import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyM
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { Invoice, InvoiceChargeType, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { CHARGE_TYPE_OPTIONS, chargeTypeLabel, fromScratchLinesProblem, isFromScratchInvoice } from '../lib/invoiceChargeLines';
-import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
+import { assertInvoiceLinesLoaded, downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { getTierPrice } from '../lib/quoteCalc';
 import { ilikeOrPattern } from '../lib/recordSearch';
@@ -1611,10 +1611,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // with no lines under the stored total. A read that returns no lines for an invoice with a
     // non-zero total is the same failure. Print and Email toast this through runCriticalAction.
     const printedTotalCents = invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0);
-    const noLinesUnderTotal = (enrichedItems?.length ?? 0) === 0 && printedTotalCents !== 0;
-    if (itemsError || !enrichedItems || noLinesUnderTotal) {
-      throw new Error('Could not load the invoice lines, so no PDF was made. Please try again.');
-    }
+    assertInvoiceLinesLoaded(itemsError, enrichedItems, printedTotalCents);
 
     const cust = customers.find(c => c.id === invoice.customer_id);
 

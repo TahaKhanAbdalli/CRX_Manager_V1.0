@@ -292,6 +292,30 @@ describe('EditableDataTable', () => {
       expect(changes.get('1')?.price).toBe('90071992547409.91');
     });
 
+    it('locks every cell and Cancel while a save runs, and unlocks them when it fails', async () => {
+      let finish: (closeEditMode: boolean) => void = () => {};
+      const onSave = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      render(<EditableDataTable data={testData} columns={columns} rowKey="id" canEdit onSave={onSave} />);
+
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), { target: { value: 'Product A2' } });
+      fireEvent.click(screen.getByText('Save (1)'));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+      // Mid-save: nothing typed now could be lost, because nothing can be typed.
+      expect(screen.getByDisplayValue('Product B')).toBeDisabled();
+      expect(screen.getByDisplayValue('1000')).toBeDisabled();
+      expect(screen.getAllByRole('combobox')[0]).toBeDisabled();
+      expect(screen.getAllByRole('checkbox')[0]).toBeDisabled();
+      expect(screen.getByText('Cancel').closest('button')).toBeDisabled();
+
+      // A save that keeps edit mode open (it failed or was refused) hands the cells back.
+      finish(false);
+      await waitFor(() => expect(screen.getByDisplayValue('Product B')).not.toBeDisabled());
+      expect(screen.getByDisplayValue('Product A2')).not.toBeDisabled();
+      expect(screen.getByText('Cancel').closest('button')).not.toBeDisabled();
+    });
+
     it('shows Edit button when canEdit=true', () => {
       render(<EditableDataTable data={testData} columns={columns} rowKey="id" canEdit />);
       expect(screen.getByText('Edit')).toBeInTheDocument();

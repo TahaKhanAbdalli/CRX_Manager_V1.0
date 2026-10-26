@@ -33,7 +33,7 @@ export default defineConfig({
     // so they never reach end users.  Only activates when SENTRY_AUTH_TOKEN is set
     // (i.e., in Vercel CI — not local dev).
     sentryVitePlugin({
-      org: process.env.SENTRY_ORG ?? 'crx-solutions',
+      org: process.env.SENTRY_ORG ?? 'crop-rx-solutions',
       project: process.env.SENTRY_PROJECT ?? 'crx-manager',
       authToken: process.env.SENTRY_AUTH_TOKEN,
       sourcemaps: {
@@ -86,26 +86,10 @@ export default defineConfig({
         // The UpdatePrompt component handles activation when the user consents.
         // Don't precache sw-doctor.js so it always loads from network
         globIgnores: ['**/sw-doctor.js'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'gstatic-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
+        // No runtimeCaching for Google Fonts: a service-worker fetch is checked
+        // against the CSP connect-src, which does not list the font hosts, so
+        // those rules blocked the fonts. The browser loads them directly instead
+        // (allowed by style-src / font-src) and caches them over HTTP.
       },
     }),
   ],
@@ -114,13 +98,20 @@ export default defineConfig({
   },
   build: {
     sourcemap: 'hidden',
-    rollupOptions: {
+    // Vite 8 raised its default browser floor (Safari 16.0 -> 16.4); keep the
+    // Vite 7 floor so field staff on older iPhones and iPads still load the app.
+    target: ['chrome107', 'edge107', 'firefox104', 'safari16'],
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-supabase': ['@supabase/supabase-js'],
-          'vendor-ui': ['lucide-react'],
-          'vendor-mapbox': ['mapbox-gl'],
+        // Vite 8 (Rolldown) dropped the object form of manualChunks; these
+        // groups produce the same four vendor chunks.
+        codeSplitting: {
+          groups: [
+            { name: 'vendor-react', test: /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/ },
+            { name: 'vendor-supabase', test: /[\\/]node_modules[\\/]@supabase[\\/]/ },
+            { name: 'vendor-ui', test: /[\\/]node_modules[\\/]lucide-react[\\/]/ },
+            { name: 'vendor-mapbox', test: /[\\/]node_modules[\\/]mapbox-gl[\\/]/ },
+          ],
         },
       },
     },

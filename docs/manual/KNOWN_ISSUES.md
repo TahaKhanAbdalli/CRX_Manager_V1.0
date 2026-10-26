@@ -8,7 +8,8 @@ The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read live,
 the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`, `20261022101000`
 and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and search-path items, and the
 `invoice_postable_version` overload. Every other "applied live" statement below is still the older record's claim,
-marked as such.
+marked as such. The margin-floor PR (To-Do 0.2) re-read the ledger again on 2026-10-26 (newest rows
+`20261023100000` and `20261023090000`), consistent with KI-01.
 
 This file is the short list of things that are genuinely open, or that someone decided to live with. Everything
 else (fixed, merged, retired, long write-ups, the evidence trail, old section numbers like §0d, §4b, F06) is
@@ -175,9 +176,15 @@ scanner for this is acknowledged as a weak tripwire.
 
 ### KI-12 — Quote "Convert to Order" can leave an accepted quote with no order
 **MED (latent) · OPEN · money/inventory/UI · unassigned (Mason to decide about one real accepted quote with no order)**
-`src/pages/QuoteBuilder.tsx:3419-3421` marks the quote Accepted (releasing its inventory holds) before the order
+`src/pages/QuoteBuilder.tsx:3447-3449` marks the quote Accepted (releasing its inventory holds) before the order
 is created. If the second step fails the quote reads as converted but has no order and its holds are gone;
-pressing Convert again recovers. Two small database clean-ups (extra `quote_sections` privileges and a loose
+pressing Convert again recovers. **The December pre-booking flow has the same gap** (raised by Maksym, checked in
+the code 2026-10-26). A pre-booking is a Planned Program quote whose stock is reserved with holds
+(`create_planned_holds`). Whole Convert to Order and Book as Order on it both go through the same accept-first step,
+and the trigger `release_holds_on_quote_status_change` (latest in `20260706030000`) frees every active hold when the
+status becomes Accepted. A failed conversion therefore leaves the pre-booked stock unreserved with no order behind
+it. Partial Order (`draw_down_quote`) is one database call that does not flip the status first, so it is not
+affected. Two small database clean-ups (extra `quote_sections` privileges and a loose
 `_below_cost_reason_from_json` parser) and a display-only profit mismatch are also recorded; the fixes exist only
 on closed PR #397.
 

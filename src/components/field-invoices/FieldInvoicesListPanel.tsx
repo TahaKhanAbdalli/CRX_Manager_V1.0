@@ -13,7 +13,7 @@ import { INVOICE_COLUMNS } from '../../lib/costFields';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { exportToCSV } from '../../lib/csvExport';
 import { downloadReportPdf } from '../../lib/reportPdf';
-import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf, generateInvoicePdf } from '../../lib/invoicePdf';
+import { buildInvoicePdfDataFromRow, buildBatchInvoicePdfData, batchInvoicePrintToast, generateBatchInvoicePdf, downloadInvoicePdf, generateInvoicePdf } from '../../lib/invoicePdf';
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
@@ -334,15 +334,15 @@ export default function FieldInvoicesListPanel() {
     if (filtered.length === 0) { toast('error', 'No invoices to print'); return; }
     await runCriticalAction({
       action: async () => {
-        const list = await Promise.all(
-          filtered.map((row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
-            show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
-          }))
-        );
-        await generateBatchInvoicePdf(list);
+        // An invoice whose lines could not be read is skipped and named; the rest still print.
+        const { list, skipped } = await buildBatchInvoicePdfData(filtered, (row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
+          show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+        }));
+        const { failures } = await generateBatchInvoicePdf(list);
+        const done = batchInvoicePrintToast(list.length - failures.length, skipped, failures);
+        toast(done.type, done.message);
       },
       toast,
-      successMessage: `Printed ${filtered.length} invoice(s)`,
       setLoading: setPrinting,
       sentryTag: format === 'legacy' ? 'field_invoice_combined_old_print_all' : 'field_invoice_combined_print_all',
     });

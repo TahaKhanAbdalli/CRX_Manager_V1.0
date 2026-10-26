@@ -1370,6 +1370,27 @@ export interface PurchaseOrderItem {
   product?: Product;
 }
 
+/** A product's net-margin floor (ratio, like Product.tier1_margin). No row = no floor. Admin-only. */
+export interface ProductMarginFloor {
+  product_id: string;
+  margin_floor: number;
+  set_by: string | null;
+  set_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Append-only history of a product's margin floor; new_margin_floor null = cleared. Admin-only. */
+export interface ProductMarginFloorChange {
+  id: string;
+  product_id: string;
+  old_margin_floor: number | null;
+  new_margin_floor: number | null;
+  reason: string | null;
+  changed_by: string | null;
+  created_at: string;
+}
+
 /** One row of the admin-only, append-only purchase-order cost history (20261021140000). */
 export type PurchaseOrderCostChangeSource = 'entered' | 'edited' | 'catalog_default' | 'set_by_admin' | 'confirmed';
 

@@ -15,6 +15,8 @@ import ConfirmModal from '../ui/ConfirmModal';
 import MobileCardList from '../ui/MobileCardList';
 import {
   buildInvoicePdfDataFromRow,
+  buildBatchInvoicePdfData,
+  batchInvoicePrintToast,
   generateBatchInvoicePdf,
   generateInvoicePdf,
   downloadInvoicePdf,
@@ -351,15 +353,15 @@ export default function FieldInvoicesPostedPanel() {
     if (visible.length === 0) { toast('error', 'No invoices to print'); return; }
     await runCriticalAction({
       action: async () => {
-        const list = await Promise.all(
-          visible.map((row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
-            show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
-          }))
-        );
-        await generateBatchInvoicePdf(list);
+        // An invoice whose lines could not be read is skipped and named; the rest still print.
+        const { list, skipped } = await buildBatchInvoicePdfData(visible, (row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
+          show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+        }));
+        const { failures } = await generateBatchInvoicePdf(list);
+        const done = batchInvoicePrintToast(list.length - failures.length, skipped, failures);
+        toast(done.type, done.message);
       },
       toast,
-      successMessage: `Printed ${visible.length} invoice(s)`,
       setLoading: setBusy,
       sentryTag: format === 'legacy' ? 'field_invoice_posted_old_print_all' : 'field_invoice_posted_print_all',
     });
