@@ -1,5 +1,5 @@
 -- Written 2026-10-25. STATUS: NOT APPLIED (local candidate). Apply status is tracked only in
--- docs/reference/migration-history.md (row 983).
+-- docs/reference/migration-history.md (row 985).
 --
 -- WHAT (To-Do row 11.4, part B of the fix plan in docs/manual/KNOWN_ISSUES.md KI-01 and KI-73):
 --   field roles read only the fields of the jobs they are assigned to through the TABLES too, not
@@ -68,10 +68,10 @@
 --
 -- EXPECTED NARROWING (by design): an applicator's Record Book keeps their own application records,
 --   but shows "-" as the field name once that job's assignment ends, as it already does for the
---   customer name after customers_select's 7-day window. FAILS CLOSED FOR anon: four of the
---   narrowed SELECT policies are TO public, and anon cannot run _can_see_field or is_sales_rep, so a
---   signed-out read of those tables now errors instead of returning no rows. The app never reads
---   them signed out.
+--   customer name after customers_select's 7-day window. FAILS CLOSED FOR anon: arf_select is
+--   TO public and anon cannot run is_admin or _can_see_field, so a signed-out read of
+--   application_record_fields now errors instead of returning no rows (the other three TO public
+--   policies already called is_admin, so they already errored). The app never reads them signed out.
 
 SET LOCAL lock_timeout = '5s';
 -- Policy expressions are printed relative to the search_path; fix it so the pinned texts compare.

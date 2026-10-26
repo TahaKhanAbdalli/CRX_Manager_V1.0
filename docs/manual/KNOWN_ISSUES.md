@@ -1,8 +1,11 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-23 (America/Chicago)** against `main` at `62ca3b640` (code, migration files, merged
-PRs). Live-database facts were NOT re-read for this rewrite (no database access in this pass): any "applied
-live" statement below is the older record's claim, and every such claim is marked as such.
+**Last verified: 2026-10-25 (America/Chicago)** for KI-01 and KI-73 only (row 11.4 part B, PR #1103): their
+field policies, `_can_see_field` and `get_job_billed_customers` bodies, and the ledger rows of `20261023090000`
+and `20261023100000` (both applied) were re-read live read-only that day. The rest of the file was last verified
+2026-10-23 against `main` at `62ca3b640` (code, migration files, merged PRs); live-database facts were NOT re-read
+for that rewrite: any "applied live" statement outside KI-01/KI-73 is the older record's claim, and every such
+claim is marked as such.
 
 This file is the short list of things that are genuinely open, or that someone decided to live with. Everything
 else (fixed, merged, retired, long write-ups, the evidence trail, old section numbers like §0d, §4b, F06) is
@@ -52,8 +55,8 @@ returned every customer's field boundaries, owners, billing splits, balances and
 because the functions never checked who was asking. Applicators can also read every field-table row, not only
 the fields they were dispatched to (still open). Proven by read-only impersonation on 2026-10-22. Planned as
 three parts: A (functions, PR #1065, applied live and merged), B (tables), C (the job route). Part B is written
-and proven in a disposable database, NOT applied (`20261023110000_field_tables_follow_field_access`, history row
-983; KI-73); part C has no PR. Related lows: dispatched
+and proven in a disposable database, NOT applied (`20261026050000_field_tables_follow_field_access`, history row
+985; KI-73); part C has no PR. Related lows: dispatched
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
 Status 2026-10-23: part A was written and not yet applied (`20261023090000_field_functions_require_field_access`,
@@ -491,14 +494,15 @@ Mason's REAL-DATA-OK.
   field-map lookups only.
 - Applicators read every `fields` row, and `field_polygons`, crop history, obstacles and `field_app_locations`
   follow the same rule (HIGH; 5 of 5 rows live for the real applicator on 2026-10-25, Central). Part B
-  (`20261023110000`, row 983, written and container-proven 2026-10-25, NOT applied) closes it, plus: the
+  (`20261026050000`, row 985, written and container-proven 2026-10-25, NOT applied) closes it, plus: the
   `field_billing_defaults`/`application_record_fields` driver reads above; direct `field_polygons` writes by any
   applicator (made office-only); `field_app_locations`/`_shares` reads (office-only); and
   `get_job_billed_customers` letting any applicator through on a job with no whole-job applicator (NULL gate).
   Mason decided 2026-10-25 that someone sent to a job sees the entire job (`DECISION_LOG.md`), so part B also
   widens `_can_see_field`'s dispatch leg to every field of the dispatched job and keeps the job pages job-wide;
   that resolves the split-job report mismatch a per-field view would have caused. Left after part B: anon reads
-  of four `TO public` field tables now error instead of returning nothing (LOW, fails closed); a crew member
+  of `application_record_fields` now error instead of returning nothing (LOW, fails closed; three other field
+  tables already did); a crew member
   whose role is driver keeps the crew job and its map but not the field tables (by design).
 - Opposite gap: dispatch-only applicators cannot read their assigned fields' shares, application records and
   details, attachments, or job-attachment photos (LOW). Mason's 2026-10-25 decision (they see the entire job and

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Real-schema proof for the 20261023110000 candidate: field tables follow field access
+ * Real-schema proof for the 20261026050000 candidate: field tables follow field access
  * (To-Do row 11.4, part B; Mason 2026-10-25: field staff see the entire job they are sent to).
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a network-disabled Supabase
@@ -49,7 +49,7 @@ const KEEP = process.env.CRX_PROVER_KEEP_CONTAINER === '1';
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
-const CANDIDATE = path.join(MIGRATIONS, '20261023110000_field_tables_follow_field_access.sql');
+const CANDIDATE = path.join(MIGRATIONS, '20261026050000_field_tables_follow_field_access.sql');
 // Live but not replayable here (storage.objects policies, storage.buckets settings); it must not touch what this proves.
 const PARKED = new Set([
   '20260914100700_customer_document_bytes_server_only.sql',

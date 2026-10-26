@@ -1,7 +1,7 @@
 ## 2026-10-25 — Field tables follow field access (To-Do row 11.4, part B)
 
 Part B of the row 11.4 fix plan in `docs/manual/KNOWN_ISSUES.md` (KI-01, KI-73). One new migration,
-`20261023110000_field_tables_follow_field_access.sql` (migration-history row 983, not applied), a
+`20261026050000_field_tables_follow_field_access.sql` (migration-history row 985, not applied), a
 checked-in disposable prover (`scripts/smoke/prove-field-tables-follow-field-access-real-schema.mjs`)
 and its container chain (`scripts/smoke/smoke-field-tables-follow-field-access.sql`). No frontend file
 changed. Mason decided the scope in the session: someone sent to a job sees the entire job, and jobs
@@ -38,7 +38,8 @@ let field roles read everything: live, the one applicator read all 5 `fields` ro
   job-wide, so an assignee's reports cover the whole job.
 * Expected narrowing: an applicator's Record Book shows "-" for the field name once that job's
   assignment ends, as it already does for the customer name after 7 days. A signed-out read of the
-  four `TO public` tables now errors instead of returning nothing.
+  `application_record_fields` table now errors instead of returning nothing (three other field tables
+  already did).
 
 ### Not changed
 

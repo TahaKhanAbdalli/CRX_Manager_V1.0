@@ -1,5 +1,5 @@
 -- ============================================================================
--- SMOKE TEST (rolled back by design) for 20261023110000_field_tables_follow_field_access.
+-- SMOKE TEST (rolled back by design) for 20261026050000_field_tables_follow_field_access.
 --
 -- CONTAINER ONLY: run through scripts/smoke/prove-field-tables-follow-field-access-real-schema.mjs,
 -- never against the live database: the chain plants [SMOKE] logins (auth.users rows), a customer,
