@@ -786,22 +786,22 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
     ok(sql(query).includes("deny"), `RPC call outside a rollback-only batch denied: ${label}`);
   }
   eq(sql("DO $$ BEGIN RAISE NOTICE '%', now(); END $$;").trim(), "", "a read-only DO block using builtins is still allowed");
-  // Every live-runnable smoke chain in the repo classifies as rollback-only, except
-  // three that EXECUTE a variable (a loop over format() text). Dynamic SQL hides
-  // names from the checks (Sol, #1092), so they stay refused until rewritten to
-  // EXECUTE '<literal>' USING ….
+  // Every live-runnable smoke chain in the repo classifies as rollback-only, with
+  // no exceptions. Dynamic SQL hides names from the checks (Sol, #1092), so a
+  // chain may only EXECUTE a literal; the three that once EXECUTEd a variable (a
+  // loop over format() text) were rewritten on 2026-10-26 to pick one literal
+  // EXECUTE, or a plain call, per CASE branch.
   const smokeDir = path.join(__dirname, "..", "..", "scripts", "smoke");
   const smokeSpecs = JSON.parse(fs.readFileSync(path.join(smokeDir, "smoke-specs.json"), "utf8")).specs;
-  const dynamicSqlChains = new Set(["save_quote_customer_row_version", "cost_margin_admin_only_rpc_leaks", "money_replay_binding_batch1"]);
   let smokeCount = 0;
   for (const [key, spec] of Object.entries(smokeSpecs)) {
     if (spec.container_only || spec.psql_only) continue;
-    const verdict = classifySql(fs.readFileSync(path.join(smokeDir, spec.chain), "utf8")).block;
-    if (dynamicSqlChains.has(key)) { eq(verdict, true, `dynamic-SQL chain stays refused: ${key}`); continue; }
+    const verdict = classifySql(fs.readFileSync(path.join(smokeDir, spec.chain), "utf8"));
     smokeCount++;
-    eq(verdict, false, `live smoke chain runs through the guard: ${key}`);
+    eq(verdict.block, false, `live smoke chain runs through the guard: ${key}`);
+    eq(verdict.kind, "rolled-back-smoke", `live smoke chain is a verified rollback-only batch: ${key}`);
   }
-  ok(smokeCount >= 66, `smoke chain sweep covered ${smokeCount} chains (66 on 2026-10-25)`);
+  ok(smokeCount >= 69, `smoke chain sweep covered ${smokeCount} chains (69 on 2026-10-26)`);
   fs.rmSync(proj, { recursive: true, force: true });
 }
 // codex-push-guard: a non-push command → silent passthrough (plain git push of a
