@@ -86,26 +86,10 @@ export default defineConfig({
         // The UpdatePrompt component handles activation when the user consents.
         // Don't precache sw-doctor.js so it always loads from network
         globIgnores: ['**/sw-doctor.js'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'gstatic-fonts-cache',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
+        // No runtimeCaching for Google Fonts: a service-worker fetch is checked
+        // against the CSP connect-src, which does not list the font hosts, so
+        // those rules blocked the fonts. The browser loads them directly instead
+        // (allowed by style-src / font-src) and caches them over HTTP.
       },
     }),
   ],
