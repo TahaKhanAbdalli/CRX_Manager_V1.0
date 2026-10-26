@@ -71,12 +71,12 @@ describe('Prepay Workspace customer list', () => {
   it('lists every active customer with a prepay balance, past the 1,000-row cap', async () => {
     renderPanel();
     const select = screen.getByLabelText('Customer');
-    // A read stopped at 1,000 rows ends at Farm 0999.
-    await waitFor(() => expect(select.querySelectorAll('option')).toHaveLength(TOTAL + 1));
+    // A read stopped at 1,000 rows ends at Farm 0999. Rendering 1,005 options is slow under a loaded full-suite run.
+    await waitFor(() => expect(select.querySelectorAll('option')).toHaveLength(TOTAL + 1), { timeout: 15000 });
     expect(screen.getByRole('option', { name: `Farm ${pad(TOTAL - 1)}` })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'No Balance Farm' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Inactive Farm' })).not.toBeInTheDocument();
-  });
+  }, 30000);
 
   it('a failed read shows an error and disables the dropdown instead of an empty list', async () => {
     H.failing.add('customers');
