@@ -53,6 +53,13 @@ they were dispatched to. Proven by read-only impersonation on 2026-10-22. Planne
 PR #1065 draft, not merged), B (tables), C (the job route). Parts B and C have no PR. Related lows: dispatched
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
+Status 2026-10-23: part A is written and NOT applied (`20261023090000_field_functions_require_field_access`,
+history row 980). It adds `_can_see_field`, filters the two field-map lookups by it, makes the other field and money
+functions office-only (plus three uncalled ones the review found), and was proven in a disposable copy of the
+schema (`scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs`): each applicator sees only
+its assigned fields, everyone else none, office staff unchanged. It stays open until applied and re-checked live.
+Until part B narrows `job_fields`, an applicator sent to one field of a split job gets no weather centroid on Job
+Detail when the job's first field is not theirs (0 split assignments live, 2026-10-22).
 
 ### KI-02 — Product cost and margin: server functions not yet fully audited
 **MED · PARTIAL · security/money · follow-up audit unassigned**
@@ -451,6 +458,9 @@ Mason's REAL-DATA-OK.
 **HIGH · OPEN · security · Mason approval to narrow permissions**
 - `global_search` lets any signed-in user search customer names and contacts, order/invoice/delivery numbers and
   farm names; `get_notes_for_entity` lets any signed-in user with a record ID read its team notes (HIGH).
+  Part A (PR #1065, not applied) closes both: search returns nothing to field roles and notes follow the linked
+  record. `team_notes` itself still admits every active profile, so the Team Board shows field roles every note;
+  Mason decided 2026-10-23 to keep that for now (To-Do row 11.11, `DECISION_LOG.md`).
 - Every active account reads every `customer_addresses` row (To-Do row 11.7; HIGH).
 - Drivers can read every customer's billing splits and spray-record field/acres data through
   `field_billing_defaults` and `application_record_fields` (MED).
@@ -481,6 +491,7 @@ OrderDetail.
 - Quote re-save can still be refused when a save both deletes or switches a saved line and adds several new lines
   for the same product (LOW).
 - `issue_return_credit` and the delivery-split functions can fall back to `current_season()` (UTC) (LOW).
+- `get_customer_summary` and `operational_dashboard_summary` pick the season from the UTC `current_date`, so from 7 PM to midnight Central on 30 September they already count the new season (found by CodeRabbit on PR #1065, 2026-10-25; that PR keeps both bodies as live has them) (LOW).
 - Transfer Net 30 (KI-14): the post path was not traced, so a later step might correct it (uncertain).
 - Split billing: a split can bill any customer named in editable order allocations, field owners or billing
   defaults; whether that scope is intended is Mason's open decision (MED). Any rep can read another rep's
