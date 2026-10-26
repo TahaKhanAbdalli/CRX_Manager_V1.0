@@ -2,7 +2,7 @@ import { assertRpcResult, hasRpcCode, RpcErrorCodes, supabase, supabaseUntyped }
 import { sanitizeError } from './errorSanitizer';
 import type { BrandSignalWord, ProductBrand } from '../types';
 
-export const PRODUCT_BRAND_COLUMNS =
+const PRODUCT_BRAND_COLUMNS =
   'id, product_id, brand_name, epa_registration, manufacturer, is_currently_sourced, is_rup, signal_word, row_version, created_by, updated_by, created_at, updated_at';
 
 /**

@@ -10,7 +10,7 @@ export type ProductIdentityResolution<T extends ProductIdentityCandidate> =
   | { status: 'missing'; product: null }
   | { status: 'ambiguous'; product: null; candidates: T[] };
 
-export function normalizeProductIdentity(value: string | null | undefined): string {
+function normalizeProductIdentity(value: string | null | undefined): string {
   return (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 

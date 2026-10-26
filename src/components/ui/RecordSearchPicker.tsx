@@ -5,9 +5,9 @@ import { useToast } from './Toast';
 import { useLatestRef } from '../../hooks/useLatestRef';
 import { ilikeOrPattern } from '../../lib/recordSearch';
 
-export const RECORD_SEARCH_LIMIT = 20;
+const RECORD_SEARCH_LIMIT = 20;
 // A search with no reply by then is shown as failed (with Retry) instead of "Searching..." forever.
-export const RECORD_SEARCH_TIMEOUT_MS = 15_000;
+const RECORD_SEARCH_TIMEOUT_MS = 15_000;
 // One character is enough: a record named "A" must be reachable (Codex review, #1017).
 // A broad one-letter search still returns only the first 20, with the "keep typing" note.
 const MIN_QUERY_LENGTH = 1;

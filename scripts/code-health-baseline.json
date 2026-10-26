@@ -805,61 +805,17 @@
       "export:batchRowIdempotencyKey",
       "export:classifyAdjustmentError"
     ],
-    "src/components/jobs/jobListColumns.ts": [
-      "export:SHARED_INVOICE_COLUMN_IDS"
-    ],
-    "src/components/jobs/JobSearchPicker.tsx": [
-      "export:JOB_SEARCH_SELECT"
-    ],
     "src/components/orders/OrderSearchPicker.tsx": [
       "export:ORDER_SEARCH_SELECT"
-    ],
-    "src/components/products/bulkProductImportSafety.ts": [
-      "export:PRODUCT_IMPORT_STRING_FIELDS"
-    ],
-    "src/components/products/ProductOptionPresentation.tsx": [
-      "export:productPackageLabel"
-    ],
-    "src/components/products/ProductSearchPicker.tsx": [
-      "export:PRODUCT_SEARCH_SELECT"
-    ],
-    "src/components/ui/RecordSearchPicker.tsx": [
-      "export:RECORD_SEARCH_LIMIT",
-      "export:RECORD_SEARCH_TIMEOUT_MS"
-    ],
-    "src/lib/applicatorPrintOptions.ts": [
-      "export:parseApplicatorPrintOptions"
-    ],
-    "src/lib/applicatorSheetPrintData.ts": [
-      "export:previousApplicationSummary"
-    ],
-    "src/lib/companyInfo.ts": [
-      "export:COMPANY_TAGLINE"
-    ],
-    "src/lib/cropProgramHelpers.ts": [
-      "export:normalizeProgramRateUnit"
     ],
     "src/lib/customerInvoiceSummary.ts": [
       "export:SUMMARY_UNPOSTED_STATUSES"
     ],
-    "src/lib/customerNameSearch.ts": [
-      "export:CUSTOMER_NAME_MATCH_LIMIT"
-    ],
     "src/lib/deliveryEvidence.ts": [
       "export:RECEIPT_LOOKUP_TIMEOUT_MS"
     ],
-    "src/lib/epaDataQualityReport.ts": [
-      "export:namesClearlyDifferent"
-    ],
-    "src/lib/epaLookupClient.ts": [
-      "export:epaFunctionErrorMessage",
-      "export:isEpaLookupResult"
-    ],
     "src/lib/fieldAppNewInvoiceAddress.ts": [
       "export:CREATED_INVOICE_PARAM"
-    ],
-    "src/lib/fieldObstacles.ts": [
-      "export:isFieldObstaclePoint"
     ],
     "src/lib/invoicePdf.ts": [
       "export:isFuelSurchargeLine"
@@ -871,12 +827,6 @@
     "src/lib/invoiceSummaryPdf.ts": [
       "export:generateCustomerInvoiceSummaryPdf"
     ],
-    "src/lib/licenseStatus.ts": [
-      "export:EXPIRING_SOON_DAYS"
-    ],
-    "src/lib/loaderWorksheet.ts": [
-      "export:MANUAL_LOAD_CAPACITY_TOLERANCE"
-    ],
     "src/lib/offlineQueue.ts": [
       "export:prepareQueuedAction"
     ],
@@ -886,20 +836,11 @@
     "src/lib/paperTicket.ts": [
       "export:completedAtForDeliveredOn"
     ],
-    "src/lib/productBrands.ts": [
-      "export:PRODUCT_BRAND_COLUMNS"
-    ],
-    "src/lib/productIdentityResolver.ts": [
-      "export:normalizeProductIdentity"
-    ],
     "src/lib/productPricing.ts": [
       "export:costBasisRows"
     ],
     "src/lib/reconciliation.ts": [
       "export:FINANCIAL_INVOICE_STATUSES"
-    ],
-    "src/lib/sqlSourceLexer.ts": [
-      "export:dollarTagAt"
     ],
     "src/lib/supplierPricingWorkbook.ts": [
       "export:MAX_SUPPLIER_QUOTE_ROWS",

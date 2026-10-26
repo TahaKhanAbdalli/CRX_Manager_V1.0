@@ -23,7 +23,7 @@ export interface LicenseStatus {
 }
 
 const MS_PER_DAY = 86_400_000;
-export const EXPIRING_SOON_DAYS = 30;
+const EXPIRING_SOON_DAYS = 30;
 
 /** Parse 'YYYY-MM-DD' as a LOCAL date (avoids the UTC-midnight off-by-one). */
 function parseLocalDate(iso: string): Date {
