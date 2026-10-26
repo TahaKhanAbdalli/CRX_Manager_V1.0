@@ -1,8 +1,8 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-25 (America/Chicago)** for KI-01 and KI-73 only (row 11.4 part B, PR #1103): their
+**Last verified: 2026-10-26 (America/Chicago)** for KI-01 and KI-73 only (row 11.4 part B, PR #1103): their
 field policies, `_can_see_field` and `get_job_billed_customers` bodies, and the ledger rows of `20261023090000`
-and `20261023100000` (both applied) were re-read live read-only that day. The rest of the file was last verified
+and `20261023100000` (both applied) were re-read live read-only late on 2026-10-25 and again just after midnight. The rest of the file was last verified
 2026-10-23 against `main` at `62ca3b640` (code, migration files, merged PRs); live-database facts were NOT re-read
 for that rewrite: any "applied live" statement outside KI-01/KI-73 is the older record's claim, and every such
 claim is marked as such.
