@@ -2,8 +2,8 @@
 -- SMOKE TEST (rolled back by design) for 20261023110000_field_tables_follow_field_access.
 --
 -- CONTAINER ONLY: run through scripts/smoke/prove-field-tables-follow-field-access-real-schema.mjs,
--- never against the live database: the chain plants [SMOKE] logins (auth.users rows), a customer,
--- fields, billing splits, a job and a dispatch, which the LIVE-DATA GUARD refuses.
+-- never against the live database: the chain plants [SMOKE] logins (auth.users rows), two customers,
+-- fields, billing splits, a spray record, a job and a dispatch, which the LIVE-DATA GUARD refuses.
 --
 -- Rule under test (To-Do row 11.4, part B): field roles read only the field rows of their own
 -- assignments through the tables, and the job functions return only those fields.

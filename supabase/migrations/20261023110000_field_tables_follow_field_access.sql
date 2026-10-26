@@ -3,13 +3,19 @@
 --
 -- WHAT (To-Do row 11.4, part B of the fix plan in docs/manual/KNOWN_ISSUES.md KI-01 and KI-73):
 --   field roles read only the field rows of their own assignments through the TABLES too, not only
---   through the field functions part A (20261023090000, live 2026-10-26) fixed. Live on 2026-10-26
+--   through the field functions part A (20261023090000, live 2026-10-25 9:10 PM Central) fixed. Live that night
 --   the one applicator still read all 5 `fields` rows directly, though the map functions gave it its
 --   2 dispatched fields. Before this file:
---     fields_select, field_crop_history_select, field_obstacles_select,
---     field_app_locations_select, field_app_location_shares_select
+--     fields_select, field_crop_history_select, field_obstacles_select
 --                                    every active applicator reads every customer's rows
 --                                    (field_polygons follows fields_select: field_id IN fields)
+--     field_polygons_insert/_update/_delete
+--                                    the same test, so every active applicator could add, rewrite
+--                                    or delete any field's boundary parts through the Data API
+--                                    (the app writes them only through office-only functions)
+--     field_app_locations_select, field_app_location_shares_select
+--                                    every active applicator reads every field-application
+--                                    invoice's locations and billed shares (amount_cents)
 --     fbd_select (field_billing_defaults), arf_select (application_record_fields)
 --                                    every active profile, drivers included, reads every row
 --                                    (billing splits with price overrides; spray-record acres)
@@ -25,37 +31,48 @@
 --                                    job id got that job's billed customers (farm names, account
 --                                    numbers). Drivers were refused (their leg is false, not NULL).
 --
--- HOW: each of those reads keeps its office legs as they are and replaces the field-role leg with
---   public._can_see_field(field_id) (part A's helper, unchanged here): an active admin or sales rep
---   sees every field; the whole-job applicator the fields on their non-deleted job; a per-field or
---   crew assignee only the field of their own open (or completed within 7 days, never cancelled)
---   dispatch on a non-deleted job.
---   * fields, field_crop_history, field_obstacles, field_app_locations: the applicator leg becomes
---     is_applicator() AND _can_see_field(field id). field_app_location_shares follows its
---     location's field. field_polygons needs no change (it reads fields under fields_select).
---   * fbd_select and arf_select: is_admin() OR is_sales_rep() OR _can_see_field(field_id). They are
---     not made office-only, because Job Detail's grower-share banner reads field_billing_defaults and
---     the applicator sheet reads both for the job's own fields.
---   * job_fields_select_location_dispatchee: _is_dispatched_to_me(job_id) AND
---     _can_see_field(field_id). job_fields_select (office and the whole-job applicator) is unchanged.
---     This also closes the Job Detail weather-centroid edge left by part A: the assignee's first
---     job_fields row is now their own field, which get_field_geojson returns to them.
---   * The four functions add _can_see_field to the field rows they return. In both billed-customer
---     functions the "a job with no fields still has its primary customer" fallback now asks whether
---     the job has any field at all, not whether the caller sees one: a caller who sees the job but
---     none of its fields (a deleted job, until part C) gets no rows, which the compliance PDF already
---     treats as incomplete and refuses, instead of a primary-only list.
+-- HOW:
+--   * The field tables use public._can_see_field(field_id) (part A's helper, unchanged here) for
+--     field roles: an active admin or sales rep sees every field; the whole-job applicator the fields
+--     on their non-deleted job; a per-field or crew assignee only the field of their own open (or
+--     completed within 7 days, never cancelled) dispatch on a non-deleted job.
+--     - fields, field_crop_history, field_obstacles: the applicator leg becomes
+--       is_applicator() AND _can_see_field(field id); field_polygons_select follows fields_select.
+--     - fbd_select and arf_select: is_admin() OR is_sales_rep() OR _can_see_field(field_id). Not
+--       office-only: Job Detail's grower-share banner reads field_billing_defaults and the applicator
+--       sheet reads both for the job's own fields.
+--   * Office-only (is_admin() OR is_sales_rep()), because no field-role screen uses them:
+--     field_app_locations_select and field_app_location_shares_select (read only by the invoice and
+--     field-invoice pages), and field_polygons_insert/_update/_delete (the app writes boundary
+--     parts only through save_field_polygons, set_field_boundary and save_field, all office-only).
+--   * New helper public._can_see_job_field(job_id, field_id): the same legs as _can_see_field but
+--     for one job, so the job-scoped reads below never show a job's field because the caller was
+--     sent to that field on ANOTHER job (the same field is often sprayed on several jobs a season).
+--     - job_fields_select_location_dispatchee: _is_dispatched_to_me(job_id) AND
+--       _can_see_job_field(job_id, field_id). job_fields_select (office and the whole-job applicator)
+--       is unchanged. This also closes the Job Detail weather-centroid edge left by part A: the
+--       assignee's first job_fields row is now their own field, which get_field_geojson returns.
+--     - The four functions add _can_see_job_field to the field rows they return. In both
+--       billed-customer functions the "a job with no fields still has its primary customer" fallback
+--       now asks whether the job has any field at all, not whether the caller sees one: a caller who
+--       sees the job but none of its fields (a deleted job, until part C) gets no rows (the per-job
+--       compliance PDF already treats that as incomplete and refuses; the Jobs list shows no billed
+--       customer), instead of a primary-only list.
 --   * get_job_billed_customers' gate becomes IF (...) IS NOT TRUE, so a NULL leg refuses.
 --
 -- SOURCE OF THE BODIES AND POLICIES: live, as pinned below (each pin also matches what a replay of
 --   the checked-in baseline and migrations produces). Only the lines marked "row 11.4 part B" (and
 --   the comment they correct) were changed; the prover checks each body's code diff line by line.
 --
--- NOT CHANGED: what an active admin or sales rep reads; every INSERT/UPDATE/DELETE policy; policy
---   names, roles and commands; function return types, owner (postgres), ACLs, search_path,
---   volatility and SECURITY DEFINER; _can_see_field; no rows change. CREATE OR REPLACE keeps each
---   OID. Part C (the whole-job applicator's lifecycle window, jobs_select, start_job and
+-- NOT CHANGED: what an active admin or sales rep reads or writes; every other INSERT/UPDATE/DELETE
+--   policy; policy names, roles and commands; function return types, owner (postgres), ACLs,
+--   search_path, volatility and SECURITY DEFINER; _can_see_field; no rows change. CREATE OR REPLACE
+--   keeps each OID. Part C (the whole-job applicator's lifecycle window, jobs_select, start_job and
 --   complete_job, and _is_dispatched_to_me's deleted-job test) is a later migration.
+--
+-- FAILS CLOSED FOR anon: four of the narrowed SELECT policies are TO public, and anon cannot run
+--   _can_see_field or is_sales_rep, so a signed-out read of those tables now errors instead of
+--   returning no rows. The app never reads them signed out.
 --
 -- EXPECTED NARROWING (by design): an applicator's Record Book keeps their own application records,
 --   but shows "-" as the field name once the assignment for that field ends, as it already does for
@@ -86,13 +103,43 @@ BEGIN
   IF (SELECT transaction_id FROM pg_temp.field_tables_follow_field_access_tx) IS DISTINCT FROM pg_current_xact_id()::text THEN
     RAISE EXCEPTION 'PREFLIGHT_FAIL: run this file as one transaction (psql -1 or the apply script)';
   END IF;
-  -- Part A's helper, exactly as it went live on 2026-10-26.
+  -- Part A's helper, exactly as it went live on 2026-10-25 (9:10 PM Central).
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p
      WHERE p.oid = to_regprocedure('public._can_see_field(uuid)')
        AND p.prosecdef AND p.provolatile = 's'
-       AND md5(replace(p.prosrc, chr(13), '')) = '0b7f544337f93adc79163cafe581222c') THEN
-    RAISE EXCEPTION 'PREFLIGHT_FAIL: public._can_see_field(uuid) is missing or not the part A body (apply 20261023090000 first)';
+       AND md5(replace(p.prosrc, chr(13), '')) = '0b7f544337f93adc79163cafe581222c'
+       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) THEN
+    -- Without EXECUTE for authenticated every read of the narrowed tables would error, office too.
+    RAISE EXCEPTION 'PREFLIGHT_FAIL: public._can_see_field(uuid) is missing, not the part A body, or not executable by authenticated (apply 20261023090000 first)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = '_can_see_job_field' AND pronamespace = 'public'::regnamespace) THEN
+    RAISE EXCEPTION 'FIELD_TABLES_BASELINE_DRIFT: public._can_see_job_field already exists';
+  END IF;
+  -- field_polygons' write policies, exactly as live has them.
+  FOR v_pin IN
+    SELECT * FROM (VALUES
+      ('field_polygons_insert', 'INSERT', NULL::text, E'(field_id IN ( SELECT fields.id\n   FROM fields))'),
+      ('field_polygons_update', 'UPDATE', E'(field_id IN ( SELECT fields.id\n   FROM fields))', NULL::text),
+      ('field_polygons_delete', 'DELETE', E'(field_id IN ( SELECT fields.id\n   FROM fields))', NULL::text)
+    ) AS t(pol, cmd, live_qual, live_check)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies pp
+       WHERE pp.schemaname = 'public' AND pp.tablename = 'field_polygons' AND pp.policyname = v_pin.pol
+         AND pp.cmd = v_pin.cmd AND pp.permissive = 'PERMISSIVE' AND pp.roles::text = '{public}'
+         AND pp.qual IS NOT DISTINCT FROM v_pin.live_qual AND pp.with_check IS NOT DISTINCT FROM v_pin.live_check) THEN
+      RAISE EXCEPTION 'FIELD_TABLES_BASELINE_DRIFT: policy % on field_polygons is not the live one', v_pin.pol;
+    END IF;
+  END LOOP;
+  -- field_polygons has exactly its four policies, and its SELECT one follows fields_select.
+  IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'field_polygons') <> 4
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'field_polygons'
+                     AND policyname = 'field_polygons_select' AND cmd = 'SELECT' AND permissive = 'PERMISSIVE'
+                     AND qual = E'(field_id IN ( SELECT fields.id\n   FROM fields))')
+     OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.field_polygons'::regclass
+                     AND relrowsecurity AND NOT relforcerowsecurity) THEN
+    RAISE EXCEPTION 'FIELD_TABLES_BASELINE_DRIFT: field_polygons policies are not the live ones';
   END IF;
 
   FOR v_pin IN
@@ -151,6 +198,73 @@ BEGIN
 END;
 $preflight$;
 
+-- The per-job field helper. --------------------------------------------------------------------------
+CREATE FUNCTION public._can_see_job_field(p_job_id uuid, p_field_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+  -- Who may see one field AS PART OF ONE JOB (the job's field rows, map and billed customers).
+  -- The legs of _can_see_field, each tied to this job, so a field the caller was sent to on
+  -- another job is not shown on this one. Every leg needs an ACTIVE profile.
+  SELECT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_active)
+  AND (
+    -- Office staff see every field of every job.
+    public.is_admin() OR public.is_sales_rep()
+    -- The whole-job applicator sees the fields of this job, never of a soft-deleted one. Part C of
+    -- row 11.4 adds the job's lifecycle window here, in _can_see_field and in jobs_select.
+    OR (public.is_applicator() AND EXISTS (
+          SELECT 1
+            FROM public.jobs j
+            JOIN public.job_fields jf ON jf.job_id = j.id
+           WHERE j.id = p_job_id
+             AND jf.field_id = p_field_id
+             AND j.applicator_id = (SELECT auth.uid())
+             AND j.deleted_at IS NULL))
+    -- A per-field or crew assignee sees only the field their own dispatch on THIS job points at.
+    -- Same checks as _can_see_field's dispatch leg: open, or completed within 7 days, never
+    -- cancelled; a crew dispatch needs an active crew and an active membership; the job is not
+    -- soft-deleted.
+    OR EXISTS (
+          SELECT 1
+            FROM public.job_location_dispatches d
+            JOIN public.job_fields jf ON jf.id = d.job_field_id AND jf.job_id = d.job_id
+            JOIN public.jobs j ON j.id = d.job_id
+           WHERE d.job_id = p_job_id
+             AND jf.field_id = p_field_id
+             AND j.deleted_at IS NULL
+             AND (
+               d.dispatch_status = 'dispatched'
+               OR (d.dispatch_status = 'completed' AND d.updated_at >= now() - interval '7 days')
+             )
+             AND (
+               d.applicator_id = (SELECT auth.uid())
+               OR (
+                 d.crew_id IS NOT NULL
+                 AND EXISTS (
+                   SELECT 1
+                     FROM public.ground_crew_members gcm
+                     JOIN public.ground_crews gc ON gc.id = gcm.crew_id
+                    WHERE gcm.crew_id = d.crew_id
+                      AND gcm.profile_id = (SELECT auth.uid())
+                      AND gcm.is_active
+                      AND gc.is_active
+                 )
+               )
+             ))
+  );
+$function$;
+
+COMMENT ON FUNCTION public._can_see_job_field(uuid, uuid) IS
+  'Row 11.4 part B: may the caller see this field as part of this job? Active office staff: any. Whole-job applicator: the fields of this non-deleted job. Dispatch or crew assignee: only the field their own open (or completed within 7 days, never cancelled) dispatch on this non-deleted job points at.';
+
+-- Deliberate grants: called from row security and these definer functions by signed-in users;
+-- never by anon.
+REVOKE ALL ON FUNCTION public._can_see_job_field(uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._can_see_job_field(uuid, uuid) TO authenticated, service_role;
+
 -- The tables. ----------------------------------------------------------------------------------------
 -- Office legs unchanged; the applicator leg follows the caller's own assignments (row 11.4 part B).
 ALTER POLICY fields_select ON public.fields
@@ -162,15 +276,13 @@ ALTER POLICY field_crop_history_select ON public.field_crop_history
 ALTER POLICY field_obstacles_select ON public.field_obstacles
   USING (is_admin() OR is_sales_rep() OR (is_applicator() AND public._can_see_field(field_id)));
 
+-- Field-application invoice locations and their billed shares (amount_cents): office only. Only
+-- the invoice and field-invoice pages, both office-only, read them.
 ALTER POLICY field_app_locations_select ON public.field_app_locations
-  USING (is_admin() OR is_sales_rep() OR (is_applicator() AND public._can_see_field(field_id)));
+  USING (is_admin() OR is_sales_rep());
 
--- A share follows its location's field.
 ALTER POLICY field_app_location_shares_select ON public.field_app_location_shares
-  USING (is_admin() OR is_sales_rep() OR (is_applicator() AND EXISTS (
-    SELECT 1 FROM public.field_app_locations l
-     WHERE l.id = field_app_location_shares.location_id
-       AND public._can_see_field(l.field_id))));
+  USING (is_admin() OR is_sales_rep());
 
 -- Was any active profile (drivers included); now office staff and the field's own assignees.
 ALTER POLICY fbd_select ON public.field_billing_defaults
@@ -179,10 +291,21 @@ ALTER POLICY fbd_select ON public.field_billing_defaults
 ALTER POLICY arf_select ON public.application_record_fields
   USING (is_admin() OR is_sales_rep() OR public._can_see_field(field_id));
 
--- A per-field or crew assignee reads only the job_fields rows of a field they may see, not the
--- job's other fields.
+-- A per-field or crew assignee reads only this job's rows for the field their dispatch on this job
+-- points at, not the job's other fields.
 ALTER POLICY job_fields_select_location_dispatchee ON public.job_fields
-  USING (_is_dispatched_to_me(job_id) AND public._can_see_field(field_id));
+  USING (_is_dispatched_to_me(job_id) AND public._can_see_job_field(job_id, field_id));
+
+-- Boundary parts are written only through office-only functions; the direct table writes were open
+-- to every applicator through fields_select.
+ALTER POLICY field_polygons_insert ON public.field_polygons
+  WITH CHECK (is_admin() OR is_sales_rep());
+
+ALTER POLICY field_polygons_update ON public.field_polygons
+  USING (is_admin() OR is_sales_rep());
+
+ALTER POLICY field_polygons_delete ON public.field_polygons
+  USING (is_admin() OR is_sales_rep());
 
 -- The functions. -------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_job_fields_with_geojson(p_job_id uuid)
@@ -220,9 +343,9 @@ AS $function$
           OR _is_dispatched_to_me(j.id)
         )
     )
-    -- Only the fields this caller may see: a per-field or crew assignee gets the field their
-    -- own dispatch points at, not the job's other fields (row 11.4 part B).
-    AND public._can_see_field(f.id)
+    -- Only the fields this caller may see on this job: a per-field or crew assignee gets the
+    -- field their own dispatch on this job points at, not the job's other fields (row 11.4 part B).
+    AND public._can_see_job_field(jf.job_id, f.id)
   ORDER BY jf.sort_order NULLS LAST, f.field_name;
 $function$;
 
@@ -310,11 +433,11 @@ AS $function$
                               AND public._is_dispatched_to_me(j3.id))
                    ) THEN c.farm_name ELSE NULL END)
             FROM public.customers c WHERE c.id = m.customer_id),
-         -- JOB_FIELDS — only the rows of fields the caller may see (_can_see_field, row 11.4
-         -- part B): office staff and the whole-job applicator get every field of the job, a
-         -- per-field or crew assignee only the field their own dispatch points at, as
+         -- JOB_FIELDS — only the rows the caller may see on this job (_can_see_job_field, row
+         -- 11.4 part B): office staff and the whole-job applicator get every field of the job, a
+         -- per-field or crew assignee only the field their own dispatch on this job points at, as
          -- job_fields_select_location_dispatchee now allows. field_name is
-         -- gated to the fields_select predicate (admin/sales_rep/applicator) so a dispatched
+         -- further gated to the applicator role, as fields_select is, so a dispatched
          -- crew member whose role is NOT applicator doesn't get a field name they couldn't
          -- read under RLS (null → the board falls back to 'Field'). (Codex re-review-3 P2.)
          'job_fields',
@@ -334,7 +457,7 @@ AS $function$
              FROM public.job_fields jf
              JOIN public.fields f ON f.id = jf.field_id
             WHERE jf.job_id = m.id
-              AND public._can_see_field(jf.field_id)
+              AND public._can_see_job_field(jf.job_id, jf.field_id)
          ), '[]'::jsonb),
          -- per-location dispatch rows the CALLER can see, for client-side label aggregation
          '_dispatches',
@@ -409,12 +532,12 @@ BEGIN
   RETURN QUERY
   WITH job_field_ids AS (
     -- Every field on the job (field_id is the unit of billing precedence) that the caller
-    -- may see: a per-field or crew assignee gets only their own field's billed customers
-    -- (row 11.4 part B).
+    -- may see on this job: a per-field or crew assignee gets only their own field's billed
+    -- customers (row 11.4 part B).
     SELECT DISTINCT jf.field_id
     FROM job_fields jf
     WHERE jf.job_id = p_job_id AND jf.field_id IS NOT NULL
-      AND public._can_see_field(jf.field_id)
+      AND public._can_see_job_field(p_job_id, jf.field_id)
   ),
   fields_with_share AS (
     -- Only shares whose field is ACTUALLY on the job (guard against an orphan
@@ -516,12 +639,12 @@ BEGIN
   ),
   job_field_ids AS (
     -- Every field on each visible job (the unit of billing precedence) that the caller may
-    -- see: a per-field or crew assignee gets only their own field's billed customers
-    -- (row 11.4 part B).
+    -- see on that job: a per-field or crew assignee gets only their own field's billed
+    -- customers (row 11.4 part B).
     SELECT vj.job_id, jf.field_id
     FROM visible_jobs vj
     JOIN job_fields jf ON jf.job_id = vj.job_id AND jf.field_id IS NOT NULL
-    WHERE public._can_see_field(jf.field_id)
+    WHERE public._can_see_job_field(vj.job_id, jf.field_id)
   ),
   fields_with_share AS (
     -- Shares whose field is ACTUALLY on the job (ignore an orphan share row).
@@ -611,10 +734,10 @@ BEGIN
            a.owner AS was_owner, a.acl AS was_acl, a.proconfig AS was_config, a.prorettype AS was_rettype,
            a.provolatile AS was_volatile, a.prosecdef AS was_secdef
       FROM (VALUES
-      ('public.get_job_fields_with_geojson(uuid)',                '1415dc063e43969b6f647a18df5f745c'),
-      ('public.get_dispatch_board_jobs(uuid,text,date,date)',     'd93066303f3e7c1d30a948d627f401dc'),
-      ('public.get_job_billed_customers(uuid)',                   '94138236eaec6ff594498994b48ac348'),
-      ('public.get_jobs_billed_customers(uuid[])',                'b56bba826d92d390c6793dd476a4a8fe')
+      ('public.get_job_fields_with_geojson(uuid)',                'c57b33144ef339dc9c9bb4f67e70a780'),
+      ('public.get_dispatch_board_jobs(uuid,text,date,date)',     '8792f6ffc2bbb3525241ee43f2e1a060'),
+      ('public.get_job_billed_customers(uuid)',                   '2505e58ce5caed1a1e6882591247bc56'),
+      ('public.get_jobs_billed_customers(uuid[])',                'a0b0c07d81895051f12d4c880493006c')
       ) AS t(sig, new_md5)
       LEFT JOIN pg_proc p ON p.oid = to_regprocedure(t.sig)
       -- CREATE OR REPLACE keeps each OID, so the preflight snapshot is matched by OID.
@@ -641,11 +764,11 @@ BEGIN
       ('fields',                    'fields_select',                         '{authenticated}', '(is_admin() OR is_sales_rep() OR (is_applicator() AND _can_see_field(id)))'),
       ('field_crop_history',        'field_crop_history_select',             '{public}',        '(is_admin() OR is_sales_rep() OR (is_applicator() AND _can_see_field(field_id)))'),
       ('field_obstacles',           'field_obstacles_select',                '{authenticated}', '(is_admin() OR is_sales_rep() OR (is_applicator() AND _can_see_field(field_id)))'),
-      ('field_app_locations',       'field_app_locations_select',            '{public}',        '(is_admin() OR is_sales_rep() OR (is_applicator() AND _can_see_field(field_id)))'),
-      ('field_app_location_shares', 'field_app_location_shares_select',      '{public}',        E'(is_admin() OR is_sales_rep() OR (is_applicator() AND (EXISTS ( SELECT 1\n   FROM field_app_locations l\n  WHERE ((l.id = field_app_location_shares.location_id) AND _can_see_field(l.field_id))))))'),
+      ('field_app_locations',       'field_app_locations_select',            '{public}',        '(is_admin() OR is_sales_rep())'),
+      ('field_app_location_shares', 'field_app_location_shares_select',      '{public}',        '(is_admin() OR is_sales_rep())'),
       ('field_billing_defaults',    'fbd_select',                            '{authenticated}', '(is_admin() OR is_sales_rep() OR _can_see_field(field_id))'),
       ('application_record_fields', 'arf_select',                            '{public}',        '(is_admin() OR is_sales_rep() OR _can_see_field(field_id))'),
-      ('job_fields',                'job_fields_select_location_dispatchee', '{authenticated}', '(_is_dispatched_to_me(job_id) AND _can_see_field(field_id))')
+      ('job_fields',                'job_fields_select_location_dispatchee', '{authenticated}', '(_is_dispatched_to_me(job_id) AND _can_see_job_field(job_id, field_id))')
     ) AS t(tbl, pol, roles, new_qual)
   LOOP
     IF NOT EXISTS (
@@ -656,6 +779,30 @@ BEGIN
       RAISE EXCEPTION 'POSTFLIGHT_FAIL: policy % on % is not the expected one', v_pol.pol, v_pol.tbl;
     END IF;
   END LOOP;
+  FOR v_pol IN
+    SELECT * FROM (VALUES
+      ('field_polygons_insert', 'INSERT', NULL::text,                       '(is_admin() OR is_sales_rep())'),
+      ('field_polygons_update', 'UPDATE', '(is_admin() OR is_sales_rep())', NULL::text),
+      ('field_polygons_delete', 'DELETE', '(is_admin() OR is_sales_rep())', NULL::text)
+    ) AS t(pol, cmd, new_qual, new_check)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies pp
+       WHERE pp.schemaname = 'public' AND pp.tablename = 'field_polygons' AND pp.policyname = v_pol.pol
+         AND pp.cmd = v_pol.cmd AND pp.permissive = 'PERMISSIVE' AND pp.roles::text = '{public}'
+         AND pp.qual IS NOT DISTINCT FROM v_pol.new_qual AND pp.with_check IS NOT DISTINCT FROM v_pol.new_check) THEN
+      RAISE EXCEPTION 'POSTFLIGHT_FAIL: policy % on field_polygons is not the expected one', v_pol.pol;
+    END IF;
+  END LOOP;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+     WHERE p.oid = to_regprocedure('public._can_see_job_field(uuid,uuid)')
+       AND p.prosecdef AND p.provolatile = 's' AND pg_get_userbyid(p.proowner) = 'postgres'
+       AND p.proconfig = ARRAY['search_path=public, pg_temp']
+       AND p.proacl::text = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
+       AND md5(replace(p.prosrc, chr(13), '')) = '45550c688832cff815ac997abe1bd978') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: public._can_see_job_field(uuid,uuid) does not have the expected attributes or grants';
+  END IF;
   RAISE NOTICE 'POSTFLIGHT_OK: field tables follow field access (row 11.4 part B)';
 END;
 $postflight$;

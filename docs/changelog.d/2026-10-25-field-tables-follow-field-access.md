@@ -8,7 +8,7 @@ changed.
 
 ### What was wrong
 
-Part A (live 2026-10-26) fixed the field functions, but the tables themselves still let field roles
+Part A (live 2026-10-25, 9:10 PM Central) fixed the field functions, but the tables themselves still let field roles
 read everything: live, the one applicator read all 5 `fields` rows directly while the map functions
 gave it only its 2 dispatched fields. Every active applicator read every customer's fields, boundary
 parts, crop history, obstacles and field-application locations and shares; every active profile,
