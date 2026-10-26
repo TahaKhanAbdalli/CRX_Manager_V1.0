@@ -13,6 +13,7 @@ The earlier third-party principles and Karpathy experiment-loop passage Mason as
 - Add a dependency only when the existing stack cannot reasonably solve the problem and the dependency materially reduces risk or maintenance.
 - Keep functions and components focused on one responsibility. Split code when it clarifies a meaningful boundary or makes testing easier, not to satisfy an arbitrary line count.
 - Shorter is useful only when it remains obvious. Do not trade readable control flow and names for dense expressions or clever one-liners.
+- CI enforces this for `src/` with `npm run check:code-health`: no new file over 600 lines, function over 200 lines or complexity 20, nesting deeper than 4, function with more than 5 parameters, or unused file or export (Knip). Existing debt is grandfathered in `scripts/code-health-baseline.json`, which may only shrink; after a cleanup, run `node scripts/check-code-health.mjs --update`.
 
 ## Make Surgical Changes
 

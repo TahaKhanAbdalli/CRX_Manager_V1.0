@@ -4,7 +4,7 @@
 
 `AGENTS.md` is the canonical shared contract. This file holds only Claude-specific routing and never weakens shared policy.
 
-- Follow the `AGENTS.md` routing table; load nothing extra at session start. Graphify narrows source reads; it never replaces source or live verification.
+- Follow the `AGENTS.md` routing table; load nothing extra at session start.
 - Refresh `.claude/schema-registry.json` after schema changes with `regen-schema-registry`.
 - Read `docs/reference/claude-model-tuning.md` only when choosing models or effort, delegating, or writing reviewer prompts.
 - Cloud sessions may lack `node_modules`, `gh`, Codex, Graphify, or the Supabase MCP: say early which gates cannot run, finish what can, and deliver a draft PR. Never report an unrun gate as passed.

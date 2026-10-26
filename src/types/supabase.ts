@@ -8024,6 +8024,78 @@ export type Database = {
           },
         ]
       }
+      product_margin_floor_changes: {
+        Row: {
+          changed_by: string | null
+          created_at: string
+          id: string
+          new_margin_floor: number | null
+          old_margin_floor: number | null
+          product_id: string
+          reason: string | null
+        }
+        Insert: {
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_margin_floor?: number | null
+          old_margin_floor?: number | null
+          product_id: string
+          reason?: string | null
+        }
+        Update: {
+          changed_by?: string | null
+          created_at?: string
+          id?: string
+          new_margin_floor?: number | null
+          old_margin_floor?: number | null
+          product_id?: string
+          reason?: string | null
+        }
+        Relationships: []
+      }
+      product_margin_floors: {
+        Row: {
+          created_at: string
+          margin_floor: number
+          product_id: string
+          set_by: string | null
+          set_reason: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          margin_floor: number
+          product_id: string
+          set_by?: string | null
+          set_reason?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          margin_floor?: number
+          product_id?: string
+          set_by?: string | null
+          set_reason?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_margin_floors_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_margin_floors_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_supplier_links: {
         Row: {
           comparison_note: string | null
@@ -15284,6 +15356,15 @@ export type Database = {
           p_idempotency_key?: string
           p_override_acres: number
           p_performed_by?: string
+        }
+        Returns: Json
+      }
+      set_product_margin_floors: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by?: string
+          p_reason?: string
         }
         Returns: Json
       }
