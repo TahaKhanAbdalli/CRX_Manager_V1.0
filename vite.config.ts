@@ -33,7 +33,7 @@ export default defineConfig({
     // so they never reach end users.  Only activates when SENTRY_AUTH_TOKEN is set
     // (i.e., in Vercel CI — not local dev).
     sentryVitePlugin({
-      org: process.env.SENTRY_ORG ?? 'crx-solutions',
+      org: process.env.SENTRY_ORG ?? 'crop-rx-solutions',
       project: process.env.SENTRY_PROJECT ?? 'crx-manager',
       authToken: process.env.SENTRY_AUTH_TOKEN,
       sourcemaps: {
