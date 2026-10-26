@@ -48,6 +48,18 @@ describe('TransactionThread', () => {
     expect(screen.getByText('No quote')).toBeInTheDocument();
   });
 
+  it('says "No invoices you can view", not "No invoices", when they may be hidden', () => {
+    renderThread({
+      orderId: 'o1',
+      orderNumber: 'O-200',
+      deliveries: [{ id: 'd1', number: 'D-300' }],
+      invoicesMayBeHidden: true,
+      currentEntity: 'order',
+    });
+    expect(screen.getByText('No invoices you can view')).toBeInTheDocument();
+    expect(screen.queryByText('No invoices')).not.toBeInTheDocument();
+  });
+
   it('shows dropdown for multiple deliveries', () => {
     renderThread({
       orderId: 'o1',
