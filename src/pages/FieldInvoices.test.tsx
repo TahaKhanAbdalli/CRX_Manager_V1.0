@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import FieldInvoices from './FieldInvoices';
 import listPanelSource from '../components/field-invoices/FieldInvoicesListPanel.tsx?raw';
@@ -66,6 +66,22 @@ describe('FieldInvoices', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'By Customer' }));
     expect(screen.getByRole('tabpanel')).toHaveTextContent('Customer invoices panel');
+  });
+
+  // To-Do 10.5: a count that comes back missing (no error, no count) leaves the badge off
+  // instead of showing 0, which reads as "nothing to do" on that tab.
+  it('shows no badge, not 0, when a count comes back missing', async () => {
+    query.or.mockClear();
+    query.or.mockResolvedValueOnce({ count: null, error: null }).mockResolvedValueOnce({ count: null, error: null });
+    render(
+      <MemoryRouter initialEntries={['/field-invoices?tab=unbilled']}>
+        <FieldInvoices />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(query.or).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.getByRole('tab', { name: /Drafts/ })).toHaveTextContent(/^Drafts$/);
+    expect(screen.getByRole('tab', { name: /Posted/ })).toHaveTextContent(/^Posted$/);
   });
 
   it('accepts legacy tab query aliases', async () => {

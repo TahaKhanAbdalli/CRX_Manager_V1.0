@@ -29,7 +29,8 @@ import { formatCents as fmt } from '../../lib/money';
 import { SkeletonTable, SkeletonCard } from '../ui/Skeleton';
 import MobileCardList from '../ui/MobileCardList';
 import { openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
-import { fetchAllRows } from '../../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../../lib/pagedRead';
+import { LoadFailedState } from '../ui/EmptyState';
 import SeasonTag from '../invoices/SeasonTag';
 
 // Field / Application invoices are the SECOND, segregated sale type (the work CRX
@@ -139,7 +140,8 @@ export default function FieldInvoicesListPanel() {
     const seq = ++fetchSeq.current;
     setLoading(true);
     // Read every page: a single request is silently cut off at the server's row cap.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    // pageWithList: a page with no list (or not a list) fails the read, not "No field invoices".
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('invoices')
       .select(`${INVOICE_COLUMNS}, customer:customers!invoices_customer_id_fkey(farm_name)`, { count: 'exact' })
       .eq('invoice_type', 'field_application')
@@ -150,10 +152,12 @@ export default function FieldInvoicesListPanel() {
       .or(openOrInSeasonFilter('created_at'))
       .order('created_at', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)))
+      // A read that throws fails the same way, never leaving the skeleton up for good.
+      .catch((err: unknown) => ({ data: null, error: err instanceof Error ? err : new Error(String(err)) }));
     if (seq !== fetchSeq.current) return;
 
-    if (error) {
+    if (error || !data) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices' } });
       toast('error', 'Failed to load field invoices');
       // No list, counts or totals: a short list would look complete.
@@ -481,7 +485,7 @@ export default function FieldInvoicesListPanel() {
       <div className="min-w-0 space-y-4">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">Field Invoices</h2>
         <Card>
-          <p role="alert" className="text-center text-red-600 py-8 text-sm">Field invoices could not be loaded. Reload to try again.</p>
+          <LoadFailedState title="Field invoices could not be loaded" onRetry={() => { void fetchInvoices(); }} />
         </Card>
       </div>
     );

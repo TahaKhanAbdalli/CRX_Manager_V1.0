@@ -265,6 +265,25 @@ describe('FinanceChargePreviewModal', () => {
     expect(mockToast).not.toHaveBeenCalledWith('error', 'Failed to load finance charge preview');
   });
 
+  // To-Do 10.5: a preview read that fails (an error, no list, or not a list) says so with
+  // Try again, never "No finance charges to generate", and Try again re-reads it.
+  it.each([
+    ['an error', { data: null, error: { message: 'connection reset', details: null, hint: null, code: 'XX000' } }],
+    ['no list', { data: null, error: null }],
+    ['not a list', { data: { unexpected: true }, error: null }],
+  ])('a preview read that answers with %s says could not be loaded, and Try again re-reads it', async (_label, reply) => {
+    mockRpc.mockResolvedValueOnce(reply).mockResolvedValueOnce({ data: makePreviews(), error: null });
+    render(<FinanceChargePreviewModal {...defaultProps} />);
+
+    expect(await screen.findByText('The finance charge preview could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText(/no finance charges to generate/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(await screen.findByText('Green Acres Farm')).toBeInTheDocument();
+    expect(screen.queryByText('The finance charge preview could not be loaded')).not.toBeInTheDocument();
+  });
+
   it('calls onClose when Cancel clicked', async () => {
     render(<FinanceChargePreviewModal {...defaultProps} />);
     // Wait for fetch to complete (empty state)

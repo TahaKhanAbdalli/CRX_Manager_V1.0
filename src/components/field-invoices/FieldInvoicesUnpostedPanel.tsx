@@ -29,7 +29,8 @@ import { formatCents as fmt } from '../../lib/money';
 import SeasonTag from '../invoices/SeasonTag';
 import { isCurrentSeason, otherSeasonLabels } from '../../lib/invoiceSeasonWindow';
 import { SkeletonTable } from '../ui/Skeleton';
-import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../../lib/pagedRead';
+import { LoadFailedState } from '../ui/EmptyState';
 import {
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
@@ -128,7 +129,8 @@ export default function FieldInvoicesUnpostedPanel() {
     // Read every page: a single request is silently cut off at the server's row cap,
     // and Post All used to skip the oldest drafts past it. The embedded lists are
     // sorted too, so the confirming read compares like with like.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    // pageWithList: a page with no list (or not a list) fails the read, not "No unposted invoices".
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from(INVOICES_POSTABLE)
       .select(LIST_SELECT, { count: 'exact' })
       .eq('invoice_type', 'field_application')
@@ -138,10 +140,12 @@ export default function FieldInvoicesUnpostedPanel() {
       .order('id')
       .order('id', { referencedTable: 'field_app_locations' })
       .order('id', { referencedTable: 'invoice_items' })
-      .range(from, to));
+      .range(from, to)))
+      // A read that throws fails the same way, never leaving the skeleton up for good.
+      .catch((err: unknown) => ({ data: null, error: err instanceof Error ? err : new Error(String(err)) }));
     if (seq !== fetchSeq.current) return;
 
-    if (error) {
+    if (error || !data) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices-unposted' } });
       toast('error', 'Failed to load unposted field invoices');
       fail();
@@ -162,12 +166,13 @@ export default function FieldInvoicesUnpostedPanel() {
     )];
 
     if (groupIds.length > 0) {
-      const { data: groupLocs, error: groupErr } = await fetchAllRowsForIds(groupIds, (idChunk, from, to) => supabase
+      const { data: groupLocs, error: groupErr } = await fetchAllRowsForIds(groupIds, (idChunk, from, to) => pageWithList(supabase
         .from('field_app_locations')
         .select('id, invoice_group_id, applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)', { count: 'exact' })
         .in('invoice_group_id', idChunk)
         .order('id')
-        .range(from, to));
+        .range(from, to)))
+        .catch((err: unknown) => ({ data: null, error: err instanceof Error ? err : new Error(String(err)) }));
       if (seq !== fetchSeq.current) return;
 
       if (groupErr) {
@@ -485,7 +490,7 @@ export default function FieldInvoicesUnpostedPanel() {
       <div className="min-w-0 space-y-4">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">Unposted Field Application Invoices</h2>
         <Card>
-          <p role="alert" className="text-center text-red-600 py-8 text-sm">Unposted field invoices could not be loaded. Reload to try again.</p>
+          <LoadFailedState title="Unposted field invoices could not be loaded" onRetry={() => { void fetchInvoices(); }} />
         </Card>
       </div>
     );

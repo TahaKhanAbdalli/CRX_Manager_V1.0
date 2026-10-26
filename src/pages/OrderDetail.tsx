@@ -12,6 +12,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import Input from '../components/ui/Input';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import CustomerSearchPicker from '../components/customers/CustomerSearchPicker';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,7 +20,7 @@ import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, describePostInvoiceBlock } from '../lib/db';
 import { Sentry } from '../lib/sentry';
@@ -101,6 +102,7 @@ export default function OrderDetail() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 
   // Parent quote for transaction thread
@@ -190,191 +192,234 @@ export default function OrderDetail() {
     // costed lines (Luna round 3).
     const seq = ++fetchSeqRef.current;
     const isStale = () => activeOrderIdRef.current !== id || seq !== fetchSeqRef.current;
-    const { data: orderRow } = await supabase
-      .from('orders')
-      .select(ORDER_COLUMNS)
-      .eq('id', id!)
-      .maybeSingle();
-    // Cost is admin-only (Mason, 2026-10-15).
-    let orderData = orderRow as Order | null;
+    // A read the page depends on that fails (an error, or no list) shows "could not be
+    // loaded" with Try again. It must not show "Order not found", $0 invoiced, or re-offer
+    // Create Invoice for an order whose invoices could not be read (To-Do 10.5).
+    const failLoad = (err: unknown) => {
+      if (isStale()) return;
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order' } });
+      setLoadFailed(true);
+      setLoading(false);
+    };
+    const readFailed = (result: { data: unknown; error: unknown }, what: string) => {
+      const err = result.error ?? (Array.isArray(result.data) ? null : new Error(`The order's ${what} read returned no list`));
+      if (!err) return false;
+      failLoad(err);
+      return true;
+    };
     try {
-      orderData = await withAdminCost('orders', orderData, isAdmin);
-    } catch (err) {
-      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_costs' } });
-      toast('error', 'Failed to load order cost. Please refresh.');
-    }
-
-    if (isStale()) return;
-    if (orderData) {
-      setOrder(orderData);
-
-      // Fetch parent quote for transaction thread
-      if (orderData.quote_id) {
-        const { data: qData } = await supabase
-          .from('quotes').select('id, quote_number')
-          .eq('id', orderData.quote_id).maybeSingle();
-        if (isStale()) return;
-        setParentQuote(qData as { id: string; quote_number: string } | null);
-      } else { setParentQuote(null); }
-
-      const { data: custData } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('id', orderData.customer_id)
+      const { data: orderRow, error: orderError } = await supabase
+        .from('orders')
+        .select(ORDER_COLUMNS)
+        .eq('id', id!)
         .maybeSingle();
-      if (isStale()) return;
-      setCustomer(custData as Customer | null);
-
-      const { data: itemsData } = await supabase
-        .from('order_items')
-        .select(ORDER_ITEM_COLUMNS)
-        .eq('order_id', id!)
-        .order('section_name');
-      let itemsList = (itemsData || []) as OrderItem[];
-      let costsFailed = false;
+      if (orderError) return failLoad(orderError);
+      // Cost is admin-only (Mason, 2026-10-15).
+      let orderData = orderRow as Order | null;
       try {
-        itemsList = await withAdminCosts('order_items', itemsList, isAdmin);
+        orderData = await withAdminCost('orders', orderData, isAdmin);
       } catch (err) {
-        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_item_costs' } });
-        toast('error', 'Failed to load order item costs. Please refresh.');
-        costsFailed = true;
+        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_costs' } });
+        toast('error', 'Failed to load order cost. Please refresh.');
       }
-      if (isStale()) return;
-      setItemCostsFailed(costsFailed);
-      setItems(itemsList);
-      setEditItems(itemsList.map((i) => ({ ...i })));
-      // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
-      setPriceInputs(Object.fromEntries(
-        itemsList.filter((i) => i.pricing_pending).map((i) => [i.id, i.suggested_price != null ? String(i.suggested_price) : ''])
-      ));
 
-      // Load related blend tickets
-      const { data: btLinks } = await supabase
-        .from('blend_ticket_to_order_items')
-        .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
-        .eq('order_id', id!);
       if (isStale()) return;
-      // Deduplicate by blend_ticket_id
-      const uniqueTickets = new Map<string, { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }>();
-      ((btLinks || []) as unknown as Array<{ blend_ticket_id: string; blend_ticket: { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null } | null }>).forEach((link) => {
-        if (link.blend_ticket && !uniqueTickets.has(link.blend_ticket_id)) {
-          uniqueTickets.set(link.blend_ticket_id, link.blend_ticket);
+      if (orderData) {
+        setOrder(orderData);
+
+        // Fetch parent quote for transaction thread
+        if (orderData.quote_id) {
+          const { data: qData } = await supabase
+            .from('quotes').select('id, quote_number')
+            .eq('id', orderData.quote_id).maybeSingle();
+          if (isStale()) return;
+          setParentQuote(qData as { id: string; quote_number: string } | null);
+        } else { setParentQuote(null); }
+
+        const { data: custData, error: custError } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('id', orderData.customer_id)
+          .maybeSingle();
+        // Every order has a customer: a failed or empty read is a failed load, not a page
+        // whose actions run without the customer.
+        if (custError || !custData) return failLoad(custError ?? new Error("The order's customer read returned no row"));
+        if (isStale()) return;
+        setCustomer(custData as Customer | null);
+
+        const itemsRes = await supabase
+          .from('order_items')
+          .select(ORDER_ITEM_COLUMNS)
+          .eq('order_id', id!)
+          .order('section_name');
+        if (readFailed(itemsRes, 'line items')) return;
+        let itemsList = itemsRes.data as OrderItem[];
+        let costsFailed = false;
+        try {
+          itemsList = await withAdminCosts('order_items', itemsList, isAdmin);
+        } catch (err) {
+          Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_order_item_costs' } });
+          toast('error', 'Failed to load order item costs. Please refresh.');
+          costsFailed = true;
         }
-      });
-      setRelatedTickets(Array.from(uniqueTickets.values()));
+        if (isStale()) return;
+        setItemCostsFailed(costsFailed);
+        setItems(itemsList);
+        setEditItems(itemsList.map((i) => ({ ...i })));
+        // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
+        setPriceInputs(Object.fromEntries(
+          itemsList.filter((i) => i.pricing_pending).map((i) => [i.id, i.suggested_price != null ? String(i.suggested_price) : ''])
+        ));
 
-      // Load linked deliveries
-      // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
-      const { data: deliveryData } = await supabase
-        .from('deliveries')
-        .select('*')
-        .eq('order_id', id!)
-        .order('scheduled_date');
-      const deliveryDriverIds = [...new Set(
-        (deliveryData || [])
-          .map((d: { assigned_driver?: string | null }) => d.assigned_driver)
-          .filter(Boolean) as string[]
-      )];
-      const deliveryDriverMap: Record<string, string> = {};
-      if (deliveryDriverIds.length > 0) {
-        const { data: driverData } = await supabase
-          .from('profile_public_view')
-          .select('id, full_name')
-          .in('id', deliveryDriverIds);
-        (driverData || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) deliveryDriverMap[p.id] = p.full_name ?? ''; });
-      }
-      if (isStale()) return;
-      setDeliveries(
-        ((deliveryData || []) as Delivery[]).map((d: Delivery) => ({
-          ...d,
-          driver_name: d.assigned_driver ? deliveryDriverMap[d.assigned_driver] || undefined : undefined,
-        }))
-      );
+        // Load related blend tickets
+        const { data: btLinks } = await supabase
+          .from('blend_ticket_to_order_items')
+          .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
+          .eq('order_id', id!);
+        if (isStale()) return;
+        // Deduplicate by blend_ticket_id
+        const uniqueTickets = new Map<string, { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }>();
+        ((btLinks || []) as unknown as Array<{ blend_ticket_id: string; blend_ticket: { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null } | null }>).forEach((link) => {
+          if (link.blend_ticket && !uniqueTickets.has(link.blend_ticket_id)) {
+            uniqueTickets.set(link.blend_ticket_id, link.blend_ticket);
+          }
+        });
+        setRelatedTickets(Array.from(uniqueTickets.values()));
 
-      // Load linked invoices (AR single source of truth)
-      const { data: invoiceData } = await supabase
-        .from(INVOICES_POSTABLE)
-        // invoice_post_version: "Post all drafts" refuses an invoice changed since this page loaded.
-        .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
-        .eq('order_id', id!)
-        .not('status', 'in', '("voided","cancelled")')
-        .order('invoice_number');
-      if (isStale()) return;
-      setInvoices((invoiceData || []) as Invoice[]);
+        // Load linked deliveries
+        // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
+        const deliveryRes = await supabase
+          .from('deliveries')
+          .select('*')
+          .eq('order_id', id!)
+          .order('scheduled_date');
+        if (readFailed(deliveryRes, 'deliveries')) return;
+        const deliveryData = deliveryRes.data as Delivery[];
+        const deliveryDriverIds = [...new Set(
+          deliveryData
+            .map((d: { assigned_driver?: string | null }) => d.assigned_driver)
+            .filter(Boolean) as string[]
+        )];
+        const deliveryDriverMap: Record<string, string> = {};
+        if (deliveryDriverIds.length > 0) {
+          // Driver names are display only: a lookup that fails or throws leaves them blank
+          // rather than failing the whole order.
+          const { data: driverData } = await Promise.resolve(supabase
+            .from('profile_public_view')
+            .select('id, full_name')
+            .in('id', deliveryDriverIds))
+            .catch(() => ({ data: null }));
+          (Array.isArray(driverData) ? driverData : []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) deliveryDriverMap[p.id] = p.full_name ?? ''; });
+        }
+        if (isStale()) return;
+        setDeliveries(
+          deliveryData.map((d: Delivery) => ({
+            ...d,
+            driver_name: d.assigned_driver ? deliveryDriverMap[d.assigned_driver] || undefined : undefined,
+          }))
+        );
 
-      // Load order shares
-      const { data: shareData } = await supabase
-        .from('order_shares')
-        .select('*')
-        .eq('order_id', id!)
-        .order('sort_order');
-      if (isStale()) return;
-      setShares((shareData || []) as OrderShare[]);
+        // Load linked invoices (AR single source of truth)
+        const invoiceRes = await supabase
+          .from(INVOICES_POSTABLE)
+          // invoice_post_version: "Post all drafts" refuses an invoice changed since this page loaded.
+          .select(`${INVOICE_COLUMNS}, ${INVOICE_POST_VERSION_COLUMNS}`)
+          .eq('order_id', id!)
+          .not('status', 'in', '("voided","cancelled")')
+          .order('invoice_number');
+        if (readFailed(invoiceRes, 'invoices')) return;
+        if (isStale()) return;
+        setInvoices(invoiceRes.data as Invoice[]);
 
-      // Field/acre split: existing per-line allocations for this order, the active fields to pick
-      // from (with their owner splits), and a customer-id → name map for the live preview.
-      // Every read below is paged: one request stops at the server's row cap, which
-      // would drop fields, owner splits or names from the split editor (Goal 4 M36).
-      const { data: allocData, error: allocError } = await fetchAllRows((from, to) => supabase
-        .from('order_item_field_allocations')
-        .select('id, order_item_id, field_id, acres, created_at, order_items!inner(order_id)', { count: 'exact' })
-        .eq('order_items.order_id', id!)
-        .order('id')
-        .range(from, to));
-      if (isStale()) return;
-      setAllocations(((allocData || []) as unknown as (OrderItemFieldAllocation & { order_items?: unknown })[])
-        .map(({ order_items: _oi, ...a }) => a as OrderItemFieldAllocation));
+        // Load order shares (who is billed what share of this order)
+        const shareRes = await supabase
+          .from('order_shares')
+          .select('*')
+          .eq('order_id', id!)
+          .order('sort_order');
+        if (readFailed(shareRes, 'shares')) return;
+        if (isStale()) return;
+        setShares(shareRes.data as OrderShare[]);
 
-      const [fieldsRes, fbdRes] = await Promise.all([
-        fetchAllRows<{ id: string; field_name: string; total_acres: number | null; customer_id: string }>((from, to) => supabase
-          .from('fields')
-          .select('id, field_name, total_acres, customer_id', { count: 'exact' })
-          .eq('is_active', true)
-          .order('field_name')
+        // Field/acre split: existing per-line allocations for this order, the active fields to pick
+        // from (with their owner splits), and a customer-id → name map for the live preview.
+        // Every read below is paged: one request stops at the server's row cap, which
+        // would drop fields, owner splits or names from the split editor (Goal 4 M36).
+        // pageWithList: a page with no list sets allocLoadFailed instead of reading as "no splits".
+        const { data: allocData, error: allocError } = await fetchAllRows((from, to) => pageWithList(supabase
+          .from('order_item_field_allocations')
+          .select('id, order_item_id, field_id, acres, created_at, order_items!inner(order_id)', { count: 'exact' })
+          .eq('order_items.order_id', id!)
           .order('id')
-          .range(from, to)),
-        fetchAllRows<{ id: string; field_id: string; customer_id: string; split_pct: number }>((from, to) => supabase
-          .from('field_billing_defaults')
-          .select('id, field_id, customer_id, split_pct', { count: 'exact' })
+          .range(from, to)));
+        if (isStale()) return;
+        setAllocations(((allocData || []) as unknown as (OrderItemFieldAllocation & { order_items?: unknown })[])
+          .map(({ order_items: _oi, ...a }) => a as OrderItemFieldAllocation));
+
+        const [fieldsRes, fbdRes] = await Promise.all([
+          fetchAllRows<{ id: string; field_name: string; total_acres: number | null; customer_id: string }>((from, to) => pageWithList(supabase
+            .from('fields')
+            .select('id, field_name, total_acres, customer_id', { count: 'exact' })
+            .eq('is_active', true)
+            .order('field_name')
+            .order('id')
+            .range(from, to))),
+          fetchAllRows<{ id: string; field_id: string; customer_id: string; split_pct: number }>((from, to) => pageWithList(supabase
+            .from('field_billing_defaults')
+            .select('id, field_id, customer_id, split_pct', { count: 'exact' })
+            .order('id')
+            .range(from, to))),
+        ]);
+        if (isStale()) return;
+        // Names for just the customers the preview can show (this order's customer + field owners).
+        // No active filter: an inactive field owner still shows by name. (customers has no
+        // deleted_at column; filtering on it made this query 400.)
+        const nameIds = [...new Set([
+          orderData.customer_id,
+          ...(fieldsRes.data || []).map((f) => f.customer_id),
+          ...(fbdRes.data || []).map((r) => r.customer_id),
+        ].filter(Boolean))];
+        // Sent in chunks, so a long id list never overflows the request URL either.
+        const custRes = await fetchAllRowsForIds(nameIds, (idChunk, from, to) => pageWithList(supabase
+          .from('customers')
+          .select('id, farm_name', { count: 'exact' })
+          .in('id', idChunk)
           .order('id')
-          .range(from, to)),
-      ]);
-      if (isStale()) return;
-      // Names for just the customers the preview can show (this order's customer + field owners).
-      // No active filter: an inactive field owner still shows by name. (customers has no
-      // deleted_at column; filtering on it made this query 400.)
-      const nameIds = [...new Set([
-        orderData.customer_id,
-        ...(fieldsRes.data || []).map((f) => f.customer_id),
-        ...(fbdRes.data || []).map((r) => r.customer_id),
-      ].filter(Boolean))];
-      // Sent in chunks, so a long id list never overflows the request URL either.
-      const custRes = await fetchAllRowsForIds(nameIds, (idChunk, from, to) => supabase
-        .from('customers')
-        .select('id, farm_name', { count: 'exact' })
-        .in('id', idChunk)
-        .order('id')
-        .range(from, to));
-      if (isStale()) return;
-      const allocLoadErrors = [allocError, fieldsRes.error, fbdRes.error, custRes.error].filter((e) => e != null);
-      for (const err of allocLoadErrors) {
-        Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_field_split_lookups_for_order' } });
+          .range(from, to)));
+        if (isStale()) return;
+        const allocLoadErrors = [allocError, fieldsRes.error, fbdRes.error, custRes.error].filter((e) => e != null);
+        for (const err of allocLoadErrors) {
+          Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_field_split_lookups_for_order' } });
+        }
+        if (allocLoadErrors.length > 0) toast('error', 'Failed to load field split details. Please refresh.');
+        setAllocLoadFailed(allocLoadErrors.length > 0);
+        const ownersByField: Record<string, { customer_id: string; split_pct: number }[]> = {};
+        for (const r of fbdRes.data || []) {
+          (ownersByField[r.field_id] ||= []).push({ customer_id: r.customer_id, split_pct: Number(r.split_pct) });
+        }
+        setAllocFields(((fieldsRes.data || []) as { id: string; field_name: string; total_acres: number | null; customer_id: string }[])
+          .map((f) => ({ ...f, owners: ownersByField[f.id] || [] })));
+        const names: Record<string, string> = {};
+        for (const c of (custRes.data || []) as { id: string; farm_name: string }[]) names[c.id] = c.farm_name;
+        setCustNames(names);
+      } else {
+        // A read that found no order (not a failed one) says "Order not found", never the
+        // previous order this page was showing.
+        setOrder(null);
       }
-      if (allocLoadErrors.length > 0) toast('error', 'Failed to load field split details. Please refresh.');
-      setAllocLoadFailed(allocLoadErrors.length > 0);
-      const ownersByField: Record<string, { customer_id: string; split_pct: number }[]> = {};
-      for (const r of fbdRes.data || []) {
-        (ownersByField[r.field_id] ||= []).push({ customer_id: r.customer_id, split_pct: Number(r.split_pct) });
-      }
-      setAllocFields(((fieldsRes.data || []) as { id: string; field_name: string; total_acres: number | null; customer_id: string }[])
-        .map((f) => ({ ...f, owners: ownersByField[f.id] || [] })));
-      const names: Record<string, string> = {};
-      for (const c of (custRes.data || []) as { id: string; farm_name: string }[]) names[c.id] = c.farm_name;
-      setCustNames(names);
+      if (isStale()) return;
+      setLoadFailed(false);
+      setLoading(false);
+    } catch (err: unknown) {
+      failLoad(err);
     }
-    if (isStale()) return;
-    setLoading(false);
   }, [id, toast, isAdmin]);
+
+  const retryLoad = () => {
+    setLoadFailed(false);
+    setLoading(true);
+    void fetchOrder();
+  };
 
   useEffect(() => {
     activeOrderIdRef.current = id;
@@ -1277,6 +1322,14 @@ export default function OrderDetail() {
           <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />
         ))}
       </div>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <Card>
+        <LoadFailedState title="This order could not be loaded" onRetry={retryLoad} />
+      </Card>
     );
   }
 

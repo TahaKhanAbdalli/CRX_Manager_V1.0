@@ -61,10 +61,11 @@ export default function FieldInvoices() {
       ]);
 
       if (cancelled) return;
-      setCounts({
-        drafts: draftsResult.error ? undefined : (draftsResult.count ?? 0),
-        posted: postedResult.error ? undefined : (postedResult.count ?? 0),
-      });
+      // A count that failed or came back missing leaves its badge off; it must not show 0
+      // as if the tab were empty (To-Do 10.5).
+      const badge = (result: { error: unknown; count: number | null }) =>
+        !result.error && typeof result.count === 'number' ? result.count : undefined;
+      setCounts({ drafts: badge(draftsResult), posted: badge(postedResult) });
     };
 
     void loadCounts();
