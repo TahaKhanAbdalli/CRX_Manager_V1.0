@@ -18,12 +18,14 @@ export const PAGE_RETURNED_NO_LIST = 'The read returned no list. Reload to try a
 /**
  * Wrap one page of a fetchAllRows read so a page that answers with no list and
  * no error counts as a failed page. fetchAllRows reads such a page as an empty
- * one, which a screen would show as "No … found" or $0 (To-Do 10.5). Callers
- * opt in; fetchAllRows itself is unchanged for everyone else.
+ * one, which a screen would show as "No … found" or $0 (To-Do 10.5). A page
+ * that answers with something other than a list fails the same way, rather
+ * than throwing inside fetchAllRows. Callers opt in; fetchAllRows itself is
+ * unchanged for everyone else.
  */
 export async function pageWithList<T>(page: PromiseLike<PageResult<T>>): Promise<PageResult<T>> {
   const result = await page;
-  if (!result.error && (result.data === null || result.data === undefined)) {
+  if (!result.error && !Array.isArray(result.data)) {
     return { data: null, error: { message: PAGE_RETURNED_NO_LIST }, count: null };
   }
   return result;
