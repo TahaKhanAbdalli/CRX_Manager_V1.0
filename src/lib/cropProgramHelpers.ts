@@ -81,7 +81,7 @@ export function orderProgramsForJob(programs: CropProgram[], jobCrops: string[])
  * Strips a leading "dry " qualifier so "Dry oz" → "oz" (and leaves everything
  * else, incl. per-acre suffixes, untouched). Empty in → empty out.
  */
-export function normalizeProgramRateUnit(unit: string | null | undefined): string {
+function normalizeProgramRateUnit(unit: string | null | undefined): string {
   const u = (unit || '').trim();
   return /^dry\s+/i.test(u) ? u.replace(/^dry\s+/i, '').trim() : u;
 }

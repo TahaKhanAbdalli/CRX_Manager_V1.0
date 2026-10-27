@@ -41,7 +41,7 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
  * is the safe direction: over-blanking can only hide a definition, and every
  * scan built on this treats a definition it cannot find as a failure.
  */
-export function dollarTagAt(sql: string, i: number): string | null {
+function dollarTagAt(sql: string, i: number): string | null {
   if (sql[i] !== '$') return null;
   let j = i + 1;
   if (j < sql.length && !/[0-9$\s]/.test(sql[j])) {

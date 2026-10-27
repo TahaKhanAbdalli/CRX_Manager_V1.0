@@ -33,7 +33,7 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
 }
 
 /** Parse a saved setting defensively so a malformed preference never blocks printing. */
-export function parseApplicatorPrintOptions(raw: string | null | undefined): ApplicatorPrintOptions {
+function parseApplicatorPrintOptions(raw: string | null | undefined): ApplicatorPrintOptions {
   if (!raw || raw.trim() === '') return { ...DEFAULT_APPLICATOR_PRINT_OPTIONS };
   let parsed: unknown;
   try {

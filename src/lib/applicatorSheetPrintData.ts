@@ -30,7 +30,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /** Convert the stored product JSON snapshot into a compact, crew-readable line. */
-export function previousApplicationSummary(productData: unknown): string {
+function previousApplicationSummary(productData: unknown): string {
   if (!Array.isArray(productData) || productData.length === 0) return 'Product details not recorded';
   const products = productData.flatMap((entry) => {
     const product = asRecord(entry);

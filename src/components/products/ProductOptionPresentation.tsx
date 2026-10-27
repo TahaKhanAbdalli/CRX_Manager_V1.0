@@ -29,7 +29,7 @@ export function normalizeReturnPolicy(value: string | null | undefined): Product
     : 'unknown';
 }
 
-export function productPackageLabel(product: ProductOptionPresentationModel): string {
+function productPackageLabel(product: ProductOptionPresentationModel): string {
   if (product.packaging_variant) return product.packaging_variant;
   if (product.unit_size) return product.unit_size;
   if (product.container_size != null && product.container_unit) return `${product.container_size} ${product.container_unit}`;

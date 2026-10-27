@@ -6,7 +6,7 @@ import { jobSearchLabel } from '../../lib/recordLabels';
 import type { JobStatus } from '../../types';
 
 // A fixed column list: jobs is a cost table, so screens never read a caller-built one.
-export const JOB_SEARCH_SELECT = 'id, job_number, job_date, status, customer_id, customer:customers(farm_name)';
+const JOB_SEARCH_SELECT = 'id, job_number, job_date, status, customer_id, customer:customers(farm_name)';
 
 export interface JobSearchResult {
   id: string;

@@ -3,7 +3,7 @@ import { excludedIdList } from './recordSearch';
 
 // How many matching customers a by-name search of orders or jobs looks through.
 // A broader name ("Farm") reaches the rest by typing more or by the record's number.
-export const CUSTOMER_NAME_MATCH_LIMIT = 50;
+const CUSTOMER_NAME_MATCH_LIMIT = 50;
 
 /**
  * `.or()` terms that match a record by its own number or its customer's farm name.

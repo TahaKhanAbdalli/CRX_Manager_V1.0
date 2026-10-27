@@ -131,7 +131,7 @@ export const LOAD_ACRES_TOLERANCE = 0.01;
  * 1,500-gallon load. Kept deliberately small and shared by every caller of the
  * worksheet math.
  */
-export const MANUAL_LOAD_CAPACITY_TOLERANCE = 0.005;
+const MANUAL_LOAD_CAPACITY_TOLERANCE = 0.005;
 
 function formatGallons(value: number): string {
   return round4(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
