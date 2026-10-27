@@ -23,7 +23,8 @@ export function holdStatePath(projectDir, sessionId) {
   const dir = path.join(projectDir, ".claude", "session-state");
   if (sessionId === undefined || sessionId === null || sessionId === "") return path.join(dir, "hold.json");
   if (typeof sessionId === "string" && /^[a-z0-9_-]{1,128}$/.test(sessionId)) return path.join(dir, `hold-${sessionId}.json`);
-  const typed = `${typeof sessionId}:${typeof sessionId === "string" ? sessionId : JSON.stringify(sessionId)}`;
+  // JSON.stringify escapes lone surrogates, which UTF-8 hashing would fold into one character.
+  const typed = `${typeof sessionId}:${JSON.stringify(sessionId)}`;
   return path.join(dir, `hold.${createHash("sha256").update(typed).digest("hex").slice(0, 32)}.json`);
 }
 
