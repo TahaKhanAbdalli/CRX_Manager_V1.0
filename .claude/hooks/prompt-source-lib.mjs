@@ -76,7 +76,8 @@ const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
 // One envelope from its open tag at the start to its FIRST close tag at the end.
 function isWholePromptEnvelope(trimmed) {
   for (const tag of WHOLE_PROMPT_ONLY_TAG_NAMES) {
-    if (!new RegExp(`^<\\\\*~?${tag}\\b[^>]*>`, "i").test(trimmed)) continue;
+    // (?=[\s>]) not \b: "<ci-monitor-event-debug>" is not this tag (Luna review, PR #1152).
+    if (!new RegExp(`^<\\\\*~?${tag}(?=[\\s>])[^>]*>`, "i").test(trimmed)) continue;
     const close = new RegExp(`<\\\\*~?\\/~?${tag}\\s*>`, "i").exec(trimmed);
     if (close && close.index + close[0].length === trimmed.length) return true;
   }
