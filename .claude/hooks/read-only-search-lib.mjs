@@ -34,10 +34,12 @@ function literalPipeline(command) {
   const stages = [[]];
   let word = null;
   let wordHasGlob = false;
+  let pieces = [];
   const endWord = () => {
-    if (word !== null) stages[stages.length - 1].push({ text: word, glob: wordHasGlob });
+    if (word !== null) stages[stages.length - 1].push({ text: word, glob: wordHasGlob, pieces });
     word = null;
     wordHasGlob = false;
+    pieces = [];
   };
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
@@ -49,9 +51,13 @@ function literalPipeline(command) {
       // A `"` is refused too: Windows PowerShell's legacy argument passing
       // rebuilds a native program's command line without escaping it, so
       // `'x" --pre=calc "y'` would reach rg as a separate --pre option.
-      if (/[|&<>^%"]/.test(body)) return null;
+      // cmd.exe also expands `!VAR!` (delayed expansion).
+      if (/[|&<>^%"!]/.test(body)) return null;
       // `'it''s'` is ONE string with a quote inside in PowerShell, two strings here.
       if (command[close + 1] === "'") return null;
+      // cmd.exe splits the body at spaces, so each piece may arrive as its own
+      // argument there (`rg -g 'x --pre calc y'`); the option checks see them all.
+      pieces.push(...body.split(/\s+/).filter(Boolean));
       word = (word ?? "") + body;
       i = close;
       continue;
@@ -61,9 +67,9 @@ function literalPipeline(command) {
       if (close < 0) return null;
       const body = command.slice(i + 1, close);
       // `$` and a backtick expand inside double quotes (bash and PowerShell),
-      // `%` does in cmd.exe, and a backslash before the closing quote ends the
-      // string in PowerShell but escapes it in bash.
-      if (/[$`%]/.test(body) || body.endsWith("\\")) return null;
+      // `%` and `!VAR!` (delayed expansion) do in cmd.exe, and a backslash
+      // before the closing quote ends the string in PowerShell but escapes it in bash.
+      if (/[$`%!]/.test(body) || body.endsWith("\\")) return null;
       // `"x"" --pre=calc ""y"` is ONE PowerShell string holding quotes, which
       // legacy argument passing splits back into separate rg options.
       if (command[close + 1] === '"') return null;
@@ -83,9 +89,10 @@ function literalPipeline(command) {
     }
     // A backslash is an escape in bash (`\'`, `\;`) but a path separator in
     // PowerShell, so it is accepted only before a character neither shell
-    // gives a meaning to.
+    // gives a meaning to. Not before `-`: bash drops the backslash, so
+    // `rg \--pre calc` reaches rg as the --pre option the checks below refuse.
     if (ch === "\\") {
-      if (!/[A-Za-z0-9_.\-/\\]/.test(command[i + 1] ?? "")) return null;
+      if (!/[A-Za-z0-9_./\\]/.test(command[i + 1] ?? "")) return null;
       word = (word ?? "") + ch;
       continue;
     }
@@ -130,18 +137,25 @@ function searchStageIsLiteral(words) {
     let i = 1;
     while (i < words.length && words[i].text !== "grep") {
       if (words[i].text === "--no-pager") i += 1;
-      else if (words[i].text === "-C" && i + 1 < words.length) i += 2;
+      // A spaced `-C 'dir'` could hand git `-c key=value` under cmd.exe.
+      else if (words[i].text === "-C" && i + 1 < words.length && words[i + 1].pieces.length <= 1) i += 2;
       else return false;
     }
     if (i >= words.length) return false;
-    return words.slice(i + 1).every((w) => !w.glob && !gitGrepOptionRunsProgram(w.text));
+    return words.slice(i + 1).every((w) => !w.glob && !asArguments(w).some(gitGrepOptionRunsProgram));
   }
   if (!SEARCH_HEADS.has(head)) return false;
   // PowerShell expands a cmdlet's wildcard path itself; for a native program
   // an unquoted wildcard is expanded by bash into file names, which could
   // arrive as options.
   const cmdlet = head === "select-string" || head === "sls";
-  return words.slice(1).every((w) => (cmdlet || !w.glob) && !(head === "rg" && rgOptionRunsProgram(w.text)));
+  return words.slice(1).every((w) => (cmdlet || !w.glob) && !(head === "rg" && asArguments(w).some(rgOptionRunsProgram)));
+}
+
+// Every argument a word may reach the program as: itself, or under cmd.exe each
+// space-separated piece of its single-quoted text.
+function asArguments(word) {
+  return [word.text, ...word.pieces];
 }
 
 function filterStageIsLiteral(words) {
