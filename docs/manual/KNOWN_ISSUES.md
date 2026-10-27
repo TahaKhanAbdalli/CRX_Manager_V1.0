@@ -199,9 +199,11 @@ can make old splits refuse to save (LOW-MED).
 path was not traced.
 
 ### KI-15 — Reports > Profitability reads stored order profit, not the server report
-**MED · OPEN · money/UI · unassigned**
-`src/pages/Reports.tsx:299-375` computes margins in the browser from `orders.total_profit` / `order_items.profit`;
-the server report `get_profitability_report` (cost at time of sale) has no caller. Numbers can differ.
+**MED · PARTIAL · money/UI · To-Do 0.6**
+`src/pages/Reports.tsx` computed margins in the browser from `orders.total_profit` / `order_items.profit`;
+the server report `get_profitability_report` (cost at time of sale) had no caller. Fixed on branch
+`claude/reports-profit-at-sale-0-6` (2026-10-26, not live yet): By Customer, By Product and Revenue Summary read
+`get_profitability_report`. Close this once it is merged and checked on croprxsolutions.app.
 
 ### KI-16 — Sub-cent and rounding gaps
 **MED/LOW · mixed · money · unassigned**

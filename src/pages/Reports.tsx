@@ -31,6 +31,7 @@ import type {
   ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
   YearEndSummaryData,
 } from '../types';
+import type { Database } from '../types/supabase';
 
 // ─── Category / Tab types ──────────────────────────────────────
 type Category = 'profitability' | 'logbook' | 'financial' | 'operational' | 'year_end';
@@ -88,6 +89,9 @@ interface CommissionRow {
   status: string;
   paid_date: string | null;
 }
+
+type ProfitabilityReportRow =
+  Database['public']['Functions']['get_profitability_report']['Returns'][number];
 
 interface RevenueSummary {
   [k: string]: unknown;
@@ -286,103 +290,73 @@ export default function Reports() {
   const [yeBatchMode, setYeBatchMode] = useState(false);
 
   // ─── PROFITABILITY sub-fetchers ────────────────────────────
-  // Each reads every matching row page by page (one request stops at the server's row
+  // By customer, by product and by month come from get_profitability_report (To-Do 0.6): each line's
+  // cost saved at the time of sale, every order that is not cancelled, voided or a draft, unpriced
+  // rush lines left out, and the same rule as the sales reports. The server adds the figures up; the
+  // page only lays them out. Every group is read page by page (one request stops at the server's row
   // cap), and a failed read clears its table and marks the report failed.
+  const fetchProfitabilityGroups = useCallback(async (
+    groupBy: 'customer' | 'product' | 'month',
+  ): Promise<ProfitabilityReportRow[] | null> => {
+    const { data, error } = await fetchAllRows<ProfitabilityReportRow>((from, to) => supabase
+      .rpc('get_profitability_report', {
+        p_group_by: groupBy,
+        p_start_date: startDate || undefined,
+        p_end_date: endDate || undefined,
+      }, { count: 'exact' })
+      // One row per group: the group key is unique, so the pages neither skip nor repeat a row.
+      .order('group_key')
+      .range(from, to));
+    if (error) {
+      Sentry.captureException(new Error(error.message), { extra: { context: `profitability_report_${groupBy}` } });
+      return null;
+    }
+    return assertRpcResult<ProfitabilityReportRow[]>(data, 'get_profitability_report');
+  }, [startDate, endDate]);
+
   const fetchCustomerProfitability = useCallback(async () => {
     const seq = reportLoadSeq.current;
-    const fail = () => {
+    const rows = await fetchProfitabilityGroups('customer');
+    if (seq !== reportLoadSeq.current) return;
+    if (!rows) {
       setCustomerData([]);
       markReportFailed('profitability:customer');
       toast('error', 'Failed to load customer profitability.');
-    };
-    // Cost is admin-only (Mason, 2026-10-15): profit comes from get_admin_cost_fields, not the table.
-    type CustomerProfitOrder = { id: string; total_price: number; total_profit?: number | null; customer: { farm_name: string } | { farm_name: string }[] | null };
-    const { data, error } = await fetchAllRows<CustomerProfitOrder>((from, to) => {
-      let query = supabase
-        .from('orders')
-        .select('id, total_price, customer:customers(farm_name)', { count: 'exact' })
-        .is('deleted_at', null)
-        .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
-      if (startDate) query = query.gte('order_date', startDate);
-      if (endDate) query = query.lte('order_date', endDate);
-      return query.order('id').range(from, to);
-    });
-    if (seq !== reportLoadSeq.current) return;
-    if (error) { fail(); return; }
-    let orders: CustomerProfitOrder[];
-    try {
-      orders = await withAdminCosts('orders', data || [], isAdmin);
-    } catch (err) {
-      if (seq !== reportLoadSeq.current) return;
-      Sentry.captureException(err, { extra: { context: 'customer_profitability_costs' } });
-      fail();
       return;
     }
-    if (seq !== reportLoadSeq.current) return;
-
-    const grouped: Record<string, CustomerProfit> = {};
-    orders.forEach((o) => {
-      const customerJoin = Array.isArray(o.customer) ? o.customer[0] : o.customer;
-      const name = customerJoin?.farm_name || 'Unknown';
-      if (!grouped[name]) grouped[name] = { farm_name: name, total_revenue: 0, total_profit: 0, margin_pct: 0, order_count: 0 };
-      grouped[name].total_revenue += o.total_price || 0;
-      grouped[name].total_profit += o.total_profit || 0;
-      grouped[name].order_count += 1;
-    });
-    const result = Object.values(grouped).map((g) => ({
-      ...g,
-      margin_pct: g.total_revenue > 0 ? (g.total_profit / g.total_revenue) * 100 : 0,
-    }));
-    result.sort((a, b) => b.total_revenue - a.total_revenue);
-    setCustomerData(result);
+    setCustomerData(rows
+      .map((row) => ({
+        farm_name: row.group_key,
+        total_revenue: row.total_revenue,
+        total_profit: row.total_profit,
+        margin_pct: row.margin_pct,
+        order_count: row.order_count,
+      }))
+      .sort((a, b) => b.total_revenue - a.total_revenue));
     reportLoaded('profitability:customer');
-  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
+  }, [fetchProfitabilityGroups, toast, reportLoaded, markReportFailed]);
 
   const fetchProductProfitability = useCallback(async () => {
     const seq = reportLoadSeq.current;
-    const fail = () => {
+    const rows = await fetchProfitabilityGroups('product');
+    if (seq !== reportLoadSeq.current) return;
+    if (!rows) {
       setProductData([]);
       markReportFailed('profitability:product');
       toast('error', 'Failed to load product profitability.');
-    };
-    type ProductProfitItem = { id: string; product_name: string; total_price: number; profit?: number | null; total_units_needed: number };
-    const { data, error } = await fetchAllRows<ProductProfitItem>((from, to) => {
-      let query = supabase
-        .from('order_items')
-        .select('id, product_name, total_price, total_units_needed, order:orders!inner(order_date)', { count: 'exact' });
-      if (startDate) query = query.gte('order.order_date', startDate);
-      if (endDate) query = query.lte('order.order_date', endDate);
-      return query.order('id').range(from, to);
-    });
-    if (seq !== reportLoadSeq.current) return;
-    if (error) { fail(); return; }
-    let items: ProductProfitItem[];
-    try {
-      items = await withAdminCosts('order_items', data || [], isAdmin);
-    } catch (err) {
-      if (seq !== reportLoadSeq.current) return;
-      Sentry.captureException(err, { extra: { context: 'product_profitability_costs' } });
-      fail();
       return;
     }
-    if (seq !== reportLoadSeq.current) return;
-
-    const grouped: Record<string, ProductProfit> = {};
-    items.forEach((i) => {
-      const name = i.product_name;
-      if (!grouped[name]) grouped[name] = { product_name: name, total_revenue: 0, total_profit: 0, units_sold: 0, margin_pct: 0 };
-      grouped[name].total_revenue += i.total_price || 0;
-      grouped[name].total_profit += i.profit || 0;
-      grouped[name].units_sold += i.total_units_needed || 0;
-    });
-    const result = Object.values(grouped).map((g) => ({
-      ...g,
-      margin_pct: g.total_revenue > 0 ? (g.total_profit / g.total_revenue) * 100 : 0,
-    }));
-    result.sort((a, b) => b.total_revenue - a.total_revenue);
-    setProductData(result);
+    setProductData(rows
+      .map((row) => ({
+        product_name: row.group_key,
+        total_revenue: row.total_revenue,
+        total_profit: row.total_profit,
+        units_sold: row.units_sold,
+        margin_pct: row.margin_pct,
+      }))
+      .sort((a, b) => b.total_revenue - a.total_revenue));
     reportLoaded('profitability:product');
-  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
+  }, [fetchProfitabilityGroups, toast, reportLoaded, markReportFailed]);
 
   // Returns whether the commission list on screen is now current. The quick-pay
   // recovery messages send the admin to a list to work out what actually
@@ -438,44 +412,24 @@ export default function Reports() {
 
   const fetchRevenue = useCallback(async () => {
     const seq = reportLoadSeq.current;
-    const fail = () => {
+    const rows = await fetchProfitabilityGroups('month');
+    if (seq !== reportLoadSeq.current) return;
+    if (!rows) {
       setRevenueData([]);
       markReportFailed('profitability:revenue');
       toast('error', 'Failed to load revenue data.');
-    };
-    type RevenueOrder = { id: string; order_date: string; total_price: number; total_profit?: number | null };
-    const { data, error } = await fetchAllRows<RevenueOrder>((from, to) => {
-      let query = supabase.from('orders').select('id, order_date, total_price', { count: 'exact' })
-        .is('deleted_at', null)
-        .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
-      if (startDate) query = query.gte('order_date', startDate);
-      if (endDate) query = query.lte('order_date', endDate);
-      return query.order('order_date').order('id').range(from, to);
-    });
-    if (seq !== reportLoadSeq.current) return;
-    if (error) { fail(); return; }
-    let orders: RevenueOrder[];
-    try {
-      orders = await withAdminCosts('orders', data || [], isAdmin);
-    } catch (err) {
-      if (seq !== reportLoadSeq.current) return;
-      Sentry.captureException(err, { extra: { context: 'revenue_costs' } });
-      fail();
       return;
     }
-    if (seq !== reportLoadSeq.current) return;
-
-    const grouped: Record<string, RevenueSummary> = {};
-    orders.forEach((o) => {
-      const month = o.order_date.substring(0, 7);
-      if (!grouped[month]) grouped[month] = { month, revenue: 0, profit: 0, orders: 0 };
-      grouped[month].revenue += o.total_price || 0;
-      grouped[month].profit += o.total_profit || 0;
-      grouped[month].orders += 1;
-    });
-    setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
+    setRevenueData(rows
+      .map((row) => ({
+        month: row.group_key,
+        revenue: row.total_revenue,
+        profit: row.total_profit,
+        orders: row.order_count,
+      }))
+      .sort((a, b) => b.month.localeCompare(a.month)));
     reportLoaded('profitability:revenue');
-  }, [startDate, endDate, toast, isAdmin, reportLoaded, markReportFailed]);
+  }, [fetchProfitabilityGroups, toast, reportLoaded, markReportFailed]);
 
   // ─── PROFITABILITY parent fetcher ────────────────────────────
   const fetchProfitability = useCallback(async () => {
