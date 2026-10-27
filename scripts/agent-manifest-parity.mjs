@@ -13,9 +13,9 @@
 // Deliberately Claude-only hooks (NOT wired for Codex), each with why:
 export const CLAUDE_ONLY_HOOKS = new Set([
   // Codex has its OWN production guard (.codex/hooks/production-action-guard.mjs)
-  // that covers pushes AND PR merges, so Codex doesn't wire Claude's push/merge
-  // guards.
-  "codex-push-guard.mjs",
+  // that covers pushes AND PR merges, so Codex doesn't wire Claude's merge guard.
+  // (Claude's codex-push-guard.mjs was unwired 2026-10-27: GitHub already refuses
+  // every push to main, the only push it judged.)
   "pr-merge-guard.mjs",
   // Runs pr-merge-guard.mjs as a child and denies a possible merge when the guard
   // crashes or runs out of time (Sol, 2026-09-27). It launches only that

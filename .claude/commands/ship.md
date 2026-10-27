@@ -31,7 +31,7 @@ If on `main`, create one: `git checkout -b ship/<short-slug>`. Tell Mason the br
 
 ## Step 1 — Implement the job to completion
 
-Do the work (you've already sized + planned it in Step 0.5). For a non-trivial feature, use the relevant scaffold skill (`/new-page`, `/new-rpc`, `/create-migration`) — those encode the correct patterns. Your PreToolUse hooks (sql-safety, money-safety, idempotency-body-check, rls-on-new-tables, status-enum-check, generated-column-check, env-guard) will refuse a bad write as you go — treat any hook block as a real defect to fix, not an obstacle to route around.
+Do the work (you've already sized + planned it in Step 0.5). For a non-trivial feature, use the relevant scaffold skill (`/new-page`, `/new-rpc`, `/create-migration`) — those encode the correct patterns. Your PreToolUse hooks (sql-safety, money-safety, idempotency-body-check, status-enum-check, generated-column-check, env-guard) will refuse a bad write as you go — treat any hook block as a real defect to fix, not an obstacle to route around.
 
 Finish the whole job before moving on. Partial implementations do not enter the gate.
 
