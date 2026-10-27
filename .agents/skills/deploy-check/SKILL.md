@@ -151,8 +151,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    and fix any other refusal's own failing condition), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: the newest run of every reported check
-   green with `mergeStateStatus` CLEAN, the head containing GitHub's real base, and the Sol proof
-   bound to that head and that base (or the documentation-only exception); CodeRabbit approval is
+   green with `mergeStateStatus` CLEAN, and the Sol proof bound to that head and to a base the
+   head contains that GitHub's base has only moved forward from (Mason, 2026-10-26: a head behind
+   main may merge), or the documentation-only exception (which still needs an up-to-date head); CodeRabbit approval is
    no longer required (2026-10-19). `CHANGES_REQUESTED` (from anyone), `--auto` and `--admin` are
    refused. The `protect-main` ruleset has no bypass actors, so its required checks bind admins too;
    no agent uses `--admin` either way. **The merge
