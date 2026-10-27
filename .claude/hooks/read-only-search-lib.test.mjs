@@ -44,6 +44,10 @@ const notRecognised = [
   `git grep 'x" -O"calc" "y'`,
   // bash drops a backslash before `-`; cmd.exe splits single-quoted text and expands !VAR!.
   "rg \\--pre calc x docs",
+  "rg --p\\re='node scripts/apply-migration-file.mjs' x AGENTS.md",
+  "rg --p\\re=echo '^AGENTS.md$' AGENTS.md",
+  "rg -\\z x docs",
+  "git grep --open-files-in-p\\ager=calc x",
   "git grep \\-Ocalc x",
   "rg -g 'x --pre calc y' docs",
   "rg -n 'a -uz b' docs",

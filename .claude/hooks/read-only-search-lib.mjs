@@ -153,9 +153,11 @@ function searchStageIsLiteral(words) {
 }
 
 // Every argument a word may reach the program as: itself, or under cmd.exe each
-// space-separated piece of its single-quoted text.
+// space-separated piece of its single-quoted text, each also as bash reads it
+// with its backslashes dropped (`--p\re` is `--pre` to bash).
 function asArguments(word) {
-  return [word.text, ...word.pieces];
+  const spellings = [word.text, ...word.pieces];
+  return [...spellings, ...spellings.map((text) => text.replace(/\\(.)/g, "$1"))];
 }
 
 function filterStageIsLiteral(words) {
