@@ -15,12 +15,14 @@ import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 // named for its own session; hold.json is the fallback when no session_id
 // arrives. An id already made of [A-Za-z0-9_-] (a real one is a UUID) names the
 // file as-is; any other id is hashed rather than stripped, so it cannot leave the
-// directory and two different ids never share a file (Luna review, PR #1152).
+// directory, and the hashed name uses "." (never in a plain id) so two different
+// ids never share a file (Luna review, PR #1152).
 export function holdStatePath(projectDir, sessionId) {
-  const raw = String(sessionId || "");
-  const id = !raw ? "" : /^[A-Za-z0-9_-]{1,128}$/.test(raw) ? raw
-    : `h-${createHash("sha256").update(raw).digest("hex").slice(0, 32)}`;
-  return path.join(projectDir, ".claude", "session-state", id ? `hold-${id}.json` : "hold.json");
+  const dir = path.join(projectDir, ".claude", "session-state");
+  if (sessionId === undefined || sessionId === null || sessionId === "") return path.join(dir, "hold.json");
+  const raw = String(sessionId);
+  if (/^[A-Za-z0-9_-]{1,128}$/.test(raw)) return path.join(dir, `hold-${raw}.json`);
+  return path.join(dir, `hold.${createHash("sha256").update(raw).digest("hex").slice(0, 32)}.json`);
 }
 
 // Mason wants to halt / pause / is only scoping a future session.

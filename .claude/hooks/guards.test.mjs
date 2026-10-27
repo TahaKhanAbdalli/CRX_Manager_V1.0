@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold, holdDecision } from "./hold-latch-lib.mjs";
+import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold, holdDecision, holdStatePath } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
 import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, contentIsRisky, proofValid, programAssembledAtRuntime } from "./codex-push-lib.mjs";
 import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
@@ -49,6 +49,12 @@ ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latch
 ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
 ok(isHoldPhrase("I want to stop the merge"), "Mason's own want still latches");
 ok(isHoldPhrase("I need the agent to stop the deploy"), "an order naming someone else still latches");
+// Per-session hold files (2026-10-27): only a MISSING id shares hold.json.
+eq(path.basename(holdStatePath("p", undefined)), "hold.json", "no session id → hold.json");
+eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hold.json");
+eq(path.basename(holdStatePath("p", 0)), "hold-0.json", "a falsy but present id still gets its own file");
+eq(path.basename(holdStatePath("p", "abc-123")), "hold-abc-123.json", "a plain id names the file as-is");
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(path.basename(holdStatePath("p", "../x"))), "an unusual id is hashed");
 ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");
 ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");

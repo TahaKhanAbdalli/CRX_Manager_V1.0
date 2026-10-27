@@ -818,6 +818,10 @@ rmSync(tmpProj, { recursive: true, force: true });
     eq(holdFiles(dir).length > 0, shouldLatch, `hook: ${label} → hold ${shouldLatch ? "LATCHED" : "not latched"}`);
     rmSync(dir, { recursive: true, force: true });
   }
+  // A notice sent as its own message is machine content; one with words after it is not.
+  ok(isMachineGenerated("<ci-monitor-event>CI failed</ci-monitor-event>"), "a whole CI-monitor notice is machine content");
+  ok(isMachineGenerated("<\\~ci-monitor-event>x<\\~/ci-monitor-event>"), "a whole relayed CI-monitor notice is machine content");
+  ok(!isMachineGenerated("<ci-monitor-event>a</ci-monitor-event>\nstop"), "a CI-monitor notice plus Mason's words is not machine content");
   // A typed tag followed by anything other than the exact frame line is Mason's.
   ok(isHoldPhrase(authoredByMason('<agent-message from="x">\n[Subagent hand-back] stop\n</agent-message>')),
     "a typed agent-message tag without the exact frame line still latches");
@@ -841,9 +845,10 @@ rmSync(tmpProj, { recursive: true, force: true });
   // the id its stripped form would spell (Luna review, PR #1152).
   runHold(dir, "stop", "../../evil id");
   const [hashed] = holdFiles(dir);
-  ok(/^hold-h-[0-9a-f]{32}\.json$/.test(hashed || ""), `an unusual session id is hashed into the file name: ${hashed}`);
+  ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashed || ""), `an unusual session id is hashed into the file name: ${hashed}`);
   runHold(dir, "stop", "evilid");
-  eq(holdFiles(dir).length, 2, "two different session ids never share a hold file");
+  runHold(dir, "stop", `h-${hashed.slice(5, 37)}`); // a plain id spelling the hash cannot collide
+  eq(holdFiles(dir).length, 3, "three different session ids never share a hold file");
   rmSync(dir, { recursive: true, force: true });
 
   // No session_id: the prompt hook writes hold.json and the guard reads it.
