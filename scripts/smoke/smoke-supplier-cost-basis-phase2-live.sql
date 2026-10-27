@@ -139,6 +139,16 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated apply expected AUTH_REQUIRED, got: %', SQLERRM;
     END IF;
   END;
+  -- approve_pricing_change_set (20261027050000) checks its key first, so each probe passes one.
+  BEGIN
+    PERFORM public.approve_pricing_change_set(gen_random_uuid(), 'x', '[]'::jsonb, NULL, NULL, 'smoke-approve-probe');
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated approve was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated approve expected AUTH_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
 
   PERFORM set_config(
     'request.jwt.claims',
@@ -161,6 +171,15 @@ BEGIN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'ADMIN_REQUIRED%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: non-admin apply expected ADMIN_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.approve_pricing_change_set(gen_random_uuid(), 'x', '[]'::jsonb, NULL, v_non_admin_id, 'smoke-approve-probe');
+    RAISE EXCEPTION 'SMOKE_FAIL: non-admin approve was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ADMIN_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: non-admin approve expected ADMIN_REQUIRED, got: %', SQLERRM;
     END IF;
   END;
 
@@ -187,6 +206,15 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: forged apply expected ACTOR_MISMATCH, got: %', SQLERRM;
     END IF;
   END;
+  BEGIN
+    PERFORM public.approve_pricing_change_set(gen_random_uuid(), 'x', '[]'::jsonb, NULL, v_non_admin_id, 'smoke-approve-probe');
+    RAISE EXCEPTION 'SMOKE_FAIL: forged approve actor was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ACTOR_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: forged approve expected ACTOR_MISMATCH, got: %', SQLERRM;
+    END IF;
+  END;
 END;
 $smoke$;
 
@@ -211,6 +239,7 @@ SELECT 'manual-preview', public.preview_product_cost_basis_changes(
     'tier2_price', '13.00',
     'tier3_price', '14.00',
     'change_reason', '[SMOKE] product-page governed pricing',
+    'price_source', '[SMOKE] supplier list',
     'basis_type', 'manual_override',
     'basis_source', 'product_page',
     'basis_reason', '[SMOKE] product-page governed pricing',
@@ -223,18 +252,6 @@ FROM phase2_live_smoke c
 WHERE c.key = 'context';
 
 DO $smoke$
-DECLARE v_export jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'workbook-export');
-BEGIN
-  IF v_export->>'export_id' IS NULL
-     OR jsonb_typeof(v_export->'rows') IS DISTINCT FROM 'array'
-     OR jsonb_array_length(v_export->'rows') IS DISTINCT FROM 1
-     OR jsonb_typeof(v_export->'rows'->0) IS DISTINCT FROM 'object' THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: workbook export payload drifted: %', v_export;
-  END IF;
-END;
-$smoke$;
-
-DO $smoke$
 DECLARE v_preview jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'manual-preview');
 BEGIN
   IF v_preview->>'status' IS DISTINCT FROM 'previewed'
@@ -243,8 +260,37 @@ BEGIN
      OR (v_preview->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: Product-page preview drifted: %', v_preview;
   END IF;
+  -- 20261027050000: an unapproved preview does not apply.
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(
+      (v_preview->>'change_set_id')::uuid, v_preview->>'request_fingerprint',
+      (SELECT (value->>'actor_id')::uuid FROM phase2_live_smoke WHERE key = 'context'),
+      'smoke-phase2-live-manual-unapproved-' || txid_current()::text);
+    RAISE EXCEPTION 'SMOKE_FAIL: an unapproved preview applied';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PRICING_APPROVAL_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: unapproved apply expected PRICING_APPROVAL_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
 END;
 $smoke$;
+
+-- Approve it, acknowledging whatever it warned (a new Product's first price appears from $0).
+INSERT INTO phase2_live_smoke(key, value)
+SELECT 'manual-approve', public.approve_pricing_change_set(
+  (p.value->>'change_set_id')::uuid,
+  p.value->>'request_fingerprint',
+  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+      'product_id', w->>'product_id', 'warning_codes', w->'warning_codes', 'reason', '[SMOKE] acknowledged'))
+    FROM jsonb_array_elements(p.value->'warnings') AS w), '[]'::jsonb),
+  NULL,
+  (c.value->>'actor_id')::uuid,
+  'smoke-phase2-live-manual-approve-' || txid_current()::text
+)
+FROM phase2_live_smoke p
+JOIN phase2_live_smoke c ON c.key = 'context'
+WHERE p.key = 'manual-preview';
 
 INSERT INTO phase2_live_smoke(key, value)
 SELECT 'manual-apply', public.apply_product_cost_basis_change_set(
@@ -332,6 +378,19 @@ SELECT 'workbook-export', public.create_pricing_workbook_export(
 FROM phase2_live_smoke c
 WHERE c.key = 'context';
 
+-- Checked here, after the export exists (it used to sit above the export and could never pass).
+DO $smoke$
+DECLARE v_export jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'workbook-export');
+BEGIN
+  IF v_export->>'export_id' IS NULL
+     OR jsonb_typeof(v_export->'rows') IS DISTINCT FROM 'array'
+     OR jsonb_array_length(v_export->'rows') IS DISTINCT FROM 1
+     OR jsonb_typeof(v_export->'rows'->0) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook export payload drifted: %', v_export;
+  END IF;
+END;
+$smoke$;
+
 INSERT INTO phase2_live_smoke(key, value)
 SELECT 'workbook-preview', public.preview_product_cost_basis_changes(
   'pricing_worksheet',
@@ -344,6 +403,7 @@ SELECT 'workbook-preview', public.preview_product_cost_basis_changes(
       'tier2_price', '26.00',
       'tier3_price', '27.00',
       'change_reason', '[SMOKE] monthly workbook pricing',
+      'price_source', '[SMOKE] supplier list',
       'basis_type', 'manual_override',
       'basis_source', 'pricing_worksheet',
       'basis_reason', '[SMOKE] monthly workbook pricing',
@@ -371,6 +431,22 @@ BEGIN
   END IF;
 END;
 $smoke$;
+
+-- A workbook approval also names the uploaded file (20261027050000).
+INSERT INTO phase2_live_smoke(key, value)
+SELECT 'workbook-approve', public.approve_pricing_change_set(
+  (p.value->>'change_set_id')::uuid,
+  p.value->>'request_fingerprint',
+  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+      'product_id', w->>'product_id', 'warning_codes', w->'warning_codes', 'reason', '[SMOKE] acknowledged'))
+    FROM jsonb_array_elements(p.value->'warnings') AS w), '[]'::jsonb),
+  jsonb_build_object('name', '[SMOKE] price-sheet.xlsx', 'sha256', repeat('0', 64)),
+  (c.value->>'actor_id')::uuid,
+  'smoke-phase2-live-workbook-approve-' || txid_current()::text
+)
+FROM phase2_live_smoke p
+JOIN phase2_live_smoke c ON c.key = 'context'
+WHERE p.key = 'workbook-preview';
 
 INSERT INTO phase2_live_smoke(key, value)
 SELECT 'workbook-apply', public.apply_product_cost_basis_change_set(

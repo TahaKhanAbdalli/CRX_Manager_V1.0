@@ -1,0 +1,5 @@
+## 2026-10-27 — Price sheet warnings treat a stated $0 tier as a real price (To-Do 0.1, Codex App on PR #1131)
+
+- Migration `20261027050000_price_sheet_warnings_and_approval.sql` (not applied): the warning check used to read a tier 2/3 price of $0 as "use tier 1" (NULLIF to tier 1). Quotes keep a stated $0 (`getQuoteTierPrice`, `getStatedTierPriceCents`, `save_quote`), so a move to $0 could have gone unwarned and a sent quote would re-price to $0. Now only a blank (NULL) tier falls back to tier 1, for the before/after prices and for which margin the floor check uses.
+- In practice: with a product cost, the pricing engine already refuses a $0 tier (`PRICING_ZERO_PRICE_BELOW_COST`); the gap was only at a $0 cost. A live read on 2026-10-27 found no active product with a $0 tier 2/3 (4 blank tier 2, 8 blank tier 3, which still fall back), so no existing product gains a new warning.
+- Two proof steps added (the engine refusal, and a $14 to $0 tier move at a $0 cost warning as a price move); `PRICE_SHEET_WARNINGS_PROOF_PASS`, 59 steps before and after.

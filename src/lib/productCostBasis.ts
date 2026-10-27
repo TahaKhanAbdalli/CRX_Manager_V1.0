@@ -221,6 +221,7 @@ export function supplierCandidatePricingRow(
     ...basePricingRow(workspace, candidate.normalized_cost_cents, options),
     basis_type: 'selected_supplier_price',
     supplier_price_observation_id: candidate.supplier_price_observation_id,
+    price_source: `Supplier price observation ${candidate.supplier_price_observation_id}`,
   };
 }
 
@@ -233,6 +234,7 @@ export function purchaseCandidatePricingRow(
     ...basePricingRow(workspace, candidate.normalized_cost_cents, options),
     basis_type: 'actual_purchase',
     purchase_order_item_id: candidate.purchase_order_item_id,
+    price_source: `Purchase order item ${candidate.purchase_order_item_id}`,
   };
 }
 
@@ -244,5 +246,6 @@ export function manualCostBasisPricingRow(
   return {
     ...basePricingRow(workspace, costCents, options),
     basis_type: 'manual_override',
+    price_source: 'Manual replacement cost',
   };
 }

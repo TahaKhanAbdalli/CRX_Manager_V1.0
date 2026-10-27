@@ -1,0 +1,6 @@
+## 2026-10-27 — Price sheet warnings leave out quotes the sent-quote price lock covers (To-Do 0.1, Codex App on PR #1131)
+
+- Migration `20261027050000_price_sheet_warnings_and_approval.sql` (not applied): `OPEN_SENT_QUOTE` (in `_pricing_change_set_warnings` and the apply-time re-read `_pricing_change_set_warning_inputs`) now counts only sent, revised or planned-accepted quotes with **no sent version**. Since `20261027040000_quote_sent_price_lock` (#1105, applied 2026-10-27), a quote with a `quote_versions` row keeps each saved line's price on every save, so a catalog change cannot reach it; warning about it asked the admin to acknowledge a re-price that would not happen, and a change to such a quote could void an approval.
+- The preflight now also refuses unless `_assert_quote_prices_as_sent(uuid)` (20261027040000) exists, so the narrower rule never applies without the lock.
+- Live read 2026-10-27: no open sent, revised or planned-accepted quote exists, so no current warning changes.
+- Proof: a new scenario (the sample quote gets a sent version; a 3% move raises nothing, approves with no acknowledgement and applies; a tenfold typo still warns as a price move) and a new preflight drift case (the lock's function missing); `PRICE_SHEET_WARNINGS_PROOF_PASS`, 65 steps before and after.

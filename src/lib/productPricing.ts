@@ -116,6 +116,8 @@ export interface PricingPreviewInputRow extends CostBasisPreviewMetadata {
   tier3_margin_percent?: string;
   tier3_price?: string;
   change_reason?: string;
+  /** Where the new number came from (supplier, document, date). Required with any price or cost change. */
+  price_source?: string;
 }
 
 export interface PricingSnapshot {
@@ -165,6 +167,7 @@ export interface PricingWorksheetPreviewRow extends CostBasisPreviewMetadata {
   tier3_margin_percent: string;
   tier3_price: string;
   change_reason: string;
+  price_source: string;
   suggested_rate?: string;
   rate_per_acre?: string;
   rate_unit?: string;
@@ -213,6 +216,49 @@ export interface PricingPreviewResult {
   pricing_change_count?: number;
   product_info_change_count?: number;
   rows: PricingPreviewRow[];
+  /** Products whose new cost or prices need an acknowledgement before apply (20261027050000). */
+  warnings: PricingWarning[];
+}
+
+export type PricingWarningCode =
+  | 'COST_MOVE_OVER_10_PERCENT'
+  | 'PRICE_MOVE_OVER_10_PERCENT'
+  | 'PRICE_BELOW_COST'
+  | 'MARGIN_UNDER_FLOOR'
+  | 'OPEN_SENT_QUOTE';
+
+export interface PricingWarningTier {
+  tier: 1 | 2 | 3;
+  before_cents: bigint | null;
+  after_cents: bigint | null;
+  /** Net margin of the new price, a ratio like 0.15; null when the price is $0 or blank. */
+  margin: number | null;
+}
+
+export interface PricingWarning {
+  product_id: string;
+  warning_codes: PricingWarningCode[];
+  details: {
+    cost_before_cents: bigint | null;
+    cost_after_cents: bigint | null;
+    margin_floor: number | null;
+    tiers: PricingWarningTier[];
+    open_quote_count: number;
+    open_quote_numbers: string[];
+  };
+}
+
+/** One per warned product: exactly its warning codes and why they are acceptable (1-500 characters). */
+export interface PricingAcknowledgement {
+  product_id: string;
+  warning_codes: PricingWarningCode[];
+  reason: string;
+}
+
+/** The uploaded price sheet a workbook approval names. */
+export interface PricingSourceFile {
+  name: string;
+  sha256: string;
 }
 
 export interface AppliedPricingRow extends PricingEffect {
@@ -269,6 +315,16 @@ export interface ApplyPricingChangeSetInput {
   idempotencyKey: string;
 }
 
+export interface ApprovePricingChangeSetInput {
+  changeSetId: string;
+  requestFingerprint: string;
+  acknowledgements: PricingAcknowledgement[];
+  /** Required for a workbook change set; null for the product page and Products list. */
+  sourceFile: PricingSourceFile | null;
+  performedBy: string;
+  idempotencyKey: string;
+}
+
 type PricingCentsField =
   | 'cost_cents'
   | 'tier1_price_cents'
@@ -292,8 +348,17 @@ type PricingEffectWire = PricingSnapshotWire
   & Omit<PricingEffect, keyof PricingSnapshot | 'before'>
   & { before?: PricingSnapshotWire };
 
-type PricingPreviewResultWire = Omit<PricingPreviewResult, 'rows'> & {
+type PricingWarningWire = Omit<PricingWarning, 'details'> & {
+  details: Omit<PricingWarning['details'], 'cost_before_cents' | 'cost_after_cents' | 'tiers'> & {
+    cost_before_cents: unknown;
+    cost_after_cents: unknown;
+    tiers: Array<Omit<PricingWarningTier, 'before_cents' | 'after_cents'> & { before_cents: unknown; after_cents: unknown }>;
+  };
+};
+
+type PricingPreviewResultWire = Omit<PricingPreviewResult, 'rows' | 'warnings'> & {
   rows: Array<Omit<PricingPreviewRow, 'effect'> & { effect: PricingEffectWire | null }>;
+  warnings?: PricingWarningWire[];
 };
 
 type ApplyPricingResultWire = Omit<ApplyPricingResult, 'rows' | 'cost_basis_rows'> & {
@@ -352,6 +417,25 @@ function normalizePricingEffect(effect: PricingEffectWire): PricingEffect {
   } as PricingEffect;
 }
 
+function normalizePricingWarning(warning: PricingWarningWire): PricingWarning {
+  const { details } = warning;
+  return {
+    ...warning,
+    details: {
+      ...details,
+      cost_before_cents: exactIntegerCents(details.cost_before_cents, 'warning cost before cents'),
+      cost_after_cents: exactIntegerCents(details.cost_after_cents, 'warning cost after cents'),
+      margin_floor: details.margin_floor == null ? null : Number(details.margin_floor),
+      tiers: details.tiers.map((tier) => ({
+        ...tier,
+        before_cents: exactIntegerCents(tier.before_cents, `warning tier ${tier.tier} before cents`),
+        after_cents: exactIntegerCents(tier.after_cents, `warning tier ${tier.tier} after cents`),
+        margin: tier.margin == null ? null : Number(tier.margin),
+      })),
+    },
+  };
+}
+
 function normalizePricingPreviewResult(result: PricingPreviewResultWire): PricingPreviewResult {
   return {
     ...result,
@@ -359,6 +443,7 @@ function normalizePricingPreviewResult(result: PricingPreviewResultWire): Pricin
       ...row,
       effect: row.effect ? normalizePricingEffect(row.effect) : null,
     })),
+    warnings: (result.warnings ?? []).map(normalizePricingWarning),
   };
 }
 
@@ -425,6 +510,56 @@ export async function previewProductPricingChanges(
   if (error) throw error;
   const result = assertRpcResult<PricingPreviewResultWire>(data, 'preview_product_cost_basis_changes');
   return normalizePricingPreviewResult(result);
+}
+
+/** Plain-English label for each warning the database can raise on a pricing preview. */
+export const PRICING_WARNING_LABELS: Record<PricingWarningCode, string> = {
+  COST_MOVE_OVER_10_PERCENT: 'Cost moves more than 10%',
+  PRICE_MOVE_OVER_10_PERCENT: 'A price moves more than 10%',
+  PRICE_BELOW_COST: 'A price is below cost',
+  MARGIN_UNDER_FLOOR: 'A margin is under the product\'s floor',
+  OPEN_SENT_QUOTE: 'An open sent quote will re-price on its next save',
+};
+
+/** The database's limit on an acknowledgement reason (approve_pricing_change_set). */
+export const PRICING_ACK_REASON_MAX = 500;
+
+/** The acknowledgements the database needs, or null while any warned product still lacks a valid reason. */
+export function pricingAcknowledgements(
+  warnings: PricingWarning[],
+  reasons: Record<string, string>,
+): PricingAcknowledgement[] | null {
+  const acknowledgements: PricingAcknowledgement[] = [];
+  for (const warning of warnings) {
+    const reason = (reasons[warning.product_id] ?? '').trim();
+    if (reason.length === 0 || reason.length > PRICING_ACK_REASON_MAX) return null;
+    acknowledgements.push({ product_id: warning.product_id, warning_codes: warning.warning_codes, reason });
+  }
+  return acknowledgements;
+}
+
+/** Lower-case hex SHA-256 of an uploaded file, the fingerprint a workbook approval records. */
+export async function sha256Hex(file: Blob): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Records the admin's sign-off on a preview: every warning acknowledged with a reason. Apply requires it. */
+export async function approvePricingChangeSet(input: ApprovePricingChangeSetInput): Promise<void> {
+  const { data, error } = await supabase.rpc('approve_pricing_change_set', {
+    p_change_set_id: input.changeSetId,
+    p_request_fingerprint: input.requestFingerprint,
+    p_acknowledgements: input.acknowledgements.map((ack) => ({
+      product_id: ack.product_id,
+      warning_codes: ack.warning_codes,
+      reason: ack.reason.trim(),
+    })) as unknown as Json,
+    p_source_file: (input.sourceFile ?? undefined) as unknown as Json | undefined,
+    p_performed_by: input.performedBy,
+    p_idempotency_key: input.idempotencyKey,
+  });
+  if (error) throw error;
+  assertRpcResult<{ status: 'approved' }>(data, 'approve_pricing_change_set');
 }
 
 export async function applyProductPricingChangeSet(
