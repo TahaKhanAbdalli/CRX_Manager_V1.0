@@ -13,16 +13,18 @@ import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 // checkout used to share one hold.json, so a misfire in one session froze all of
 // them (2026-10-23). The prompt hook writes, and the guard reads, only the file
 // named for its own session; hold.json is the fallback when no session_id
-// arrives. An id already made of [A-Za-z0-9_-] (a real one is a UUID) names the
-// file as-is; any other id is hashed rather than stripped, so it cannot leave the
-// directory, and the hashed name uses "." (never in a plain id) so two different
-// ids never share a file (Luna review, PR #1152).
+// arrives. A string id made of lowercase [a-z0-9_-] (a real one is a lowercase
+// UUID) names the file as-is. Any other id (uppercase, which a case-insensitive
+// Windows disk would fold onto a lowercase twin, another type, or other
+// characters) is hashed with its type rather than stripped, so it cannot leave
+// the directory; the hashed name uses "." (never in a plain id), so two ids
+// cannot share a file short of a 128-bit hash collision (Luna review, PR #1152).
 export function holdStatePath(projectDir, sessionId) {
   const dir = path.join(projectDir, ".claude", "session-state");
   if (sessionId === undefined || sessionId === null || sessionId === "") return path.join(dir, "hold.json");
-  const raw = String(sessionId);
-  if (/^[A-Za-z0-9_-]{1,128}$/.test(raw)) return path.join(dir, `hold-${raw}.json`);
-  return path.join(dir, `hold.${createHash("sha256").update(raw).digest("hex").slice(0, 32)}.json`);
+  if (typeof sessionId === "string" && /^[a-z0-9_-]{1,128}$/.test(sessionId)) return path.join(dir, `hold-${sessionId}.json`);
+  const typed = `${typeof sessionId}:${typeof sessionId === "string" ? sessionId : JSON.stringify(sessionId)}`;
+  return path.join(dir, `hold.${createHash("sha256").update(typed).digest("hex").slice(0, 32)}.json`);
 }
 
 // Mason wants to halt / pause / is only scoping a future session.

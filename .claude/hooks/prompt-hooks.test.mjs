@@ -769,7 +769,7 @@ rmSync(tmpProj, { recursive: true, force: true });
 {
   const runHold = (dir, prompt, sessionId) => {
     const r = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
-      input: JSON.stringify(sessionId ? { prompt, session_id: sessionId } : { prompt }),
+      input: JSON.stringify(sessionId === undefined ? { prompt } : { prompt, session_id: sessionId }),
       encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
     });
     eq(r.status, 0, `hold-latch-prompt exits 0: ${JSON.stringify(prompt.slice(0, 40))}`);
@@ -829,19 +829,19 @@ rmSync(tmpProj, { recursive: true, force: true });
 
   // One hold per session: session A's stop is invisible to session B's guard.
   const dir = mkdtempSync(path.join(tmpdir(), "crx-two-sessions-"));
-  runHold(dir, "stop", "session-A");
-  eq(holdFiles(dir).join(","), "hold-session-A.json", "session A's stop writes only its own hold file");
+  runHold(dir, "stop", "session-a");
+  eq(holdFiles(dir).join(","), "hold-session-a.json", "session A's stop writes only its own hold file");
   const guard = (sessionId) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-guard.mjs")], {
     input: JSON.stringify({ session_id: sessionId, tool_name: "Bash", tool_input: { command: "git push origin x" } }),
     encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
   }).stdout;
-  ok(guard("session-A").includes('"deny"'), "session A's guard sees its own hold");
-  eq(guard("session-B").trim(), "", "session B's guard sees no hold");
-  runHold(dir, "ok carry on", "session-B");
-  eq(holdFiles(dir).join(","), "hold-session-A.json", "session B's message does not clear session A's hold");
-  runHold(dir, "ok carry on", "session-A");
+  ok(guard("session-a").includes('"deny"'), "session A's guard sees its own hold");
+  eq(guard("session-b").trim(), "", "session B's guard sees no hold");
+  runHold(dir, "ok carry on", "session-b");
+  eq(holdFiles(dir).join(","), "hold-session-a.json", "session B's message does not clear session A's hold");
+  runHold(dir, "ok carry on", "session-a");
   eq(holdFiles(dir).length, 0, "session A's own next message clears its hold");
-  // An id outside [A-Za-z0-9_-] is hashed: no path escape, and no collision with
+  // An id outside lowercase [a-z0-9_-] is hashed: no path escape, and no collision with
   // the id its stripped form would spell (Luna review, PR #1152).
   runHold(dir, "stop", "../../evil id");
   const [hashed] = holdFiles(dir);
@@ -849,6 +849,8 @@ rmSync(tmpProj, { recursive: true, force: true });
   runHold(dir, "stop", "evilid");
   runHold(dir, "stop", `h-${hashed.slice(5, 37)}`); // a plain id spelling the hash cannot collide
   eq(holdFiles(dir).length, 3, "three different session ids never share a hold file");
+  runHold(dir, "stop", 0);
+  eq(holdFiles(dir).length, 4, "a numeric session id 0 reaches the hook and gets its own file");
   rmSync(dir, { recursive: true, force: true });
 
   // No session_id: the prompt hook writes hold.json and the guard reads it.

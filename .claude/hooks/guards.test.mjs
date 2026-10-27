@@ -52,9 +52,12 @@ ok(isHoldPhrase("I need the agent to stop the deploy"), "an order naming someone
 // Per-session hold files (2026-10-27): only a MISSING id shares hold.json.
 eq(path.basename(holdStatePath("p", undefined)), "hold.json", "no session id → hold.json");
 eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hold.json");
-eq(path.basename(holdStatePath("p", 0)), "hold-0.json", "a falsy but present id still gets its own file");
 eq(path.basename(holdStatePath("p", "abc-123")), "hold-abc-123.json", "a plain id names the file as-is");
-ok(/^hold\.[0-9a-f]{32}\.json$/.test(path.basename(holdStatePath("p", "../x"))), "an unusual id is hashed");
+const hashedName = (id) => path.basename(holdStatePath("p", id));
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("../x")), "an unusual id is hashed");
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName(0)), "a falsy but present id still gets its own file");
+ok(hashedName(0) !== hashedName("0"), "the number 0 and the string \"0\" get different files");
+ok(hashedName("ABC") !== hashedName("abc"), "ids differing only in case get different files on a case-insensitive disk");
 ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");
 ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
