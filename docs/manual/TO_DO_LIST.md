@@ -113,6 +113,8 @@ Quote line identity (pricing slice 1) is row 1.3. The sent-quote price lock (sli
 | 1.11 | Someone actually looks at price-later orders, draft consolidation and booking rollover on a real screen | **Not done** (old `TODO.md` (2026-09-27), §1). | Staging proofs | SHOULD |
 | 1.12 | Two people editing the same order can't overwrite each other's changes; ticket-number and allocation-version collisions are prevented | **Open** (old `TODO.md` (2026-09-27), §5). Orders have no stale-edit check. | Fix | SHOULD |
 
+**Quoting flexibility (not ranked yet, 2026-10-26).** Mason's 2026 sheet quotes compared with the quote screen: grouping by crop and timing, section $/acre subtotals, recommended vs. other options, text-only rows, internal notes, terms tags, per-100-gal rates and more. See `docs/plans/2026-10-26-quoting-flexibility-improvements-BRAINSTORM.md`. Its items become rows here once Mason ranks them.
+
 ## 2. Delivering
 
 | # | What must work | Today (evidence) | Closed by | Rank |
