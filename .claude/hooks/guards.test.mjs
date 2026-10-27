@@ -65,6 +65,7 @@ for (const p of [
   "make the gate stop dropping tables",
   "the hook should stop sending invoices",
   "the hook should stop retrying the deletes",
+  "the hook should stop retrying at some point before deploying",
   "add a setting to stop the nightly sweep",
   "set X=0 in my settings to stop the customer exports",
 ]) ok(isHoldPhrase(p), `off the safe list latches: ${p}`);
@@ -83,6 +84,7 @@ eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hol
 eq(path.basename(holdStatePath("p", null)), "hold.json", "null session id → hold.json");
 eq(path.basename(holdStatePath("p", "abc-123")), "hold-abc-123.json", "a plain id names the file as-is");
 const hashedName = (id) => path.basename(holdStatePath("p", id));
+ok(new Set([[-0], [0], [Infinity], [null], ["0"]].map(hashedName)).size === 5, "nested -0, 0, Infinity, null and \"0\" get different files");
 ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("../x")), "an unusual id is hashed");
 ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName(0)), "a falsy but present id still gets its own file");
 ok(hashedName(0) !== hashedName("0"), "the number 0 and the string \"0\" get different files");

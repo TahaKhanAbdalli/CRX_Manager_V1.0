@@ -26,8 +26,12 @@ export function holdStatePath(projectDir, sessionId) {
   if (typeof sessionId === "string" && /^[a-z0-9_-]{1,128}$/.test(sessionId)) return path.join(dir, `hold-${sessionId}.json`);
   // JSON.stringify escapes lone surrogates, which UTF-8 hashing would fold into
   // one character. It prints -0 as "0" and both infinities as "null", so a
-  // number is spelled with String() and -0 by hand.
-  const spelled = typeof sessionId === "number" ? (Object.is(sessionId, -0) ? "-0" : String(sessionId)) : JSON.stringify(sessionId);
+  // number is spelled with String() and -0 by hand, at any depth: inside an
+  // array or object every string and number is tagged, so [-0], [0] and
+  // [Infinity] get different files (Luna review, PR #1152).
+  const num = (n) => (Object.is(n, -0) ? "-0" : String(n));
+  const tag = (_k, v) => (typeof v === "number" ? `n:${num(v)}` : typeof v === "string" ? `s:${v}` : v);
+  const spelled = typeof sessionId === "number" ? num(sessionId) : typeof sessionId === "object" ? JSON.stringify(sessionId, tag) : JSON.stringify(sessionId);
   const typed = `${typeof sessionId}:${spelled}`;
   return path.join(dir, `hold.${createHash("sha256").update(typed).digest("hex").slice(0, 32)}.json`);
 }
@@ -143,7 +147,7 @@ function isDescriptiveStop(text, start, end) {
   // guard exists for pushes, deploys, merges and releases, so "Make the CI job
   // stop deploying now" and "Change the config to stop the deployment" latch
   // (Sol review, PR #1152). The skips below are for a hook's own behaviour.
-  const after = text.slice(end, end + 200).split(/\s+/).slice(0, 6).map((w) => w.toLowerCase().replace(/[^a-z]/g, ""));
+  const after = text.slice(end, end + 200).split(/\s+/).filter(Boolean).slice(0, 6).map((w) => w.toLowerCase().replace(/[^a-z]/g, ""));
   if (after.some((w) => OUTWARD_STEM_RE.test(w))) return false;
   const [twoBack, oneBack] = before.slice(-2);
   // The -ing form is skipped only when the clause positively describes something:
