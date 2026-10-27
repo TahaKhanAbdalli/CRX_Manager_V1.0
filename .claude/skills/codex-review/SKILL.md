@@ -600,7 +600,10 @@ never use `@coderabbitai resume`. Exception (Mason, 2026-10-21): a PR that touch
 payments, inventory, or costs, or one Mason asks to have reviewed, needs a clean CodeRabbit review
 of its current head plus a clean Sol; the agent posts `@coderabbitai full review` once for its
 frozen, green head if CodeRabbit has not reviewed it, and any fix commit it prompts needs a new Sol
-and one new full review (rules: `docs/reference/coderabbit-native-review.md`). A failed CodeRabbit pre-merge "error" check is a finding to fix
+and one new full review, except narrow fixes for a review whose findings were all Minor or Trivial,
+pushed before any merge of main (Mason, 2026-10-26; the gates check the limits, and this wrapper then
+shows Sol those fixes) (rules: `docs/reference/coderabbit-native-review.md` items 6-9). Sol may also
+run before CodeRabbit's first review of such a PR. A failed CodeRabbit pre-merge "error" check is a finding to fix
 or refute, not a blocker. (`docs/reference/coderabbit-native-review.md` has the history.) Both agent
 merge gates enforce the rule: the newest run of every reported check green with `mergeStateStatus`
 CLEAN, and the Step 3B Sol proof bound to that head and to a base the head contains that GitHub's

@@ -15,10 +15,16 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_MAX_PAGES,
   CODERABBIT_REQUIRED_LABEL,
+  CODERABBIT_REQUIREMENT_QUERY,
   codexBotFindingsDenial,
   coderabbitCompletedCommit,
+  coderabbitFindingSeverity,
   coderabbitRequirementArgs,
+  coderabbitRequirementUnreadableDenial,
   coderabbitReviewMissingDenial,
+  FOLLOWUP_REQUIRED_CHECKS,
+  isFollowUpExcludedPath,
+  isFollowUpTestPath,
   evaluateCodeRabbitRequirement,
   isMoneyPath,
   prOwnChangesUnchanged,
@@ -615,9 +621,11 @@ const MID = "4a1b2c3d4e5f60718293a4b5c6d7e8f901234567";
 const crStatus = (description, { login = "coderabbitai", state = "SUCCESS", context = "CodeRabbit" } = {}) =>
   ({ context, state, description, creator: { login } });
 const commit = (oid, { parents = 1, statuses = [] } = {}) =>
-  ({ commit: { oid, parents: { totalCount: parents }, status: statuses === null ? null : { contexts: statuses } } });
+  ({ commit: { oid, parents: { totalCount: parents }, status: statuses === null ? null : { contexts: statuses }, checkSuites: { totalCount: 0, nodes: [] } } });
 const facts = ({ files = ["src/lib/invoiceMath.ts"], labels = [], commits = [commit(HEAD, { statuses: [crStatus("Review completed")] })],
   headRefOid = HEAD, filesTotal = files.length } = {}) => ({
+  number: 1134,
+  baseRepository: { nameWithOwner: "masonwells1/CRX_Manager_V1.0" },
   headRefOid,
   labels: { totalCount: labels.length, nodes: labels.map((name) => ({ name })) },
   files: { totalCount: filesTotal, nodes: files.map((filePath) => ({ path: filePath })) },
@@ -653,6 +661,105 @@ eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(HEAD, { statuses: [crS
   "missing", "a non-success state does not count");
 eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] }), commit(HEAD)] })).status,
   "missing", "an ordinary commit after the reviewed one needs a new review");
+
+// CodeRabbit's check run (since 2026-10-27), shaped like GitHub's answer for
+// 4a8914672 (reviewed) and 52b05497b (skipped) on PR #1134.
+const crSuite = ({ appId = 347564, slug = "coderabbitai", name = "CodeRabbit", status = "COMPLETED", conclusion = "SUCCESS",
+  summary = "Result: Success - Review completed\nRun ID: `6abde565-bfb5-4dc0-8f97-e8db549f6dad`\nCodeRabbit Review: [Open CodeRabbit Review](https://app.coderabbit.ai/change-stack/masonwells1/CRX_Manager_V1.0/pull/1134?scope=ghh_x)" } = {}) =>
+  ({ totalCount: 1, nodes: [{ app: { databaseId: appId, slug }, checkRuns: { totalCount: 1, nodes: [{ name, status, conclusion, summary }] } }] });
+const PR_1134 = { number: 1134, baseRepository: { nameWithOwner: "masonwells1/CRX_Manager_V1.0" } };
+const runCommit = (oid, suite, statuses = []) => ({ commit: { ...commit(oid, { statuses }).commit, checkSuites: suite } });
+ok(coderabbitCompletedCommit(runCommit(HEAD, crSuite()).commit, PR_1134), "a CodeRabbit check run 'Review completed' counts with no commit status");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(HEAD, crSuite())] })).status, "reviewed", "a check-run review of the head passes");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ conclusion: "SKIPPED", summary: "Result: Skipped - Review skipped\nRun ID: `00522ca4`" })).commit, PR_1134),
+  "a skipped check run (52b05497b) is not a review");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ appId: 15368 })).commit, PR_1134), "a 'CodeRabbit' run from another app id does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ slug: "github-actions" })).commit, PR_1134), "a run whose app slug is not coderabbitai does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ name: "CodeRabbit-fake" })).commit, PR_1134), "another run name does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ status: "IN_PROGRESS", conclusion: null })).commit, PR_1134), "an unfinished run does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ conclusion: "FAILURE" })).commit, PR_1134), "a failed run does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Note: Result: Success - Review completed" })).commit, PR_1134),
+  "the summary must START with the completed result");
+ok(coderabbitCompletedCommit(runCommit(HEAD, crSuite({ conclusion: "SKIPPED", summary: "Result: Skipped" }), [crStatus("Review completed")]).commit, PR_1134),
+  "the commit-status signal still counts on its own");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ conclusion: "SKIPPED", summary: "Result: Skipped" }),
+  [crStatus("Review skipped: automatic reviews are disabled")]).commit, PR_1134), "neither signal completed: not reviewed");
+// Sol on #1125: a check run belongs to a commit, so it must name THIS pull request.
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite()).commit, { ...PR_1134, number: 1135 }),
+  "a check run whose summary links another PR (same head commit) does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite()).commit, { ...PR_1134, baseRepository: { nameWithOwner: "someone/fork" } }),
+  "a check run linking the same PR number in another repository does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite()).commit), "a check run cannot count without the PR it must name");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Result: Success - Review completed\nRun ID: `x`" })).commit, PR_1134),
+  "a check run with no PR link does not count");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Result: Success - Review completed\n(https://app.coderabbit.ai/change-stack/masonwells1/CRX_Manager_V1.0/pull/11345?scope=x)" })).commit, PR_1134),
+  "PR 11345's link is not PR 1134's");
+ok(coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Result: Success - Review completed\n[Open](https://app.coderabbit.ai/change-stack/MasonWells1/crx_manager_v1.0/pull/1134?scope=x)" })).commit, PR_1134),
+  "the owner and repository compare without case");
+ok(coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Result: Success - Review completed\n[Open](https://app.coderabbit.ai/change-stack/masonwells1/CRX_Manager_V1.0/pull/1134/)" })).commit, PR_1134),
+  "a trailing slash after the PR number still reads");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, crSuite({ summary: "Result: Success - Review completed\n[Open](https://app.coderabbit.ai/change-stack/masonwells1/CRX_Manager_V1.0/pull/1134/unrelated)" })).commit, PR_1134),
+  "a longer path after the PR number is not this PR's review link (Luna on #1125)");
+{
+  // Luna on #1125: a completed run with no readable PR link is not "never reviewed".
+  const unbound = facts({ commits: [runCommit(OLD, crSuite({ summary: "Result: Success - Review completed\nRun ID: `x`" })), commit(HEAD)] });
+  eq(evaluateCodeRabbitRequirement(unbound).priorReview, undefined, "a completed run with an unreadable PR link leaves priorReview unknown");
+  const elsewhere = facts({ commits: [runCommit(OLD, crSuite()), commit(HEAD)] });
+  elsewhere.number = 1135;
+  eq(evaluateCodeRabbitRequirement(elsewhere).priorReview, false, "a run that clearly names another PR is not this PR's review");
+}
+eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(HEAD, crSuite())] }) ).status, "reviewed", "the requirement read binds the run to its own PR");
+const otherPr = facts({ commits: [runCommit(HEAD, crSuite())] });
+otherPr.number = 1135;
+eq(evaluateCodeRabbitRequirement(otherPr).status, "missing", "another PR sharing the reviewed head is still missing its review");
+ok(!coderabbitCompletedCommit(runCommit(HEAD, { nodes: null }).commit, PR_1134), "an unreadable suite list is not a review");
+{
+  // Luna on #1125: suites and runs are read first-5 / first-10, so a cut-short list
+  // with no review in view is unknown, never "CodeRabbit never reviewed".
+  const skipped = () => crSuite({ conclusion: "SKIPPED", summary: "Result: Skipped - Review skipped" });
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(OLD, skipped()), runCommit(HEAD, skipped())] })).priorReview, false,
+    "complete commits, suites and runs with no completed review: never reviewed");
+  const manySuites = skipped();
+  manySuites.totalCount = 6;
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(OLD, manySuites), runCommit(HEAD, skipped())] })).priorReview, undefined,
+    "an older commit with more CodeRabbit suites than were read is unknown");
+  const manyRuns = skipped();
+  manyRuns.nodes[0].checkRuns.totalCount = 11;
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(OLD, manyRuns), runCommit(HEAD, skipped())] })).priorReview, undefined,
+    "a suite with more CodeRabbit runs than were read is unknown");
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(OLD, { nodes: [] }), runCommit(HEAD, skipped())] })).priorReview, undefined,
+    "a suite list with no total is unknown");
+  const noSuites = commit(OLD);
+  delete noSuites.commit.checkSuites;
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [noSuites, runCommit(HEAD, skipped())] })).priorReview, undefined,
+    "a commit read without its check suites is unknown (Luna round 2)");
+  const negative = skipped();
+  negative.totalCount = -1;
+  eq(evaluateCodeRabbitRequirement(facts({ commits: [runCommit(OLD, negative), runCommit(HEAD, skipped())] })).priorReview, undefined,
+    "a negative suite total is unknown (Luna round 3)");
+  const negativeCommits = facts({ commits: [commit(OLD), commit(HEAD)] });
+  negativeCommits.commits.totalCount = -1;
+  eq(evaluateCodeRabbitRequirement(negativeCommits).priorReview, undefined, "a negative commit total is unknown");
+  ok(/checkSuites\([^)]*\) \{ totalCount/.test(CODERABBIT_REQUIREMENT_QUERY) && /checkRuns\([^)]*\) \{ totalCount/.test(CODERABBIT_REQUIREMENT_QUERY),
+    "the requirement read asks for the suite and run totals");
+}
+ok(CODERABBIT_REQUIREMENT_QUERY.includes("baseRepository { nameWithOwner }") && /pullRequest\(number:\$number\) \{\s+number/.test(CODERABBIT_REQUIREMENT_QUERY),
+  "the requirement read asks for the PR number and repository");
+ok(CODERABBIT_REQUIREMENT_QUERY.includes("filterBy:{appId:347564}") && CODERABBIT_REQUIREMENT_QUERY.includes('checkName:"CodeRabbit"'),
+  "the requirement read asks for CodeRabbit's own check runs");
+
+// Whether CodeRabbit ever reviewed: commits(last:100) may not reach an older review.
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD), commit(HEAD)] })).priorReview, false,
+  "a complete commit list with no review means CodeRabbit never reviewed");
+const cutShort = facts({ commits: [commit(OLD), commit(HEAD)] });
+cutShort.commits.totalCount = 150;
+eq(evaluateCodeRabbitRequirement(cutShort).priorReview, undefined,
+  "a cut-short commit list with no review is unknown, not 'never reviewed' (Codex App P2 on #1125)");
+const noTotal = facts({ commits: [commit(OLD), commit(HEAD)] });
+delete noTotal.commits.totalCount;
+eq(evaluateCodeRabbitRequirement(noTotal).priorReview, undefined, "an unreadable commit total is unknown");
+eq(evaluateCodeRabbitRequirement(facts({ commits: [commit(OLD, { statuses: [crStatus("Review completed")] }), commit(HEAD)] })).priorReview,
+  true, "a listed reviewed commit means CodeRabbit did review");
 
 // The ALLOW direction.
 const reviewedHead = evaluateCodeRabbitRequirement(facts());
@@ -708,6 +815,8 @@ const read = (gh, extra = {}) => readCodeRabbitRequirement(gh, { owner: "o", nam
 eq(read(fakeGh()).status, "reviewed", "a merge-only walk with identical PR changes keeps the earlier review");
 eq(read(fakeGh({ atHead: [{ ...prFiles[0], sha: "2".repeat(40) }] })).status, "missing",
   "a merge that changed a PR file voids the earlier review");
+eq(read(fakeGh({ atHead: [{ ...prFiles[0], sha: "2".repeat(40) }] })).priorReview, true,
+  "...and still says CodeRabbit reviewed this PR, so Sol does not go first (Codex App P2 on #1125)");
 eq(read(fakeGh({ atHead: [...prFiles, { filename: "src/lib/newMoney.ts", status: "added", sha: "3".repeat(40) }] })).status, "missing",
   "a merge that added a file to the PR's own changes voids the earlier review");
 {
@@ -779,5 +888,259 @@ ok(coderabbitRequirementArgs("o", "r", 5).includes("number=5")
 ok(/@coderabbitai full review/.test(coderabbitReviewMissingDenial("X", "7", "it changes money", HEAD))
   && /pr comment 7/.test(coderabbitReviewMissingDenial("X", "7", "w", HEAD)),
   "the denial tells the agent the exact one request to post");
+
+// ── One CodeRabbit review per PR: minor follow-ups (Mason, 2026-10-26) ───────
+// Real GitHub answers recorded 2026-10-26 (trimmed to what the parser reads:
+// fixtures/coderabbit-followup/). Each is replayed through the same
+// readCodeRabbitRequirement the merge gates, the landing gate and the Sol
+// pre-flight call; then copies are broken one condition at a time.
+{
+  const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "coderabbit-followup");
+  const loadFixture = (number) => JSON.parse(readFileSync(path.join(fixtureDir, `pr${number}.json`), "utf8"));
+  const isFollowUpRead = (args) => args[1] === "graphql" && args.some((arg) => String(arg).includes('reviews(first:100, author:"coderabbitai[bot]")'));
+  const isRequirementRead = (args) => args[1] === "graphql" && args.some((arg) => String(arg).includes("commits(last:100)"));
+  // Replays calls by their exact arguments; `edit(kind, value)` may change a parsed answer.
+  const replay = (fixture, edit = () => {}) => {
+    const answers = new Map(fixture.calls.map((call) => [JSON.stringify(call.args), call.out]));
+    // A broken copy may change which trees the follow-up read asks for; answer
+    // it with the recorded read (a tree it lacks reads as "not a plain file").
+    const followUpAnswer = fixture.calls.find((call) => isFollowUpRead(call.args))?.out;
+    // Recorded before the read also asked for check runs (2026-10-27): answer the
+    // current query with the recorded one, whose commits carry statuses only.
+    const requirementAnswer = fixture.calls.find((call) => isRequirementRead(call.args))?.out;
+    const head = JSON.parse(fixture.calls[0].out).data.repository.pullRequest.headRefOid;
+    return (args) => {
+      const out = isFollowUpRead(args) ? followUpAnswer
+        : isRequirementRead(args) ? requirementAnswer
+        : answers.get(JSON.stringify(args));
+      if (out === undefined) throw new Error(`fixture has no answer for gh ${args.slice(0, 2).join(" ")}`);
+      // "fixes" is the R...F compare; "tipFix"/"tipHead" are the PR's own changes
+      // against the base at the last fix and at the head.
+      const url = String(args[1]);
+      const kind = isFollowUpRead(args) ? "followUp"
+        : url.includes("/compare/") ? (Array.isArray(JSON.parse(out)) ? (url.endsWith(`...${head}`) ? "tipHead" : "tipFix") : "fixes")
+        : args[1] === "graphql" ? "requirement" : "files";
+      if (kind === "files") return edit(kind, out) ?? out;
+      const value = JSON.parse(out);
+      edit(kind, value);
+      return JSON.stringify(value);
+    };
+  };
+  const readFixture = (number, edit) => {
+    const fixture = loadFixture(number);
+    return readCodeRabbitRequirement(replay(fixture, edit), { owner: "masonwells1", name: "CRX_Manager_V1.0", number });
+  };
+
+  // The recorded outcomes.
+  for (const number of [1017, 1099, 1101, 1065, 1086]) {
+    const fixture = loadFixture(number);
+    const verdict = readFixture(number);
+    eq([verdict.status, verdict.via || ""], [fixture.expect.status, fixture.expect.via], `PR #${number} replays to its recorded outcome`);
+  }
+  // As recorded, #1017 is refused: a merge of main after its fixes also changed
+  // docs/workflows/UI_PATTERNS.md, which the PR edits and which is guidance, not a
+  // shared status ledger (Luna round 2). With that one main edit taken out, it is the
+  // covered base every broken copy below starts from.
+  ok(/changed the PR's own changes \(docs\/workflows\/UI_PATTERNS\.md\)/.test(readFixture(1017).why),
+    "#1017 as recorded: a main edit to a shared guidance doc refuses");
+  const withoutMainDocEdit = () => {
+    let atFix = "";
+    return (k, v) => {
+      const entry = Array.isArray(v) ? v.find((f) => f.filename === "docs/workflows/UI_PATTERNS.md") : null;
+      if (k === "tipFix" && entry) atFix = entry.sha;
+      if (k === "tipHead" && entry && atFix) entry.sha = atFix;
+    };
+  };
+  const readCovered = (edit = () => {}) => {
+    const align = withoutMainDocEdit();
+    return readFixture(1017, (k, v) => { align(k, v); edit(k, v); });
+  };
+  const covered = readCovered();
+  eq(covered.via, "minor-follow-up", "#1017 without that main doc edit is covered");
+  eq(covered.followUp.reviewedOid, "faa0f2fa31ec15b34ebabeccf07e5abafde2fa31", "#1017: R is the commit CodeRabbit marked Review completed");
+  eq(covered.followUp.findings.map((f) => [f.path, f.severity]), [["src/components/ui/RecordSearchPicker.tsx", "minor"]],
+    "#1017: its one finding is read with CodeRabbit's own Minor label");
+  eq(covered.followUp.files.map((f) => [f.filename, f.category]).sort(),
+    [["src/components/customers/CustomerSearchPicker.test.tsx", "test"], ["src/components/ui/RecordSearchPicker.tsx", "finding"]],
+    "#1017: the fix touched the finding's file and a test");
+  ok(/rated its finding .* major/.test(readFixture(1099).why), "#1099: a Major finding needs a new review");
+  eq(readFixture(1101).followUp.files.map((f) => f.category), ["finding"], "#1101: a trivial finding in a smoke test is covered");
+  ok(/merge commit sits between/.test(readFixture(1065).why), "#1065: main merged before the fixes needs a new review");
+  ok(/holds none of CodeRabbit's findings/.test(readFixture(1086).why), "#1086: a fix in a file with no finding needs a new review");
+
+  // Break one condition at a time on #1017 (covered as recorded).
+  const R = "faa0f2fa31ec15b34ebabeccf07e5abafde2fa31";
+  const fullReview = (value) => value.data.repository.pullRequest.reviews.nodes.find((r) => r.commit.oid === R && r.body);
+  const finding = (value) => fullReview(value).comments.nodes.find((c) => !c.replyTo);
+  const walkthrough = (value) => value.data.repository.pullRequest.comments.nodes.find((c) => c.body.includes("pre_merge_checks_walkthrough_start"));
+  const fileIn = (value, name) => value.files.find((f) => f.filename.endsWith(name));
+  const cases = [
+    ["missing", "a Major label", "followUp", (v) => { finding(v).body = finding(v).body.replace("🟡 Minor", "🟠 Major"); }],
+    ["missing", "an unrecognised severity header", "followUp", (v) => { finding(v).body = "**Please fix.**"; }],
+    ["missing", "a Minor label with the wrong colour", "followUp", (v) => { finding(v).body = finding(v).body.replace("🟡 Minor", "🔵 Minor"); }],
+    ["missing", "a review that claims more findings than were read", "followUp", (v) => { fullReview(v).body = fullReview(v).body.replace("Actionable comments posted: 1", "Actionable comments posted: 2"); }],
+    ["missing", "a review with zero findings", "followUp", (v) => { fullReview(v).body = fullReview(v).body.replace("Actionable comments posted: 1", "Actionable comments posted: 0"); }],
+    ["missing", "outside-diff comments in the review summary", "followUp", (v) => { fullReview(v).body += "\n> **⚠️ Outside diff range comments (1)**"; }],
+    ["missing", "a nitpick section in the review summary", "followUp", (v) => { fullReview(v).body += "\n<summary>🧹 Nitpick comments (2)</summary>"; }],
+    ["missing", "two full reviews of the same commit", "followUp", (v) => { const reviews = v.data.repository.pullRequest.reviews; reviews.nodes.push(structuredClone(fullReview(v))); reviews.totalCount += 1; }],
+    ["missing", "a review with more than 100 comments", "followUp", (v) => { fullReview(v).comments.totalCount = 101; }],
+    ["missing", "more than 100 CodeRabbit reviews", "followUp", (v) => { v.data.repository.pullRequest.reviews.totalCount = 101; }],
+    ["missing", "more than 100 PR comments", "followUp", (v) => { v.data.repository.pullRequest.comments.totalCount = 101; }],
+    ["missing", "another review of R with a finding of its own", "followUp", (v) => {
+      const reviews = v.data.repository.pullRequest.reviews;
+      const other = structuredClone(fullReview(v));
+      other.body = "";
+      other.comments.nodes = [{ ...finding(v), body: finding(v).body.replace("🟡 Minor", "🟠 Major") }];
+      reviews.nodes.push(other);
+      reviews.totalCount += 1;
+    }],
+    ["missing", "another review of R requesting changes", "followUp", (v) => {
+      const reviews = v.data.repository.pullRequest.reviews;
+      reviews.nodes.push({ ...structuredClone(fullReview(v)), body: "", state: "CHANGES_REQUESTED", comments: { totalCount: 0, nodes: [] } });
+      reviews.totalCount += 1;
+    }],
+    ["missing", "a review with two finding-count lines", "followUp", (v) => { fullReview(v).body += "\n**Actionable comments posted: 1**\n"; }],
+    ["missing", "another review of R with only a written finding", "followUp", (v) => {
+      const reviews = v.data.repository.pullRequest.reviews;
+      reviews.nodes.push({ ...structuredClone(fullReview(v)), body: "This change double-bills an invoice.", comments: { totalCount: 0, nodes: [] } });
+      reviews.totalCount += 1;
+    }],
+    ["missing", "a merge after the fixes that changed a shared policy document", "any", (v, k) => {
+      if (k === "tipFix") v.push({ filename: "docs/reference/coderabbit-native-review.md", status: "modified", sha: "6".repeat(40) });
+      if (k === "tipHead") v.push({ filename: "docs/reference/coderabbit-native-review.md", status: "modified", sha: "7".repeat(40) });
+    }],
+    ["missing", "a base compare entry with no blob", "any", (v, k) => { if (k === "tipFix" || k === "tipHead") delete v[0].sha; }],
+    ["unreadable", "a summary describing another commit", "followUp", (v) => { walkthrough(v).body = walkthrough(v).body.replace(R, "f".repeat(40)); }],
+    ["unreadable", "no summary comment", "followUp", (v) => { walkthrough(v).body = ""; }],
+    ["unreadable", "a pre-merge table missing a row", "followUp", (v) => { walkthrough(v).body = walkthrough(v).body.replace(/\n\|[^\n]*New Table Without Rls[^\n]*/, ""); }],
+    ["missing", "a custom pre-merge check in warning", "followUp", (v) => { walkthrough(v).body = walkthrough(v).body.replace(/(\|\s*Money Not Exact Whole Cents\s*\|\s*)!\[Passed\]/, "$1![Warning]"); }],
+    ["unreadable", "GitHub errors with the follow-up read", "followUp", (v) => { v.errors = [{ message: "partial" }]; }],
+    ["missing", "a finding file that became executable", "followUp", (v) => { for (const key of ["t2_0", "t2_1"]) for (const entry of v.data.repository[key]?.entries || []) if (entry.name === "RecordSearchPicker.tsx") entry.mode = 0o100755; }],
+    ["missing", "a new test file that already existed at R", "fixes", (v) => { fileIn(v, "CustomerSearchPicker.test.tsx").status = "added"; }],
+    ["missing", "a fix in a file with no finding", "fixes", (v) => { v.files.push({ ...fileIn(v, "RecordSearchPicker.tsx"), filename: "src/lib/invoiceMath.ts" }); }],
+    ["missing", "a fix under supabase/", "fixes", (v) => { v.files.push({ ...fileIn(v, "RecordSearchPicker.tsx"), filename: "supabase/migrations/20261026000000_x.sql" }); }],
+    ["missing", "a fix to agent tooling", "fixes", (v) => { v.files.push({ ...fileIn(v, "RecordSearchPicker.tsx"), filename: "scripts/write-codex-push-proof.mjs" }); }],
+    ["missing", "a renamed file", "fixes", (v) => { fileIn(v, "RecordSearchPicker.tsx").previous_filename = "src/components/ui/Old.tsx"; }],
+    ["missing", "a file with no text diff", "fixes", (v) => { delete fileIn(v, "RecordSearchPicker.tsx").patch; }],
+    ["missing", "61 changed lines in a finding file", "fixes", (v) => { fileIn(v, "RecordSearchPicker.tsx").additions = 61; }],
+    ["missing", "151 changed test lines", "fixes", (v) => { fileIn(v, "CustomerSearchPicker.test.tsx").additions = 151; }],
+    ["missing", "21 deleted test lines", "fixes", (v) => { fileIn(v, "CustomerSearchPicker.test.tsx").deletions = 21; }],
+    ["missing", "a changelog entry over 40 lines", "fixes", (v) => { v.files.push({ filename: "docs/changelog.d/2026-10-26-x.md", status: "added", additions: 41, deletions: 0, patch: "+x" }); }],
+    ["missing", "a compare listing a commit outside the chain", "fixes", (v) => { v.commits[0].sha = "e".repeat(40); }],
+    ["missing", "a merge after the fixes that changed a PR code file", "tipHead", (v) => { v.find((f) => f.filename === "src/components/ui/RecordSearchPicker.tsx").sha = "9".repeat(40); }],
+    ["missing", "a merge of another branch that adds a file", "tipHead", (v) => { v.push({ filename: "src/lib/sneaky.ts", status: "added", sha: "8".repeat(40) }); }],
+    ["missing", "a fix to a test file in agent tooling", "fixes", (v) => { v.files.push({ ...fileIn(v, "CustomerSearchPicker.test.tsx"), filename: ".claude/hooks/pr-merge-guard.test.mjs" }); }],
+    ["unreadable", "commit parents without their SHAs", "requirement", (v) => { for (const node of v.data.repository.pullRequest.commits.nodes) delete node.commit.parents.nodes; }],
+  ];
+  // Each break must be refused for ITS reason, not a side effect of the edit.
+  const reasons = {
+    "a Major label": /rated its finding .* major/,
+    "an unrecognised severity header": /no readable severity/,
+    "a Minor label with the wrong colour": /no readable severity/,
+    "a review that claims more findings than were read": /says it posted 2 findings but 1/,
+    "a review with zero findings": /posted no findings/,
+    "outside-diff comments in the review summary": /outside the changed lines/,
+    "a nitpick section in the review summary": /nitpick/,
+    "two full reviews of the same commit": /more than one full review/,
+    "a review with more than 100 comments": /more than 100 comments/,
+    "more than 100 CodeRabbit reviews": /more than 100 reviews/,
+    "more than 100 PR comments": /PR has more than 100 comments/,
+    "another review of R with a finding of its own": /another CodeRabbit review of that commit posted findings/,
+    "another review of R requesting changes": /another CodeRabbit review of that commit is CHANGES_REQUESTED/,
+    // Its count is not trusted, so it is no full review; as "another" review it has text.
+    "a review with two finding-count lines": /another CodeRabbit review of that commit has text of its own/,
+    "a merge of another branch that adds a file": /changed the PR's own changes \(src\/lib\/sneaky\.ts\)/,
+    "a fix to a test file in agent tooling": /pr-merge-guard\.test\.mjs, which always gets a fresh review/,
+    "another review of R with only a written finding": /another CodeRabbit review of that commit has text of its own/,
+    "a merge after the fixes that changed a shared policy document": /changed the PR's own changes \(docs\/reference\/coderabbit-native-review\.md\)/,
+    "a base compare entry with no blob": /could not be compared in full/,
+    "a summary describing another commit": /no single CodeRabbit summary comment describes the reviewed commit/,
+    "no summary comment": /no single CodeRabbit summary comment describes the reviewed commit/,
+    "a pre-merge table missing a row": /lists 8 checks but its summary counts 9/,
+    "a custom pre-merge check in warning": /"money not exact whole cents" pre-merge check reads warning/,
+    "GitHub errors with the follow-up read": /GitHub returned errors/,
+    "a finding file that became executable": /RecordSearchPicker\.tsx is not a plain file/,
+    "a new test file that already existed at R": /already existed at the reviewed commit/,
+    "a fix in a file with no finding": /invoiceMath\.ts, which holds none/,
+    "a fix under supabase/": /supabase\/migrations\/20261026000000_x\.sql, which always gets a fresh review/,
+    "a fix to agent tooling": /write-codex-push-proof\.mjs, which always gets a fresh review/,
+    "a renamed file": /only edits, new tests/,
+    "a file with no text diff": /has no text diff/,
+    "61 changed lines in a finding file": /61 lines in finding files \(limit 60\)/,
+    "151 changed test lines": /151 test lines \(limit 150\)/,
+    "21 deleted test lines": /delete 21 test lines/,
+    "a changelog entry over 40 lines": /changelog entry is over 40 lines/,
+    "a compare listing a commit outside the chain": /exactly the fix commits/,
+    "a merge after the fixes that changed a PR code file": /changed the PR's own changes \(src\/components\/ui\/RecordSearchPicker\.tsx\)/,
+    "commit parents without their SHAs": /parents could not be read/,
+  };
+  eq(Object.keys(reasons).sort(), cases.map(([, label]) => label).sort(), "every broken case names its expected reason");
+  for (const [status, label, kind, change] of cases) {
+    const verdict = readCovered((k, value) => { if (kind === "any" || k === kind) change(value, k); });
+    eq(verdict.status, status, `#1017 broken by ${label} -> ${status}`);
+    ok(reasons[label].test(verdict.why), `#1017 broken by ${label} is refused for that reason (got: ${verdict.why})`);
+  }
+  // Allowed variations stay covered.
+  const stays = [
+    ["a Title-check warning (PR text, not code)", "followUp", (v) => { walkthrough(v).body = walkthrough(v).body.replace(/(\|\s*Title check\s*\|\s*)!\[Passed\]/, "$1![Warning]"); }],
+    ["one new changelog entry", "any", (v, k) => {
+      if (k === "fixes") v.files.push({ filename: "docs/changelog.d/2026-10-26-x.md", status: "added", additions: 12, deletions: 0, patch: "+x" });
+      // Its directory's tree at F and the head (third directory in the read).
+      if (k === "followUp") for (const key of ["t1_2", "t2_2"]) v.data.repository[key] = { entries: [{ name: "2026-10-26-x.md", type: "blob", mode: 0o100644 }] };
+    }],
+    ["an older summary comment about another commit", "followUp", (v) => {
+      const comments = v.data.repository.pullRequest.comments;
+      comments.nodes.unshift({ ...structuredClone(walkthrough(v)), body: walkthrough(v).body.replace(R, "a".repeat(40)) });
+      comments.totalCount += 1;
+    }],
+    ["a merge after the fixes that changed a shared doc", "any", (v, k) => {
+      // Main and the PR both edited the same ledger: its blob differs, nothing else does.
+      if (k === "tipFix") v.push({ filename: "docs/manual/KNOWN_ISSUES.md", status: "modified", sha: "6".repeat(40) });
+      if (k === "tipHead") v.push({ filename: "docs/manual/KNOWN_ISSUES.md", status: "modified", sha: "7".repeat(40) });
+    }],
+  ];
+  for (const [label, kind, change] of stays) {
+    eq(readCovered((k, value) => { if (kind === "any" || k === kind) change(value, k); }).via, "minor-follow-up", `#1017 with ${label} stays covered`);
+  }
+  {
+    const fixture = loadFixture(1017);
+    let threw = false;
+    try {
+      readCodeRabbitRequirement(replay(fixture), { owner: "masonwells1", name: "CRX_Manager_V1.0", number: 1017, deadlineMs: 10_000, callTimeoutMs: 5_000, now: (() => { let t = 0; return () => (t += 2_000); })() });
+    } catch { threw = true; }
+    ok(threw, "a follow-up read that would outlive the hook budget throws (callers refuse; never 'not covered')");
+  }
+
+  // Header parsing, both formats.
+  const pic = (icon, word) => `<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src="https://x/review-comment-icons-v1/${icon}-16.svg" alt=""></picture> ${word}** · **Functional Correctness** · **Quick win**\n\nBody mentions 🟠 Major in passing.`;
+  eq(coderabbitFindingSeverity(pic("amber", "Minor")), "minor", "pictured Minor");
+  eq(coderabbitFindingSeverity(pic("neutral", "Trivial")), "trivial", "pictured Trivial");
+  eq(coderabbitFindingSeverity(pic("major", "Major")), "major", "pictured Major");
+  eq(coderabbitFindingSeverity(pic("major", "Minor")), null, "a Minor word with another icon is unrecognised");
+  eq(coderabbitFindingSeverity("**🎯 Functional Correctness** | **🔵 Trivial**"), "trivial", "older table-style Trivial");
+  eq(coderabbitFindingSeverity("**🎯 Functional Correctness** | **🟡 Minor** | **🟠 Major**"), null, "two severities in one header are unrecognised");
+  eq(coderabbitFindingSeverity("Some text\n**🟡 Minor**"), null, "only the first line counts");
+  ok(isFollowUpExcludedPath("supabase/functions/send-email/index.ts") && isFollowUpExcludedPath(".github/workflows/ci.yml")
+    && isFollowUpExcludedPath("package-lock.json") && isFollowUpExcludedPath("vite.config.ts") && isFollowUpExcludedPath("AGENTS.md")
+    && isFollowUpExcludedPath("src/AGENTS.md") && isFollowUpExcludedPath("src/pages/CLAUDE.md")
+    && isFollowUpExcludedPath("src/config.ts") && isFollowUpExcludedPath("config/payment-limits.json")
+    && isFollowUpExcludedPath(".nvmrc") && isFollowUpExcludedPath(".npmrc") && isFollowUpExcludedPath(".node-version")
+    && isFollowUpExcludedPath("src/.babelrc") && isFollowUpExcludedPath("Dockerfile") && isFollowUpExcludedPath("Makefile")
+    && !isFollowUpExcludedPath("src/lib/configurePicker.ts")
+    && !isFollowUpExcludedPath("src/lib/invoiceMath.ts"), "control files are excluded; app code is not");
+  ok(isFollowUpTestPath("scripts/smoke/smoke-x.sql") && isFollowUpTestPath("scripts/smoke/prove-x-real-schema.mjs")
+    && !isFollowUpTestPath("scripts/smoke/smoke-specs.json")
+    && !isFollowUpTestPath("scripts/smoke/run-smoke.mjs") && !isFollowUpTestPath("scripts/smoke/interpret-result.mjs")
+    && !isFollowUpTestPath("scripts/smoke/seed-supplier-pricing-phase1a.sql")
+    && !isFollowUpTestPath("scripts/smoke/setup-offline-action-receipt-failure-proof.sql")
+    && !isFollowUpTestPath("scripts/write-codex-push-proof.mjs"),
+    "only smoke and prover chains count as tests under scripts/; the runner, verdict, seed and setup files do not");  // The required pre-merge checks are exactly the custom checks in .coderabbit.yaml.
+  const yaml = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".coderabbit.yaml"), "utf8");
+  const customNames = [...yaml.slice(yaml.indexOf("custom_checks:")).matchAll(/^\s+- name: (.+)$/gm)].map((m) => m[1].trim().toLowerCase());
+  eq([...FOLLOWUP_REQUIRED_CHECKS].sort(), customNames.sort(), "FOLLOWUP_REQUIRED_CHECKS matches .coderabbit.yaml's custom checks");
+  ok(/do NOT post a new @coderabbitai request/.test(coderabbitRequirementUnreadableDenial("X", "7", "a read was cut short"))
+    && /a read was cut short/.test(coderabbitRequirementUnreadableDenial("X", "7", "a read was cut short")),
+    "the unreadable denial names the failed read and forbids spending a review on it");
+}
 
 console.log(`codex-bot-review-lib: ${pass} assertions passed`);

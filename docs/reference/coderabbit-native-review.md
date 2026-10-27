@@ -63,12 +63,47 @@
 > 6. **Fixes move the head.** If CodeRabbit's comments lead to any new commit (code, documentation,
 >    or configuration; only a plain merge of main is exempt, item 7), the new head needs a
 >    fresh Sol review (carry-forward covers only a merge of main) and one new full review, by the
->    same steps. If that second review still asks for changes, stop and hand over under the
->    `AGENTS.md` stop rule.
+>    same steps, unless item 8 covers it. If that second review still asks for changes, stop and
+>    hand over under the `AGENTS.md` stop rule.
 > 7. **A merge of main alone** into a head CodeRabbit already reviewed clean does not need a new
 >    CodeRabbit review (Mason, 2026-10-21, accepting the recommendation): main takes dozens of
 >    merges a week and CodeRabbit allows only a few reviews an hour, and the Sol carry-forward
 >    collision check covers the interaction with the new main.
+> 8. **Narrow fixes for a minor-only review need no second review (Mason, 2026-10-26: "no need to
+>    re review coderabbit again if only minor issue found").** The fixed head keeps CodeRabbit's
+>    review, and still needs the fresh Sol review, when ALL of these hold (the merge gates check
+>    each one; any failure means one new full review, item 6):
+>    - every inline finding in that review is labelled **Minor** or **Trivial** by CodeRabbit, it
+>      posted at least one, and its summary lists no outside-diff, duplicate or nitpick items;
+>    - its pre-merge checks for that commit all passed (the PR title and description checks may
+>      fail: they judge the PR's text, not its code);
+>    - the fixes were pushed **before** any merge of main (fix first, then merge main), and the PR's
+>      own changes against the base are the same at the last fix and at the head, so a later merge
+>      brought in nothing but main (the shared status ledgers both sides edit excepted:
+>      `KNOWN_ISSUES.md`, `TO_DO_LIST.md`, `CURRENT_STATE.md`, `migration-history.md`, `docs/CHANGELOG.md`);
+>    - the fixes touch only files that hold a finding (edits, at most 60 changed lines in total),
+>      test files including `scripts/smoke/` chains (`smoke-*.sql`, `prove-*.mjs`; never the
+     runner, verdict, seed or setup files) (at most 150 changed and 20 deleted lines),
+>      and one new `docs/changelog.d/` entry (at most 40 lines); nothing under `supabase/`, CI,
+>      agent tooling (`.claude/`, `.codex/`, `.agents/`, other `scripts/`), dependencies or
+>      configuration (including any `config` file or folder, YAML/TOML/INI files, every dotfile
+>      or dot-folder such as `.nvmrc`, and `Dockerfile`/`Makefile`-style build files); no rename,
+>      delete, binary or file-mode change; at most 20 files and 30 fix commits.
+>
+>    Accepted residual (Luna round 3 on #1125, deferred): the shared-ledger exception proves only
+>    that a later merge changed no code. It does not prove that a ledger edit came from main rather
+>    than another branch; ledgers are not executed and Sol still reviews the head.
+>
+>    The Sol review is then shown those fixes and the findings they answer, and judges whether each
+>    change does only that and whether it changes money, quantity, cost, inventory or idempotency
+>    behaviour (`scripts/write-codex-push-proof.mjs`). The prompt carries capped excerpts; the
+>    complete findings and fix diffs go into `FOLLOWUP_EVIDENCE.md` in Sol's review packet. Measured 2026-10-26, before this rule: 120
+>    reviews in 7 days, 93% of them on PRs reviewed more than once; CodeRabbit's allowance is per
+>    developer identity (every agent posts as Mason) and drops to one an hour at 80+ reviews a week
+>    (Advanced plan: 10/hour under 50). The plan passed three adversarial Sol rounds.
+> 9. **Sol may run first.** Before CodeRabbit's first review of a qualifying PR, the Sol pre-flight
+>    lets the full Sol review run (Mason, 2026-10-26). If CodeRabbit then asks for nothing, that Sol
+>    proof stands; any fix after it needs Sol again.
 >
 > **The merge gates enforce it (Mason, 2026-10-21, "build the merge-gate enforcement into #1009").**
 > Both agent merge gates (`.claude/hooks/pr-merge-guard.mjs`, `.codex/hooks/production-action-guard.mjs`)
@@ -80,7 +115,10 @@
 > review of any other PR, the agent adds that label** (`gh pr edit <n> --add-label needs-coderabbit`)
 > so the gate holds it too. A qualifying PR merges (or applies its migration) only when CodeRabbit
 > itself set its `CodeRabbit` commit status to "Review completed" on the head, or on an earlier
-> PR commit followed only by merge commits. The status, not a review object, is the evidence:
+> PR commit followed only by merge commits. Since 2026-10-27 CodeRabbit may report instead by a
+> `CodeRabbit` check run from its own GitHub App (id 347564), completed with conclusion SUCCESS
+> and a summary starting "Result: Success - Review completed" whose CodeRabbit link names this
+> repository and PR number; either signal counts, and a SKIPPED run does not. The status, not a review object, is the evidence:
 > CodeRabbit files an empty review object whenever it answers a thread reply, while its status
 > says "Review rate limited" or "Review skipped: …" when it did not review. A status posted by
 > anyone other than CodeRabbit (an agent through Mason's account, for example) does not count.
@@ -89,6 +127,19 @@
 > the PR's own changes (GitHub's three-dot compare against the base: every file's status and blob)
 > are identical at the reviewed commit and the head, so a merge that edits a PR file, or slips in a
 > new one, needs a new review. Nothing blocks the request comment itself (checked 2026-10-21).
+> Item 8's minor-follow-up check (`readMinorFollowUp()`, same file, Mason 2026-10-26) runs only
+> when that answer is "missing" and CodeRabbit completed a review of an earlier PR commit. It proves
+> the fix chain by parent SHAs, reads CodeRabbit's full review of that commit by its review id
+> (its "Actionable comments posted: K" must match the K inline findings read), parses each finding's
+> severity from its header line only, binds the pre-merge table to that commit through CodeRabbit's
+> `change_assessment_commit` marker, and checks each fixed file's type and mode at the reviewed
+> commit, the last fix and the head. It answers in three ways: covered; not covered (the refusal
+> names the failed condition: request one new full review); or unreadable (a read failed or was cut
+> short: retry, and never spend a new review on it). A PR past one read's 100 reviews, review
+> comments or PR comments is "not covered" rather than retried forever. It adds two to four GitHub reads (about 5
+> seconds measured on real PRs), so the advisory budgets rose from 12 to 15 seconds in the Claude
+> merge gate and from 5 to 7 in the Codex gate. Like every gate here it stops mistakes, not an
+> agent deliberately working around it with Mason's authority.
 >
 > **Limits, on purpose.** The file test is a word list, so money code in a generically named file
 > (`src/lib/math.ts`) is not caught by the gate. Mason accepted this gap on 2026-10-21 ("money

@@ -187,7 +187,8 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees, sessio
     return refuse(`could not read ${number}'s labels, files and commit statuses to check the CodeRabbit review requirement (${error?.message || error}); fail closed.`);
   }
   if (coderabbitReview.status === "unreadable" || coderabbitReview.headOid !== head.toLowerCase()) {
-    return refuse(`${number}'s CodeRabbit review requirement could not be read for this exact head (fail closed) — re-run on the current head.`);
+    const why = coderabbitReview.why && coderabbitReview.status === "unreadable" ? ` (${coderabbitReview.why})` : "";
+    return refuse(`${number}'s CodeRabbit review requirement could not be read for this exact head${why} (fail closed) — re-run on the current head; do not post a new @coderabbitai request for this.`);
   }
   // Mason's "skip coderabbit" in THIS session waives only the missing review
   // (2026-10-22); the thread check below still runs.

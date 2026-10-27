@@ -368,7 +368,10 @@ function listWorktreesFromProjectDir() {
 // refused. Every caller therefore invokes this only after its hard denials have
 // had their chance, at a point where the alternative is returning ALLOW anyway.
 // Do not move it earlier "so the reader sees it first".
-const CODEX_ADVISORY_BUDGET_MS = 12_000;
+// 15s since 2026-10-26 (was 12s): a minor-follow-up CodeRabbit check adds two or
+// three reads (codex-bot-review-lib.mjs, readMinorFollowUp). The launcher still
+// denies a merge if the guard runs past its own deadline.
+const CODEX_ADVISORY_BUDGET_MS = 15_000;
 
 // DEFERRED PAST EVERY MERGE IN THE COMMAND (Codex round 8, SEC-001). Running
 // last within ONE merge was not enough: `gh pr merge 1 && gh pr merge 2` gates
@@ -442,7 +445,7 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
   // A money PR (or one carrying the needs-coderabbit label) needs a completed
   // CodeRabbit review of its head; an unreadable answer refuses.
   if (!coderabbitReview || coderabbitReview.status === "unreadable") {
-    deny(coderabbitRequirementUnreadableDenial("PR MERGE GATE", request.selector));
+    deny(coderabbitRequirementUnreadableDenial("PR MERGE GATE", request.selector, coderabbitReview?.why));
   }
   if (coderabbitReview.status === "missing") {
     // Mason's "skip coderabbit #<this PR>" in THIS session waives only the missing
