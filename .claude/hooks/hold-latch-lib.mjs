@@ -1,7 +1,8 @@
 // Pure helpers for the stop/pause/scope "hold latch" (hold-latch-*.mjs).
 //
 // Safety model: the latch only affects tool calls between Mason saying "stop"
-// and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
+// and his NEXT message in that same session. Any non-hold prompt there clears
+// it (another session's messages never touch it), so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
 import { createHash } from "node:crypto";
