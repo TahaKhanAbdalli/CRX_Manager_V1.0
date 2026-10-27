@@ -113,7 +113,7 @@ function isDescriptiveStop(text, start, end) {
   // scanned, so a huge prompt full of stop words stays linear; a clause longer
   // than the window is not judged descriptive, and the stop latches.
   const from = Math.max(0, start - 1000);
-  const parts = text.slice(from, start).split(/[.!?;:,\n\r\u2028\u2029\u0085—–]|\s-\s|--|\b(?:stop|pause|hold)\b/i);
+  const parts = text.slice(from, start).split(/[.!?;:,\n\r\v\f\u2028\u2029\u0085—–]|\s-\s|--|\b(?:stop|pause|hold)\b/i);
   if (from > 0 && parts.length === 1) return false;
   const clause = parts.pop();
   const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);

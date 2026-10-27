@@ -92,7 +92,7 @@ ok(isHoldPhrase(`make the gate ${"word ".repeat(300)}should stop pushing`), "an 
 }
 ok(!isHoldPhrase("change the setting to stop the nightly sweep"), "a setting verb plus a settings word is descriptive");
 // A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
-for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", " "]) {
+for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f", " "]) {
   ok(isHoldPhrase(`make the gate stop refusing${sep}stop pushing`), `a real stop after ${JSON.stringify(sep)} still latches`);
 }
 for (const p of ["stop re-running checks", "Great work. Stop re-running checks", "ok stop re-running checks",
