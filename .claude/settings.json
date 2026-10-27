@@ -358,11 +358,6 @@
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rls-on-new-tables.mjs\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/status-enum-check.mjs\"",
             "timeout": 15
           },
@@ -389,11 +384,6 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/active-area-guard.mjs\"",
             "timeout": 15
           },
           {
@@ -487,11 +477,6 @@
       {
         "matcher": "*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
-            "timeout": 15
-          },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-wrap.mjs\"",

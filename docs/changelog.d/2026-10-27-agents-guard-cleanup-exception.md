@@ -1,0 +1,4 @@
+## 2026-10-27 - AGENTS.md records the guard-cleanup exception
+
+- Mason approved it in conversation (2026-10-27): "Yes, add the guard-cleanup exception to AGENTS.md." Through a reviewed PR, a local agent hook may now be removed or narrowed when a CI check or GitHub setting already enforces the same thing, or when it only blocks harmless work. The exception never covers the merge gates, the push-to-`main` guard, migration-apply protection, secret protection, CI, review, or branch protection, and the PR must name what still enforces the rule.
+- In this PR: `rls-on-new-tables` is covered by `scripts/check-migration-hard-rules.mjs` in the required `SQL Migration Validation` check; `active-area-guard` blocked nothing because its config file never existed; Claude's `stop-verify` is covered by Mason's global verify-before-stop hook (Codex keeps it). `codex-push-guard` stays.

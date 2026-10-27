@@ -74,19 +74,20 @@ The full table, with every incident that produced each hook, is
 the groups do.
 
 **1. Code-pattern guards (before an agent writes a file).** `sql-safety`, `money-safety`,
-`idempotency-body-check`, `actor-binding-check`, `rls-on-new-tables`, `status-enum-check`,
+`idempotency-body-check`, `actor-binding-check`, `status-enum-check`,
 `generated-column-check`, `grant-change-guard`, `env-guard`. Each refuses a write that repeats a
-known bug: floating-point parsing of cent amounts, a new table without Row Level Security, a status
+known bug: floating-point parsing of cent amounts, a status
 value the database's CHECK constraint does not allow, writing a generated column, a mutating
 database function whose idempotency key is not really used, a function that trusts a caller-supplied
 "acting user", removing a grant that live code still calls, or touching `.env` files and keys.
 Several read `.claude/schema-registry.json`, a snapshot of the live schema. For a human these
 are the same rules as `docs/reference/coding-guidelines.md` and `docs/workflows/SAFE_DEVELOPMENT_RULES.md`;
 the CI job `SQL Migration Validation` and `scripts/check-migration-hard-rules.mjs` check some of
-them on GitHub too.
+them on GitHub too, and the latter is the only check for a new table without Row Level Security
+(the `rls-on-new-tables` hook that duplicated it was unwired on 2026-10-27).
 
 **2. Command safety (before an agent runs a shell or tool command).** `bash-safety`,
-`mcp-tool-guard`, `active-area-guard`, `live-testdata-guard`. They refuse force pushes,
+`mcp-tool-guard`, `live-testdata-guard`. They refuse force pushes,
 `git reset --hard`, discarding all changes, `--no-verify`, broad deletes, live-database writes
 outside the approved doors, and test data written into production.
 
@@ -115,8 +116,9 @@ message), `owner-approval-prompt` (records his `I approve` for a parked migratio
 **5. Session housekeeping.** At start: `session-staleness` (schema snapshot behind migrations,
 missing backup), `worktree-awareness` (other sessions working), `worktree-cleanup` (removes finished
 worktrees), `session-snapshot`, `session-heartbeat`, `session-context-reminder`. At the end of a turn:
-`stop-verify` (refuses "done" until the change was actually run and observed) and `stop-wrap`
-(uncommitted files, unapplied migrations, undeployed functions). After a tool call:
+`stop-wrap` (uncommitted files, unapplied migrations, undeployed functions). Codex also runs
+`stop-verify` (refuses "done" until the change was actually run and observed); Claude's wiring of
+it was dropped on 2026-10-27 because Mason's global verify-before-stop hook does the same job. After a tool call:
 `posttool-router`, `eslint-autofix`, `registry-freshness`, `applied-snapshot-invalidate`.
 
 Files ending in `-lib.mjs` hold the shared logic; files ending in `.test.mjs` are their tests and run

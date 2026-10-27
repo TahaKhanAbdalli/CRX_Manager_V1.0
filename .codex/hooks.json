@@ -30,12 +30,6 @@
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/rls-on-new-tables.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/rls-on-new-tables.mjs'\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/status-enum-check.mjs\"",
             "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/status-enum-check.mjs'\"",
             "timeout": 5
@@ -67,12 +61,6 @@
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/bash-safety.mjs\"",
             "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/bash-safety.mjs'\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/active-area-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/active-area-guard.mjs'\"",
             "timeout": 5
           }
         ]

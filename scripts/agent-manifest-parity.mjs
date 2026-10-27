@@ -47,7 +47,12 @@ export const CLAUDE_ONLY_HOOKS = new Set([
 
 // Deliberately Codex-only shared hooks (in .codex/hooks.json but NOT settings.json).
 // Currently none — every hook Codex wires is also wired for Claude.
-export const CODEX_ONLY_HOOKS = new Set([]);
+export const CODEX_ONLY_HOOKS = new Set([
+  // The "done = ran and proven" Stop check. Claude sessions get it from the
+  // owner's global verify-before-stop hook, so Claude's wiring was dropped
+  // (2026-10-27); Codex has no global equivalent, so it keeps this one.
+  "stop-verify.mjs",
+]);
 
 // Extract the set of .claude/hooks/<name>.mjs referenced in a manifest's hook
 // wiring (settings.json or .codex/hooks.json). Text-based on purpose: it catches
