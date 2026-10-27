@@ -18,6 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { checkCommandDeep, checkMigrationModify, checkAskDeep } from "./bash-safety-lib.mjs";
+import { literalReadOnlySearch } from "./read-only-search-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -38,6 +39,9 @@ try {
 
 const cmd = payload?.tool_input?.command || "";
 if (!cmd) out("allow");
+// A plain search runs nothing, so a quoted pattern such as 'rm -rf' or
+// 'git reset --hard' is text, not the command it names (2026-10-27).
+if (literalReadOnlySearch(cmd)) out("allow");
 
 const cwd = process.cwd();
 
