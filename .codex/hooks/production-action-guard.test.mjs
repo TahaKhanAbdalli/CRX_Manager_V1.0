@@ -3684,6 +3684,7 @@ try {
   for (const command of [
     'git commit -m "docs(changelog): record the real Codex tool-path proof"',
     `git commit -m "fix(guard): don't block (quoted) text"`,
+    'git commit -m "docs(changelog): document C:\\Program Files"',
   ]) {
     assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, false, `commit message allowed: ${command}`);
   }
@@ -3695,6 +3696,9 @@ try {
     'Write-Output "x" | Tee-Object -FilePath "$d$f"',
     "Write-Output \"x\" | Tee-Object -FilePath “(Join-Path .codex hooks)”",
     'cmd /c "echo %PATH%(x)"',
+    'Write-Output "a\\" (Invoke-Evil x) "b"',
+    `Write-Output 'a\\' (Invoke-Evil x) '"'`,
+    'Write-Output "a" (Invoke-Evil x) "b"',
   ]) {
     assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, true, `computed text still refused: ${command}`);
   }

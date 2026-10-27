@@ -700,13 +700,14 @@ export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
 // PowerShell and cmd.exe alike. So for the computed-text test below, a
 // double-quoted span is blanked when its body cannot expand in any of them (no
 // `$`, backtick, `%` or `!`). The segment is left untouched when anything could
-// make the quotes mean something else: a backslash or backtick (an escaped
-// quote) or a smart quote (PowerShell reads it as a quote, the others do not).
+// make the quotes mean something else: a backslash right before a quote or any
+// backtick (an escaped quote) or a smart quote (PowerShell reads it as a quote,
+// the others do not). A backslash elsewhere (`C:\Program Files`) is plain text.
 // Single-quoted text is stepped over unchanged, so a `"` inside it never opens
 // a span (`Tee-Object '"' (Join-Path a b) '"'` keeps its subexpression visible).
 export function literalDoubleQuotedTextBlanked(segment) {
   const text = String(segment || "");
-  if (/[\\`‘’‚‛“”„]/.test(text)) return text;
+  if (/\\["']|[`‘’‚‛“”„]/.test(text)) return text;
   let out = "";
   for (let i = 0; i < text.length; i++) {
     const quote = text[i];

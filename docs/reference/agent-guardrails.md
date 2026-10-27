@@ -221,8 +221,9 @@
 > (`literalReadOnlySearch`) now recognises a command that only searches — `rg`, `grep`, `git grep`, `Select-String`, `findstr`, or a
 > `Get-ChildItem` listing fed into one, optionally piped into another search or `head`/`wc`/`Select-Object`/`Measure-Object` — when
 > every character is literal in bash, PowerShell and cmd.exe alike: one line, no separator, redirect, grouping, substitution, variable
-> or splat outside quotes, no `$`/backtick/`%`/trailing backslash inside double quotes, no `|&<>^%` inside single quotes (cmd.exe
-> does not treat `'` as a quote), no smart quotes, no unquoted wildcard for a native program, a bare program name (not `./tools/rg`),
+> or splat outside quotes, no `$`/backtick/`%`/trailing backslash inside double quotes, no `|&<>^%"` inside single quotes (cmd.exe
+> does not treat `'` as a quote, and Windows PowerShell's legacy argument passing re-splits an embedded `"` into separate options),
+> no doubled quote (`''`/`""` is an escaped quote in PowerShell), no smart quotes, no unquoted wildcard for a native program, a bare program name (not `./tools/rg`),
 > and none of the options that start another program (`rg --pre`/`--pre-glob`/`-z`/`--search-zip`/`--hostname-bin`, `git grep -O`/
 > `--open-files-in-pager`/`--textconv` and their git abbreviations, any git global option but `--no-pager` and `-C`). Both hooks let
 > such a search through; the Codex guard still refuses one that names a review-proof file or runs from the review state directory,

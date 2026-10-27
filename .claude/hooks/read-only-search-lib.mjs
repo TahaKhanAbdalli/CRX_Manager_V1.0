@@ -46,7 +46,12 @@ function literalPipeline(command) {
       if (close < 0) return null;
       const body = command.slice(i + 1, close);
       // cmd.exe does not treat ' as a quote, so its separators stay live there.
-      if (/[|&<>^%]/.test(body)) return null;
+      // A `"` is refused too: Windows PowerShell's legacy argument passing
+      // rebuilds a native program's command line without escaping it, so
+      // `'x" --pre=calc "y'` would reach rg as a separate --pre option.
+      if (/[|&<>^%"]/.test(body)) return null;
+      // `'it''s'` is ONE string with a quote inside in PowerShell, two strings here.
+      if (command[close + 1] === "'") return null;
       word = (word ?? "") + body;
       i = close;
       continue;
@@ -59,6 +64,9 @@ function literalPipeline(command) {
       // `%` does in cmd.exe, and a backslash before the closing quote ends the
       // string in PowerShell but escapes it in bash.
       if (/[$`%]/.test(body) || body.endsWith("\\")) return null;
+      // `"x"" --pre=calc ""y"` is ONE PowerShell string holding quotes, which
+      // legacy argument passing splits back into separate rg options.
+      if (command[close + 1] === '"') return null;
       word = (word ?? "") + body;
       i = close;
       continue;

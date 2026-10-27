@@ -37,6 +37,11 @@ for (const command of recognised) {
 // runs its ordinary checks).
 const notRecognised = [
   "",
+  // Windows PowerShell's legacy native argument passing re-splits an embedded `"`.
+  `rg 'x" --pre=calc "y' docs`,
+  `rg "x"" --pre=calc ""y" docs`,
+  `rg 'x'' --pre=calc ''y' docs`,
+  `git grep 'x" -O"calc" "y'`,
   "git push origin HEAD:main",
   "rg x; git push origin HEAD:main",
   "rg x && git push origin HEAD:main",
