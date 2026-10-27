@@ -191,8 +191,9 @@ export interface CommitLabelDraftResult {
 export interface CostHistory {
   id: string;
   product_id: string;
-  changed_by: string;
-  change_source: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline';
+  /** NULL only on the starting snapshot (20261026140000): no person made that row. */
+  changed_by: string | null;
+  change_source: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline' | 'starting_snapshot';
   change_reason: string | null;
   change_set_id: string | null;
   old_cost: number | null;

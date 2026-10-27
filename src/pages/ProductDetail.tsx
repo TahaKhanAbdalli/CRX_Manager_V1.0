@@ -9,6 +9,7 @@ import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
 import ProductPriceHistory from '../components/products/ProductPriceHistory';
+import ProductSellPriceHistory from '../components/products/ProductSellPriceHistory';
 import ProductBrandsSection from '../components/products/ProductBrandsSection';
 import ProductMarginFloorCard from '../components/products/ProductMarginFloorCard';
 import { useToast } from '../components/ui/Toast';
@@ -315,6 +316,8 @@ export default function ProductDetail() {
       .from('cost_history')
       .select('*')
       .eq('product_id', id!)
+      // The starting snapshot (20261026140000) records no change; the Sell Price History card shows it.
+      .neq('change_source', 'starting_snapshot')
       .order('changed_at', { ascending: false })
       .limit(20);
     if (error) {
@@ -1626,6 +1629,8 @@ export default function ProductDetail() {
                 onSelectPurchaseBasis={(candidate) => void handlePurchaseBasisSelection(candidate)}
               />
             )}
+            {/* To-Do 0.4: sell prices over time. Admin-only, like all price history. */}
+            {isAdmin && <ProductSellPriceHistory productId={id} reloadToken={priceHistoryReloadToken} />}
             {isAdmin && (
               <Card>
                 <CardHeader title="Cost" accent="History" />
