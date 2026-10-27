@@ -204,7 +204,9 @@ const U = { ADMIN: id('a1'), REP: id('b1') };
 const PA = id('f1'); // has an earlier history row
 const PB = id('f2'); // no history
 const PC = id('f3'); // inactive, no history
+const PD = id('f4'); // priced, but its only history row is cost-only (no tier price)
 const OLD_ROW = id('e1');
+const COST_ROW = id('e2');
 const q = (value) => `'${value}'`;
 
 function claims(uid) {
@@ -225,12 +227,14 @@ function seed() {
     INSERT INTO public.products (id, product_name, unit_size, current_cost, tier1_price, tier2_price, tier3_price, tier1_margin, product_form, is_active, pricing_version) VALUES
       ('${PA}', '[PROVER] A', 'gal', 20.00, 30.00, 28.50, NULL, 0.3333, 'liquid', true, 3),
       ('${PB}', '[PROVER] B', 'gal', 7.25, 12.00, 11.00, 10.00, NULL, 'liquid', true, 1),
-      ('${PC}', '[PROVER] C', 'gal', 9.00, 12.00, NULL, NULL, NULL, 'liquid', false, 1);
+      ('${PC}', '[PROVER] C', 'gal', 9.00, 12.00, NULL, NULL, NULL, 'liquid', false, 1),
+      ('${PD}', '[PROVER] D', 'gal', 5.00, 8.00, NULL, NULL, NULL, 'liquid', true, 1);
     INSERT INTO public.cost_history (id, product_id, changed_by, change_source, change_reason, changed_at, old_cost, new_cost, old_tier1_price, new_tier1_price)
-      VALUES ('${OLD_ROW}', '${PA}', '${U.ADMIN}', 'product_page', 'earlier change', now() - interval '30 days', 19.00, 20.00, 29.00, 30.00);
+      VALUES ('${OLD_ROW}', '${PA}', '${U.ADMIN}', 'product_page', 'earlier change', now() - interval '30 days', 19.00, 20.00, 29.00, 30.00),
+             ('${COST_ROW}', '${PD}', '${U.ADMIN}', 'legacy_frontend', 'cost only', now() - interval '20 days', 4.50, 5.00, NULL, NULL);
     COMMIT;`, { user: 'supabase_admin' });
-  assert.equal(scalar("SELECT count(*) FROM public.products WHERE id::text LIKE '7c330000-%';"), '3', 'products not seeded');
-  console.log('[prover] seeded an admin, a sales rep, three products and one earlier history row');
+  assert.equal(scalar("SELECT count(*) FROM public.products WHERE id::text LIKE '7c330000-%';"), '4', 'products not seeded');
+  console.log('[prover] seeded an admin, a sales rep, four products and two earlier history rows');
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -250,8 +254,9 @@ const SCENARIOS = [
     ['A (has earlier history): no snapshot', 'bare', SNAP(PA), 'ok|0:', 'same'],
     ['B: one snapshot equal to the product', 'bare', SNAP(PB), 'ok|0:', 'ok|1:7.25/12.00/11.00/10.00/1/true/true'],
     ['C (inactive): one snapshot too', 'bare', SNAP(PC), 'ok|0:', 'ok|1:9.00/12.00/-/-/1/true/true'],
+    ['D (cost-only history): one snapshot, so its prices show', 'bare', SNAP(PD), 'ok|0:', 'ok|1:5.00/8.00/-/-/1/true/true'],
     ['the earlier history row is untouched', 'bare', `(SELECT change_source || '/' || change_reason || '/' || new_tier1_price FROM public.cost_history WHERE id = '${OLD_ROW}')`, 'ok|product_page/earlier change/30.00', 'same'],
-    ['a second run of the snapshot INSERT adds nothing', 'bare', { stmt: `${SNAPSHOT_INSERT()} v := ${COUNT_ALL}::text;` }, NO_SNAPSHOT_SOURCE, 'ok|3'],
+    ['a second run of the snapshot INSERT adds nothing', 'bare', { stmt: `${SNAPSHOT_INSERT()} v := ${COUNT_ALL}::text;` }, NO_SNAPSHOT_SOURCE, 'ok|5'],
   ] },
   { name: '2. rules', steps: [
     ['a real change with no changed_by is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source) VALUES ('${PB}', NULL, 'product_page'); v := 'inserted';` }, /^23502\|.*changed_by/, /^23514\|.*cost_history_changed_by_required/],
@@ -327,12 +332,12 @@ function main() {
   check('before', runMatrix('before'));
   preflightRefusesDrift('before');
   const rowsBefore = scalar('SELECT count(*) FROM public.cost_history;');
-  const products = scalar('SELECT count(*) FROM public.products p WHERE NOT EXISTS (SELECT 1 FROM public.cost_history h WHERE h.product_id = p.id);');
+  const products = scalar("SELECT count(*) FROM public.products p WHERE NOT EXISTS (SELECT 1 FROM public.cost_history h WHERE h.product_id = p.id AND (h.change_source = 'starting_snapshot' OR num_nonnulls(h.old_tier1_price, h.new_tier1_price, h.old_tier2_price, h.new_tier2_price, h.old_tier3_price, h.new_tier3_price) > 0));");
 
   stageText('candidate.sql', lf(CANDIDATE));
   const a = apply('candidate.sql');
   assert.equal(a.status, 0, `the candidate failed to apply:\n${a.output}`);
-  assert.equal(scalar('SELECT count(*) FROM public.cost_history;'), String(Number(rowsBefore) + Number(products)), 'the apply must add exactly one row per product with no history');
+  assert.equal(scalar('SELECT count(*) FROM public.cost_history;'), String(Number(rowsBefore) + Number(products)), 'the apply must add exactly one row per product with no sell-price history');
   console.log(`[prover] candidate applied: ${products} snapshot rows added to ${rowsBefore} existing`);
 
   check('after', runMatrix('after'));

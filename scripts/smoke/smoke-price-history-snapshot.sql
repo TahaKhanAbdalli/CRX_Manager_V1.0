@@ -3,9 +3,12 @@
 -- product FK (20261026140000_product_price_history_starting_snapshot.sql). Run after apply, as ONE
 -- statement. Live, rollback-only, plants one [SMOKE] product.
 --
---   1. Every product that existed when the snapshot ran has a history row; each snapshot row is its
---      product's only row from that time or earlier, with no changed_by and old = new. (Products
---      created later need no snapshot: their first logged change records their starting prices.)
+--   1. Every product that existed when the snapshot ran has a history row; a snapshot sits only on a
+--      product with no earlier row recording a sell price, at most one per product, with no
+--      changed_by and old = new. (Products created later need no snapshot: their first logged change
+--      records their starting prices.) A price save that raced the apply can carry an earlier
+--      timestamp than the snapshot (a transaction's now() is when it began); if step 1 ever names
+--      such a row, read its changed_at against the apply time before treating it as a failure.
 --   2. Re-running the snapshot INSERT over those products adds nothing (idempotent).
 --   3. A real change with no changed_by is refused (cost_history_changed_by_required).
 --   4. Deleting a product that has history is refused by cost_history_product_id_fkey, and its
@@ -41,9 +44,11 @@ BEGIN
   IF v_bad <> 0 THEN RAISE EXCEPTION 'SMOKE_FAIL 1: % products that existed at the snapshot have no history', v_bad; END IF;
   SELECT count(*) INTO v_bad FROM public.cost_history s
    WHERE s.change_source = 'starting_snapshot'
-     AND (SELECT count(*) FROM public.cost_history h
-           WHERE h.product_id = s.product_id AND h.changed_at <= s.changed_at) <> 1;
-  IF v_bad <> 0 THEN RAISE EXCEPTION 'SMOKE_FAIL 1: % snapshot rows sit on a product that already had history', v_bad; END IF;
+     AND EXISTS (SELECT 1 FROM public.cost_history h
+                  WHERE h.product_id = s.product_id AND h.id <> s.id
+                    AND (h.change_source = 'starting_snapshot'
+                         OR (h.changed_at <= s.changed_at AND num_nonnulls(h.old_tier1_price, h.new_tier1_price, h.old_tier2_price, h.new_tier2_price, h.old_tier3_price, h.new_tier3_price) > 0)));
+  IF v_bad <> 0 THEN RAISE EXCEPTION 'SMOKE_FAIL 1: % snapshot rows sit on a product whose history already recorded a sell price', v_bad; END IF;
   SELECT count(*) INTO v_bad FROM public.cost_history
    WHERE change_source = 'starting_snapshot'
      AND (changed_by IS NOT NULL OR old_cost IS DISTINCT FROM new_cost
@@ -57,7 +62,8 @@ BEGIN
   SELECT p.id, NULL, 'starting_snapshot', 'smoke re-run', now(), p.current_cost, p.current_cost
     FROM public.products p
    WHERE p.created_at <= v_snapshot_at
-     AND NOT EXISTS (SELECT 1 FROM public.cost_history h WHERE h.product_id = p.id);
+     AND NOT EXISTS (SELECT 1 FROM public.cost_history h
+                      WHERE h.product_id = p.id AND (h.change_source = 'starting_snapshot' OR num_nonnulls(h.old_tier1_price, h.new_tier1_price, h.old_tier2_price, h.new_tier2_price, h.old_tier3_price, h.new_tier3_price) > 0));
   SELECT count(*) INTO v_after FROM public.cost_history;
   IF v_after <> v_before THEN RAISE EXCEPTION 'SMOKE_FAIL 2: a re-run added % rows', v_after - v_before; END IF;
 

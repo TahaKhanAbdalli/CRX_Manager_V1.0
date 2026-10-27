@@ -8,11 +8,12 @@
 --   The screen half (an admin-only sell-price chart with a real date axis) reads cost_history
 --   directly, which its admin-only policy already allows.
 --
---   1. A dated STARTING SNAPSHOT for every product with NO history row: one cost_history row,
+--   1. A dated STARTING SNAPSHOT for every product whose history records NO sell price: one cost_history row,
 --      stamped now, recording its current cost, three tier prices, three tier margins and pricing
 --      version as both old and new (no change). Live 2026-10-26: 578 of 604 products have no history
---      row at all, so "what was the price on date X" has no answer for them. A product that already
---      has history gets none: its earliest row's old values already say where it started, and a
+--      row at all, and 9 more have only rows with no tier price (older cost-only writers), so "what
+--      was the price on date X" has no answer for them (587 in all). A product whose history already
+--      records a tier price gets none: its earliest such row's old values say where it started, and a
 --      snapshot dated today would sort after its real changes. A product created later needs none
 --      either: every change after creation is logged by write_product_pricing_history, so its
 --      creation prices are its first row's old values (or its current prices if it never changed).
@@ -24,12 +25,12 @@
 --        starting_snapshot row name no person and carry old = new on every value, so a real change
 --        can never be written as one. cost_history_tier_prices_whole_cents holds the six tier price
 --        columns (plain numeric) to whole cents; live 2026-10-26 every one of the 33 rows already is.
---      - Re-runnable: a product that has any history row (a snapshot included) gets no new one.
+--      - Re-runnable: a product with a snapshot, or with a row recording a tier price, gets no new one.
 --   2. cost_history_product_id_fkey loses ON DELETE CASCADE (becomes NO ACTION): deleting a product
 --      with history is refused instead of silently erasing that history. The app has no product
 --      delete; 602 of 604 products are already undeletable through product_cost_basis (RESTRICT).
 --
--- LIVE DATA: this INSERTs about 578 new cost_history rows (one per product with no history). It
+-- LIVE DATA: this INSERTs about 587 new cost_history rows (one per product with no sell-price history). It
 --   changes or deletes no existing row.
 --
 -- ROLLBACK (new reviewed migration; the snapshot rows are history and should normally be kept):
@@ -119,20 +120,24 @@ SELECT p.id, NULL, 'starting_snapshot', 'Prices when price history started',
        p.tier1_margin, p.tier1_margin, p.tier2_margin, p.tier2_margin, p.tier3_margin, p.tier3_margin,
        p.pricing_version, p.pricing_version
   FROM public.products p
- WHERE NOT EXISTS (SELECT 1 FROM public.cost_history h WHERE h.product_id = p.id);
+ WHERE NOT EXISTS (SELECT 1 FROM public.cost_history h
+                    WHERE h.product_id = p.id
+                      AND (h.change_source = 'starting_snapshot' OR num_nonnulls(h.old_tier1_price, h.new_tier1_price, h.old_tier2_price, h.new_tier2_price, h.old_tier3_price, h.new_tier3_price) > 0));
 
 -- VERIFY
 DO $verify$
 BEGIN
-  -- Every product now has history; a snapshot only where it is the product's only row.
+  -- Every product now has history; a snapshot only where no other row of it records a sell price.
   IF EXISTS (SELECT 1 FROM public.products p
               WHERE NOT EXISTS (SELECT 1 FROM public.cost_history h WHERE h.product_id = p.id)) THEN
     RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a product still has no history row';
   END IF;
   IF EXISTS (SELECT 1 FROM public.cost_history s
               WHERE s.change_source = 'starting_snapshot'
-                AND (SELECT count(*) FROM public.cost_history h WHERE h.product_id = s.product_id) <> 1) THEN
-    RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a snapshot was added to a product that already had history';
+                AND EXISTS (SELECT 1 FROM public.cost_history h
+                             WHERE h.product_id = s.product_id AND h.id <> s.id
+                               AND (h.change_source = 'starting_snapshot' OR num_nonnulls(h.old_tier1_price, h.new_tier1_price, h.old_tier2_price, h.new_tier2_price, h.old_tier3_price, h.new_tier3_price) > 0))) THEN
+    RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a snapshot was added to a product whose history already records a sell price';
   END IF;
   IF EXISTS (SELECT 1 FROM public.cost_history h JOIN public.products p ON p.id = h.product_id
               WHERE h.change_source = 'starting_snapshot'

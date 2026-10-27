@@ -5,9 +5,9 @@ import type { CostHistory } from '../types';
 /**
  * Sell-price history for one product (To-Do 0.4, pricing plan slice 4). Read from cost_history,
  * which already logs every tier price change and is admin-only (Mason, 2026-10-14: "only admin can
- * see the price history"). 20261026140000 gave every product with no history a dated starting
- * snapshot; a product with history starts at its first change's old prices, and one created later
- * at its creation (its first logged change records the prices it started with).
+ * see the price history"). 20261026140000 gave every product whose history recorded no sell price a
+ * dated starting snapshot; a product with priced history starts at its first change's old prices,
+ * and one created later at its creation (its first logged change records the prices it started with).
  */
 
 // change_source is text as the database returns it; sourceLabel() names the known values.
