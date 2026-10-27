@@ -63,6 +63,12 @@ ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain st
 ok(isHoldPhrase("You'd better stop pushing"), "a contracted person (you'd) still latches");
 ok(isHoldPhrase("we’re going to stop deploying"), "a curly-apostrophe contraction (we’re) still latches");
 ok(!isHoldPhrase("the hook should stop re-running checks"), "a hyphenated -ing verb is descriptive");
+ok(!isHoldPhrase("make the gate stop re-running checks"), "a descriptive stop before a hyphenated -ing verb is skipped");
+for (const p of ["stop re-running checks", "Great work. Stop re-running checks", "ok stop re-running checks",
+  "please stop re-running checks", "claude, stop re-running checks", "you stop re-running checks",
+  "please wait and stop pushing", "finish the build and stop pushing"]) {
+  ok(isHoldPhrase(p), `an imperative stop before a hyphenated -ing verb latches: ${p}`);
+}
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).
 eq(holdDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "warn", "edit source warns under hold");
