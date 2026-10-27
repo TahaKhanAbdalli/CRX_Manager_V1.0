@@ -158,7 +158,7 @@ export function orderedVisibleColumnIds(settings: JobListSettings): JobColumnId[
  * other shared toggles (Locations / Crops / Chemical Appl.) have no column on
  * the per-invoice summary list, so there is nothing to hide there.
  */
-export const SHARED_INVOICE_COLUMN_IDS: Record<string, JobColumnId> = {
+const SHARED_INVOICE_COLUMN_IDS: Record<string, JobColumnId> = {
   customer_name: 'customer_name',
   applicator_name: 'applicator_name',
   total_acres: 'total_acres',

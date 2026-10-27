@@ -15,7 +15,7 @@
 
 export const COMPANY_NAME = 'Crop RX Solutions';
 export const COMPANY_LEGAL_NAME = 'Crop RX Solutions, Inc.';
-export const COMPANY_TAGLINE = 'Agricultural Input Solutions';
+const COMPANY_TAGLINE = 'Agricultural Input Solutions';
 export const COMPANY_CITY = 'West York, IL';
 export const COMPANY_PHONE = '618-843-0413';
 export const COMPANY_WEBSITE = 'www.croprxsolutions.com';

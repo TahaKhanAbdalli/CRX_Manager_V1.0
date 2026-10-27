@@ -70,7 +70,7 @@ function comparableNameTokens(value: string): string[] {
 }
 
 /** Conservative by design: only flag names with no shared meaningful token. */
-export function namesClearlyDifferent(ours: string, epa: string): boolean {
+function namesClearlyDifferent(ours: string, epa: string): boolean {
   const ourTokens = comparableNameTokens(ours);
   const epaTokens = comparableNameTokens(epa);
   if (ourTokens.length === 0 || epaTokens.length === 0) return false;

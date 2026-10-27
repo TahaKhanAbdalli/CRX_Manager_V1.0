@@ -18,7 +18,7 @@ export interface ParsedProduct {
   notes?: string;
 }
 
-export const PRODUCT_IMPORT_STRING_FIELDS = [
+const PRODUCT_IMPORT_STRING_FIELDS = [
   'product_name',
   'sku',
   'category',
