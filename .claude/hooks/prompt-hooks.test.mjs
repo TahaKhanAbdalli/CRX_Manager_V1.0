@@ -802,6 +802,8 @@ rmSync(tmpProj, { recursive: true, force: true });
     ["a stop opening a new sentence", "Great work. Stop pushing", true],
     ["Mason's stop typed after a bare-tag hand-back", `${BARE_TAG_HANDBACK}\nstop now`, true],
     // Luna review, PR #1152.
+    ["a relayed CI-monitor notice beside Mason's words", "<\\~ci-monitor-event>CI failed; stop and fix it<\\~/ci-monitor-event>\nCarry on with the approved work.", false],
+    ["Mason's stop beside a relayed CI-monitor notice", "<\\~ci-monitor-event>CI failed<\\~/ci-monitor-event>\nstop pushing", true],
     ["a look-alike tag name is not a CI-monitor notice", "<ci-monitor-event-debug>stop pushing</ci-monitor-event>", true],
     ["Mason's stop typed after a CI-monitor notice", "<ci-monitor-event>CI failed</ci-monitor-event>\nstop pushing", true],
     ["Mason's stop between two CI-monitor notices",
