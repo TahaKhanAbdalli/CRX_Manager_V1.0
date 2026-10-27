@@ -1,0 +1,8 @@
+## 2026-10-27 — Records: price sheet warnings applied live; To-Do 0.1, 0.6 and 0.7 live
+
+- `docs/reference/migration-history.md` row 993: `20261027050000_price_sheet_warnings_and_approval` APPLIED LIVE 2026-10-27 14:46:31 UTC, ledger version `20261027144628` (PR #1131, merged as `09a613569`), with its gates and the post-apply catalog check.
+- `.claude/schema-registry.json` rebuilt from live introspection (high-water `20261027160349`, after #1119's `20261027060000_last_charged_prices` applied): adds `pricing_change_set_warnings` and `pricing_change_set_approvals`, the new `cost_history`, `pricing_change_set_rows` and `product_info_change_set_rows` columns, and every other migration applied since the last rebuild (through `20261027060000`, including `price_tier_at_sale` on `order_items` and `invoice_items`).
+- `src/lib/rpcContracts.test.ts`: `write_product_pricing_history` leaves `MUTATOR_INVENTORY_EXEMPT` (its pre-apply window ended).
+- `src/types/supabase.ts` is unchanged: #1131 already added its tables, columns and functions. A wholesale regeneration from live was tried and rejected: it drops hand-kept entries such as the `invoice_postable_version` computed field on `invoices_postable` (a PostgREST computed field the generator lists only as a function) and fails the type check.
+- `docs/manual/TO_DO_LIST.md`: 0.1 built and live (rollout now waits only on margin floors), 0.6 live (#1134), 0.7's as-of date and Stale Costs report live (#1133). `docs/manual/KNOWN_ISSUES.md`: KI-15 closed by #1134.
+- `src/lib/costFields.ts`: `price_tier_at_sale` (#1119, not cost data, readable by signed-in users on live) joins the safe column lists of `order_items` and `invoice_items`, so the cost-column drift test matches the refreshed registry.
