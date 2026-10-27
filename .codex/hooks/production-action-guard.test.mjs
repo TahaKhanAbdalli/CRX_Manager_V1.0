@@ -462,6 +462,36 @@ try {
     false, "a money PR CodeRabbit completed a review of merges");
   assert.equal(moneyMerge(() => { throw new Error("gh down"); }).blocked, true,
     "a failed requirement read refuses (fail closed)");
+  // One review per PR (Mason, 2026-10-26): CodeRabbit reviewed an earlier commit, so
+  // the minor-follow-up reads run; a malformed answer to them refuses as unreadable
+  // and never tells the agent to spend a new review (Luna round 1 on #1125).
+  {
+    const reviewed = "e".repeat(40);
+    const followUpAnswer = JSON.stringify({ data: { repository: { pullRequest: {
+      headRefOid: ordinary.sha,
+      labels: { totalCount: 0, nodes: [] },
+      files: { totalCount: 1, nodes: [{ path: "src/lib/invoiceMath.ts" }] },
+      commits: { totalCount: 2, nodes: [
+        { commit: { oid: reviewed, parents: { totalCount: 1, nodes: [{ oid: "d".repeat(40) }] }, status: { contexts: crDone() } } },
+        { commit: { oid: ordinary.sha, parents: { totalCount: 1, nodes: [{ oid: reviewed }] }, status: { contexts: [] } } },
+      ] },
+    } } } });
+    const malformed = moneyMerge(followUpAnswer);
+    assert.equal(malformed.blocked, true, "a malformed minor-follow-up read refuses (fail closed)");
+    assert.match(malformed.reason, /could not read this pull request's CodeRabbit facts completely \(the minor-follow-up check/,
+      "...as unreadable, naming the follow-up check");
+    assert.match(malformed.reason, /do NOT post a\s+new @coderabbitai request/, "...and does not spend a review on it");
+    let compareCalls = 0;
+    const timedOut = evaluateProductionAction({
+      toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo, nowMs: Date.now(),
+      runGh: (args, ...rest) => {
+        if (Array.isArray(args) && args.some((a) => String(a).includes("/compare/"))) { compareCalls += 1; throw new Error("gh timed out"); }
+        return withRequirement(followUpAnswer)(args, ...rest);
+      },
+    });
+    assert.equal(compareCalls, 1, "the follow-up path reached its compare read");
+    assert.equal(timedOut.blocked, true, "a follow-up read that times out refuses (fail closed)");
+  }
   // Mason's "skip coderabbit" (2026-10-22): main() binds the waiver to the
   // hook's session; here it is injected directly.
   {

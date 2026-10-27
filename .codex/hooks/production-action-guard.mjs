@@ -1313,9 +1313,11 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
 //
 // Returns a denial verdict, or null when nothing blocks. Fails OPEN on any
 // error: see the header of codex-bot-review-lib.mjs for why this one predicate
-// does not fail closed like its neighbours here. The 5s budget is deliberately a
-// third of the hook's 15s so the notices below can still be written.
-const CODEX_ADVISORY_BUDGET_MS = 5_000;
+// does not fail closed like its neighbours here. The 7s budget stays under half
+// of the hook's 15s so the notices below can still be written; it rose from 5s
+// on 2026-10-26 because a minor-follow-up check (codex-bot-review-lib.mjs) adds
+// two or three GitHub reads. The hard-gate deadline still caps it.
+const CODEX_ADVISORY_BUDGET_MS = 7_000;
 
 // The hard gates' share of this hook (see createHardGateBudget). The timeout
 // mirrors this hook's entry in .codex/hooks.json and the per-call cap mirrors
@@ -1384,7 +1386,7 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
     return denied(coderabbitFindingsDenial("CODEX PRODUCTION GATE", request.selector, coderabbitOpen));
   }
   if (!coderabbitReview || coderabbitReview.status === "unreadable") {
-    return denied(coderabbitRequirementUnreadableDenial("CODEX PRODUCTION GATE", request.selector));
+    return denied(coderabbitRequirementUnreadableDenial("CODEX PRODUCTION GATE", request.selector, coderabbitReview?.why));
   }
   if (coderabbitReview.status === "missing") {
     // Mason's "skip coderabbit #<this PR>" in THIS session waives only the missing

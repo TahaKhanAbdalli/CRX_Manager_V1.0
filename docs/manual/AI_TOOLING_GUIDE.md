@@ -145,7 +145,8 @@ schema registry refresh, the daily landing summary workflow.
 1. A pull request, opened as a draft, marked ready once its head is final.
 2. Every required check green on that head.
 3. CodeRabbit and Codex App comments fixed or answered, each thread replied to and resolved. A
-   money PR also needs a clean CodeRabbit review of its current head.
+   money PR also needs a clean CodeRabbit review of its current head; narrow fixes for a review
+   whose findings were all Minor or Trivial keep that review (Mason, 2026-10-26).
 4. A fresh Sol review of the exact head, run last, unless the PR is Sol-exempt.
 5. A migration, if any, applied live before the merge, through the gate.
 6. Merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`.

@@ -54,8 +54,9 @@
 > arrived, and never post `@coderabbitai review`. Exception (Mason, 2026-10-21): a PR that touches money, invoices,
 > payments, inventory, or costs in any way, or one Mason asks to have reviewed, needs a clean CodeRabbit review of its
 > current head plus a clean Sol, and the agent posts `@coderabbitai full review` once for its frozen, green head (one
-> retry after a stated wait; any fix commit moves the head and needs a new request; drop `docs(` from the title before
-> marking it ready). Both merge gates and the migration landing gate enforce it (`evaluateCodeRabbitRequirement()` in
+> retry after a stated wait; any fix commit moves the head and needs a new request, except narrow fixes for a review
+> whose findings were all Minor or Trivial, which `readMinorFollowUp()` checks (Mason, 2026-10-26); drop `docs(` from
+> the title before marking it ready). Both merge gates and the migration landing gate enforce it (`evaluateCodeRabbitRequirement()` in
 > `.claude/hooks/codex-bot-review-lib.mjs`): a PR that changes a migration, an Edge Function, a money-named `src/` file,
 > or carries the `needs-coderabbit` label needs CodeRabbit's own "Review completed" commit status on the head, or on an
 > earlier commit followed only by merges whose PR-own changes (three-dot compare, per-file status, blob and rename source) are identical at both
@@ -118,7 +119,9 @@
 > re-read after every other read; no unanswered Codex App thread on this commit (`evaluateCodexBotReview`) and no unanswered
 > CodeRabbit thread (`coderabbitThreadCount`); CodeRabbit's newest status on this commit is not a PENDING it set less
 > than an hour ago (an older one is a dead review); and a money or Mason-named PR's completed CodeRabbit review
-> (`readCodeRabbitRequirement`) or a live `skip coderabbit` waiver for that PR from any session. Every unreadable answer
+> (`readCodeRabbitRequirement`, including a minor-only review covering narrow fixes, whose fixes the Sol prompt then
+> shows) or a live `skip coderabbit` waiver for that PR from any session; before CodeRabbit's first review of the PR,
+> Sol may run (Mason, 2026-10-26). Every unreadable answer
 > refuses. It is a cost control: the merge gates check the same things again, unchanged, and a refusal leaves any
 > existing proof in place. `--carry-forward` does not run it.
 >
