@@ -117,8 +117,9 @@ message), `owner-approval-prompt` (records his `I approve` for a parked migratio
 **5. Session housekeeping.** At start: `session-staleness` (schema snapshot behind migrations,
 missing backup), `worktree-awareness` (other sessions working), `worktree-cleanup` (removes finished
 worktrees), `session-snapshot`, `session-heartbeat`, `session-context-reminder`. At the end of a turn:
-`stop-wrap` (uncommitted files, unapplied migrations, undeployed functions). The project's
-`stop-verify` was unwired on 2026-10-27; Mason's global verify-before-stop hook covers Claude. After a tool call:
+`stop-wrap` (uncommitted files, unapplied migrations, undeployed functions). Codex also runs
+`stop-verify` (refuses "done" until the change was actually run and observed); Claude's wiring of
+it was dropped on 2026-10-27 because Mason's global verify-before-stop hook does the same job. After a tool call:
 `posttool-router`, `eslint-autofix`, `registry-freshness`, `applied-snapshot-invalidate`.
 
 Files ending in `-lib.mjs` hold the shared logic; files ending in `.test.mjs` are their tests and run
