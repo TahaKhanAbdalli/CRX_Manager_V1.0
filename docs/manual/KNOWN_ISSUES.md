@@ -1,6 +1,8 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-27 (America/Chicago)** for KI-12 and KI-81 (live function bodies and quote rows read
+**Shipment reconciliation: 2026-10-27 (America/Chicago).** Compared all 68 PRs in the October 25–27 UTC merge query with `main` at `fe258c2fe`, current source and the live read-only migration ledger. KI-15 is closed; KI-30's completed category/vendor work is removed from its open scope; KI-47/KI-52/KI-72 are narrowed. The [audit record](../audits/2026-10-27-shipped-work-reconciliation.md) lists every PR and the evidence limits. All other open and accepted risks remain; this is not a fresh full security audit.
+
+**Last verified: 2026-10-27 (America/Chicago)** for the shipment reconciliation above and these earlier targeted checks for KI-12 and KI-81 (live function bodies and quote rows read
 2026-10-25, re-read 2026-10-26 13:33 UTC and 2026-10-27 05:06 UTC, 12:06 AM Central: the six bodies migration
 `20261027040000` pins are unchanged, no quote is sent or revised, and no migration since touches the functions these
 entries name; at 7:37 AM Central that migration applied live, ledger `20261027123725`, 1068 rows, and a read-only
@@ -48,9 +50,9 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 
 | Status | Count |
 |---|---|
-| Open or partly open entries (KI-01 to KI-52, KI-72 to KI-78 and KI-81 to KI-84; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 52 |
+| Open or partly open entries (KI-15 closed; several entries bundle related items and UNVERIFIED sub-items) | 51 |
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
-| Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
+| Closed as FIXED, with proof (bottom of file and archive) | 7 |
 
 Highest-priority open items, in order: KI-01 (an applicator keeps field access after the assignment ends,
 part C; the functions and tables were fixed live 2026-10-26 and 2026-10-27 UTC, parts A and B), KI-02 (cost and
@@ -223,11 +225,6 @@ can make old splits refuse to save (LOW-MED).
 `20260914100500` lines ~2587 and 2820 stamp invoice date + 30 days regardless of the customer's terms. The post
 path was not traced.
 
-### KI-15 — Reports > Profitability reads stored order profit, not the server report
-**MED · OPEN · money/UI · unassigned**
-`src/pages/Reports.tsx:299-375` computes margins in the browser from `orders.total_profit` / `order_items.profit`;
-the server report `get_profitability_report` (cost at time of sale) has no caller. Numbers can differ.
-
 ### KI-16 — Sub-cent and rounding gaps
 **MED/LOW · mixed · money · unassigned**
 - `baseUnitOfRate` (`src/lib/chemCalculator.ts:559`) drops everything after `/`, so "oz/cwt" reads as "oz".
@@ -341,8 +338,7 @@ invoice, five empty deliveries). Counts are older records' claims, not re-measur
 
 ### KI-30 — Customer/vendor/product data hygiene waiting on Mason
 **LOW-MED · UNVERIFIED · database/process · Mason / unassigned**
-Vendor-name merges, a 19-product category remap and ~20 junk-row deletes need his decisions (each changes history
-or deletes real rows). About 105 of 204 stored EPA registration numbers are wrong (MED, compliance data; the
+**Vendor-name merges and category remap are closed** (Mason 2026-10-25, recorded in PR #1100; To-Do 0.12/0.16). That read-only check found no duplicate vendor names and all 595 active products in the intended 11 categories. **Still open:** junk-row deletes and remaining live-data cleanup need Mason's decisions (they change history or delete real rows). About 105 of 204 stored EPA registration numbers are wrong (MED, compliance data; the
 `LabelDataQuality` screen exists, data entry is not done). CRM has no data entered; 146 of 150 customers lack a
 sales rep (older counts).
 
@@ -417,11 +413,9 @@ cross-check, which reads `src/types/index.ts`, cannot confirm those writes. Fix:
 
 ## Tooling, guards and CI (affect the agents and the build, not customers)
 
-### KI-45 — A helper agent's report can latch, or clear, the hold
+### KI-45 — Hold-latch helper-report edge cases
 **MED · OPEN · tooling-guards · unassigned**
-The hook that freezes outward actions when Mason says "stop" can mistake a helper's report containing that word
-for his own words (`.claude/hooks/prompt-source-lib.mjs`, text-shape rules only). The complete fix needs Claude
-Code to pass message origin.
+PR #1084 fixed the four recognized helper-report frames that were falsely latching the session. A helper report in another text shape can still be mistaken for Mason's words (`.claude/hooks/prompt-source-lib.mjs`, text-shape rules only); message-origin support is still needed for a complete fix. Further narrowing is in open PR #1152, not counted as shipped here.
 
 ### KI-46 — A review proof can be rewritten through its Windows 8.3 short name
 **MED · OPEN · tooling-guards/security · Mason (owner action)**
@@ -436,7 +430,6 @@ authenticate proof contents. CodeRabbit's backstop was removed 2026-10-19, which
   `Remove-Item -Recurse`, `git clean --force -d`, `git branch -d -f` and `git commit -n`. A fix sits on branch
   `claude/autopilot-recursive-delete-alias-20260907` (18,131-command sweep) but must be rebuilt on current `main`.
   MED.
-- A `[E2E]` marker exempts a whole SQL batch (`.claude/hooks/live-testdata-lib.mjs:731`). MED.
 - Bare `git clean` with a config override is not covered (`bash-safety-lib.mjs:280`). LOW.
 - `review-proof-guard`: the `GIT_EXTERNAL_DIFF` separate-export form and `gh` download over a protected path are
   unblocked (item 1 fixed in PR #530). Capped by Mason's 2026-09-01 decision. LOW.
@@ -484,10 +477,10 @@ then. Byte/candidate scan budgets (3 GiB, 100,000) need re-measuring. Maintenanc
 ### KI-52 — Tests and tooling hygiene
 **LOW · OPEN · tooling-guards · unassigned**
 Page-render tests flake in the full suite (latest fix #1062; fixed case by case); `scripts/fleet-status.mjs` lacks
-the fsmonitor override; `live-testdata-lib.mjs` read-side false positives (UNVERIFIED);
+the fsmonitor override; `live-testdata-lib.mjs` read-side false positives were addressed by PR #1143 (merged 2026-10-27), which keeps executable DML guarded; new instances still need individual reproduction;
 `scripts/land-pr.mjs:167` prints a `gh pr merge --squash --auto` command the merge guard refuses;
 `src/lib/rlsContracts.test.ts:148-160` comment still says "NOT APPLIED" for `20260813080000`; the Phase 3
-return-policy concurrency prover can't reach its chain (UNVERIFIED); no static guard catches invoice-type leaks or
+return-policy concurrency prover can't reach its chain (UNVERIFIED; PR #1110 repaired three different provers and does not establish this one's result); no static guard catches invoice-type leaks or
 direct-URL edit-lock bypasses (MED, UI); extra live-sweep predicates (concurrency hotspot, more money identities)
 not written; Gauntlet V2 Phase 2 unfinished (no staging database, E2E switched off, 44 page-render skips,
 counts not re-measured); `docs/reference/gotchas.md` has no "gross margin means markup" note.
@@ -549,8 +542,8 @@ pipeline: fix merged (PR #885, `20261006200000`, applied live per the old record
 live-sweep predicate (`quote-versions-rpc-owned`) was declined at its prompt, and the live smoke chains need
 Mason's REAL-DATA-OK.
 
-Purchase order copy (To-Do 0.15, migration `20261027070000`, row 995): the PDF download works once merged,
-but **Email PO Copy (to mason@croprxsolutions.com) stays off until Mason approves deploying the `send-email`
+Purchase order copy (To-Do 0.15, PR #1114 merged 2026-10-27): the PDF download is built. Migration `20261027070000` is absent from the live ledger read 2026-10-27; PR #1147's email snapshot/retry fixes merged 2026-10-27; the service still needs deployment. The
+**Email PO Copy (to mason@croprxsolutions.com) stays off until Mason approves deploying the `send-email`
 edge function** (the live function answers "Unknown email_type: purchase_order").
 
 ### KI-73 — More field-access holes (extends KI-01; To-Do row 11.4, plus row 11.7)
@@ -682,8 +675,7 @@ positives). Live-database facts need a read-only query by someone with access.
 
 ## Closed in this rewrite (each with proof; full original text is in the archive)
 
-These were open-looking entries in the old file and are confirmed fixed on `main`. "Applied live" is the older
-record's claim; this pass had no database access.
+Entries 1–6 were closed during the original rewrite; their older proof records are retained. Entry 7 was closed by the 2026-10-27 reconciliation. That reconciliation checked the live migration ledger, but did not re-run the older behavioral proofs.
 
 1. **Staff photo buckets were publicly readable** — `20261015230000_staff_photo_storage_access.sql` and
    `20261016030000_staff_photo_buckets_private.sql`, PRs #929 and #947 (buckets read `public = false` live
@@ -697,6 +689,8 @@ record's claim; this pass had no database access.
    (e.g. `20260914100500:2263`) set the rounded total.
 6. **`review-proof-guard` node-preload / `-pe` eval bypass (item 1 of the executor-bypass entry)** — PR #530
    (merge `26e8a40d9`); items 2–3 stay open in KI-47.
+
+7. **KI-15, stored-profit Reports tabs** — PR #1134 merged 2026-10-27 (`cef4e3015`); `Reports.tsx` now calls `get_profitability_report` for customer, product and month groups. The PR records real-data local-app proof and paging/failure tests. Full report approval remains To-Do 10.2. Original issue and closure evidence appended to the archive.
 
 Also closed inside the old file's own headings before this rewrite (no new proof needed, see archive): the
 Deliveries list scheduled-delivery gap (PR #964), smoke chains rotted by the PO cost lock, the regular invoice
