@@ -43,6 +43,45 @@ describe('ProductSellPriceHistory', () => {
     expect(within(items[1]).queryByText('$10.00')).not.toHaveClass('line-through');
   });
 
+  it('draws the prices in effect before the first change of a product with older history', async () => {
+    mocks.fetchSellPriceHistory.mockResolvedValue([
+      { ...base, id: 'r', changed_at: '2026-10-20T15:00:00Z', change_source: 'product_page', old_tier1_price: 10, new_tier1_price: 11 },
+    ]);
+    render(<ProductSellPriceHistory productId="p1" />);
+    const chart = await screen.findByRole('img', { name: /Sell prices by tier/ });
+    // Tier 1's line starts at the left edge on its old price, then steps up at the change.
+    const tier1 = chart.querySelector('path[stroke="#15803d"]');
+    expect(tier1?.getAttribute('d')).toMatch(/^M 5 /);
+    expect(screen.getByText(/^Before, then Oct 20, 2026$/)).toBeInTheDocument();
+    // $10 (before) is the bottom of the range, $11 the top.
+    expect(screen.getByText(/\$9\.50 – \$11\.00/)).toBeInTheDocument();
+  });
+
+  it('shows the prices of a product whose only logged change was to cost', async () => {
+    mocks.fetchSellPriceHistory.mockResolvedValue([
+      { ...base, id: 'c', changed_at: '2026-10-20T15:00:00Z', change_source: 'product_page', old_tier1_price: 10, new_tier1_price: 10 },
+    ]);
+    render(<ProductSellPriceHistory productId="p1" />);
+    expect(await screen.findByRole('img', { name: /Sell prices by tier/ })).toBeInTheDocument();
+    expect(screen.queryByText('No price changes recorded since this product was created.')).not.toBeInTheDocument();
+  });
+
+  it('never shows one product\'s history on another product\'s page', async () => {
+    let resolveB: (rows: unknown[]) => void = () => {};
+    mocks.fetchSellPriceHistory
+      .mockResolvedValueOnce([
+        { ...base, id: 'a', changed_at: '2026-10-20T15:00:00Z', change_source: 'product_page', change_reason: 'Product A change', old_tier1_price: 10, new_tier1_price: 11 },
+      ])
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; }));
+    const { rerender } = render(<ProductSellPriceHistory productId="a" />);
+    expect(await screen.findByText('Product A change')).toBeInTheDocument();
+    rerender(<ProductSellPriceHistory productId="b" />);
+    expect(screen.queryByText('Product A change')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading sell price history');
+    resolveB([]);
+    expect(await screen.findByText('No price changes recorded since this product was created.')).toBeInTheDocument();
+  });
+
   it('says a failed load could not be loaded, reports it, and retries', async () => {
     mocks.fetchSellPriceHistory.mockRejectedValueOnce(new Error('network'));
     mocks.fetchSellPriceHistory.mockResolvedValueOnce([]);

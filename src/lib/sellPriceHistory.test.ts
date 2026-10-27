@@ -16,6 +16,8 @@ describe('priceToCents', () => {
     expect(priceToCents(null)).toBeNull();
     expect(() => priceToCents(1.005)).toThrow(/whole cents/);
     expect(() => priceToCents('abc')).toThrow(/whole cents/);
+    // Beyond what an integer holds exactly: refused, never shown rounded.
+    expect(() => priceToCents('90071992547409.93')).toThrow(/too large/);
   });
 });
 

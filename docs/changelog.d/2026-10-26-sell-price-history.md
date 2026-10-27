@@ -13,11 +13,14 @@ the price history".
 - **Database** (`20261026140000_product_price_history_starting_snapshot.sql`):
   - A dated starting snapshot for each product with no history (578 of 604), recording its cost and
     tier prices on the day this applies, so "what was the price then?" has an answer. Products that
-    already have history start at their first change; a product added later starts at its first
-    logged change, and until then the card says no price changes were recorded since it was created.
+    already have history start at their first change, with the prices before it shown as "Before";
+    a product added later starts at its first logged change, and until then the card says no price
+    changes were recorded since it was created. Dates show in Central time.
     It adds about 578 rows and changes no existing row; a re-run adds nothing.
   - The snapshot row names no person, because no one made it. Every real change must still name who
-    made it, and the database enforces that.
+    made it, and the database enforces that. A snapshot row must also record no change (old equals
+    new on every value), so a real change can never pass as one.
+  - The six tier price columns in the history are now held to whole cents (all 33 live rows already were).
   - Deleting a product with history is now refused instead of silently erasing that history. The
     app has no product delete, and 602 of 604 products were already undeletable for other reasons.
 - **Not in this change:** history for per-acre price changes and a required reason on every change
@@ -25,6 +28,6 @@ the price history".
 - **Proof:**
   - `node scripts/smoke/prove-price-history-snapshot-real-schema.mjs` runs the migration on a
     disposable copy of the production schema. It covers the snapshot values, the refused re-run,
-    the unattributed-change and unknown-source refusals, the refused product delete, who can read
+    the unattributed-change, changed-snapshot, sub-cent and unknown-source refusals, the refused product delete, who can read
     history, and preflight drift, and it runs the live smoke chain once.
   - The live self-undoing chain `smoke-price-history-snapshot.sql` runs after the apply.

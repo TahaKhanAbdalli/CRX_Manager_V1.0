@@ -20,7 +20,10 @@
 --        the four live values).
 --      - changed_by is NULL on snapshot rows only: no person made this change, and naming one would
 --        misattribute it. The column was NOT NULL; it becomes nullable with a CHECK that only a
---        starting_snapshot row may leave it empty.
+--        starting_snapshot row may leave it empty. cost_history_starting_snapshot_unchanged makes a
+--        starting_snapshot row name no person and carry old = new on every value, so a real change
+--        can never be written as one. cost_history_tier_prices_whole_cents holds the six tier price
+--        columns (plain numeric) to whole cents; live 2026-10-26 every one of the 33 rows already is.
 --      - Re-runnable: a product that has any history row (a snapshot included) gets no new one.
 --   2. cost_history_product_id_fkey loses ON DELETE CASCADE (becomes NO ACTION): deleting a product
 --      with history is refused instead of silently erasing that history. The app has no product
@@ -52,11 +55,17 @@ BEGIN
   IF (SELECT is_nullable FROM information_schema.columns
        WHERE table_schema = 'public' AND table_name = 'cost_history' AND column_name = 'changed_by') IS DISTINCT FROM 'NO'
      OR EXISTS (SELECT 1 FROM pg_constraint
-                 WHERE conrelid = 'public.cost_history'::regclass AND conname = 'cost_history_changed_by_required') THEN
+                 WHERE conrelid = 'public.cost_history'::regclass
+                   AND conname IN ('cost_history_changed_by_required', 'cost_history_starting_snapshot_unchanged',
+                                   'cost_history_tier_prices_whole_cents')) THEN
     RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_PREFLIGHT: cost_history.changed_by is not the live NOT NULL column of 2026-10-26';
   END IF;
 END
 $preflight$;
+
+-- Lock products before cost_history (statement 2 needs both): a pricing save updates products and
+-- then writes cost_history, so taking them in that same order cannot deadlock with one.
+LOCK TABLE public.products IN SHARE ROW EXCLUSIVE MODE;
 
 -- 1. Room for snapshot rows.
 ALTER TABLE public.cost_history
@@ -67,7 +76,27 @@ ALTER TABLE public.cost_history
   ])),
   ALTER COLUMN changed_by DROP NOT NULL,
   ADD CONSTRAINT cost_history_changed_by_required
-    CHECK (changed_by IS NOT NULL OR change_source = 'starting_snapshot');
+    CHECK (changed_by IS NOT NULL OR change_source = 'starting_snapshot'),
+  -- A snapshot records no change and no person, so a real change can never pass as one.
+  ADD CONSTRAINT cost_history_starting_snapshot_unchanged
+    CHECK (change_source IS DISTINCT FROM 'starting_snapshot' OR (
+      changed_by IS NULL
+      AND old_cost IS NOT DISTINCT FROM new_cost
+      AND old_tier1_price IS NOT DISTINCT FROM new_tier1_price
+      AND old_tier2_price IS NOT DISTINCT FROM new_tier2_price
+      AND old_tier3_price IS NOT DISTINCT FROM new_tier3_price
+      AND old_tier1_margin IS NOT DISTINCT FROM new_tier1_margin
+      AND old_tier2_margin IS NOT DISTINCT FROM new_tier2_margin
+      AND old_tier3_margin IS NOT DISTINCT FROM new_tier3_margin
+      AND old_pricing_version IS NOT DISTINCT FROM new_pricing_version)),
+  -- The six tier prices are plain numeric; hold them to whole cents (live 2026-10-26: 0 of 33 rows are not).
+  ADD CONSTRAINT cost_history_tier_prices_whole_cents CHECK (
+    (old_tier1_price IS NULL OR old_tier1_price = round(old_tier1_price, 2))
+    AND (new_tier1_price IS NULL OR new_tier1_price = round(new_tier1_price, 2))
+    AND (old_tier2_price IS NULL OR old_tier2_price = round(old_tier2_price, 2))
+    AND (new_tier2_price IS NULL OR new_tier2_price = round(new_tier2_price, 2))
+    AND (old_tier3_price IS NULL OR old_tier3_price = round(old_tier3_price, 2))
+    AND (new_tier3_price IS NULL OR new_tier3_price = round(new_tier3_price, 2)));
 
 -- 2. Deleting a product keeps (refuses over) its history.
 ALTER TABLE public.cost_history
@@ -110,6 +139,10 @@ BEGIN
                      OR h.new_tier1_price IS DISTINCT FROM p.tier1_price
                      OR h.new_tier2_price IS DISTINCT FROM p.tier2_price
                      OR h.new_tier3_price IS DISTINCT FROM p.tier3_price
+                     OR h.new_tier1_margin IS DISTINCT FROM p.tier1_margin
+                     OR h.new_tier2_margin IS DISTINCT FROM p.tier2_margin
+                     OR h.new_tier3_margin IS DISTINCT FROM p.tier3_margin
+                     OR h.new_pricing_version IS DISTINCT FROM p.pricing_version
                      OR h.changed_by IS NOT NULL)) THEN
     RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a snapshot does not match its product';
   END IF;
@@ -119,6 +152,14 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM public.cost_history WHERE changed_by IS NULL AND change_source <> 'starting_snapshot') THEN
     RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a real change has no changed_by';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conrelid = 'public.cost_history'::regclass
+                    AND conname = 'cost_history_starting_snapshot_unchanged' AND convalidated)
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid = 'public.cost_history'::regclass
+                       AND conname = 'cost_history_tier_prices_whole_cents' AND convalidated) THEN
+    RAISE EXCEPTION 'PRICE_HISTORY_SNAPSHOT_VERIFY: a new cost_history CHECK is missing';
   END IF;
   -- RLS and grants are untouched: admins only read cost_history; no browser role writes it.
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.cost_history'::regclass)

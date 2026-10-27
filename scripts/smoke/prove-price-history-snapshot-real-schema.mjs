@@ -255,6 +255,9 @@ const SCENARIOS = [
   ] },
   { name: '2. rules', steps: [
     ['a real change with no changed_by is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source) VALUES ('${PB}', NULL, 'product_page'); v := 'inserted';` }, /^23502\|.*changed_by/, /^23514\|.*cost_history_changed_by_required/],
+    ['a snapshot that records a price change is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source, old_tier1_price, new_tier1_price) VALUES ('${PB}', NULL, 'starting_snapshot', 10, 11); v := 'inserted';` }, /^23502\|.*changed_by/, /^23514\|.*cost_history_starting_snapshot_unchanged/],
+    ['a snapshot that names a person is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source) VALUES ('${PB}', '${U.ADMIN}', 'starting_snapshot'); v := 'inserted';` }, /^23514\|.*cost_history_change_source_check/, /^23514\|.*cost_history_starting_snapshot_unchanged/],
+    ['a tier price that is not whole cents is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source, old_tier1_price, new_tier1_price) VALUES ('${PB}', '${U.ADMIN}', 'product_page', 10, 10.005); v := 'inserted';` }, 'ok|inserted', /^23514\|.*cost_history_tier_prices_whole_cents/],
     ['an unknown source is refused', 'bare', { stmt: `INSERT INTO public.cost_history (product_id, changed_by, change_source) VALUES ('${PB}', '${U.ADMIN}', 'made_up'); v := 'inserted';` }, /^23514\|.*cost_history_change_source_check/, 'same'],
     ['deleting a product with history', 'bare', { stmt: `DELETE FROM public.products WHERE id = '${PA}'; v := (SELECT count(*) FROM public.cost_history WHERE product_id = '${PA}')::text;` }, 'ok|0', /^23503\|.*cost_history_product_id_fkey/],
   ] },

@@ -37,8 +37,11 @@ export async function fetchSellPriceHistory(productId: string): Promise<SellPric
 export function priceToCents(value: number | string | null): number | null {
   if (value === null) return null;
   const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(String(value).trim());
-  if (!match) throw new Error(`price history holds a price that is not whole cents: ${value}`);
+  // The messages never carry the price itself: errors reach Sentry, and prices are admin-only.
+  if (!match) throw new Error('price history holds a price that is not whole cents');
   const cents = Number(match[2]) * 100 + Number((match[3] ?? '').padEnd(2, '0'));
+  // Past 2^53 an integer is no longer exact; refuse rather than show a rounded price.
+  if (!Number.isSafeInteger(cents)) throw new Error('price history holds a price too large to show exactly');
   return match[1] === '-' ? -cents : cents;
 }
 
@@ -58,13 +61,13 @@ export interface SellPricePoint {
 }
 
 /**
- * The rows that set or change a sell price, oldest first: the starting snapshot and every row whose
- * tier prices differ from before. Cost-only changes (tier prices unchanged) are left out: this is
- * the sell-price history, and cost has its own card.
+ * The rows that set or change a sell price, oldest first: the earliest row (a starting snapshot or
+ * the first logged change), then every row whose tier prices differ from before. Later cost-only
+ * changes (tier prices unchanged) are left out: this is the sell-price history, and cost has its own card.
  */
 export function sellPricePoints(rows: SellPriceHistoryRow[]): SellPricePoint[] {
   const points: SellPricePoint[] = [];
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const cents = {
       tier1: priceToCents(row.new_tier1_price),
       tier2: priceToCents(row.new_tier2_price),
@@ -77,7 +80,8 @@ export function sellPricePoints(rows: SellPriceHistoryRow[]): SellPricePoint[] {
     };
     const isStartingPoint = row.change_source === 'starting_snapshot';
     const changed = TIERS.some((tier) => cents[tier] !== previousCents[tier]);
-    if (!isStartingPoint && !changed) continue;
+    // The earliest row always counts, even a cost-only one: it is where the record starts.
+    if (index > 0 && !isStartingPoint && !changed) continue;
     points.push({
       id: row.id,
       at: row.changed_at,

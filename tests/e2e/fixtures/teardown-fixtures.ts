@@ -73,18 +73,38 @@ async function deleteByPrefix(
   );
 
   const text = await resp.text();
-  // A refused delete removes nothing; say so instead of reporting 0 rows. Products whose price was
-  // ever changed are refused on purpose since 20261026140000: their price history is kept.
-  if (!resp.ok) {
-    console.warn(`  ! ${table}: delete refused (${resp.status}): ${text.slice(0, 200)}`);
-    return 0;
-  }
+  // Products whose price was ever changed are refused on purpose since 20261026140000 (a foreign-key
+  // refusal, 409): their price history is kept. One refused row rolls back the whole batch, so fall
+  // back to one row at a time and keep only the refused ones. Any other failure is real.
+  if (resp.status === 409) return deleteOneByOne(token, table, nameCol, prefix);
+  if (!resp.ok) throw new Error(`${table}: cleanup delete failed (${resp.status}): ${text.slice(0, 200)}`);
   try {
     const rows = JSON.parse(text);
     return Array.isArray(rows) ? rows.length : 0;
   } catch {
     return 0;
   }
+}
+
+/** deleteByPrefix's fallback after a refused batch: each matching row on its own; refused rows stay. */
+async function deleteOneByOne(token: string, table: string, nameCol: string, prefix: string): Promise<number> {
+  const headers = { apikey: ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const list = await fetch(
+    `${SUPABASE_URL}/rest/v1/${table}?select=id&${nameCol}=like.${encodeURIComponent(prefix + '*')}`,
+    { headers },
+  );
+  if (!list.ok) throw new Error(`${table}: listing rows to clean up failed (${list.status})`);
+  const ids = ((await list.json()) as { id: string }[]).map((r) => r.id);
+  let deleted = 0;
+  let kept = 0;
+  for (const id of ids) {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers });
+    if (resp.status === 409) { kept += 1; continue; }
+    if (!resp.ok) throw new Error(`${table}: cleanup delete of ${id} failed (${resp.status})`);
+    deleted += 1;
+  }
+  if (kept > 0) console.warn(`  ! ${table}: kept ${kept} row(s) whose price history refuses the delete`);
+  return deleted;
 }
 
 /**

@@ -3,6 +3,7 @@ import Card, { CardHeader } from '../ui/Card';
 import { LoadFailedState } from '../ui/EmptyState';
 import { formatCents } from '../../lib/money';
 import { Sentry } from '../../lib/sentry';
+import { sanitizeError } from '../../lib/errorSanitizer';
 import {
   sourceLabel,
   TIERS,
@@ -23,14 +24,19 @@ const TOP = 10;
 const BOTTOM = 90;
 
 function formatDay(at: string): string {
-  return new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  // Central time, the business's day, whatever the viewer's browser is set to.
+  return new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 }
 
+// Each settled state names the product it belongs to, so another product's history never shows.
 type LoadState =
   | { status: 'loading' }
-  | { status: 'failed' }
+  | { status: 'failed'; productId: string }
   // loadedAt ends the time axis: the last price is drawn as still in effect on that day.
-  | { status: 'loaded'; points: SellPricePoint[]; loadedAt: string };
+  | { status: 'loaded'; productId: string; points: SellPricePoint[]; loadedAt: string };
+
+// Width of the "before" band, in chart units: the prices before the first change, which have no date.
+const BEFORE_BAND = 8;
 
 /**
  * Sell-price history (To-Do 0.4): each tier price over time on a real date axis, and every change
@@ -38,7 +44,11 @@ type LoadState =
  * only and cost_history is admin-only in the database.
  */
 export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: { productId: string; reloadToken?: number }) {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [loaded, setState] = useState<LoadState>({ status: 'loading' });
+  const state = useMemo<LoadState>(
+    () => (loaded.status !== 'loading' && loaded.productId !== productId ? { status: 'loading' } : loaded),
+    [loaded, productId],
+  );
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
@@ -47,14 +57,14 @@ export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: 
     setState({ status: 'loading' });
     fetchSellPriceHistory(productId)
       .then((rows) => {
-        if (!cancelled) setState({ status: 'loaded', points: sellPricePoints(rows), loadedAt: new Date().toISOString() });
+        if (!cancelled) setState({ status: 'loaded', productId, points: sellPricePoints(rows), loadedAt: new Date().toISOString() });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        Sentry.captureException(error instanceof Error ? error : new Error(sanitizeError(error)), {
           extra: { context: 'sell_price_history' },
         });
-        setState({ status: 'failed' });
+        setState({ status: 'failed', productId });
       });
     return () => { cancelled = true; };
   }, [productId, reloadToken, attempt]);
@@ -62,20 +72,33 @@ export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: 
   const chart = useMemo(() => {
     if (state.status !== 'loaded' || state.points.length === 0) return null;
     const { points } = state;
-    const values = points.flatMap((p) => TIERS.map((t) => p.cents[t]).filter((c): c is number => c !== null));
+    // A product with older history starts at its first change, whose old prices were in effect
+    // before it on no recorded date: they get a "before" band at the left edge.
+    const before = points[0].isStartingPoint ? null : points[0].previousCents;
+    const hasBefore = before !== null && TIERS.some((t) => before[t] !== null);
+    const values = [
+      ...points.flatMap((p) => TIERS.map((t) => p.cents[t])),
+      ...(hasBefore ? TIERS.map((t) => before[t]) : []),
+    ].filter((c): c is number => c !== null);
     if (values.length === 0) return null;
+    const plotLeft = hasBefore ? LEFT + BEFORE_BAND : LEFT;
     const start = points[0].at;
     // The axis runs to the day it loaded, so the last price is drawn as still in effect.
     const last = points[points.length - 1].at;
     const end = Date.parse(state.loadedAt) > Date.parse(last) ? state.loadedAt : last;
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const x = (at: string) => LEFT + timeFraction(at, start, end) * (RIGHT - LEFT);
+    const x = (at: string) => plotLeft + timeFraction(at, start, end) * (RIGHT - plotLeft);
     const y = (cents: number) => (max === min ? 50 : BOTTOM - ((cents - min) / (max - min)) * (BOTTOM - TOP));
     // A step line per tier: flat until the next change, then a jump.
     const paths = TIERS.map((tier) => {
       const segments: string[] = [];
       let pen: { x: number; y: number } | null = null;
+      const startCents = hasBefore ? before[tier] : null;
+      if (startCents !== null) {
+        pen = { x: LEFT, y: y(startCents) };
+        segments.push(`M ${LEFT} ${pen.y}`);
+      }
       for (const point of points) {
         const cents = point.cents[tier];
         const px = x(point.at);
@@ -88,7 +111,7 @@ export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: 
       if (pen) segments.push(`L ${RIGHT} ${pen.y}`);
       return { tier, d: segments.join(' ') };
     });
-    return { paths, start, end, min, max, x, y };
+    return { paths, start, end, min, max, x, y, hasBefore };
   }, [state]);
 
   return (
@@ -124,8 +147,8 @@ export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: 
             }))}
           </svg>
           <div className="mt-1 flex justify-between text-xs text-secondary tabular-nums">
-            <span>{formatDay(chart.start)}</span>
-            <span>{formatCents(chart.min)} – {formatCents(chart.max)}</span>
+            <span>{chart.hasBefore ? `Before, then ${formatDay(chart.start)}` : formatDay(chart.start)}</span>
+            <span>Price range {formatCents(chart.min)} – {formatCents(chart.max)}</span>
             <span>{formatDay(chart.end)}</span>
           </div>
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-secondary">
@@ -157,11 +180,11 @@ export default function ProductSellPriceHistory({ productId, reloadToken = 0 }: 
                       <dt className="text-xs text-secondary">{TIER_LABELS[tier]}</dt>
                       <dd>
                         {moved && (
-                          <span className="mr-1 text-red-500 line-through">
+                          <span className="mr-1 text-red-700 line-through">
                             <span className="sr-only">was </span>{before === null ? '—' : formatCents(before)}
                           </span>
                         )}
-                        <span className={moved ? 'font-medium text-crx-green' : 'text-nav-dark'}>
+                        <span className={moved ? 'font-medium text-green-700' : 'text-nav-dark'}>
                           {moved && <span className="sr-only">now </span>}{after === null ? '—' : formatCents(after)}
                         </span>
                       </dd>
