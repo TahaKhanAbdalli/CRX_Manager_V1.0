@@ -3118,11 +3118,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   // argument is unchanged and now recorded in migration-history row 862: it
   // RETURNS trigger, so PostgreSQL refuses any direct call, and its
   // recomputation of the order header from the current lines is convergent.
-  // Pre-apply window only: 20261027050000 (price sheet warnings, To-Do 0.1) re-emits this
-  // trigger function, so it is discovered until that migration applies and the registry
-  // high-water moves past it. Prune this entry then.
-  write_product_pricing_history:
-    'trigger-only price-history writer (re-emitted by 20261027050000); RETURNS trigger, so no API role can call it, and it writes one cost_history row per committed pricing change',
+  // write_product_pricing_history was listed here for the same pre-apply window:
+  // 20261027050000 re-emitted it, applied live 2026-10-27 (migration-history row
+  // 993), and the registry high-water moved past it, so the entry went stale. It
+  // RETURNS trigger, so no API role can call it.
 };
 
 
