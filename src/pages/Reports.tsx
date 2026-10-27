@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback, useRef } from 'react';
+import { useEffect, useState , useCallback, useMemo, useRef } from 'react';
 import { Download, CheckCircle2, FileText, Sprout } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
@@ -13,7 +13,7 @@ import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
-import { formatExactUSD } from '../lib/money';
+import { formatExactUSD, formatUSD } from '../lib/money';
 import { parseDollarsToCentsSigned } from '../lib/parseCents';
 import LogbookReport from '../components/reports/LogbookReport';
 import ProductSearchPicker from '../components/products/ProductSearchPicker';
@@ -26,6 +26,13 @@ import { Sentry } from '../lib/sentry';
 import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { COMMISSION_COLUMNS, withAdminCosts } from '../lib/costFields';
+import {
+  DEFAULT_STALE_COST_AGE_DAYS,
+  STALE_COST_AGE_OPTIONS,
+  staleCostRows,
+  type StaleCostAgeDays,
+  type StaleCostRow,
+} from '../lib/costFreshness';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
@@ -37,18 +44,25 @@ import type { Database } from '../types/supabase';
 type Category = 'profitability' | 'logbook' | 'financial' | 'operational' | 'year_end';
 type ProfitTab = 'customer' | 'product' | 'commission' | 'revenue';
 type FinancialTab = 'pnl' | 'gross_sales' | 'customer_balance' | 'commission_balance';
-type OperationalTab = 'chemical_history' | 'inventory_cost' | 'posted_applications' | 'price_list';
+type OperationalTab = 'chemical_history' | 'inventory_cost' | 'stale_costs' | 'posted_applications' | 'price_list';
 
 // Cost and margin are admin-only (Mason, 2026-10-15). The server refuses these
 // reports to everyone else, so non-admins never see the tabs.
 const ADMIN_ONLY_FINANCIAL_TABS: ReadonlySet<FinancialTab> = new Set(['pnl', 'gross_sales', 'commission_balance']);
-const ADMIN_ONLY_OPERATIONAL_TABS: ReadonlySet<OperationalTab> = new Set(['inventory_cost']);
+const ADMIN_ONLY_OPERATIONAL_TABS: ReadonlySet<OperationalTab> = new Set(['inventory_cost', 'stale_costs']);
 // Profit by customer / product / month is profit; a rep keeps only their own commissions.
 const ADMIN_ONLY_PROFIT_TABS: ReadonlySet<ProfitTab> = new Set(['customer', 'product', 'revenue']);
 const NO_COMMISSIONS: CommissionRow[] = [];
 // A rep's own commission rows, without order_profit (profit is admin-only).
 // Price list columns; an admin's list adds current_cost through withAdminCosts (cost is admin-only).
 const PRICE_LIST_COLUMNS = 'id, product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, product_form, container_type, container_size, unit_size';
+// Stale costs (To-Do 0.7): the product's own columns; current_cost and cost_updated_date come
+// through withAdminCosts.
+const STALE_COST_PRODUCT_COLUMNS = 'id, product_name, sku, category, vendor';
+type StaleCostProduct = {
+  id: string; product_name: string; sku: string | null; category: string | null; vendor: string | null;
+  current_cost?: number | null; cost_updated_date?: string | null;
+};
 const REP_COMMISSION_COLUMNS = 'id, recipient, order_id, job_id, commission_amount, split_percentage, order_date, status, paid_date';
 
 // ─── Existing profitability interfaces (unchanged) ─────────────
@@ -259,6 +273,9 @@ export default function Reports() {
   const [chemProductId, setChemProductId] = useState('');
   const [chemProductName, setChemProductName] = useState('');
   const [inventoryCostData, setInventoryCostData] = useState<InventoryCostRow[]>([]);
+  const [staleCostProducts, setStaleCostProducts] = useState<StaleCostProduct[]>([]);
+  const [staleCostAge, setStaleCostAge] = useState<StaleCostAgeDays>(DEFAULT_STALE_COST_AGE_DAYS);
+  const staleCostData = useMemo(() => staleCostRows(staleCostProducts, staleCostAge), [staleCostProducts, staleCostAge]);
   useEffect(() => {
     if (isAdmin || !ADMIN_ONLY_PROFIT_TABS.has(profitTab)) return;
     setProfitTab('commission');
@@ -271,6 +288,7 @@ export default function Reports() {
     if (isAdmin || !ADMIN_ONLY_OPERATIONAL_TABS.has(operationalTab)) return;
     setOperationalTab('chemical_history');
     setInventoryCostData([]);
+    setStaleCostProducts([]);
   }, [isAdmin, operationalTab]);
   const [priceListData, setPriceListData] = useState<Record<string, unknown>[]>([]);
   const [priceListError, setPriceListError] = useState(false);
@@ -625,6 +643,43 @@ export default function Reports() {
     reportLoaded('operational:inventory_cost');
   }, [toast, reportLoaded, markReportFailed]);
 
+  // Every active product with its cost and "as of" date (admin-only, through get_admin_cost_fields).
+  // A failed read clears the list and marks the report failed, so a partial list never shows.
+  const fetchStaleCosts = useCallback(async () => {
+    const seq = reportLoadSeq.current;
+    const fail = () => {
+      setStaleCostProducts([]);
+      markReportFailed('operational:stale_costs');
+      toast('error', 'Failed to load stale costs.');
+    };
+    // pageWithList: a page answered with no list is a failure, not "no stale costs".
+    const { data, error } = await fetchAllRows<StaleCostProduct>((from, to) => pageWithList(supabase
+      .from('products')
+      .select<string, StaleCostProduct>(STALE_COST_PRODUCT_COLUMNS, { count: 'exact' })
+      .eq('is_active', true)
+      .order('product_name')
+      .order('id')
+      .range(from, to)));
+    if (seq !== reportLoadSeq.current) return;
+    if (error) {
+      Sentry.captureException(new Error(error.message), { extra: { context: 'stale_costs_load' } });
+      fail();
+      return;
+    }
+    let products: StaleCostProduct[];
+    try {
+      products = await withAdminCosts('products', data || [], isAdmin);
+    } catch (err) {
+      if (seq !== reportLoadSeq.current) return;
+      Sentry.captureException(err, { extra: { context: 'stale_costs_load' } });
+      fail();
+      return;
+    }
+    if (seq !== reportLoadSeq.current) return;
+    setStaleCostProducts(products);
+    reportLoaded('operational:stale_costs');
+  }, [toast, isAdmin, reportLoaded, markReportFailed]);
+
   // Reads every active product page by page (one request stops at the row cap).
   // A failed page clears the list and shows an error, so a partial price list
   // never appears, or exports, as if it were complete.
@@ -759,10 +814,11 @@ export default function Reports() {
     setLoading(true);
     if (operationalTab === 'chemical_history') await fetchChemHistory();
     if (operationalTab === 'inventory_cost' && isAdmin) await fetchInventoryCost();
+    if (operationalTab === 'stale_costs' && isAdmin) await fetchStaleCosts();
     if (operationalTab === 'price_list') await fetchPriceList();
     if (operationalTab === 'posted_applications') await fetchPostedApplications();
     if (seq === reportLoadSeq.current) setLoading(false);
-  }, [operationalTab, isAdmin, fetchChemHistory, fetchInventoryCost, fetchPriceList, fetchPostedApplications]);
+  }, [operationalTab, isAdmin, fetchChemHistory, fetchInventoryCost, fetchStaleCosts, fetchPriceList, fetchPostedApplications]);
 
   // ─── Fetch on tab/date change ───────────────────────────────
   useEffect(() => {
@@ -1174,6 +1230,20 @@ export default function Reports() {
         { key: 'total_cost_value', header: 'Total Value', format: fmtCSV },
         { key: 'below_reorder', header: 'Below Reorder', format: (v) => v ? 'Yes' : 'No' },
       ], 'inventory_cost');
+    } else if (operationalTab === 'stale_costs') {
+      if (staleCostData.length === 0) {
+        toast('info', 'No stale costs to export.');
+        return;
+      }
+      exportToCSV(staleCostData, [
+        { key: 'product_name', header: 'Product' },
+        { key: 'sku', header: 'SKU' },
+        { key: 'category', header: 'Category' },
+        { key: 'vendor', header: 'Vendor' },
+        { key: 'current_cost', header: 'Cost', format: (v) => (v == null ? '' : fmtCSV(v)) },
+        { key: 'cost_as_of', header: 'Cost As Of', format: (v) => (v == null ? '' : String(v)) },
+        { key: 'cost_age_days', header: 'Days Old', format: (v) => (v == null ? 'Unknown' : String(v)) },
+      ], `stale_costs_over_${staleCostAge}_days`);
     } else if (operationalTab === 'price_list') {
       if (!priceListExportReady) {
         toast('error', 'Price list export unavailable until the full list loads.');
@@ -1320,6 +1390,18 @@ export default function Reports() {
     { key: 'below_reorder', header: 'Status', render: (r) => r.below_reorder ? <Badge variant="error">Low Stock</Badge> : <Badge variant="success">OK</Badge> },
   ];
 
+  const staleCostCols: Column<StaleCostRow>[] = [
+    { key: 'product_name', header: 'Product', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.product_name}</span> },
+    { key: 'sku', header: 'SKU' },
+    { key: 'category', header: 'Category', sortable: true },
+    { key: 'vendor', header: 'Vendor', sortable: true },
+    // Cents shown: a cost that moved by cents must not look unchanged (this page's fmt rounds to dollars).
+    { key: 'current_cost', header: 'Cost', render: (r) => <span className="font-mono">{r.current_cost != null ? formatUSD(r.current_cost) : '-'}</span> },
+    // Not sortable: the list comes oldest first with undated costs on top, and a sort would put them last.
+    { key: 'cost_as_of', header: 'Cost As Of', render: (r) => (r.cost_as_of ? parseLocalDate(r.cost_as_of).toLocaleDateString() : <Badge variant="warning">Unknown</Badge>) },
+    { key: 'cost_age_days', header: 'Days Old', render: (r) => <span className="font-mono">{r.cost_age_days ?? '—'}</span> },
+  ];
+
   const priceListCols: Column<Record<string, unknown>>[] = [
     { key: 'product_name', header: 'Product', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.product_name as string}</span> },
     { key: 'sku', header: 'SKU' },
@@ -1389,6 +1471,7 @@ export default function Reports() {
 
   const operationalTabs = ([
     { key: 'inventory_cost', label: 'Inventory Cost' },
+    { key: 'stale_costs', label: 'Stale Costs' },
     { key: 'chemical_history', label: 'Chemical History' },
     { key: 'posted_applications', label: 'Posted Applications' },
     { key: 'price_list', label: 'Price List' },
@@ -1662,8 +1745,28 @@ export default function Reports() {
             </div>
           )}
 
+          {isAdmin && operationalTab === 'stale_costs' && !reportFailed && !loading && (
+            <div className="flex flex-wrap items-center gap-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+              <label className="flex items-center gap-2">
+                <span className="font-semibold">Cost not changed in over</span>
+                <select
+                  value={staleCostAge}
+                  onChange={(e) => setStaleCostAge(Number(e.target.value) as StaleCostAgeDays)}
+                  className="px-2 py-1 text-sm border border-amber-300 rounded-md bg-white"
+                >
+                  {STALE_COST_AGE_OPTIONS.map((days) => <option key={days} value={days}>{days} days</option>)}
+                </select>
+              </label>
+              <span>
+                <span className="font-semibold">Products:</span> {staleCostData.length} of {staleCostProducts.length} active
+                {' '}({staleCostData.filter((r) => r.cost_age_days === null).length} with no date)
+              </span>
+            </div>
+          )}
+
           {!reportFailed && !(operationalTab === 'price_list' && priceListError) && <Card padding={false}>
             <div className="p-5">
+              {isAdmin && operationalTab === 'stale_costs' && <DataTable data={staleCostData} columns={staleCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category', 'vendor']} emptyTitle="No stale costs" emptyDescription="Every active product's cost changed within the selected age." loading={loading} />}
               {isAdmin && operationalTab === 'inventory_cost' && <DataTable data={inventoryCostData as unknown as Record<string, unknown>[]} columns={inventoryCostCols as unknown as Column<Record<string, unknown>>[]} searchable searchPlaceholder="Search products..." searchKeys={['product_name', 'sku', 'category']} emptyTitle="No inventory data" loading={loading} />}
               {operationalTab === 'chemical_history' && <DataTable data={chemHistoryData as unknown as Record<string, unknown>[]} columns={chemHistoryCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No chemical history" emptyDescription="Select a product and date range" loading={loading} />}
               {operationalTab === 'posted_applications' && <DataTable data={postedAppsData} columns={postedAppsCols} searchable searchKeys={['customer_name', 'record_number']} emptyTitle="No posted applications" loading={loading} />}
