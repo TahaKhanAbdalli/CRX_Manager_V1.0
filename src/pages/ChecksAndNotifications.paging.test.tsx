@@ -55,7 +55,7 @@ vi.mock('../lib/db', async () => {
   return { ...actual, supabase: client, supabaseUntyped: client };
 });
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
-vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
+vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn(), withSenderNames: async <T,>(rows: T) => rows }));
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: H.profile, role: 'admin', deniedPages: [] }),
 }));

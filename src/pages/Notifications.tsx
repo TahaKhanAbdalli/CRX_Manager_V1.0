@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { sanitizeError, supabase, checkMutationResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { fetchAllRows } from '../lib/pagedRead';
+import { withSenderNames } from '../lib/activityLogger';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {
@@ -49,13 +50,14 @@ export default function Notifications() {
       .order('created_at', { ascending: false })
       .order('id')
       .range(from, to));
+    const rows = error ? [] : await withSenderNames((data || []) as NotificationType[]);
     if (seq !== loadSeq.current) return;
     if (error) {
       Sentry.captureException(error, { extra: { context: 'load_notifications' } });
       setNotifications([]);
       setLoadFailed(true);
     } else {
-      setNotifications((data || []) as NotificationType[]);
+      setNotifications(rows);
       setLoadFailed(false);
     }
     setLoading(false);
@@ -202,6 +204,7 @@ export default function Notifications() {
                     )}
                   </div>
                   <p className="text-xs text-secondary mt-0.5 line-clamp-2">{n.message}</p>
+                  {n.sender_name && <p className="text-xs text-secondary mt-0.5">From {n.sender_name}</p>}
                   <p className="text-xs text-gray-400 mt-1">
                     {new Date(n.created_at).toLocaleString()}
                   </p>
