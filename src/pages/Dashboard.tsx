@@ -313,16 +313,20 @@ export default function Dashboard() {
 
     // Low-stock and expiring-quote notifications now run via the U18 run_morning_notification_checks cron.
 
-    try {
-      const { data: reminderData, error: reminderErr } = await supabase.rpc('check_remainder_reminders');
-      if (reminderErr) throw reminderErr;
-      assertRpcResult(reminderData, 'check_remainder_reminders');
-    } catch (err) {
-      Sentry.captureException(err, { tags: { source: 'mutation', action: 'check_remainder_reminders' } });
-      supabase.rpc('log_failed_notification', {
-        p_notification_type: 'remainder_reminders',
-        p_error_message: err instanceof Error ? err.message : String(err),
-      }).then(({ error: logErr }) => { if (logErr) Sentry.captureException(logErr, { tags: { source: 'mutation', action: 'log_failed_notification' } }); });
+    // check_remainder_reminders is admin-only (INSUFFICIENT_ROLE for anyone else) and also runs
+    // nightly via the check-remainder-reminders cron, so only an admin's dashboard load triggers it.
+    if (role === 'admin') {
+      try {
+        const { data: reminderData, error: reminderErr } = await supabase.rpc('check_remainder_reminders');
+        if (reminderErr) throw reminderErr;
+        assertRpcResult(reminderData, 'check_remainder_reminders');
+      } catch (err) {
+        Sentry.captureException(err, { tags: { source: 'mutation', action: 'check_remainder_reminders' } });
+        supabase.rpc('log_failed_notification', {
+          p_notification_type: 'remainder_reminders',
+          p_error_message: err instanceof Error ? err.message : String(err),
+        }).then(({ error: logErr }) => { if (logErr) Sentry.captureException(logErr, { tags: { source: 'mutation', action: 'log_failed_notification' } }); });
+      }
     }
 
     try {
@@ -336,7 +340,7 @@ export default function Dashboard() {
         p_error_message: err instanceof Error ? err.message : String(err),
       }).then(({ error: logErr }) => { if (logErr) Sentry.captureException(logErr, { tags: { source: 'mutation', action: 'log_failed_notification' } }); });
     }
-  }, [toast]);
+  }, [role, toast]);
 
   useEffect(() => {
     fetchDashboard();
