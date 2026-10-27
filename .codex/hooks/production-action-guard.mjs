@@ -695,6 +695,30 @@ export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
   }
   return null;
 }
+// A conventional commit message (`git commit -m "docs(changelog): …"`) holds a
+// `(` that no shell runs: inside double quotes it is plain text in bash,
+// PowerShell and cmd.exe alike. So for the computed-text test below, a
+// double-quoted span is blanked when its body cannot expand in any of them (no
+// `$`, backtick, `%` or `!`). The segment is left untouched when anything could
+// make the quotes mean something else: a backslash or backtick (an escaped
+// quote) or a smart quote (PowerShell reads it as a quote, the others do not).
+// Single-quoted text is stepped over unchanged, so a `"` inside it never opens
+// a span (`Tee-Object '"' (Join-Path a b) '"'` keeps its subexpression visible).
+export function literalDoubleQuotedTextBlanked(segment) {
+  const text = String(segment || "");
+  if (/[\\`‘’‚‛“”„]/.test(text)) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const quote = text[i];
+    if (quote !== "'" && quote !== '"') { out += quote; continue; }
+    const close = text.indexOf(quote, i + 1);
+    if (close < 0) return text; // unbalanced: leave the whole segment as written
+    const span = text.slice(i, close + 1);
+    out += quote === '"' && !/[$%!]/.test(span) ? '""' : span;
+    i = close;
+  }
+  return out;
+}
 // Codex round 13 (HIGH): the computed-text refusal above is scoped to segments
 // whose VERB the mutation list knows, and the fail-closed rule to segments that
 // NAME a protected file. A destination split across variables and written by a
@@ -714,7 +738,7 @@ export function computedSegmentWithUnrecognizedCommand(command, workdir = "") {
   // The lone resolve-review-thread call (#973) holds `(` only inside its quoted
   // GraphQL text; ghApiIsResolveReviewThreadOnly has already proved every word
   // literal (no `$`, backtick or subexpression can match it), so it is not computed.
-  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(segment) && !ghApiIsResolveReviewThreadOnly(segment);
+  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(literalDoubleQuotedTextBlanked(segment)) && !ghApiIsResolveReviewThreadOnly(segment);
   const commandComputed = segments.some(computed);
   for (const segment of segments) {
     if (!computed(segment) && !(commandComputed && segmentHeadIsExecutor(segment))) continue;

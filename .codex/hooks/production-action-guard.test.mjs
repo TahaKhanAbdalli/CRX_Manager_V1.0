@@ -3678,6 +3678,27 @@ try {
     "a search run from inside the review state directory is still refused",
   );
 
+  // A `(` inside plain double-quoted text is not a subexpression: Codex's own
+  // `git commit -m "docs(changelog): …"` was refused on 2026-10-27. Anything that
+  // can expand inside the quotes, or a quote that only some shells honour, still counts.
+  for (const command of [
+    'git commit -m "docs(changelog): record the real Codex tool-path proof"',
+    `git commit -m "fix(guard): don't block (quoted) text"`,
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, false, `commit message allowed: ${command}`);
+  }
+  for (const command of [
+    'git commit -m "docs(x): $(Get-Content .codex/hooks/production-action-guard.mjs)"',
+    'git commit -m "docs(x): `whoami`"',
+    'Write-Output "a(b)" | Tee-Object -FilePath (Join-Path .codex hooks)',
+    `Write-Output '"' | Tee-Object '"' (Join-Path .codex/hooks production-action-guard.mjs) '"'`,
+    'Write-Output "x" | Tee-Object -FilePath "$d$f"',
+    "Write-Output \"x\" | Tee-Object -FilePath “(Join-Path .codex hooks)”",
+    'cmd /c "echo %PATH%(x)"',
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, true, `computed text still refused: ${command}`);
+  }
+
   // A refused harness change points at the path that exists: a Claude session and the reviewed PR.
   // The "reviewed maintenance workflow" it used to name was retired on 2026-09-05.
   for (const verdict of [

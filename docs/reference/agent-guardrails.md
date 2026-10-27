@@ -231,6 +231,13 @@
 > **Still refused:** a search of a PROTECTED file whose single-quoted pattern holds a `|` (use double quotes) or that is chained to
 > another command.
 >
+> **A `(` in a quoted commit message is text (2026-10-27).** Codex's `git commit -m "docs(changelog): …"` was refused because the
+> fail-closed computed-text rule treats any `(` as a subexpression and then read `changelog` as an unknown command. For that rule
+> only (`computedSegmentWithUnrecognizedCommand`), `literalDoubleQuotedTextBlanked` blanks a double-quoted span whose body holds no
+> `$`, backtick, `%` or `!`; single-quoted text is stepped over unchanged, and a segment with a backslash, a backtick, a smart quote or
+> an unbalanced quote is left as written. `"$(…)"`, `` "`…`" ``, `"%VAR%"`, smart-quoted subexpressions and every unquoted `(` are
+> still computed. The mutating-verb computed-text check is unchanged.
+>
 > **Repairing a guard file (2026-10-27).** Codex cannot change the protected harness or the enforcement surface by any route. Its
 > refusals used to point at a "reviewed maintenance workflow", whose script was retired unapplied on 2026-09-05. They now give the
 > supported path: hand the change to a Claude session, which edits the file on a feature branch and ships it through the reviewed PR
