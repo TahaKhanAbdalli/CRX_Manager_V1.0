@@ -3668,6 +3668,7 @@ try {
     "rg -n 'x' docs; node scripts/apply-migration-file.mjs x.sql",
     "rg --pre 'node scripts/apply-migration-file.mjs' x docs",
     "rg --p\\re='node scripts/apply-migration-file.mjs' x AGENTS.md",
+    "git grep -1O'node scripts/apply-migration-file.mjs' CRX -- AGENTS.md",
     "rg -n 'x' docs | node scripts/apply-migration-file.mjs x.sql",
     "rg -n 'x' docs > .codex/hooks/production-action-guard.mjs",
   ]) {

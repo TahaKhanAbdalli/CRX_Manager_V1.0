@@ -115,14 +115,17 @@ function headName(word) {
 // rg options that run another program, and its short-flag letter for one.
 function rgOptionRunsProgram(option) {
   if (/^--(?:pre|pre-glob|search-zip|hostname-bin)(?:=|$)/i.test(option)) return true;
-  return /^-[A-Za-z]+$/.test(option) && option.slice(1).includes("z");
+  // Any short bundle holding `z`, whatever precedes it (`-1z`, `-nz`); a `z`
+  // that is really an option's value is refused too, which only costs a fallback.
+  return /^-[^-]/.test(option) && option.includes("z");
 }
 
 // git accepts any unambiguous prefix of a long option, so `--op` is
 // `--open-files-in-pager`; `--text` alone is a different, harmless option.
 function gitGrepOptionRunsProgram(option) {
   const name = option.replace(/=.*$/, "");
-  if (/^-[A-Za-z]*O/.test(name) && !name.startsWith("--")) return true;
+  // `-O` anywhere in a short bundle, including after a context count (`-1O`).
+  if (/^-[^-]/.test(name) && option.includes("O")) return true;
   if (!name.startsWith("--")) return false;
   const bare = name.slice(2).toLowerCase();
   if (bare.length >= 2 && "open-files-in-pager".startsWith(bare)) return true;
