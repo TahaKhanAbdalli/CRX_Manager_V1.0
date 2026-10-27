@@ -52,6 +52,7 @@ ok(isHoldPhrase("I need the agent to stop the deploy"), "an order naming someone
 // Per-session hold files (2026-10-27): only a MISSING id shares hold.json.
 eq(path.basename(holdStatePath("p", undefined)), "hold.json", "no session id → hold.json");
 eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hold.json");
+eq(path.basename(holdStatePath("p", null)), "hold.json", "null session id → hold.json");
 eq(path.basename(holdStatePath("p", "abc-123")), "hold-abc-123.json", "a plain id names the file as-is");
 const hashedName = (id) => path.basename(holdStatePath("p", id));
 ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("../x")), "an unusual id is hashed");
