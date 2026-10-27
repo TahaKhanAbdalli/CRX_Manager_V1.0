@@ -74,9 +74,12 @@ export function isHoldPhrase(prompt) {
 // agent to stop the deploy" and a stop right after "." or "," still latch.
 const ADDRESS_WORDS = new Set(["please", "pls", "ok", "okay", "so", "just", "now", "and", "then", "but", "hey",
   "you", "we", "lets", "let's", "us", "i", "to", "all", "everyone", "everybody", "guys", "claude", "codex"]);
-// Before "to stop the …", these make it Mason's own want or an order to someone.
+// Before "to stop the …", these make it Mason's own want or an order to someone;
+// the reminder words cover "make sure / remember / don't forget to stop the deploy"
+// (Luna review, PR #1152).
 const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", "has", "had", "got", "gotta",
-  "going", "time", "ready", "like", "wish", "ask", "asked", "tell", "told", "me"]);
+  "going", "time", "ready", "like", "wish", "ask", "asked", "tell", "told", "me",
+  "sure", "remember", "forget", "try", "careful"]);
 // Anywhere earlier in the same clause, these make it an order or Mason's own
 // want ("I need the agent to stop the deploy"), so the stop latches (Luna
 // review, PR #1152). Filler such as "and" / "so" is deliberately absent:
