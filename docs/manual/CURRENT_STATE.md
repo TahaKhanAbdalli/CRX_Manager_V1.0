@@ -1,10 +1,13 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-27 5:05 AM Central (10:05 UTC) for the migration ledger only (read-only live check against
-project `rhyzpcqhnizqbxphqdkr` right after the PR #1138 apply): 1067 rows / 1060 names, `max(version)` `20261027093945` =
+**Last verified:** 2026-10-27 7:37 AM Central (12:37 UTC) for the migration ledger only (read-only live check against
+project `rhyzpcqhnizqbxphqdkr` right after the PR #1105 apply): 1068 rows, `max(version)` `20261027123725` =
+`20261027040000_quote_sent_price_lock` (row 992; PR #1105 merged as `f1503ba91`: a sent quote keeps the prices the
+customer saw, To-Do 1.2, 1.3 and 0.5), which is also the name high-water. Earlier read, 5:05 AM Central (10:05 UTC), right
+after the PR #1138 apply: 1067 rows / 1060 names, `max(version)` `20261027093945` =
 `20261027030000_customer_credit_exposure` (row 991, applied 09:39:45 UTC; PR #1138 merged as `b3da666ec`: a new read-only
 function that totals a customer's open invoices across every sales rep, for PR #1132's credit check; nothing calls it yet),
-which is also the name high-water. Earlier read, 2026-10-27 12:05 AM Central (05:05 UTC), after #1122 landed: 1066 rows / 1059 names,
+which was then also the name high-water. Earlier read, 2026-10-27 12:05 AM Central (05:05 UTC), after #1122 landed: 1066 rows / 1059 names,
 `max(version)` `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (row 989, PR #1122),
 which was then also the name high-water; row 991 was not yet applied.
 PR #1105 re-read the same ledger at 12:06 AM Central (05:06 UTC): unchanged, and `20261027040000` (row 992) is not applied.

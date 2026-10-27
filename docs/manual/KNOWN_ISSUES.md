@@ -3,7 +3,9 @@
 **Last verified: 2026-10-27 (America/Chicago)** for KI-12 and KI-81 (live function bodies and quote rows read
 2026-10-25, re-read 2026-10-26 13:33 UTC and 2026-10-27 05:06 UTC, 12:06 AM Central: the six bodies migration
 `20261027040000` pins are unchanged, no quote is sent or revised, and no migration since touches the functions these
-entries name); the migration ledger re-read by the PR #1138 session at 5:05 AM Central after its apply (1067 rows, newest
+entries name; at 7:37 AM Central that migration applied live, ledger `20261027123725`, 1068 rows, and a read-only
+read after the apply found the save, convert, draw-down and Schedule Job bodies calling its price check); the
+migration ledger re-read by the PR #1138 session at 5:05 AM Central after its apply (1067 rows, newest
 `20261027093945` = `20261027030000_customer_credit_exposure`, row 991) and at 12:05 AM Central (newest `20261027044721`,
 then `20261027020546` = part B, consistent with KI-01 and KI-73); 2026-10-26 for KI-01 and KI-73 (row 11.4 part B, checked 9:05 PM Central,
 PR #1103): after part B (`20261026050000`, ledger `20261027020546`) applied live, the `_can_see_field` body md5,
@@ -189,7 +191,7 @@ JobDetail, QuoteBuilder, BlendTicketDetail, PrepayWorkspacePanel, FinanceChargeP
 scanner for this is acknowledged as a weak tripwire.
 
 ### KI-12 — Quote "Convert to Order" can leave an accepted quote with no order
-**MED (latent) · CAUSE FIXED IN CODE 2026-10-25, NOT YET LIVE (To-Do 1.3) · money/inventory/UI · Mason to decide about one real accepted quote with no order (Q-2026-2059)**
+**MED (latent) · CAUSE FIXED, LIVE 2026-10-27 (To-Do 1.3; PR #1105 merged as `f1503ba91`) · money/inventory/UI · Mason to decide about one real accepted quote with no order (Q-2026-2059)**
 QuoteBuilder used to save the quote as Accepted (releasing its inventory holds) before creating the order, so a
 failed second step left an accepted quote with no order. It now calls `convert_quote_to_order` on the sent or
 revised quote, which marks it accepted in the same transaction as the order; a failure leaves the quote as it was
@@ -281,7 +283,7 @@ could slip past a close. No month is closed live (older record's claim), so it i
 
 ### KI-81 — Two invoice paths read a quote line's current price, not the price the customer was sent
 **MED · OPEN (found 2026-10-25, To-Do 1.2 follow-up) · money · unassigned**
-The sent-price lock (`20261027040000`) gates Convert, Partial Order and Schedule Job, which copy quote prices into
+The sent-price lock (`20261027040000`, live since 2026-10-27, ledger `20261027123725`) gates Convert, Partial Order and Schedule Job, which copy quote prices into
 orders and job lines. Two later paths read `quote_items.price_per_unit` live instead (read from live bodies
 2026-10-25): `create_invoice_from_blend_ticket` (through `set_blend_ticket_product_quote_price` /
 `_blend_quote_pick_valid_20261020`, or the first line of the job's quote section) and the field-application
