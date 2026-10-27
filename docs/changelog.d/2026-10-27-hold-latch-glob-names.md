@@ -1,3 +1,3 @@
 ## 2026-10-27 - Wildcard spellings of the hold file names are protected
 
-- From Luna round 28 on PR #1152: the review-proof guard's protected-name list also matches wildcard spellings of the hold files that end in `.json` (such as `hold*.json`), so they cannot be deleted that way. A general wildcard-aware check for every protected file is a separate follow-up.
+- From Luna rounds 28 and 29 on PR #1152: the review-proof guard's protected-name list also matches spellings of the hold files where a wildcard, bracket class or brace list follows `hold` and the name ends in `.json` (such as `hold*.json`, `hold[-.]*.json` or `hold{-a,-b}.json`). A glob that drops the `.json` ending, or hides the name another way, is not caught by name; a general wildcard-aware check for every protected file is a separate follow-up.
