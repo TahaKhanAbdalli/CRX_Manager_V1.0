@@ -140,8 +140,10 @@ function searchStageIsLiteral(words) {
     let i = 1;
     while (i < words.length && words[i].text !== "grep") {
       if (words[i].text === "--no-pager") i += 1;
-      // A spaced `-C 'dir'` could hand git `-c key=value` under cmd.exe.
-      else if (words[i].text === "-C" && i + 1 < words.length && words[i + 1].pieces.length <= 1) i += 2;
+      // A spaced `-C 'dir'` could hand git `-c key=value` under cmd.exe, and
+      // bash expands an unquoted `-C *` into file names that git reads as a
+      // different subcommand (`git -C -- push grep …`).
+      else if (words[i].text === "-C" && i + 1 < words.length && words[i + 1].pieces.length <= 1 && !words[i + 1].glob) i += 2;
       else return false;
     }
     if (i >= words.length) return false;

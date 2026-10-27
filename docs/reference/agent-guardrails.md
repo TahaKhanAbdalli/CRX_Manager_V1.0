@@ -225,7 +225,7 @@
 > expansion), each space-separated piece of single-quoted text checked as its own argument (cmd.exe splits it), every argument
 > also checked with its backslashes dropped (bash reads `--p\re` as `--pre`), any short bundle holding `rg`'s `z` or `git grep`'s
 > `O` refused wherever it sits (`git grep -1O<pager>` runs the pager), no `-C` directory
-> with spaces in it, no `$`/backtick/`%`/trailing backslash inside double quotes, no `|&<>^%"` inside single quotes (cmd.exe
+> with spaces or an unquoted wildcard in it (bash expands `git -C *` into file names, so it can become `git -C -- push grep`), no `$`/backtick/`%`/trailing backslash inside double quotes, no `|&<>^%"` inside single quotes (cmd.exe
 > does not treat `'` as a quote, and Windows PowerShell's legacy argument passing re-splits an embedded `"` into separate options),
 > no doubled quote (`''`/`""` is an escaped quote in PowerShell), no smart quotes, no unquoted wildcard for a native program, a bare program name (not `./tools/rg`),
 > and none of the options that start another program (`rg --pre`/`--pre-glob`/`-z`/`--search-zip`/`--hostname-bin`, `git grep -O`/

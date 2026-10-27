@@ -55,6 +55,10 @@ const notRecognised = [
   "rg -g 'x --pre calc y' docs",
   "rg -n 'a -uz b' docs",
   "git -C 'x -c core.fsmonitor=calc' grep -n y",
+  // bash expands `*` into file names: `git -C -- push grep --no-verify` is a push.
+  "git -C * grep --no-verify",
+  "git -C ?? grep -n x",
+  "git -C docs/[a-z]* grep -n x",
   "git grep -n 'a --open-files-in-pager=calc b'",
   "rg -n x '!P!'",
   'rg -n x "!P!"',
