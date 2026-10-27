@@ -69,7 +69,7 @@ const CONTAINS_MACHINE_TAG_RE = new RegExp(
 // ...or the trimmed prompt STARTS with one of those tag names (covers tags that
 // carry attributes, e.g. <task-notification source="...">).
 const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
-  "^<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")\\b",
+  "^<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")(?=[\\s>])",
   "i"
 );
 
@@ -390,10 +390,12 @@ const BLOCKQUOTE_LINE_RE = /^[ \t]{0,3}>.*$/gm;
 // Closed blocks anywhere in the prompt: an open tag through its matching close.
 // Non-greedy, so two envelopes in one prompt are two separate removals and what
 // Mason typed BETWEEN them survives.
+// The tag name must end at whitespace or ">" (not \b), so a look-alike such as
+// <ci-monitor-event-debug> is not an envelope (Luna review, PR #1152).
 function stripClosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(`<${tag}(?=[\\s>])[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
   }
   return out;
 }
@@ -404,7 +406,7 @@ function stripUnclosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    out = out.replace(new RegExp(`<${tag}(?=[\\s>])[^>]*>[\\s\\S]*$`, "i"), " ");
     // Any orphaned closing tag left behind.
     out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
   }
