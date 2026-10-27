@@ -26,6 +26,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
+import LastChargedPrices from '../components/quotes/LastChargedPrices';
 import { LoadFailedState } from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -5246,6 +5247,19 @@ export default function QuoteBuilder() {
         </div>
       </Card>
       </fieldset>
+
+      {/* To-Do 0.3: what this customer was charged before. Staff only; never in Customer View. */}
+      {!customerView && (isAdmin || profile?.role === 'sales_rep') && (
+        <LastChargedPrices
+          // A new customer starts a new card, so the last customer's prices never show for a moment.
+          key={customerId}
+          customerId={customerId}
+          lines={sections.flatMap((section) => section.items.map((item) => ({
+            productId: item.product_id,
+            productName: item.product?.product_name ?? 'Product',
+          })))}
+        />
+      )}
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />

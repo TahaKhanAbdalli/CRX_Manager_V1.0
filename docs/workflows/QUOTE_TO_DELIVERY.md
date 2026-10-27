@@ -76,6 +76,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - `is_planned` flag: when true, inventory holds reserve stock while the quote is `draft`, `sent` or `revised`. They are released when the quote is accepted (including by conversion), declined, expired, cancelled or closed, or when `is_planned` is switched off.
 - Commission splits stored as JSONB: `{ splits: [{ recipient, recipient_user_id, percentage }] }` — the immutable `recipient_user_id` (profile UUID), not the display name, routes the money (since `20260722174029`).
 - Always call `logActivity()` after send/accept/decline events.
+- **Last charged** (To-Do 0.3, `20261027060000`): the quote screen's "Last Charged" card shows admins and sales reps the last price charged to this customer for each product on the quote, with tier and date, from `get_last_charged_prices`. A charge is a posted, paid or overdue invoice line, or a priced confirmed or delivered order line not yet on such an invoice; quotes never count, and neither do invoices made from a spray job (they store each chemical's line total, not a per-unit price). Reference only: it never changes a quote price, and it is hidden in Customer View and absent from the PDF. Every new order and invoice line records the tier it was sold at (`price_tier_at_sale`); older lines show "Tier unknown".
 
 ### What can go wrong
 - Forgetting to create a `quote_versions` snapshot before sending
