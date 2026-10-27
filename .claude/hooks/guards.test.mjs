@@ -60,6 +60,9 @@ ok(hashedName(0) !== hashedName("0"), "the number 0 and the string \"0\" get dif
 ok(hashedName("ABC") !== hashedName("abc"), "ids differing only in case get different files on a case-insensitive disk");
 ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");
 ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
+ok(isHoldPhrase("You'd better stop pushing"), "a contracted person (you'd) still latches");
+ok(isHoldPhrase("we’re going to stop deploying"), "a curly-apostrophe contraction (we’re) still latches");
+ok(!isHoldPhrase("the hook should stop re-running checks"), "a hyphenated -ing verb is descriptive");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).
 eq(holdDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "warn", "edit source warns under hold");

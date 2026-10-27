@@ -87,8 +87,10 @@ const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our
 function isDescriptiveStop(text, start, end) {
   const clause = text.slice(0, start).split(/[.!?;:,\n—–]|\s-\s|--/).pop();
   const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);
-  const next = (/^[ \t]+([A-Za-z]+)/.exec(text.slice(end)) || [])[1]?.toLowerCase() || "";
-  if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w))) return false;
+  // "re-running" reads as one word; a contraction counts as its base word, so
+  // "You'd better stop pushing" is addressed (Luna review, PR #1152).
+  const next = (/^[ \t]+([A-Za-z]+(?:-[A-Za-z]+)*)/.exec(text.slice(end)) || [])[1]?.toLowerCase().replace(/-/g, "") || "";
+  if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w) || ACTOR_WORDS.has(w.replace(/'.*$/, "")))) return false;
   const [twoBack, oneBack] = before.slice(-2);
   if (next.length > 4 && next.endsWith("ing")) {
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
