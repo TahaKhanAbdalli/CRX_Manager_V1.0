@@ -13,10 +13,10 @@ import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 // checkout used to share one hold.json, so a misfire in one session froze all of
 // them (2026-10-23). The prompt hook writes, and the guard reads, only the file
 // named for its own session; hold.json is the fallback when no session_id
-// arrives. A string id made of lowercase [a-z0-9_-] (a real one is a lowercase
-// UUID) names the file as-is. Any other id (uppercase, which a case-insensitive
+// arrives. A string id of 1-128 lowercase [a-z0-9_-] characters (a real one is a
+// lowercase UUID) names hold-<id>.json as-is. Any other id (longer, uppercase, which a case-insensitive
 // Windows disk would fold onto a lowercase twin, another type, or other
-// characters) is hashed with its type rather than stripped, so it cannot leave
+// characters) is hashed with its type into hold.<hash>.json rather than stripped, so it cannot leave
 // the directory; the hashed name uses "." (never in a plain id), so two ids
 // cannot share a file short of a 128-bit hash collision (Luna review, PR #1152).
 export function holdStatePath(projectDir, sessionId) {

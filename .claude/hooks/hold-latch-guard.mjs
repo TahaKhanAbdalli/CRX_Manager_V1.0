@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // PreToolUse half of the hold latch: while a HOLD is latched in this session's
-// own file (holdStatePath: hold-<session>.json, or hold.json with no id) held:true,
+// own file (holdStatePath: hold-<session>.json, hold.<hash>.json for an id it
+// cannot use as-is, or hold.json with no id) held:true,
 // block OUTWARD tool calls (push, merge, PR publishing, migration apply, deploy,
 // live SQL writes) and WARN on local ones (source Write/Edit, commit). Reads,
 // tests/builds, and notes stay allowed. See holdDecision in hold-latch-lib.mjs.
