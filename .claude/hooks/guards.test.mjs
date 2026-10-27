@@ -43,7 +43,13 @@ ok(isHoldPhrase("pause this loop"), "pause");
 ok(isHoldPhrase("im just scoping a future session, dont build yet"), "scope-only");
 ok(!isHoldPhrase("build me the invoices page"), "normal build is not a hold");
 // 2026-10-27: a descriptive stop / pause is skipped; an addressed one still latches.
-ok(!isHoldPhrase("the hook should stop pushing to main"), "descriptive stop + -ing is not a hold");
+ok(!isHoldPhrase("the hook should stop retrying on a red check"), "descriptive stop + -ing is not a hold");
+// Stopping an outward action always latches, whatever the phrasing (Sol, PR #1152).
+for (const p of ["Make the CI job stop deploying now", "Change the config to stop the deployment",
+  "the hook should stop pushing to main", "make the gate stop merging", "set FOO=1 in my settings to stop the release",
+  "update the settings to stop the migration"]) {
+  ok(isHoldPhrase(p), `stopping an outward action latches: ${p}`);
+}
 // An order to agents or sessions, even collectively, is not a description (Codex App review, PR #1152).
 for (const p of ["the agent should stop pushing to main", "All agents must stop pushing", "Both agents must stop deploying",
   "every session should stop merging", "the subagents must stop running migrations",

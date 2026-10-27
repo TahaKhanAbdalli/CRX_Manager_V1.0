@@ -106,6 +106,7 @@ const THING_WORDS = new Set(["hook", "hooks", "gate", "gates", "guard", "guards"
 const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env"]);
 const SETTING_VERBS = new Set(["set", "change", "update", "edit", "turn", "toggle", "disable", "enable",
   "configure", "add", "remove", "put"]);
+const OUTWARD_STEM_RE = /^(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying)/;
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -124,6 +125,12 @@ function isDescriptiveStop(text, start, end) {
   // "You'd better stop pushing" is addressed (Luna review, PR #1152).
   const next = (/^[ \t]+([A-Za-z]+(?:-[A-Za-z]+)*)/.exec(text.slice(end)) || [])[1]?.toLowerCase().replace(/-/g, "") || "";
   if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w) || ACTOR_WORDS.has(w.replace(/'.*$/, "")))) return false;
+  // Stopping an outward action is always an order, whatever the phrasing: the
+  // guard exists for pushes, deploys, merges and releases, so "Make the CI job
+  // stop deploying now" and "Change the config to stop the deployment" latch
+  // (Sol review, PR #1152). The skips below are for a hook's own behaviour.
+  const after = text.slice(end, end + 200).split(/\s+/).slice(0, 6).map((w) => w.toLowerCase().replace(/[^a-z]/g, ""));
+  if (after.some((w) => OUTWARD_STEM_RE.test(w))) return false;
   const [twoBack, oneBack] = before.slice(-2);
   // The -ing form is skipped only when the clause positively describes something:
   // a modal right before it ("the hook should pause retrying") or a causative
