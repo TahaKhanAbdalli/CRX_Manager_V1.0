@@ -86,11 +86,17 @@ const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", 
 // want ("I need the agent to stop the deploy"), so the stop latches (Luna
 // review, PR #1152). Filler such as "and" / "so" is deliberately absent:
 // "…, and set X=0 in my user settings to stop the reviews" stays descriptive.
+// Agents and sessions, singly or collectively ("All agents must stop pushing"),
+// are addressees, not hooks or gates being described (Codex App review, PR #1152).
 const ACTOR_WORDS = new Set(["i", "you", "we", "us", "me", "lets", "let's", "everyone", "everybody", "guys",
-  "claude", "codex", ...WANT_WORDS]);
+  "claude", "codex", "agent", "agents", "subagent", "subagents", "session", "sessions", "helper", "helpers",
+  "bot", "bots", "worker", "workers", "team", "both", ...WANT_WORDS]);
 const MODAL_WORDS = new Set(["should", "would", "could", "will", "can", "must", "might", "may", "shall",
   "shouldnt", "wouldnt", "couldnt", "wont", "cant", "shouldn't", "wouldn't", "couldn't", "won't", "can't"]);
 const CAUSATIVE_WORDS = new Set(["make", "makes", "made", "making"]);
+const THING_WORDS = new Set(["hook", "hooks", "gate", "gates", "guard", "guards", "check", "checks", "test", "tests",
+  "script", "scripts", "job", "jobs", "workflow", "workflows", "build", "builds", "latch", "ci", "linter", "monitor",
+  "loop", "cron", "pipeline", "sweep", "reviewer", "it"]);
 const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env", "flag", "flags",
   "option", "options", "variable", "variables"]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
@@ -110,6 +116,9 @@ function isDescriptiveStop(text, start, end) {
   // this point stop pushing") is still an order (Codex App review, PR #1152).
   if (next.length > 4 && next.endsWith("ing")) {
     if (!MODAL_WORDS.has(oneBack) && !before.some((w) => CAUSATIVE_WORDS.has(w))) return false;
+    // ...and the clause names a machine part doing it, so an order to people
+    // or agents in any wording still latches (Codex App review, PR #1152).
+    if (!before.some((w) => THING_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
   }
   // "to stop the …" is skipped only as a configuration goal: the clause names a

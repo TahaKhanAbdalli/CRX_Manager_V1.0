@@ -43,7 +43,13 @@ ok(isHoldPhrase("pause this loop"), "pause");
 ok(isHoldPhrase("im just scoping a future session, dont build yet"), "scope-only");
 ok(!isHoldPhrase("build me the invoices page"), "normal build is not a hold");
 // 2026-10-27: a descriptive stop / pause is skipped; an addressed one still latches.
-ok(!isHoldPhrase("the agent should stop pushing to main"), "descriptive stop + -ing is not a hold");
+ok(!isHoldPhrase("the hook should stop pushing to main"), "descriptive stop + -ing is not a hold");
+// An order to agents or sessions, even collectively, is not a description (Codex App review, PR #1152).
+for (const p of ["the agent should stop pushing to main", "All agents must stop pushing", "Both agents must stop deploying",
+  "every session should stop merging", "the subagents must stop running migrations",
+  "the deployers must stop pushing", "the new folks should stop merging"]) {
+  ok(isHoldPhrase(p), `an order to agents latches: ${p}`);
+}
 ok(!isHoldPhrase("add a setting to stop the nightly sweep"), "a goal ('to stop the …') is not a hold");
 ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");
 ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
