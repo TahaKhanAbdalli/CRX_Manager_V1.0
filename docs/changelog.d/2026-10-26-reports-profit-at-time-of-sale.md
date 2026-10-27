@@ -13,4 +13,5 @@ No database change. Admins only, as before.
   of the report; the order tables are no longer read for these tabs.
 - Tests: `Reports.paging.test.tsx` covers 1,500 customer groups across two pages, the date range reaching
   the report, all three groupings, and a failed page. Checked in the running app on 2026-10-26.
-- KNOWN_ISSUES KI-15 is marked partial until this is live.
+- Closes KNOWN_ISSUES KI-15 and the rest of To-Do 0.6 once live; those two records are updated in the
+  session's records PR, not here (every queued PR edits them).
