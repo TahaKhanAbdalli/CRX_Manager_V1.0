@@ -9,7 +9,15 @@ import {
   type PoGateSnapshot,
 } from '../../supabase/functions/_shared/purchaseOrderEmailGate';
 
-const order: PoGateOrder = { id: 'po-1', status: 'submitted', vendor: 'Spinner Ag', expected_delivery_date: '2026-11-03', notes: 'Call ahead' };
+const order: PoGateOrder = {
+  id: 'po-1',
+  po_number: 'PO-2026-0040',
+  status: 'submitted',
+  vendor: 'Spinner Ag',
+  submitted_date: '2026-10-27',
+  expected_delivery_date: '2026-11-03',
+  notes: 'Call ahead',
+};
 // PostgREST returns numeric columns as numbers; strings are tolerated too.
 const dbLine = (id: string, productId: string, quantity: number | string, cost: number | string | null, extra: Partial<PoGateLine> = {}): PoGateLine => ({
   id,
@@ -35,7 +43,9 @@ const printedLine = (id: string, productId: string, quantity: number, cost: numb
 });
 const lines: PoGateLine[] = [dbLine('l-1', 'p-1', 3, 12.5), dbLine('l-2', 'p-2', '2.5', '3.00')];
 const snapshot: PoGateSnapshot = {
+  po_number: 'PO-2026-0040',
   vendor: 'Spinner Ag',
+  submitted_date: '2026-10-27',
   expected_delivery_date: '2026-11-03',
   notes: 'Call ahead',
   lines: [printedLine('l-2', 'p-2', 2.5, 3), printedLine('l-1', 'p-1', 3, 12.5)],
@@ -58,6 +68,7 @@ describe('purchase order copy email gate', () => {
       expect(decidePurchaseOrderEmail({ ...order, status }, lines, to, snapshot)).toMatchObject({ ok: false, status: 409 });
     }
     expect(decidePurchaseOrderEmail({ ...order, status: 'partially_received' }, lines, to, snapshot).ok).toBe(true);
+    expect(decidePurchaseOrderEmail({ ...order, submitted_date: null }, lines, to, { ...snapshot, submitted_date: null }).ok).toBe(true);
     expect(decidePurchaseOrderEmail(null, lines, to, snapshot)).toMatchObject({ ok: false, status: 404 });
   });
 
@@ -90,6 +101,9 @@ describe('purchase order copy email gate', () => {
       { ...snapshot, expected_delivery_date: '2026-11-04' },
       { ...snapshot, notes: null },
       { ...snapshot, vendor: 'Hydrite' },
+      { ...snapshot, po_number: 'PO-2026-0041' },
+      { ...snapshot, submitted_date: '2026-10-26' },
+      { ...snapshot, submitted_date: null },
     ];
     for (const variant of variants) {
       expect(decidePurchaseOrderEmail(order, lines, to, variant)).toMatchObject(changed);
@@ -109,6 +123,9 @@ describe('purchase order copy email gate', () => {
       undefined, null, 'x', [],
       { ...snapshot, lines: [] },
       { ...snapshot, vendor: 3 },
+      { ...snapshot, po_number: null },
+      { ...snapshot, po_number: undefined },
+      { ...snapshot, submitted_date: 20261027 },
       { ...snapshot, lines: [{ ...line, quantity_ordered: '3' }] },
       { ...snapshot, lines: [{ ...line, product_id: undefined }] },
       { ...snapshot, lines: [{ ...line, unit_cost: Number.NaN }] },
@@ -139,7 +156,7 @@ describe('send-email purchase order wiring', () => {
     expect(logInsert).toBeGreaterThan(firstGate);
     expect(finalGate).toBeGreaterThan(logInsert);
     expect(outbound).toBeGreaterThan(finalGate);
-    expect(source).toContain('.select("id, status, vendor, expected_delivery_date, notes")');
+    expect(source).toContain('.select("id, po_number, status, vendor, submitted_date, expected_delivery_date, notes")');
     expect(source).toContain('.select("id, product_id, quantity_ordered, unit_cost, cost_needs_review, unit_size, notes, product_name, product:products(product_name, epa_registration)")');
   });
 

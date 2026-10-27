@@ -25,7 +25,9 @@ export type EmailType =
 
 /** What a PO copy's PDF prints; the server refuses the send unless it is still the PO. */
 export interface PurchaseOrderEmailSnapshot {
+  po_number: string;
   vendor: string | null;
+  submitted_date: string | null;
   expected_delivery_date: string | null;
   notes: string | null;
   lines: Array<{

@@ -38,6 +38,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { buildPurchaseOrderEmailPayload, pdfToBase64, purchaseOrderEmailBlocker, sendEmail } from '../lib/emailService';
 import { COMPANY_ORDERING_EMAIL } from '../lib/companyInfo';
 import type { PdfPurchaseOrderData } from '../lib/purchaseOrderPdf';
+import { purchaseOrderPdfFingerprint } from '../lib/purchaseOrderFingerprint';
 import { Sentry } from '../lib/sentry';
 import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { LoadFailedState } from '../components/ui/EmptyState';
@@ -67,22 +68,6 @@ const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default
 };
 const conditionLabel = (c: string) =>
   c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-
-/**
- * Everything a vendor PO PDF prints, so a changed PO is a new email (not a replay of the
- * old one) and an admin never confirms one version and sends another.
- */
-function purchaseOrderPdfFingerprint(header: PurchaseOrder | null, lines: readonly PurchaseOrderItem[]): string {
-  return JSON.stringify([
-    header && [header.vendor, header.status, header.submitted_date, header.expected_delivery_date, header.notes],
-    lines
-      .map((line) => [
-        line.id, line.product_id, line.product?.product_name ?? line.product_name, line.product?.epa_registration,
-        line.quantity_ordered, line.unit_cost ?? null, !!line.cost_needs_review, line.unit_size, line.notes,
-      ])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-  ]);
-}
 
 /** Vendor names match ignoring case and runs of spaces (the send-email gate does the same). */
 const normalizeVendorName = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -1092,7 +1077,9 @@ export default function PurchaseOrderDetail() {
         idempotencyKey: emailPOIdem.getKey(),
         // The server refuses the send unless this is still the PO.
         snapshot: {
+          po_number: header.po_number,
           vendor: header.vendor,
+          submitted_date: header.submitted_date,
           expected_delivery_date: header.expected_delivery_date,
           notes: header.notes,
           lines: lines.map((line) => ({
@@ -2126,7 +2113,7 @@ export default function PurchaseOrderDetail() {
             <Input
               value={editForm.notes}
               onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
-              placeholder="Notes (printed on the PO PDF sent to the vendor)"
+              placeholder="Notes (printed on the PO PDF)"
             />
           </div>
 

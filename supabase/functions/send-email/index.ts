@@ -109,7 +109,7 @@ async function checkPurchaseOrderEmail(
 ): Promise<PoGateResult> {
   const { data: order, error: orderErr } = await adminClient
     .from("purchase_orders")
-    .select("id, status, vendor, expected_delivery_date, notes")
+    .select("id, po_number, status, vendor, submitted_date, expected_delivery_date, notes")
     .eq("id", purchaseOrderId)
     .maybeSingle();
   if (orderErr) return { ok: false, status: 503, error: `Purchase order lookup failed: ${orderErr.message}` };
