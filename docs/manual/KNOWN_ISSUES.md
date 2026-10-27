@@ -48,7 +48,7 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 
 | Status | Count |
 |---|---|
-| Open or partly open entries (KI-01 to KI-52, KI-72 to KI-78 and KI-81 to KI-83; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 51 |
+| Open or partly open entries (KI-01 to KI-52, KI-72 to KI-78 and KI-81 to KI-84; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 52 |
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
@@ -504,6 +504,15 @@ generator drops hand-kept entries (the `invoice_postable_version` computed field
 such as `get_quote_versions`), so the typecheck fails, and it adds about 60 live helpers the file lacks, which
 moves two `rpcContracts.test.ts` classifications. Records PRs add only the entries their migration changes, compared
 against a live generation.
+
+### KI-84 — The split-billing backfill smoke chain fails on current `main`
+**LOW · OPEN · tooling/smoke · unassigned (Mason, 2026-10-27: noted, not now)**
+`scripts/smoke/smoke-backfill-refuse-split-billing.sql` stops before `SMOKE_PASS_ROLLBACK` on a current-main
+database. It completes a delivery with a direct `UPDATE`, which 20261022075000 now refuses
+(`COMPLETION_EVIDENCE_REQUIRED`). It also needs the versioned `post_invoice_group` branch, using the pattern in
+`smoke-field-app-split-penny-exact.sql`. This is a test gap, not a customer defect: the refusal it proves stays
+live, and `prove-quote-customer-row-version-real-schema.mjs` still runs the chain in its old form on the July
+catalog (#1110). Done = the chain passes on main and still fails first against 20261006200000 (CRX-LIFE-001).
 
 ---
 
