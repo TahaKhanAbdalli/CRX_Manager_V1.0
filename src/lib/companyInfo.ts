@@ -19,6 +19,13 @@ const COMPANY_TAGLINE = 'Agricultural Input Solutions';
 export const COMPANY_CITY = 'West York, IL';
 export const COMPANY_PHONE = '618-843-0413';
 export const COMPANY_WEBSITE = 'www.croprxsolutions.com';
+/**
+ * Where a purchase order copy is emailed (To-Do 0.15). Orders are placed by hand
+ * through each supplier's portal, so the copy goes here, never to a vendor (Mason,
+ * 2026-10-26). The send-email edge function refuses any other recipient; keep in
+ * step with PO_COPY_RECIPIENT in supabase/functions/_shared/purchaseOrderEmailGate.ts.
+ */
+export const COMPANY_ORDERING_EMAIL = 'mason@croprxsolutions.com';
 
 // ── Composed strings used by the PDF footers/headers ──────────────────────
 // Letterhead tagline WITH phone (invoice, statement, year-end summary headers).

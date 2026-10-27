@@ -3935,7 +3935,10 @@ export type EmailType =
   // Field-app parity #40: pre-application customer notice (matches the DB
   // email_type enum value; the send-email edge allow-list entry is prepared,
   // its deploy gated for Mason).
-  | 'pre_application_notice';
+  | 'pre_application_notice'
+  | 'post_application_notice'
+  // To-Do 0.15: a purchase order emailed to its vendor (admin-only).
+  | 'purchase_order';
 
 export interface EmailLog {
   id: string;

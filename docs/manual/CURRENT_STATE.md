@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-27 7:37 AM Central (12:37 UTC) for the migration ledger only (read-only live check against
+**Last verified:** 2026-10-27 7:37 AM Central (12:37 UTC) for the migration ledger only (row 995 `20261027070000`, PR #1114, not yet applied; read-only live check against
 project `rhyzpcqhnizqbxphqdkr` right after the PR #1105 apply): 1068 rows, `max(version)` `20261027123725` =
 `20261027040000_quote_sent_price_lock` (row 992; PR #1105 merged as `f1503ba91`: a sent quote keeps the prices the
 customer saw, To-Do 1.2, 1.3 and 0.5), which is also the name high-water. Earlier read, 5:05 AM Central (10:05 UTC), right

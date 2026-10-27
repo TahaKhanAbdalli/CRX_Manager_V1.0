@@ -135,7 +135,7 @@ All numbers are generated server-side. The year-bearing `next_*_number` generato
 ## Email Integration Pattern (Track A)
 - **Service layer**: `src/lib/emailService.ts` — `sendEmail()`, `pdfToBase64()`, `buildEmailHtml()` (CRX-branded template)
 - **Edge Function**: `supabase/functions/send-email/index.ts` — Resend API, JWT auth, idempotency guard, base64 PDF attachments, `email_log` audit trail
-- **10 email types** in the Edge Function source (`ALL_EMAIL_TYPES`): `invoice`, `statement`, `order_confirmed`, `delivery_completed`, `quote`, `ar_reminder`, `low_stock_alert`, `month_end_close`, `pre_application_notice`, `post_application_notice`. Drivers may send only `delivery_completed`.
+- **11 email types** in the Edge Function source (`ALL_EMAIL_TYPES`): the 10 customer types in `CUSTOMER_EMAIL_TYPES` (`invoice`, `statement`, `order_confirmed`, `delivery_completed`, `quote`, `ar_reminder`, `low_stock_alert`, `month_end_close`, `pre_application_notice`, `post_application_notice`) plus `purchase_order`, a copy of a PO emailed to the company ordering address for placing the order through the supplier's portal (admin only; the recipient must be that address, never a vendor or customer). Sales reps may send the customer types; drivers only `delivery_completed`.
 - **Graceful degradation**: Email sends are always wrapped in try/catch inside the primary action handler. Email failure never blocks the core business action (quote send, order confirm, delivery complete)
 - **Pages using email**:
   - `InvoiceDetail.tsx` — "Email Invoice" button (admin, posted invoices only) with PDF attachment

@@ -21,6 +21,8 @@ const H = vi.hoisted(() => ({
   },
   tables: {} as Record<string, Row[]>,
   functions: {} as Record<string, Row[]>,
+  // get_admin_cost_fields' reply: cost fields keyed by row id.
+  costFields: {} as Record<string, Row>,
   // A table or function whose pages from this offset on fail, like a dropped connection.
   failPage: null as { source: string; from: number } | null,
   reads: [] as string[],
@@ -66,10 +68,10 @@ function serverRead(source: string, all: () => Row[]): Record<string, unknown> {
 
 vi.mock('../lib/db', () => ({
   supabase: {
-    from: (table: string) => serverRead(table, () => H.tables[table] ?? []),
+    from: (table: string) => serverRead(table, () => (table in H.tables ? H.tables[table] : [])),
     rpc: (name: string, args: Record<string, unknown> | undefined, options?: { count?: string }) => {
-      // Cost fields come back as one object keyed by id (none here), not as rows.
-      if (name === 'get_admin_cost_fields') return Promise.resolve({ data: {}, error: null });
+      // Cost fields come back as one object keyed by id, not as rows.
+      if (name === 'get_admin_cost_fields') return Promise.resolve({ data: H.costFields, error: null });
       H.rpcCalls.push({ name, args });
       // The profitability report answers per grouping: H.functions['get_profitability_report:customer'].
       const source = name === 'get_profitability_report' ? `${name}:${String(args?.p_group_by)}` : name;
@@ -124,6 +126,7 @@ beforeEach(() => {
   H.orders = {};
   H.tables = {};
   H.functions = {};
+  H.costFields = {};
   H.rpcCalls = [];
 });
 afterEach(() => { cleanup(); });
@@ -187,6 +190,50 @@ describe('Reports past the 1,000-row server cap', () => {
     // The last record, only on the second page, carries its applicator's name.
     const last = JSON.parse(table.getAttribute('data-last') ?? 'null') as Row;
     expect(last).toMatchObject({ record_number: `APP-${TOTAL - 1}`, applicator_name: 'Pat Sprayer' });
+  });
+
+  it('lists every active product whose cost is stale or undated, across pages (To-Do 0.7)', async () => {
+    const fresh = new Date().toISOString();
+    H.tables.products = many((i) => ({
+      id: `product-${String(i).padStart(4, '0')}`,
+      product_name: `Product ${String(i).padStart(4, '0')}`,
+      sku: null, category: null, vendor: 'Wells', is_active: true,
+    }));
+    // Even products changed cost today; odd ones (750, half on the second page) have no date.
+    for (let i = 0; i < TOTAL; i += 2) {
+      H.costFields[`product-${String(i).padStart(4, '0')}`] = { current_cost: 10, cost_updated_date: fresh };
+    }
+    H.costFields['product-0000'] = { current_cost: 10, cost_updated_date: '2025-01-15T15:00:00Z' };
+    await openTab('Operational', 'Stale Costs');
+
+    const table = screen.getByTestId('rows:No stale costs');
+    await waitFor(() => expect(table).toHaveTextContent(String(TOTAL / 2 + 1)));
+    expect(H.orders.products).toEqual(['product_name', 'id']);
+    // Undated first, the dated old one last.
+    expect(JSON.parse(table.getAttribute('data-last') ?? 'null')).toMatchObject({ id: 'product-0000', cost_as_of: '2025-01-15' });
+    fireEvent.click(screen.getByRole('button', { name: /Export CSV/ }));
+    const exported = H.exportToCSV.mock.calls[0][0] as Row[];
+    expect(exported).toHaveLength(TOTAL / 2 + 1);
+    expect(H.exportToCSV.mock.calls[0][2]).toBe('stale_costs_over_90_days');
+  });
+
+  it('treats a product page with no list as a failure, not "no stale costs"', async () => {
+    H.tables.products = null as unknown as Row[];
+    await openTab('Operational', 'Stale Costs');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded completely');
+    expect(screen.queryByTestId('rows:No stale costs')).not.toBeInTheDocument();
+    expect(H.toast).toHaveBeenCalledWith('error', 'Failed to load stale costs.');
+  });
+
+  it('keeps the stale-cost tab from a sales rep', async () => {
+    H.auth.role = 'sales_rep';
+    H.auth.profile = { id: 'rep-1', role: 'sales_rep' };
+    render(<MemoryRouter><Reports /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Operational' }));
+    await screen.findByRole('button', { name: 'Chemical History' });
+    expect(screen.queryByRole('button', { name: 'Stale Costs' })).not.toBeInTheDocument();
+    expect(H.reads).not.toContain('products');
   });
 
   it('reads profit by customer, product and month from the server report (To-Do 0.6), every group', async () => {
