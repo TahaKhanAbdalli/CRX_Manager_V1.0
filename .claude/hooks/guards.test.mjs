@@ -47,7 +47,8 @@ ok(!isHoldPhrase("the hook should stop retrying on a red check"), "descriptive s
 // Stopping an outward action always latches, whatever the phrasing (Sol, PR #1152).
 for (const p of ["Make the CI job stop deploying now", "Change the config to stop the deployment",
   "the hook should stop pushing to main", "make the gate stop merging", "set FOO=1 in my settings to stop the release",
-  "update the settings to stop the migration"]) {
+  "update the settings to stop the migration", "the hook should stop force-pushing to main",
+  "make the job stop re-deploying"]) {
   ok(isHoldPhrase(p), `stopping an outward action latches: ${p}`);
 }
 // An order to agents or sessions, even collectively, is not a description (Codex App review, PR #1152).

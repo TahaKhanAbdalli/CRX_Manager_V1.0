@@ -106,7 +106,8 @@ const THING_WORDS = new Set(["hook", "hooks", "gate", "gates", "guard", "guards"
 const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env"]);
 const SETTING_VERBS = new Set(["set", "change", "update", "edit", "turn", "toggle", "disable", "enable",
   "configure", "add", "remove", "put"]);
-const OUTWARD_STEM_RE = /^(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying)/;
+// Matched anywhere in the word, so "force-pushing" and "re-deploying" count.
+const OUTWARD_STEM_RE = /(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying)/;
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
