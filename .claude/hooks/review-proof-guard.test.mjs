@@ -989,6 +989,8 @@ for (const command of [
   // Per-session latch names (Codex GitHub App, PR #1152): a bare find never names the state dir.
   "find . -name hold-session-a.json -delete",
   "rm hold.0123456789abcdef0123456789abcdef.json",
+  "rm hold*.json",
+  "find . -name 'hold?*.json' -delete",
   "cp /tmp/snap.json applied-migrations.json",
   // Reviewer agents and commands are now enforcement surfaces.
   "cp /tmp/x .claude/agents/rls-security-reviewer.md",

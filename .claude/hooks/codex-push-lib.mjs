@@ -672,7 +672,7 @@ export function reviewProofPathMentioned(value) {
   // Their legitimate writers (write-apply-proofs, owner-approval-prompt,
   // autopilot-arm, refresh-applied-migrations, hold-latch-prompt) all write
   // internally and never name the file in a tool command.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold(?:[-.][^\s/"']+)?\.json)(?![\w.-])/i.test(text);
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold(?:[-.*?][^\s/"']*)?\.json)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
