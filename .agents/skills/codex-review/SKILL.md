@@ -424,8 +424,9 @@ skips it. Merge main in before this point, not after Sol alongside fixes (ship.m
 
 **Main moved after a clean Sol pass? Usually nothing to do (Mason, 2026-10-26).** The merge gates accept
 a head behind main when the head contains the base its proof reviewed and main only moved forward, so
-merge as it is. Catch up only when GitHub reports a conflict, and then carry the review forward
-(Mason, 2026-10-21) rather than paying for a second full Sol review. Merge the new main into the branch (`git fetch origin`,
+merge as it is. If GitHub reports a conflict, resolving it changes the PR, so it needs a fresh full
+Sol review. If you merge main in anyway and it merges cleanly, carry the review forward (Mason,
+2026-10-21) rather than paying for a second full Sol review. Merge the new main into the branch (`git fetch origin`,
 `git merge origin/main`, push; no other edits in that commit), wait for the checks on the new head,
 then run `node scripts/write-codex-push-proof.mjs --carry-forward` (add `--dry-run` to see the
 decision only) immediately before the merge. It mints a carried proof for the new head only when:
