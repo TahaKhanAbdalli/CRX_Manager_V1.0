@@ -35,6 +35,8 @@ This mapping is a starting point, not a reason to lower rigor on risky work. Nev
 
 The read-only report commands `status` and `fleet` carry this routing in their frontmatter (`model: sonnet`, `effort: low`, since 2026-09-05). `parked` does not: its inventory is mechanical, but on an apply request the same command continues into the migration flow, and a command-level pin would lower that path. A command wrapped by a same-named skill (`agent-health`) takes its settings from the skill file, not the command file. No other command pins a model or effort; the session default applies.
 
+The `compliance-reviewer` agent runs on `sonnet` at `high` (Mason, 2026-10-27): its Hard Rule checklist scan is mechanical, so the model is cheaper, but it covers money rules, so its effort stays `high`.
+
 `money-inventory-hunt.js` deliberately pins its finder and verifier calls to `high` until a real effort comparison proves a better setting. Do not change that based only on the table above.
 
 Current Claude models (October 2026): Fable 5.1 (`claude-fable-5-1`), Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5 (`claude-sonnet-5-5`), and Haiku 5.5 (`claude-haiku-5-5`). Pin a model with the Claude Code aliases `fable`, `opus`, `sonnet`, or `haiku` rather than a dated ID, so agents, workflows, and `scripts/run-claude-review.mjs` follow each new release instead of going stale. Pin an exact ID only when a measurement depends on that exact model, and say so next to the pin.
