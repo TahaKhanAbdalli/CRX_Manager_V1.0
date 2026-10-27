@@ -1358,6 +1358,17 @@
         "regression"
       ]
     },
+    "customer_credit_exposure": {
+      "chain": "smoke-customer-credit-exposure.sql",
+      "description": "20261027030000 (PR #1132's credit check, Sol HIGH: a rep's check could not see another rep's drafts through invoice RLS). On a [SMOKE] customer with a $10,000.00 limit and invoices owned by sales rep A, sales rep B, rep A and an active admin all get exposure_cents = 960000 (draft 900000 + unposted + posted + overdue; paid, voided, cancelled, soft-deleted, a negative-balance credit memo and another customer's draft excluded) and credit_limit_cents = 1000000; a customer with no limit answers null and 0; an unknown id raises CUSTOMER_NOT_FOUND; an active non-office profile, a profile-less JWT and (when one exists) an inactive sales rep are refused. The browser-role half (RLS hides rep A's draft from rep B while the function counts it; anon refused EXECUTE; a SECURITY INVOKER mutation drops rep B to 0) is the container prover prove-customer-credit-exposure-real-schema.mjs. Terminal rollback.",
+      "covers": [
+        "customer_credit_exposure"
+      ],
+      "area": [
+        "billing",
+        "security"
+      ]
+    },
     "reps_work_any_customer": {
       "chain": "smoke-reps-work-any-customer.sql",
       "description": "20261013220000 (Mason, 2026-10-13: sales reps work with ANY customer). On a [SMOKE] customer with no assigned rep, an active sales rep logs, reviews and supersedes a fact, logs an interaction, and reads the prep card, lapsed products, purchase summary and dispatch board; a non-office profile is still refused the prep card (PURCHASE_INTELLIGENCE_ACCESS_DENIED); the rep cannot reassign the customer through save_customer or a table update (REP_CANNOT_REASSIGN, customers_guard_rep_edit_20261013). Invoice save/post, statement, split billing and the other widened paths are covered by the updated financial_scope_and_delivery_aggregate, adversarial_money_inventory_closeout, save_field_app_split_invoice and save_quote_customer_row_version chains; the full before/after matrix (70 cases, admins identical, the prepay and deactivation guards that need a browser role) is the container prover prove-reps-work-any-customer-real-schema.mjs. Terminal rollback.",

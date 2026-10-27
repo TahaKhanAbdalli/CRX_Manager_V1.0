@@ -1,7 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-26 9:05 PM Central (2026-10-27 02:05 UTC) for the migration ledger only (read-only live
-check against project `rhyzpcqhnizqbxphqdkr` right after the row 11.4 part B apply): 1065 rows, `max(version)`
+**Last verified:** 2026-10-27 12:05 AM Central (05:05 UTC) for the migration ledger only (read-only live check
+against project `rhyzpcqhnizqbxphqdkr` by the PR #1138 session after #1122 landed): 1066 rows / 1059 names,
+`max(version)` `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (row 989, PR #1122),
+which is also the name high-water; `20261027030000_customer_credit_exposure` (row 991, PR #1138) is NOT applied.
+Earlier read, 2026-10-26 9:05 PM Central (2026-10-27 02:05 UTC), right after the row 11.4 part B apply: 1065 rows, `max(version)`
 `20261027020546` = `20261026050000_field_tables_follow_field_access` (row 985, applied 2026-10-27 02:05:46 UTC,
 9:05 PM Central on 2026-10-26, on Mason's own `I approve`; PR #1103 merged as `5d8af90c1`: To-Do row 11.4 part B,
 so field staff read only the fields of the jobs they are sent to through the field tables too; computed live

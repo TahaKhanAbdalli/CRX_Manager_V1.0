@@ -602,6 +602,18 @@ export interface Customer {
   parent_customer?: Customer;
 }
 
+/**
+ * customer_credit_exposure(p_customer_id) result (migration 20261027030000). exposure_cents is the
+ * sum of every rep's draft, unposted, posted and overdue invoice balances (negatives as 0), in
+ * whole cents; credit_limit_cents is null when the customer has no limit (the function also maps a
+ * stored 0 or negative limit, which means "no limit", to null), otherwise a positive whole-cent limit.
+ */
+export interface CustomerCreditExposure {
+  customer_id: string;
+  credit_limit_cents: number | null;
+  exposure_cents: number;
+}
+
 export interface CustomerAddress {
   id: string;
   customer_id: string;
