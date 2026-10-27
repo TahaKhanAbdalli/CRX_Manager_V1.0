@@ -57,7 +57,22 @@ for (const p of ["the agent should stop pushing to main", "All agents must stop 
   "the deployers must stop pushing", "the new folks should stop merging"]) {
   ok(isHoldPhrase(p), `an order to agents latches: ${p}`);
 }
-ok(!isHoldPhrase("add a setting to stop the nightly sweep"), "a goal ('to stop the …') is not a hold");
+ok(!isHoldPhrase("add a setting to stop the security checks"), "a safe-list goal ('to stop the …') is not a hold");
+// The safe list (Mason, 2026-10-27): only a hook's own harmless behaviour skips;
+// anything else stopped latches (Sol review, PR #1152).
+for (const p of [
+  "the job should stop deleting customer records now",
+  "make the gate stop dropping tables",
+  "the hook should stop sending invoices",
+  "the hook should stop retrying the deletes",
+  "add a setting to stop the nightly sweep",
+  "set X=0 in my settings to stop the customer exports",
+]) ok(isHoldPhrase(p), `off the safe list latches: ${p}`);
+for (const p of [
+  "the hook should stop warning on every commit",
+  "make the gate stop flagging docs",
+  "change the config to stop the duplicate approval prompts",
+]) ok(!isHoldPhrase(p), `on the safe list skips: ${p}`);
 ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");
 ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
 ok(isHoldPhrase("I want to stop the merge"), "Mason's own want still latches");
@@ -111,7 +126,7 @@ ok(isHoldPhrase(`make the gate ${"word ".repeat(300)}should stop pushing`), "an 
   isHoldPhrase("make the gate stop refusing ".repeat(20000));
   ok(Date.now() - t0 < 2000, "a huge prompt full of stop words is checked quickly");
 }
-ok(!isHoldPhrase("change the setting to stop the nightly sweep"), "a setting verb plus a settings word is descriptive");
+ok(!isHoldPhrase("change the setting to stop the codex reviews"), "a setting verb plus a settings word is descriptive");
 // A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
 for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f", " "]) {
   ok(isHoldPhrase(`make the gate stop refusing${sep}stop pushing`), `a real stop after ${JSON.stringify(sep)} still latches`);

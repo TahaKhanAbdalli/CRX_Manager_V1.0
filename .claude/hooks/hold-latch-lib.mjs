@@ -77,6 +77,7 @@ export function isHoldPhrase(prompt) {
 // not addressing ones and no earlier word in that clause names a person or a
 // want, so "stop pushing", "you should stop pushing", "ok stop", "I need the
 // agent to stop the deploy" and a stop right after "." or "," still latch.
+// Both shapes also need what stops to be on the safe list below.
 const ADDRESS_WORDS = new Set(["please", "pls", "ok", "okay", "so", "just", "now", "and", "then", "but", "hey",
   "you", "we", "lets", "let's", "us", "i", "to", "all", "everyone", "everybody", "guys", "claude", "codex"]);
 // Before "to stop the …", these make it Mason's own want or an order to someone;
@@ -107,7 +108,19 @@ const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "confi
 const SETTING_VERBS = new Set(["set", "change", "update", "edit", "turn", "toggle", "disable", "enable",
   "configure", "add", "remove", "put"]);
 // Matched anywhere in the word, so "force-pushing" and "re-deploying" count.
-const OUTWARD_STEM_RE = /(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying)/;
+// Destructive stems are here too, so "stop retrying the deletes" latches.
+const OUTWARD_STEM_RE = /(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying|delet|drop|remov|truncat|wipe|wiping|purg|overwrit|eras|destr|revert|rewrit|forc)/;
+// The safe list (Mason, 2026-10-27): a descriptive stop is skipped only when
+// what stops is one of a hook's own harmless behaviours named here. Any other
+// verb or thing latches, so a missing word can only add a hold, never lose one
+// ("the job should stop deleting customer records" latches: Sol review, PR #1152).
+const HARMLESS_ING = new Set(["refusing", "retrying", "blocking", "warning", "flagging", "nagging", "prompting",
+  "asking", "denying", "rejecting", "complaining", "erroring", "failing", "looping", "latching", "misfiring",
+  "reporting", "rerunning", "reviewing"]);
+const HARMLESS_THING_WORDS = new Set(["review", "reviews", "check", "checks", "prompt", "prompts", "warning",
+  "warnings", "nag", "nags", "reminder", "reminders", "notification", "notifications", "popup", "popups",
+  "retry", "retries", "percommit", "security", "automatic", "extra", "duplicate", "repeated", "lint", "codex",
+  "luna", "hook", "hooks", "gate", "guard", "permission", "approval"]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -138,6 +151,7 @@ function isDescriptiveStop(text, start, end) {
   // earlier ("make the gate stop refusing"). An introductory phrase alone ("At
   // this point stop pushing") is still an order (Codex App review, PR #1152).
   if (next.length > 4 && next.endsWith("ing")) {
+    if (!HARMLESS_ING.has(next)) return false;
     // The causative must govern this stop: "make [the] <machine part> stop",
     // with the machine part right before it. "After making the build green stop
     // pushing" names a prerequisite, not the thing stopping (Codex App, PR #1152).
@@ -157,6 +171,11 @@ function isDescriptiveStop(text, start, end) {
   if (oneBack === "to" && DETERMINERS.has(next)) {
     if (!clause.includes("=") && !before.some((w) => CONFIG_WORDS.has(w))) return false;
     if (!before.some((w) => SETTING_VERBS.has(w))) return false;
+    // Every word of what is stopped, up to the end of the clause, must be on the
+    // safe list: "the per-commit security reviews" skips, "the nightly export" latches.
+    const thing = text.slice(end).split(/[.!?;:,\n\r]|\s-\s|--/)[0].split(/\s+/)
+      .map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean).slice(1);
+    if (thing.length < 1 || thing.length > 6 || !thing.every((w) => HARMLESS_THING_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
   }
   return false;
