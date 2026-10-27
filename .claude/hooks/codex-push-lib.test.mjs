@@ -687,6 +687,13 @@ assert.equal(urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0"),
 assert.equal(urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0/"), true, "trailing slash still matches");
 assert.equal(urlIsGuardedApp("git@github.com:masonwells1/CRX_Backups.git"), false);
 assert.equal(urlIsGuardedApp("git@github.com:someoneelse/CRX_Manager_V1.0.git"), false);
+// The repo moves to the croprxsolutions organization (app-repo-identity.mjs); the
+// moved address must keep every gate, under any spelling of the owner.
+assert.equal(urlIsGuardedApp("git@github.com:croprxsolutions/CRX_Manager_V1.0.git"), true, "the organization's address is the app repo");
+assert.equal(urlIsGuardedApp("https://github.com/CropRxSolutions/CRX_Manager_V1.0"), true, "owner case does not matter");
+assert.equal(urlIsGuardedApp("https://github.com/croprxsolutions/./CRX_Manager_V1.0.git"), true, "a `.` segment under the new owner too");
+assert.equal(urlIsGuardedApp("https://github.com/croprxsolutions/other-repo.git"), false, "another organization repo is not the app repo");
+assert.equal(repoIsGuardedApp("origin\thttps://github.com/croprxsolutions/CRX_Manager_V1.0.git (push)"), true, "a checkout whose remote follows the move");
 assert.equal(urlIsGuardedApp(""), true, "unresolvable destination gates");
 assert.equal(urlIsGuardedApp(null), true);
 assert.equal(urlIsGuardedApp(undefined), true);
@@ -1370,6 +1377,16 @@ assert.equal(
   rewritesReachGuardedApp("url.https://github.com/masonwells1/.pushinsteadof ghm:"),
   true,
   "the https spelling of the same prefix too",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:croprxsolutions/.insteadof org:"),
+  true,
+  "the organization's owner-level prefix reaches the moved app repo",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:croprxsolutions/FarmRx.insteadof farm:"),
+  false,
+  "another repository in the organization is not the app repo",
 );
 assert.equal(
   rewritesReachGuardedApp("url.https://github.com/.insteadof gh:"),

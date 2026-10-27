@@ -122,7 +122,7 @@ const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 // decides whether Mason waived a money PR's CodeRabbit review (Codex App P1, #1035).
 // `read-only-search-lib` joined 2026-10-27: imported at startup, and it decides
 // which shell commands skip the checks below as plain searches.
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|sol-exempt-lib|coderabbit-skip-lib|read-only-search-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|sol-exempt-lib|coderabbit-skip-lib|read-only-search-lib|app-repo-identity)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 // The same set, spelled out, for the glob matcher below: a wildcard token has
@@ -139,6 +139,9 @@ export const PROTECTED_HARNESS_FILES = Object.freeze([
   ".claude/hooks/sol-exempt-lib.mjs",
   ".claude/hooks/coderabbit-skip-lib.mjs",
   ".claude/hooks/read-only-search-lib.mjs",
+  // Imported by codex-push-lib and coderabbit-skip-lib, so it loads at guard
+  // startup too (Codex App P1 on #1149).
+  ".claude/hooks/app-repo-identity.mjs",
   ".codex/hooks/production-action-guard.mjs",
   ".codex/hooks/codex-hook-adapter.mjs",
   "scripts/run-claude-review.mjs",

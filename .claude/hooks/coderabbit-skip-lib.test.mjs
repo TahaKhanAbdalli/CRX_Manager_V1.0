@@ -77,6 +77,9 @@ ok(coderabbitSkipNotice("PR MERGE GATE", "1018", { pullRequest: 1018, said: "ski
 // ── which repository a waiver covers (Codex App P2 on #1035) ────────────────
 eq(isSkipRepository("masonwells1", "CRX_Manager_V1.0"), true, "this repository");
 eq(isSkipRepository("MasonWells1", "crx_manager_v1.0"), true, "GitHub names are case-insensitive");
+eq(isSkipRepository("croprxsolutions", "CRX_Manager_V1.0"), true, "this repository after its move to the organization");
+eq(isSkipRepository("croprxsolutions", "other-repo"), false, "another repository in the organization gets none");
+eq(skipPullRequestFor("https://github.com/CropRxSolutions/CRX_Manager_V1.0/pull/1018", 1018), 1018, "the organization's address for this repository");
 eq(isSkipRepository("other", "repo"), false, "any other repository gets no waiver");
 eq(isSkipRepository("masonwells1", "CRX_Manager_V1.0-fork"), false, "a look-alike name gets none");
 eq(isSkipRepository(undefined, undefined), false, "an unknown repository gets none");

@@ -53,6 +53,7 @@ import {
   gitUrlRewriteSettings,
   urlUsesUnknownTransport,
 } from "../.claude/hooks/codex-push-lib.mjs";
+import { APP_REPO_PATHS } from "../.claude/hooks/app-repo-identity.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -312,7 +313,8 @@ function isInside(child, parent) {
 // agreement with the push guard — and it already had the same defect the guard
 // did: `https://github.com/masonwells1/./CRX_Manager_V1.0.git` is the public repo,
 // and a raw suffix match says it is not (Codex's ninth 2026-07-30 review).
-const GUARDED_APP_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
+// Either owner of the app repo (app-repo-identity.mjs), before or after its move.
+const GUARDED_APP_REPO_IDS = APP_REPO_PATHS.map((repoPath) => `github.com/${repoPath}`);
 // The ONE repository allowed to hold these notes as tracked files.
 const BACKUP_REPO_ID = "github.com/masonwells1/crx_backups";
 function nearestExisting(dir) {
@@ -700,7 +702,7 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
     return null;
   }
 
-  const where = pushUrls.some((url) => canonicalRepoId(url) === GUARDED_APP_REPO_ID)
+  const where = pushUrls.some((url) => GUARDED_APP_REPO_IDS.includes(canonicalRepoId(url)))
     ? `the PUBLIC CRX Manager checkout`
     : pushUrls.length === 0
       ? `a git checkout with no push remote, so where it would end up cannot be determined`
