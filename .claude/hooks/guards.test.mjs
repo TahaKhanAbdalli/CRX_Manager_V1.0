@@ -67,6 +67,7 @@ ok(hashedName(0) !== hashedName("0"), "the number 0 and the string \"0\" get dif
 ok(hashedName("ABC") !== hashedName("abc"), "ids differing only in case get different files on a case-insensitive disk");
 ok(hashedName("\uD800") !== hashedName("\uD801"), "two malformed (lone-surrogate) ids get different files");
 ok(hashedName(-0) !== hashedName(0), "the numbers -0 and 0 get different files");
+ok(new Set([Infinity, -Infinity, NaN].map(hashedName)).size === 3, "the infinities and NaN get different files");
 ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\n")) && /^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\r\n")),
   "an id with a trailing line break is hashed, never used as a file name");
 ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");

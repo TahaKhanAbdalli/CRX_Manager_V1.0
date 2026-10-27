@@ -24,8 +24,10 @@ export function holdStatePath(projectDir, sessionId) {
   if (sessionId === undefined || sessionId === null || sessionId === "") return path.join(dir, "hold.json");
   if (typeof sessionId === "string" && /^[a-z0-9_-]{1,128}$/.test(sessionId)) return path.join(dir, `hold-${sessionId}.json`);
   // JSON.stringify escapes lone surrogates, which UTF-8 hashing would fold into
-  // one character; it prints -0 as "0", so that one is spelled out.
-  const typed = `${typeof sessionId}:${Object.is(sessionId, -0) ? "-0" : JSON.stringify(sessionId)}`;
+  // one character. It prints -0 as "0" and both infinities as "null", so a
+  // number is spelled with String() and -0 by hand.
+  const spelled = typeof sessionId === "number" ? (Object.is(sessionId, -0) ? "-0" : String(sessionId)) : JSON.stringify(sessionId);
+  const typed = `${typeof sessionId}:${spelled}`;
   return path.join(dir, `hold.${createHash("sha256").update(typed).digest("hex").slice(0, 32)}.json`);
 }
 
