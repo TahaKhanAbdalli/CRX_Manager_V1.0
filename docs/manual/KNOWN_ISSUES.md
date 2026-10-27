@@ -1,7 +1,8 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-27 12:05 AM Central (05:05 UTC)** for the migration ledger only (PR #1138 session,
-read-only): 1066 rows, newest `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (PR #1122),
+**Last verified: 2026-10-27 5:05 AM Central (10:05 UTC)** for the migration ledger only (PR #1138 session, read-only,
+after its apply): 1067 rows, newest `20261027093945` = `20261027030000_customer_credit_exposure` (row 991); no other item
+re-read. Earlier, 2026-10-27 12:05 AM Central (05:05 UTC), for the ledger only: 1066 rows, newest `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (PR #1122),
 then `20261027020546` = part B, consistent with KI-01 and KI-73; no other item re-read. Earlier, 2026-10-26 9:05 PM
 Central (2026-10-27 02:05 UTC), for KI-01 and KI-73 only (row 11.4 part B, PR #1103): after part B (`20261026050000`, ledger `20261027020546`) applied live, the `_can_see_field` body md5,
 the field-table SELECT policies and the per-role visible-field counts were re-read live read-only (the ledger then
