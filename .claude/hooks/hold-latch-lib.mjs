@@ -132,9 +132,11 @@ function isDescriptiveStop(text, start, end) {
     // pushing" names a prerequisite, not the thing stopping (Codex App, PR #1152).
     const causes = THING_WORDS.has(oneBack) && before.slice(-6, -1).some((w) => CAUSATIVE_WORDS.has(w));
     if (!MODAL_WORDS.has(oneBack) && !causes) return false;
-    // ...and the clause names a machine part doing it, so an order to people
-    // or agents in any wording still latches (Codex App review, PR #1152).
-    if (!before.some((w) => THING_WORDS.has(w))) return false;
+    // ...and a machine part is the one doing it: the subject right before the
+    // modal ("the hook should stop"), so an order to people or agents in any
+    // wording still latches, even beside a machine word ("The CI maintainer
+    // should stop pushing": Codex App and Luna review, PR #1152).
+    if (!causes && !THING_WORDS.has(twoBack)) return false;
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
   }
   // "to stop the …" is skipped only as a configuration goal: the clause names a

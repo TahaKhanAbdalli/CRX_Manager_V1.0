@@ -993,6 +993,8 @@ for (const command of [
   "find . -name 'hold?*.json' -delete",
   "find . -name 'hold[-.]*.json' -delete",
   "rm hold{-a,-b}.json",
+  "echo '{\"held\":false}' > hold-session-a.json",
+  "printf x > hold.0123456789abcdef0123456789abcdef.json",
   "cp /tmp/snap.json applied-migrations.json",
   // Reviewer agents and commands are now enforcement surfaces.
   "cp /tmp/x .claude/agents/rls-security-reviewer.md",

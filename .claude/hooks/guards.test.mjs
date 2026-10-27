@@ -89,6 +89,11 @@ for (const p of ["After making the build green stop pushing", "Make the build gr
 for (const p of ["make the gate stop refusing", "Please make the CI job stop retrying", "made the hook stop blocking"]) {
   ok(!isHoldPhrase(p), `a governed causative stays descriptive: ${p}`);
 }
+// The machine part must be the modal's subject (Luna, PR #1152).
+for (const p of ["The CI maintainer should stop pushing", "the build engineer must stop deploying", "our hook author should stop merging"]) {
+  ok(isHoldPhrase(p), `a person beside a machine word still latches: ${p}`);
+}
+ok(!isHoldPhrase("the CI job should stop retrying"), "a machine subject before the modal stays descriptive");
 // "it" names no machine part (Luna, PR #1152).
 ok(isHoldPhrase("It should stop pushing to main"), "a bare 'it' subject does not make a stop descriptive");
 // A clause longer than the scan window latches; many stops stay fast (Luna, PR #1152).
