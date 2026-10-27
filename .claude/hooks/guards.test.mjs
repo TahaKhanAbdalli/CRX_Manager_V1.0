@@ -81,6 +81,14 @@ for (const p of ["Use the emergency flag to stop the deploy", "Flip the kill fla
   ok(isHoldPhrase(p), `tool-phrased stop latches: ${p}`);
 }
 ok(!isHoldPhrase("set X=0 in my user settings to stop the per-commit security reviews"), "a setting change is still descriptive");
+// A causative only exempts the stop it governs (Codex App, PR #1152).
+for (const p of ["After making the build green stop pushing", "Make the build green, then stop pushing",
+  "After you make the gate pass stop deploying", "making the checks pass stop merging"]) {
+  ok(isHoldPhrase(p), `a prerequisite causative does not hide the order: ${p}`);
+}
+for (const p of ["make the gate stop refusing", "Please make the CI job stop retrying", "made the hook stop blocking"]) {
+  ok(!isHoldPhrase(p), `a governed causative stays descriptive: ${p}`);
+}
 // "it" names no machine part (Luna, PR #1152).
 ok(isHoldPhrase("It should stop pushing to main"), "a bare 'it' subject does not make a stop descriptive");
 // A clause longer than the scan window latches; many stops stay fast (Luna, PR #1152).
