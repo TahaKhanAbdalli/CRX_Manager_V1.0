@@ -99,8 +99,7 @@ outside the approved doors, and test data written into production.
   PR has a completed CodeRabbit review (unless Mason waived it with `skip coderabbit #<PR>`), the
   command pins `--match-head-commit <sha>`, and a fresh Sol proof matches that head and GitHub's
   real base. A Sol-exempt PR skips only the Sol proof. `--auto` and `--admin` are refused.
-- `review-proof-guard` stops anyone writing a proof file by hand. (Pushes to `main` are refused by
-  GitHub itself, so the old `codex-push-guard` was unwired on 2026-10-27.)
+- `codex-push-guard` checks pushes; `review-proof-guard` stops anyone writing a proof file by hand.
 - `migration-apply-guard` (with `scripts/apply-migration-file.mjs`, its second door) applies a
   migration to the live database only with fresh reviewer proofs, a fresh content-bound Sol proof,
   the PR's head green and Sol-reviewed, and nothing destructive. Deleting rows, dropping data,

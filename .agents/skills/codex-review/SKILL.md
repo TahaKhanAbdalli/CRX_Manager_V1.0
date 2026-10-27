@@ -612,7 +612,8 @@ Step 3B above, which still needs the head to contain GitHub's base). `CHANGES_RE
 anyone), `--auto` and `--admin` are refused.
 
 **Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof
-for every merge into `main` except a documentation-only change, and block any attempt to hand-write it. Mint it the sanctioned way; do
+for every merge into `main` except a documentation-only change (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
+risky push aimed at `main`), and block any attempt to hand-write it. Mint it the sanctioned way; do
 NOT write the JSON yourself:
 
 ```bash
