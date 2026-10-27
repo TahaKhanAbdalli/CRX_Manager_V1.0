@@ -15784,6 +15784,7 @@ export type Database = {
         | "month_end_close"
         | "pre_application_notice"
         | "post_application_notice"
+        | "purchase_order"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -15922,6 +15923,7 @@ export const Constants = {
         "month_end_close",
         "pre_application_notice",
         "post_application_notice",
+        "purchase_order",
       ],
     },
   },
