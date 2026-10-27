@@ -54,7 +54,9 @@ describe('whole-record row-version client contract', () => {
   it('routes every direct quote/customer mutation through the exact-next-token guard', () => {
     const quoteBuilder = readFileSync(resolve(process.cwd(), 'src/pages/QuoteBuilder.tsx'), 'utf8');
     const customerDetail = readFileSync(resolve(process.cwd(), 'src/pages/CustomerDetail.tsx'), 'utf8');
-    expect(quoteBuilder.match(/applyDirectQuoteMutationRowVersion\(/g)).toHaveLength(2);
+    // One direct status write remains (Decline/Cancel). Convert no longer writes the status
+    // back after a failed conversion: convert_quote_to_order accepts the quote atomically (KI-12).
+    expect(quoteBuilder.match(/applyDirectQuoteMutationRowVersion\(/g)).toHaveLength(1);
     expect(quoteBuilder).toContain('const previousRowVersion = quoteRowVersionRef.current;');
     expect(customerDetail).toContain('const previousRowVersion = customerRowVersionRef.current;');
     expect(customerDetail).toContain('resolveDirectMutationRowVersion(previousRowVersion, nextRowVersion)');

@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
+import { resendRequiredMessage } from '../lib/quotePriceLock';
 import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { QUOTE_COLUMNS } from '../lib/costFields';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -260,6 +261,11 @@ export default function Quotes() {
         toast('warning', 'This booking has partial draw-downs — draw the remaining balance from the quote instead of converting.');
       } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
         toast('error', 'This booking is closed — only sent or revised quotes can be converted.');
+      } else if (hasRpcCode(err, RpcErrorCodes.QUOTE_RESEND_REQUIRED)) {
+        // The sent-price lock (20261027040000): an expected refusal with a plain-English instruction.
+        toast('error', resendRequiredMessage(err));
+      } else if (hasRpcCode(err, RpcErrorCodes.COST_BASIS_REQUIRED)) {
+        toast('error', 'A line on this quote has no recorded cost. Open the quote, revise and save it, then convert it again.');
       } else if (hasRpcCode(err, RpcErrorCodes.QUOTE_STALE_WRITE)
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         convertQuoteIdem.resetKey();

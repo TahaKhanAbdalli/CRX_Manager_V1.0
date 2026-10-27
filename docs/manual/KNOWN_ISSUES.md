@@ -1,10 +1,12 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-27 5:05 AM Central (10:05 UTC)** for the migration ledger only (PR #1138 session, read-only,
-after its apply): 1067 rows, newest `20261027093945` = `20261027030000_customer_credit_exposure` (row 991); no other item
-re-read. Earlier, 2026-10-27 12:05 AM Central (05:05 UTC), for the ledger only: 1066 rows, newest `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (PR #1122),
-then `20261027020546` = part B, consistent with KI-01 and KI-73; no other item re-read. Earlier, 2026-10-26 9:05 PM
-Central (2026-10-27 02:05 UTC), for KI-01 and KI-73 only (row 11.4 part B, PR #1103): after part B (`20261026050000`, ledger `20261027020546`) applied live, the `_can_see_field` body md5,
+**Last verified: 2026-10-27 (America/Chicago)** for KI-12 and KI-81 (live function bodies and quote rows read
+2026-10-25, re-read 2026-10-26 13:33 UTC and 2026-10-27 05:06 UTC, 12:06 AM Central: the six bodies migration
+`20261027040000` pins are unchanged, no quote is sent or revised, and no migration since touches the functions these
+entries name); the migration ledger re-read by the PR #1138 session at 5:05 AM Central after its apply (1067 rows, newest
+`20261027093945` = `20261027030000_customer_credit_exposure`, row 991) and at 12:05 AM Central (newest `20261027044721`,
+then `20261027020546` = part B, consistent with KI-01 and KI-73); 2026-10-26 for KI-01 and KI-73 (row 11.4 part B, checked 9:05 PM Central,
+PR #1103): after part B (`20261026050000`, ledger `20261027020546`) applied live, the `_can_see_field` body md5,
 the field-table SELECT policies and the per-role visible-field counts were re-read live read-only (the ledger then
 had 1065 rows). The
 rest of the file was last verified 2026-10-25 against `main` at `c65b7b351` (code, migration files, merged PRs).
@@ -42,7 +44,7 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 
 | Status | Count |
 |---|---|
-| Open or partly open entries (KI-01 to KI-52 and KI-72 to KI-78; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 48 |
+| Open or partly open entries (KI-01 to KI-52, KI-72 to KI-78 and KI-81; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 49 |
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
@@ -187,16 +189,19 @@ JobDetail, QuoteBuilder, BlendTicketDetail, PrepayWorkspacePanel, FinanceChargeP
 scanner for this is acknowledged as a weak tripwire.
 
 ### KI-12 — Quote "Convert to Order" can leave an accepted quote with no order
-**MED (latent) · OPEN · money/inventory/UI · unassigned (Mason to decide about one real accepted quote with no order)**
-`src/pages/QuoteBuilder.tsx:3447-3449` marks the quote Accepted (releasing its inventory holds) before the order
-is created. If the second step fails the quote reads as converted but has no order and its holds are gone;
-pressing Convert again recovers. **The December pre-booking flow has the same gap** (raised by Maksym, checked in
-the code 2026-10-26). A pre-booking is a Planned Program quote whose stock is reserved with holds
-(`create_planned_holds`). Whole Convert to Order and Book as Order on it both go through the same accept-first step,
-and the trigger `release_holds_on_quote_status_change` (latest in `20260706030000`) frees every active hold when the
-status becomes Accepted. A failed conversion therefore leaves the pre-booked stock unreserved with no order behind
-it. Partial Order (`draw_down_quote`) is one database call that does not flip the status first, so it is not
-affected. Two small database clean-ups (extra `quote_sections` privileges and a loose
+**MED (latent) · CAUSE FIXED IN CODE 2026-10-25, NOT YET LIVE (To-Do 1.3) · money/inventory/UI · Mason to decide about one real accepted quote with no order (Q-2026-2059)**
+QuoteBuilder used to save the quote as Accepted (releasing its inventory holds) before creating the order, so a
+failed second step left an accepted quote with no order. It now calls `convert_quote_to_order` on the sent or
+revised quote, which marks it accepted in the same transaction as the order; a failure leaves the quote as it was
+(proof: `scripts/smoke/smoke-convert-sent-quote-in-one-step.sql`). A direct `quotes.status` update by an owning
+rep can still flip a quote to accepted without an order (the column is writable); that path is not in the app.
+Q-2026-2059 (accepted, no order, no draws; seen 2026-10-25) predates the fix and is untouched.
+**The December pre-booking flow had the same gap** (raised by Maksym, checked in the code 2026-10-26): a
+Planned Program quote reserves its stock with holds (`create_planned_holds`), and the trigger
+`release_holds_on_quote_status_change` (latest in `20260706030000`) frees every active hold when the status becomes
+Accepted. The same fix covers it: whole Convert to Order and Book as Order both now reach `convert_quote_to_order`
+with no Accepted save first, so the hold release and the new order are one transaction and a failed conversion
+keeps the pre-booked stock reserved. Partial Order (`draw_down_quote`) never flipped the status first. Two small database clean-ups (extra `quote_sections` privileges and a loose
 `_below_cost_reason_from_json` parser) and a display-only profit mismatch are also recorded; the fixes exist only
 on closed PR #397.
 
@@ -273,6 +278,17 @@ could slip past a close. No month is closed live (older record's claim), so it i
 - Auto-draft invoice does nothing when an applicator completes a job; policy is Mason's, switch is off. MED, dormant.
 - Two commission design choices wait on Mason (do blend tickets create commissions; may applicators see a job's
   commission split). UNVERIFIED, LOW.
+
+### KI-81 — Two invoice paths read a quote line's current price, not the price the customer was sent
+**MED · OPEN (found 2026-10-25, To-Do 1.2 follow-up) · money · unassigned**
+The sent-price lock (`20261027040000`) gates Convert, Partial Order and Schedule Job, which copy quote prices into
+orders and job lines. Two later paths read `quote_items.price_per_unit` live instead (read from live bodies
+2026-10-25): `create_invoice_from_blend_ticket` (through `set_blend_ticket_product_quote_price` /
+`_blend_quote_pick_valid_20261020`, or the first line of the job's quote section) and the field-application
+invoice (`_save_field_app_invoice_impl_20260714`, `resolve_field_app_chemical_price`, which take the first quote
+line on the field with no status, customer or deleted filter). After a revision that changed a price and was not
+re-sent, either can bill the unsent price; the field-application lookup can also take a draft, declined or deleted
+quote's price. Fix: read the price from the version last sent (or refuse like the lock), with a real-schema proof.
 
 ---
 

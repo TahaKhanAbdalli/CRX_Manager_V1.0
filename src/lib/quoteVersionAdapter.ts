@@ -57,7 +57,10 @@ function isQuoteSnapshotItem(value: unknown): value is QuoteVersion['snapshot_da
     && isFiniteNumber(value.total_price)
     && isNullableFiniteNumber(value.net_margin)
     && isNullableString(value.calc_mode)
-    && isNullableString(value.price_unit);
+    && isNullableString(value.price_unit)
+    // Recorded since 20261027040000; older versions do not carry them.
+    && (value.quote_item_id === undefined || isNullableString(value.quote_item_id))
+    && (value.price_override === undefined || isNullableFiniteNumber(value.price_override));
 }
 
 function isQuoteSnapshotQuote(value: unknown): value is QuoteVersion['snapshot_data']['quote'] {
@@ -88,6 +91,7 @@ function parseQuoteSnapshotSection(
     || !isNullableString(value.section_notes)
     || (value.section_header_notes !== undefined && !isNullableString(value.section_header_notes))
     || (value.needed_by_date !== undefined && !isNullableString(value.needed_by_date))
+    || (value.field_id !== undefined && !isNullableString(value.field_id))
     || !value.items.every(isQuoteSnapshotItem)
   ) {
     return null;
@@ -99,6 +103,8 @@ function parseQuoteSnapshotSection(
     section_notes: value.section_notes,
     section_header_notes: value.section_header_notes ?? null,
     needed_by_date: value.needed_by_date ?? null,
+    // Recorded since 20261027040000; absent on older versions.
+    ...(value.field_id !== undefined ? { field_id: value.field_id } : {}),
     items: value.items,
   };
 }
