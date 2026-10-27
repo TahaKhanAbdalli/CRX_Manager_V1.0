@@ -386,10 +386,40 @@ for (const [sql, kind] of [
   ["DELETE FROM ONLY financial_audit_log WHERE id = 1", "audit-log-write"],
   ["INSERT INTO customers (name) VALUES ('Real') RETURNING '[E2E]'", "real-insert"],
   ["DO $$ BEGIN EXECUTE 'UPDATE customers SET phone = ''1'' WHERE name LIKE ''[E2E]%'''; END $$", "dynamic-sql"],
-  ["SELECT 'UPDATE customers SET phone = ''1'' WHERE id = 1'", "dynamic-sql-write"],
-  ["SELECT proname FROM pg_proc WHERE prosrc ILIKE '%insert into invoices%'", "dynamic-sql-write"],
+  // A string that CAN run as code still counts (2026-10-27): a plain-quoted DO body.
+  ["DO 'BEGIN INSERT INTO customers (name) VALUES (''x''); END'", "dynamic-sql-write"],
 ]) eq(classifySql(sql).kind, kind, `not [E2E]-targeted, refused as ${kind}: ${sql.slice(0, 70).replace(/\n/g, " ")}`);
 ok(!classifySql("SELECT proname FROM pg_proc WHERE prosrc ILIKE '%insert%invoices%'").block, "a catalog search with the words split is a read");
+// Reads let through (Mason, 2026-10-26: looser guards). A string nothing can run
+// is data, so write words or a function name inside it call nothing; read-only
+// catalog functions and CTE/alias column lists are not RPCs.
+for (const sql of [
+  "SELECT 'UPDATE customers SET phone = ''1'' WHERE id = 1'",
+  "SELECT proname FROM pg_proc WHERE prosrc ILIKE '%insert into invoices%'",
+  "SELECT prosrc LIKE '%delete from invoices%' FROM pg_proc",
+  "SELECT 'public.save_invoice(jsonb)'::regprocedure",
+  "SELECT to_regprocedure('public.post_invoice(uuid)') IS NOT NULL",
+  "SELECT pg_get_function_identity_arguments(p.oid) FROM pg_proc p WHERE p.prosrc ILIKE '%insert into customers%'",
+  "WITH target(sig, ok) AS (VALUES ('a', true)) SELECT * FROM target",
+  "WITH RECURSIVE lexer (oid, pos) AS (SELECT 1, 1 UNION ALL SELECT oid, pos + 1 FROM lexer WHERE pos < 3) SELECT * FROM lexer",
+  "WITH a AS (SELECT 1), cases(label) AS MATERIALIZED (SELECT 'x') SELECT * FROM cases",
+  "SELECT * FROM (VALUES (1, 2)) v(a, b)",
+  "SELECT * FROM unnest(ARRAY[1]) WITH ORDINALITY t(x, n)",
+  "SELECT * FROM unnest(ARRAY['a']) m(name)",
+  "SELECT acldefault('f', 10::oid), sha256('x'::bytea), trim_scale(1.50), pg_options_to_table(c.reloptions) FROM pg_class c",
+]) ok(!classifySql(sql).block, `a read is allowed: ${sql.slice(0, 80)}`);
+// Still refused: strings that can run, real calls the new rules sit next to, and
+// the backslash reading of a literal's end.
+for (const [sql, kind] of [
+  ["SELECT query_to_xml('insert into customers (name) values (1) returning 1', true, true, '')", "rpc-via-select"],
+  ["SELECT * FROM customers c, save_invoice('{}'::jsonb) AS (a int)", "rpc-via-select"],
+  ["SELECT x FROM t WHERE (1=1) AND void_order(1)", "rpc-via-select"],
+  ["WITH x AS (SELECT 1) SELECT post_invoice(1)", "rpc-via-select"],
+  ["SELECT set_config('role', 'authenticated', true)", "rpc-via-select"],
+  ["SELECT 1 FROM pg_proc WHERE prosrc LIKE '%x%' AND cancel_order(1) IS NULL", "rpc-via-select"],
+  ["SELECT ' \\'' ; INSERT INTO customers (name) VALUES ('x'); --'", "rpc-via-select"],
+  ["SELECT 1; DELETE FROM invoices WHERE notes = 'insert into customers'", "financial-delete"],
+]) eq(classifySql(sql).kind, kind, `still refused as ${kind}: ${sql.slice(0, 80)}`);
 // Codex App on #1093: with standard_conforming_strings off, `'\'` ends early, so the
 // `--` and `/*` below are code and the write runs. Either reading refusing refuses.
 for (const sql of [
@@ -407,8 +437,8 @@ for (const sql of [
 ]) ok(classifySql(sql).block, `INSERT … SELECT is not provably fake: ${sql.slice(0, 60)}`);
 eq(classifySql("INSERT INTO customers SELECT * FROM customers WHERE name LIKE '[E2E]%'").kind, "real-insert",
   "INSERT … SELECT without a column list is refused as a real insert");
-eq(classifySql("SELECT 'UPDATE customers SET phone = ''1'' WHERE id = 1'", { realDataOk: true }).kind,
-  "dynamic-sql-write", "REAL-DATA-OK does not relax a write spelled inside a string literal");
+eq(classifySql("DO 'BEGIN UPDATE customers SET phone = ''1'' WHERE id = 1; END'", { realDataOk: true }).kind,
+  "dynamic-sql-write", "REAL-DATA-OK does not relax a write spelled inside a string that runs");
 eq(classifySql("DO $$ BEGIN EXECUTE 'UPDATE customers SET phone = ''1'' WHERE id = 1'; END $$", { realDataOk: true }).kind,
   "dynamic-sql", "REAL-DATA-OK does not relax EXECUTE in a DO block");
 eq(classifySql("MERGE INTO customers c USING customers s ON false WHEN NOT MATCHED THEN INSERT (name) VALUES ('[E2E] x')", { realDataOk: true }).kind,

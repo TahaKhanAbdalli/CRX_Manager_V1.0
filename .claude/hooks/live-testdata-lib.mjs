@@ -201,7 +201,10 @@ export function stripFunctionBodiesOnly(sql) {
 // a kept dollar-quoted body (e.g. a DO block) is no longer stripped, so prose
 // like `-- never TRUNCATE` in a DO body can false-positive — that parks the
 // migration for Mason, which is the safe direction.
-export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) {
+// blankLiterals: also blank the inside of every plain and E'' string literal
+// (the quotes stay), for checks that read only code. Dollar quotes stay
+// verbatim: a DO body is code.
+export function stripCommentsQuoteAware(sql, { intoDollarBodies = false, blankLiterals = false } = {}) {
   const src = String(sql || "");
   let out = "";
   let i = 0;
@@ -211,14 +214,18 @@ export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) 
     const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
       !/[A-Za-z0-9_$]/.test(src[i - 1] || "");
     if (ch === "'" || escapeString) {
-      let j = i + (escapeString ? 2 : 1);
+      const open = i + (escapeString ? 2 : 1);
+      let j = open, closed = false;
       while (j < n) {
         if ((escapeString || plainBackslashEscapes) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
-        if (src[j] === "'") { j++; break; }
+        if (src[j] === "'") { j++; closed = true; break; }
         j++;
       }
-      out += src.slice(i, j); i = j; continue;
+      out += blankLiterals
+        ? src.slice(i, open) + " ".repeat(j - open - (closed ? 1 : 0)) + (closed ? "'" : "")
+        : src.slice(i, j);
+      i = j; continue;
     }
     if (ch === '"') {
       let j = i + 1;
@@ -716,6 +723,24 @@ const SQL_BUILTIN_FNS = new Set([
   // full-text search (read-only)
   "to_tsvector", "to_tsquery", "plainto_tsquery", "phraseto_tsquery",
   "websearch_to_tsquery", "ts_rank", "ts_rank_cd", "ts_headline",
+  // read-only catalog, privilege, hash and text functions refused in real
+  // sessions (2026-10-27 replay of a month of execute_sql calls)
+  "acldefault", "makeaclitem", "pg_options_to_table", "pg_get_partkeydef",
+  "pg_get_statisticsobjdef", "pg_get_function_sqlbody", "pg_get_keywords",
+  "pg_describe_object", "pg_identify_object", "pg_identify_object_as_address",
+  "pg_get_object_address", "pg_index_column_has_property", "pg_index_has_property",
+  "pg_indexam_has_property", "pg_relation_is_updatable", "pg_column_is_updatable",
+  "pg_trigger_depth", "pg_my_temp_schema", "current_schemas", "row_security_active",
+  "has_sequence_privilege", "has_any_column_privilege", "has_type_privilege",
+  "has_server_privilege", "has_tablespace_privilege", "has_parameter_privilege",
+  "has_foreign_data_wrapper_privilege", "has_language_privilege",
+  "to_regoper", "to_regoperator", "to_regcollation", "to_regtypemod", "pg_input_is_valid",
+  "sha224", "sha256", "sha384", "sha512", "trim_scale", "scale", "min_scale",
+  "xpath", "xpath_exists", "string_to_table", "array_dims", "jsonb_path_match",
+  "jsonb_object", "json_object", "jsonb_to_record", "jsonb_to_recordset",
+  "json_to_record", "json_to_recordset", "jsonb_populate_recordset",
+  "json_populate_recordset", "jsonb_array_elements_text", "json_array_elements_text",
+  "plpgsql_check_function_tb", "plpgsql_check_function",
 ]);
 // SQL keywords that look like `word (` in text but are not function calls.
 const SQL_KEYWORD_FNS = new Set([
@@ -738,11 +763,42 @@ const schemaBefore = (word) => new RegExp(`(?:^|[^${IDENT_CHAR}."])(?:${caseless
 const AUTH_SCHEMA_BEFORE_RE = schemaBefore("auth");
 const PG_CATALOG_BEFORE_RE = schemaBefore("pg_catalog");
 
-export function findNonReadFunctionCall(sqlText) {
+// A plain string literal runs as code only as a DO or function body
+// (`DO 'BEGIN … END'`, `CREATE FUNCTION … AS '…'`), through EXECUTE, or when
+// handed to a function that runs its argument (query_to_xml, dblink_exec, an
+// application RPC). Those functions are refused by name, so a query with none of
+// these keywords outside its strings and comments holds only data in its
+// strings (2026-10-27: such catalog reads were most of this guard's refusals).
+// PREPARE and CALL are listed because they run statements of their own.
+export function literalsCanRun(sql) {
+  return /\b(?:do|execute|create|prepare|call)\b/i.test(stripCommentsQuoteAware(sql, { blankLiterals: true }));
+}
+
+// Index of the `)` closing the parenthesis opened just before `from`, in text
+// whose literals are blanked, skipping quoted names; text.length if none.
+function closingParen(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') { const j = text.indexOf('"', i + 1); if (j === -1) return text.length; i = j; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) return i;
+  }
+  return text.length;
+}
+
+export function findNonReadFunctionCall(sqlText, { literalsAreData = false } = {}) {
   // Comments go first (quote-aware, each becomes one space): `evil./*x*/fn(1)`
   // hid its schema and `fn/**/(1)` hid the call itself (Codex connector, PR #882),
   // and comment prose such as `-- cancel_order(42)` is not a call.
-  const text = stripCommentsQuoteAware(String(sqlText || ""));
+  // When no string in the query can run as code (literalsAreData, see
+  // literalsCanRun), a name inside a string is data too:
+  // `'public.save_invoice(jsonb)'::regprocedure` and `prosrc LIKE '%post_invoice(%'`
+  // call nothing.
+  const text = stripCommentsQuoteAware(String(sqlText || ""), { blankLiterals: literalsAreData });
+  // The same text with every literal blanked (same length, same positions), for
+  // reading structure: a `)` inside a string closes nothing.
+  const code = stripCommentsQuoteAware(String(sqlText || ""), { blankLiterals: true });
   if (!/\bselect\b/i.test(text)) return null;
   // A name starts after any identifier character, `$` and non-ASCII included:
   // `my$count(…)` and `écount(…)` are application functions, not the built-in count
@@ -758,14 +814,21 @@ export function findNonReadFunctionCall(sqlText) {
     // A quoted name with capitals (`"COUNT"(…)`) is not the built-in either.
     const quotedCaps = /"\s*\($/.test(m[0]) && m[1] !== name;
     const otherSchema = quotedCaps || /^"?public"?\s*\./i.test(m[0]) ||
-      (/\.\s*$/.test(before) && !PG_CATALOG_BEFORE_RE.test(before));
+      (/(?<!\.)\.\s*$/.test(before) && !PG_CATALOG_BEFORE_RE.test(before));
     if (!otherSchema && (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name))) continue;
     // auth.uid() is the caller's id, a read; a `uid` in any other schema is not vouched for.
     // The schema must be exactly `auth` or `"auth"`, not `"evil.auth"` or `x.auth` (Luna, PR #882).
     if (name === "uid" && !quotedCaps && AUTH_SCHEMA_BEFORE_RE.test(before)) continue;
     // `AS t(a, b)` names an alias's columns and `::numeric(10,2)` is a type;
-    // neither is a call.
-    if (/(?:\bas|::)\s*$/i.test(text.slice(0, m.index))) continue;
+    // neither is a call. Nor is an alias's column list right after a closing
+    // bracket or WITH ORDINALITY (`(VALUES …) v(a, b)`, `unnest(x) t(a)`): no
+    // call can follow `)` or `]` directly.
+    if (/(?:\bas|::|[)\]]|\bordinality)\s*$/i.test(text.slice(0, m.index))) continue;
+    // A CTE's column list, `WITH t(a, b) AS (SELECT …)`: only a query may open
+    // after `AS (` there. (A record function's `AS (col type)` list never starts
+    // with a reserved word.)
+    if (!otherSchema && /(?:\bwith(?:\s+recursive)?|,)\s*$/i.test(before) &&
+      /^\s*as\s*(?:(?:not\s+)?materialized\s*)?\(\s*(?:select|values|with|table)\b/i.test(code.slice(closingParen(code, m.index + m[0].length) + 1))) continue;
     // The application's read-named functions live in `public`, so a get_/list_ name
     // in any other schema (`evil.get_invoice(…)`) is not vouched for (Luna, PR #882).
     const appSchema = !quotedCaps && (/^(?:"public"|[Pp][Uu][Bb][Ll][Ii][Cc])\s*\./.test(m[0]) ||
@@ -1208,7 +1271,8 @@ function classifySqlInner(query, realDataOk) {
   // (`PERFORM save_x()`, `v := save_x()`) or a `CALL proc()` slipped past it
   // (reported by the #1093 session). Such a batch is scanned as if it were one.
   const runsCode = /\bdo\s*(?:language\s+[a-z_]+\s*)?\$|\bcall\s+[a-z_"]/i.test(t);
-  const rpc = findNonReadFunctionCall(runsCode ? `SELECT ${t}` : t);
+  const literalsAreData = !literalsCanRun(t);
+  const rpc = findNonReadFunctionCall(runsCode ? `SELECT ${t}` : t, { literalsAreData });
   if (rpc) {
     return {
       block: true,
@@ -1220,7 +1284,7 @@ function classifySqlInner(query, realDataOk) {
   // Comments removed, DO bodies included, so `-- [E2E]` or `/* [E2E] */` cannot
   // exempt anything below.
   const code = stripCommentsQuoteAware(t, { intoDollarBodies: true });
-  const scan = findWrites(code);
+  const scan = findWrites(code, { literalsAreData });
   if (scan.block) return scan;
   const real = scan.writes.filter((w) => !w.fake);
   const isFin = (w) => FINANCIAL_TABLES.includes(w.table);
@@ -1359,7 +1423,7 @@ function maskQuotes(code) {
       const start = i + (escapeString ? 2 : 1);
       let j = start, end = n;
       while (j < n) {
-        if (escapeString && code[j] === "\\") { j += Math.min(2, n - j); continue; }
+        if ((escapeString || plainBackslashEscapes) && code[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (code[j] === "'" && code[j + 1] === "'") { j += 2; continue; }
         if (code[j] === "'") { end = j; j++; break; }
         j++;
@@ -1485,7 +1549,7 @@ function targetsFakeRows(verb, text, masked, inLiteral, headLen) {
 // literal is marked `dynamic` (EXECUTE '…', or text that only looks like SQL):
 // it is never exempt and its extent is not measured, which keeps a literal
 // packed with write keywords linear instead of quadratic.
-function findWrites(code) {
+function findWrites(code, { literalsAreData = false } = {}) {
   const { masked, inLiteral, inDollar } = maskQuotes(code);
   // U&"custome\0072s" is the customers table, spelled so no name list can match it.
   if (/\bu&"/i.test(masked)) {
@@ -1532,6 +1596,9 @@ function findWrites(code) {
     const start = m.index;
     const verb = m[1].toLowerCase().match(/^(insert|update|delete|merge)/)[1];
     const table = m[2].toLowerCase();
+    // Text in a string nothing can run (a catalog search such as
+    // `prosrc ILIKE '%insert into customers%'`) writes nothing.
+    if (inLiteral[start] && literalsAreData) continue;
     if (inLiteral[start] || verb === "merge") {
       writes.push({ verb, table, text: m[0], fake: false, dynamic: !!inLiteral[start] });
       continue;
