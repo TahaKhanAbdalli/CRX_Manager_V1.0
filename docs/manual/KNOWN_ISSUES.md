@@ -1,12 +1,16 @@
 # Known Issues — what is open today
 
-**Last verified: 2026-10-25 (America/Chicago)** against `main` at `c65b7b351` (code, migration files, merged
-PRs). The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read live, read-only, at 10:52 PM
-Central: the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`,
-`20261022101000` and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and
-search-path items, and the `invoice_postable_version` overload. Every other "applied live" statement below is
-still the older record's claim, marked as such. The margin-floor PR (To-Do 0.2) re-read the ledger again on 2026-10-26
-(newest rows `20261023100000` and `20261023090000`), consistent with KI-01.
+**Last verified: 2026-10-26 9:05 PM Central (2026-10-27 02:05 UTC)** for KI-01 and KI-73 only (row 11.4 part B,
+PR #1103): after part B (`20261026050000`, ledger `20261027020546`) applied live, the `_can_see_field` body md5,
+the field-table SELECT policies and the per-role visible-field counts were re-read live read-only (the ledger then
+had 1065 rows). The
+rest of the file was last verified 2026-10-25 against `main` at `c65b7b351` (code, migration files, merged PRs).
+The 2026-10-23 rewrite had no database access. The 2026-10-25 pass re-read live, read-only, at 10:52 PM Central:
+the migration ledger from `20261022000000` on (so the applied-live claims for `20261022090000`, `20261022101000`
+and `20261023090000` in KI-01, KI-02, KI-73 and KI-74 are confirmed), the KI-07 grant and search-path items, and the
+`invoice_postable_version` overload. Every other "applied live" statement below is still the older record's claim,
+marked as such. The margin-floor PR (To-Do 0.2) re-read the ledger again on 2026-10-26 (newest rows
+`20261023100000` and `20261023090000`), consistent with KI-01.
 
 This file is the short list of things that are genuinely open, or that someone decided to live with. Everything
 else (fixed, merged, retired, long write-ups, the evidence trail, old section numbers like §0d, §4b, F06) is
@@ -39,8 +43,8 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
-Highest-priority open items, in order: KI-01 (applicators still read every field-table row; the database
-functions were fixed live 2026-10-26, part A), KI-02 (cost and
+Highest-priority open items, in order: KI-01 (an applicator keeps field access after the assignment ends,
+part C; the functions and tables were fixed live 2026-10-26 and 2026-10-27 UTC, parts A and B), KI-02 (cost and
 margin: the table-level lock is live since 2026-10-25; the server-function audit is still owed), KI-10 (about 69 functions still replay a saved answer on the retry
 key alone), KI-04 (tools with no permission rule run without a prompt), KI-18 (UTC/browser-clock season can
 suppress the pre-harvest safety warning).
@@ -50,13 +54,13 @@ suppress the pre-harvest safety warning).
 ## Security and access
 
 ### KI-01 — Drivers and applicators can read every customer's fields and some money totals
-**HIGH · PARTIAL · security · Mason approval needed to narrow permissions; part A applied live, parts B and C not started**
+**HIGH · PARTIAL · security · Mason approval needed to narrow permissions; parts A and B applied live, part C not started**
 Until 2026-10-26 02:10 UTC (9:10 PM Central, 2026-10-25), any signed-in account, including drivers and applicators, could call database functions that
 returned every customer's field boundaries, owners, billing splits, balances and the company-wide overdue list,
-because the functions never checked who was asking. Applicators can also read every field-table row, not only
-the fields they were dispatched to (still open). Proven by read-only impersonation on 2026-10-22. Planned as
-three parts: A (functions, PR #1065, applied live and merged), B (tables), C (the job route). Parts B and C have
-no PR. Related lows: dispatched
+because the functions never checked who was asking. Until 2026-10-27 02:05 UTC (9:05 PM Central, 2026-10-26),
+applicators could also read every field-table row, not only the fields of the jobs they were sent to. Proven by
+read-only impersonation on 2026-10-22. Planned as three parts: A (functions, PR #1065), B (tables, PR #1103),
+C (the job route); A and B are applied live and merged; part C has no PR. Related lows: dispatched
 applicators can read chemical cost; any sales rep can edit another rep's draft field-invoice billing; invoice
 emails put the invoice number and date into HTML unescaped (`src/lib/emailService.ts:123-139`).
 Status 2026-10-23: part A was written and not yet applied (`20261023090000_field_functions_require_field_access`,
@@ -69,8 +73,17 @@ history row 980) on Mason's own `I approve`, and PR #1065 merged as `9ad2cb000`.
 impersonation, counts only): the real applicator gets 2 fields from the field-map lookup (its 2 open dispatches;
 it was 5) and is refused the all-fields map; a driver gets 0; an admin gets all 5. Still open: the applicator
 reads all 5 rows of the `fields` table directly (part B), and the whole-job applicator route has no end (part
-C, KI-73). No in-app click-through as an applicator was done. Until part B narrows `job_fields`, an applicator sent to one field of a split job gets no weather centroid on Job
-Detail when the job's first field is not theirs (0 split assignments live, 2026-10-22).
+C, KI-73). No in-app click-through as an applicator was done.
+Status 2026-10-26 (Central): part B is APPLIED LIVE (2026-10-27 02:05:46 UTC, 9:05 PM Central on 2026-10-26;
+ledger `20261027020546`, history row 985) on Mason's own `I approve`, and PR #1103 merged as `5d8af90c1`.
+Re-checked live read-only: `_can_see_field` md5 matches the migration's postflight pin, and the field-table
+SELECT policies gate applicators on it. Visible `fields` rows per role, computed from the live policy rules with
+each active person's id substituted (not a signed-in test): admins (4) 5 of 5, sales reps (3) 5 of 5, the 1
+active applicator 2 of 5 (the fields of the jobs they are dispatched to; it was 5), drivers (2) 0, entity
+recipients (2) 0. Still open: access does not end when the assignment ends (part C, KI-73). No in-app
+click-through as an applicator was done. Part B also widened `_can_see_field` to every field of a dispatched job,
+so the earlier gap where an applicator sent to one field of a split job got no weather centroid on Job Detail
+should be gone (not checked in the app; 0 split assignments live, 2026-10-22).
 
 ### KI-02 — Product cost and margin: server functions not yet fully audited
 **MED · PARTIAL · security/money · follow-up audit unassigned**
@@ -493,16 +506,30 @@ Mason's REAL-DATA-OK.
   to field roles and notes follow the linked record (`get_notes_for_entity` runs as the caller, checked live). `team_notes` itself still admits every active profile, so the Team Board shows field roles every note;
   Mason decided 2026-10-23 to keep that for now (To-Do row 11.11, `DECISION_LOG.md`).
 - Every active account reads every `customer_addresses` row (To-Do row 11.7; HIGH).
-- Drivers can read every customer's billing splits and spray-record field/acres data through
-  `field_billing_defaults` and `application_record_fields` (MED).
+- FIXED LIVE 2026-10-27 02:05 UTC (9:05 PM Central, 2026-10-26) by part B: drivers could read every customer's
+  billing splits and spray-record field/acres data through `field_billing_defaults` and
+  `application_record_fields` (MED); both now admit only office staff and applicators who can see the field.
 - Whole-job applicators keep access to completed, cancelled and soft-deleted jobs indefinitely, and dispatch access
   can survive a job deletion; affected functions include `start_job` and `complete_job` (HIGH; part C, not
   started). Part A's `_can_see_field` already ends whole-job access when `jobs.deleted_at` is set, for the
   field-map lookups only.
-- Applicators read every `fields` row, and `field_polygons`, crop history, obstacles and `field_app_locations`
-  follow the same rule (HIGH; part B, not started; 5 of 5 rows live for the real applicator on 2026-10-26).
+- FIXED LIVE 2026-10-27 02:05 UTC (9:05 PM Central, 2026-10-26) by part B (PR #1103, history row 985, ledger
+  `20261027020546`): applicators read every `fields` row, and `field_polygons`, crop history, obstacles and
+  `field_app_locations` followed the same rule (HIGH; 5 of 5 rows live for the real applicator on 2026-10-25,
+  Central). After the apply the 1 active applicator sees 2 of 5 fields, drivers and entity recipients 0, admins
+  and sales reps 5 of 5 (computed read-only from the live policy rules, not a signed-in test). Part B also closed: the
+  `field_billing_defaults`/`application_record_fields` driver reads above; direct `field_polygons` writes by any
+  applicator (made office-only); `field_app_locations`/`_shares` reads (office-only); and
+  `get_job_billed_customers` letting any applicator through on a job with no whole-job applicator (NULL gate).
+  Mason decided 2026-10-25 that someone sent to a job sees the entire job (`DECISION_LOG.md`), so part B also
+  widens `_can_see_field`'s dispatch leg to every field of the dispatched job and keeps the job pages job-wide;
+  that resolves the split-job report mismatch a per-field view would have caused. Left after part B: anon reads
+  of `application_record_fields` now error instead of returning nothing (LOW, fails closed; three other field
+  tables already did); a crew member
+  whose role is driver keeps the crew job and its map but not the field tables (by design).
 - Opposite gap: dispatch-only applicators cannot read their assigned fields' shares, application records and
-  details, attachments, or job-attachment photos (LOW).
+  details, attachments, or job-attachment photos (LOW). Mason's 2026-10-25 decision (they see the entire job and
+  ticket) means these should be widened to the dispatch route too; not built.
 
 ### KI-74 — More cost exposure and prerequisites (extends KI-02)
 **HIGH/MED · OPEN · security/money · Mason**
