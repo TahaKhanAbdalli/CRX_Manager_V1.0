@@ -39,9 +39,10 @@ export function priceToCents(value: number | string | null): number | null {
   const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(String(value).trim());
   // The messages never carry the price itself: errors reach Sentry, and prices are admin-only.
   if (!match) throw new Error('price history holds a price that is not whole cents');
+  // The value can arrive as a JSON number, exact only to about 15 digits; product prices are
+  // numeric(12,2) (at most 10 dollar digits), so anything longer is refused, never shown rounded.
+  if (match[2].replace(/^0+(?=\d)/, '').length > 10) throw new Error('price history holds a price too large to show exactly');
   const cents = Number(match[2]) * 100 + Number((match[3] ?? '').padEnd(2, '0'));
-  // Past 2^53 an integer is no longer exact; refuse rather than show a rounded price.
-  if (!Number.isSafeInteger(cents)) throw new Error('price history holds a price too large to show exactly');
   return match[1] === '-' ? -cents : cents;
 }
 
@@ -67,7 +68,13 @@ export interface SellPricePoint {
  */
 export function sellPricePoints(rows: SellPriceHistoryRow[]): SellPricePoint[] {
   const points: SellPricePoint[] = [];
-  for (const [index, row] of rows.entries()) {
+  // A snapshot is where the record starts, so it goes first even if a price save racing the
+  // migration got an earlier timestamp (a transaction's now() is when it began).
+  const ordered = [
+    ...rows.filter((r) => r.change_source === 'starting_snapshot'),
+    ...rows.filter((r) => r.change_source !== 'starting_snapshot'),
+  ];
+  for (const [index, row] of ordered.entries()) {
     const cents = {
       tier1: priceToCents(row.new_tier1_price),
       tier2: priceToCents(row.new_tier2_price),

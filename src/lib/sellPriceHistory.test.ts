@@ -18,6 +18,7 @@ describe('priceToCents', () => {
     expect(() => priceToCents('abc')).toThrow(/whole cents/);
     // Beyond what an integer holds exactly: refused, never shown rounded.
     expect(() => priceToCents('90071992547409.93')).toThrow(/too large/);
+    expect(priceToCents('9999999999.99')).toBe(999999999999);
   });
 });
 
@@ -31,6 +32,14 @@ describe('sellPricePoints', () => {
     expect(points.map((p) => p.id)).toEqual(['start', 'raise']);
     expect(points[0]).toMatchObject({ isStartingPoint: true, cents: { tier1: 1000, tier2: 950, tier3: null } });
     expect(points[1]).toMatchObject({ isStartingPoint: false, previousCents: { tier1: 1000 }, cents: { tier1: 1100 }, reason: 'Wells letter' });
+  });
+
+  it('puts the starting snapshot first even when a change carries an earlier timestamp', () => {
+    const points = sellPricePoints([
+      row({ id: 'raced', change_source: 'product_page', changed_at: '2026-10-27T03:00:00Z', old_tier1_price: 10, new_tier1_price: 11 }),
+      row({ id: 'start', change_source: 'starting_snapshot', changed_at: '2026-10-27T03:00:01Z' }),
+    ]);
+    expect(points.map((p) => p.id)).toEqual(['start', 'raced']);
   });
 
   it('falls back to the note when a row has no reason', () => {

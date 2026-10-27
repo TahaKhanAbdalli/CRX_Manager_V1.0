@@ -90,13 +90,14 @@ ALTER TABLE public.cost_history
       AND old_tier3_margin IS NOT DISTINCT FROM new_tier3_margin
       AND old_pricing_version IS NOT DISTINCT FROM new_pricing_version)),
   -- The six tier prices are plain numeric; hold them to whole cents (live 2026-10-26: 0 of 33 rows are not).
+  -- The bounds also refuse NaN and the infinities, which equal their own round().
   ADD CONSTRAINT cost_history_tier_prices_whole_cents CHECK (
-    (old_tier1_price IS NULL OR old_tier1_price = round(old_tier1_price, 2))
-    AND (new_tier1_price IS NULL OR new_tier1_price = round(new_tier1_price, 2))
-    AND (old_tier2_price IS NULL OR old_tier2_price = round(old_tier2_price, 2))
-    AND (new_tier2_price IS NULL OR new_tier2_price = round(new_tier2_price, 2))
-    AND (old_tier3_price IS NULL OR old_tier3_price = round(old_tier3_price, 2))
-    AND (new_tier3_price IS NULL OR new_tier3_price = round(new_tier3_price, 2)));
+    (old_tier1_price IS NULL OR (old_tier1_price = round(old_tier1_price, 2) AND old_tier1_price > -1e10 AND old_tier1_price < 1e10))
+    AND (new_tier1_price IS NULL OR (new_tier1_price = round(new_tier1_price, 2) AND new_tier1_price > -1e10 AND new_tier1_price < 1e10))
+    AND (old_tier2_price IS NULL OR (old_tier2_price = round(old_tier2_price, 2) AND old_tier2_price > -1e10 AND old_tier2_price < 1e10))
+    AND (new_tier2_price IS NULL OR (new_tier2_price = round(new_tier2_price, 2) AND new_tier2_price > -1e10 AND new_tier2_price < 1e10))
+    AND (old_tier3_price IS NULL OR (old_tier3_price = round(old_tier3_price, 2) AND old_tier3_price > -1e10 AND old_tier3_price < 1e10))
+    AND (new_tier3_price IS NULL OR (new_tier3_price = round(new_tier3_price, 2) AND new_tier3_price > -1e10 AND new_tier3_price < 1e10)));
 
 -- 2. Deleting a product keeps (refuses over) its history.
 ALTER TABLE public.cost_history
