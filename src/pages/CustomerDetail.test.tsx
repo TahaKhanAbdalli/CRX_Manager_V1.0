@@ -10,6 +10,7 @@ const {
   mockResetIdempotencyKey,
   customerIdempotencyState,
   dirtyStates,
+  mockProfile,
 } = vi.hoisted(() => {
   // Generations are PER SCOPE, mirroring the real hook's per-scope Map. One shared
   // counter would let a reset on customer B change the key later handed back for
@@ -28,6 +29,7 @@ const {
     mockResetIdempotencyKey: vi.fn((scope: string = '') => { customerIdempotencyState.bump(scope); }),
     customerIdempotencyState,
     dirtyStates: [] as boolean[],
+    mockProfile: { current: { id: 'admin-1', role: 'admin', full_name: 'Admin' } },
   };
 });
 
@@ -89,7 +91,7 @@ vi.mock('../lib/db', async () => ({
   hasRpcCode: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).hasRpcCode,
   RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
 }));
-vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'admin-1', role: 'admin', full_name: 'Admin' } }) }));
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: mockProfile.current }) }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: (_operation: string, _userId: string, intentScope = '') => ({
@@ -854,6 +856,34 @@ describe('CustomerDetail stale whole-record save', () => {
     const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
     expect(payload.p_customer_id).toBeNull();
     expect(JSON.stringify(payload)).not.toContain('Original Farm');
+  });
+
+  it('a sales rep creating a customer gets no split editor and sends no split (only an admin sets it, Mason 2026-10-27)', async () => {
+    mockProfile.current = { id: 'rep-1', role: 'sales_rep', full_name: 'Rep One' };
+    try {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'customers') return customerQuery(() => original);
+        return query({ data: [], error: null });
+      });
+      mockRpc.mockResolvedValue({ data: { customer_id: 'created-1', row_version: 1 }, error: null });
+
+      renderDetailWithNewCustomerJump();
+      await screen.findByDisplayValue('Original Farm');
+      fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+      await screen.findByRole('button', { name: 'Create Customer' });
+
+      expect(screen.queryByLabelText('commission recipient')).not.toBeInTheDocument();
+      expect(screen.getByText(/an admin sets this customer.s commission split/i)).toBeInTheDocument();
+
+      mockRpc.mockClear();
+      fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Rep Farm' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
+      await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+      const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as { p_customer_payload: Record<string, unknown> };
+      expect(payload.p_customer_payload).not.toHaveProperty('default_commission_split');
+    } finally {
+      mockProfile.current = { id: 'admin-1', role: 'admin', full_name: 'Admin' };
+    }
   });
 
   it('restores the create-form defaults on that jump, not an empty form', async () => {

@@ -52,8 +52,9 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
   // Reps work with any customer (2026-10-13, migration 20261013220000) with these exceptions.
   [/^REP_CANNOT_REASSIGN\b/i,
    'Only an admin can change which sales rep a customer is assigned to'],
-  [/^COMMISSION_SPLIT_ADMIN_OR_ASSIGNED_REP\b/i,
-   "Only an admin or this customer's assigned sales rep can change its default commission split"],
+  // Admin-only since 2026-10-14 (migration 20261027080200).
+  [/^COMMISSION_SPLIT_ADMIN_ONLY\b/i,
+   "Only an admin can set or change a customer's default commission split"],
   [/^SALESMAN_SCOPE_DENIED\b/i,
    "Sales reps work under their own name: choose yourself as the salesman, or ask an admin to handle another salesman's work"],
   [/^INVOICE_SCOPE_DENIED\b/i,
