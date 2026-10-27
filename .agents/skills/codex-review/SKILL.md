@@ -402,9 +402,10 @@ one-line reason. This is still the advisory path — it mints no proof.
 rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
 or not). Run it LAST: after the head is frozen and checks are green (and after any CodeRabbit
 fix push, if a requested review arrived), immediately before the migration apply (if any) and
-the merge. The proof binds to that HEAD and to GitHub's real base, so a later commit or a moved base
-voids it; on an unchanged head and base it stays valid for 24 hours (Mason, 2026-10-23), so a PR
-waiting in the merge queue keeps its review. A live migration apply still needs the head's Sol
+the merge. The proof binds to that HEAD and to the base it reviewed, so a later commit voids it; on an
+unchanged head it stays valid for 24 hours (Mason, 2026-10-23), so a PR waiting in the merge queue keeps
+its review. A base that only moved forward afterwards does not void it at the merge gates: the PR may
+merge behind main (Mason, 2026-10-26). A live migration apply still needs the head's Sol
 proof under 30 minutes (the migration landing gate).
 
 **Only on a quiet head (Mason, 2026-10-23).** A fix pushed after Sol for a Codex GitHub App or
@@ -599,8 +600,9 @@ frozen, green head if CodeRabbit has not reviewed it, and any fix commit it prom
 and one new full review (rules: `docs/reference/coderabbit-native-review.md`). A failed CodeRabbit pre-merge "error" check is a finding to fix
 or refute, not a blocker. (`docs/reference/coderabbit-native-review.md` has the history.) Both agent
 merge gates enforce the rule: the newest run of every reported check green with `mergeStateStatus`
-CLEAN, the head containing GitHub's real base, and the Step 3B Sol proof bound to that head and
-base (not needed for a documentation-only change, Step 3B above). `CHANGES_REQUESTED` (from
+CLEAN, and the Step 3B Sol proof bound to that head and to a base the head contains that GitHub's
+base has only moved forward from (Mason, 2026-10-26; not needed for a documentation-only change,
+Step 3B above, which still needs the head to contain GitHub's base). `CHANGES_REQUESTED` (from
 anyone), `--auto` and `--admin` are refused.
 
 **Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof

@@ -52,7 +52,7 @@ import {
   mcpMergeRequest,
   mergeRequestKey,
   proofSearchDirs,
-  proofValid,
+  proofValidForMerge,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
 } from "./codex-push-lib.mjs";
@@ -603,25 +603,23 @@ function gateRequest(request) {
     deny("PR MERGE GATE: GitHub returned an unusable baseRefOid, so the proof cannot be bound to the real base (fail closed).");
   }
 
-  // The head must already contain that base (Sol HIGH, round 7 — the Codex merge
-  // guard already required it). A head behind main merges base-only commits the
-  // Sol proof never reviewed alongside this change, and GitHub does not always
-  // refuse a behind branch, so check it here rather than assume it.
-  let headContainsBase = false;
-  try {
-    headContainsBase = headContainsBaseOnGitHub({ baseSha, headSha, repo: request.repo, gh: hardGateGh });
-  } catch {
-    headContainsBase = false;
-  }
-  if (!headContainsBase) {
-    deny(
-      `PR MERGE GATE: this pull request's head ${String(headSha).slice(0, 12)} does not contain the base it will ` +
-      `merge onto (${baseSha.slice(0, 12)}), or GitHub could not confirm it (fail closed). The reviewed diff cannot ` +
-      "cover everything the merge lands. Update the branch — merge origin/main into it and push — then wait for the " +
-      "checks and run `node scripts/write-codex-push-proof.mjs --carry-forward` to keep the earlier clean Sol review " +
-      "(it falls back to telling you to run the full review when it cannot)."
-    );
-  }
+  // A head behind main may merge (Mason, 2026-10-26; proofValidForMerge). The
+  // proof's own base must still be in the head and behind GitHub's base, which
+  // GitHub's compare answers through the same budgeted gh. Each pair is asked once.
+  const ancestry = new Map();
+  const isAncestorOnGitHub = (ancestor, descendant) => {
+    const key = `${ancestor}...${descendant}`;
+    if (!ancestry.has(key)) {
+      let contained = false;
+      try {
+        contained = headContainsBaseOnGitHub({ baseSha: ancestor, headSha: descendant, repo: request.repo, gh: hardGateGh });
+      } catch {
+        contained = false;
+      }
+      ancestry.set(key, contained);
+    }
+    return ancestry.get(key);
+  };
 
   let valid = false;
   let carried = null;
@@ -633,7 +631,7 @@ function gateRequest(request) {
         if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(f)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
-        if (proofValid(data, headSha, Date.now(), baseSha)) {
+        if (proofValidForMerge({ data, headSha, nowMs: Date.now(), baseSha, isAncestor: isAncestorOnGitHub })) {
           valid = true;
           carried = data.carried_forward === true ? data.carry : null;
           break outer;
@@ -658,8 +656,8 @@ function gateRequest(request) {
   // ── documentation-only exemption (Mason, 2026-10-07) ───────────────────────
   // No proof was found. A pull request whose every changed file is documentation
   // on the allow-list in sol-exempt-lib.mjs merges without one. Asked only HERE,
-  // after the review-objection check, the green pipeline, the head pin and
-  // base containment have all passed. It spends the same budgeted gh, and any
+  // after the review-objection check, the green pipeline and the head pin have
+  // all passed. It spends the same budgeted gh, and any
   // failure inside it answers "Sol required".
   const exemption = solExemptionOnGitHub({ baseSha, headSha, repo: request.repo, gh: hardGateGh });
   if (exemption.exempt) {
@@ -673,14 +671,14 @@ function gateRequest(request) {
 
   deny(
     `PR MERGE GATE: every merge into main needs a fresh gpt-6-sol/high Codex proof bound to this exact ` +
-    `head and GitHub's real base (Mason's autonomous-landing rule, 2026-09-26). None was found, and the ` +
+    `head and a base the head contains (Mason's autonomous-landing rule, 2026-09-26). None was found, and the ` +
     `documentation-only exemption does not apply: ${exemption.reason}.\n\n` +
     `"Review is queued/scheduled" is NOT reviewed. Before merging:\n` +
     `  1. Check out the PR branch (\`gh pr checkout ${request.selector || "<number>"}\`) if it isn't the current branch.\n` +
-    `  2. \`git fetch origin\` so local origin/main equals GitHub's real base (${baseSha.slice(0, 12)}...) — the proof is bound to the base GitHub will merge onto.\n` +
+    `  2. \`git fetch origin\` and merge origin/main into the branch if the head does not contain it (GitHub's base is ${baseSha.slice(0, 12)}...) — the review covers origin/main...HEAD.\n` +
     `  3. Run: node scripts/write-codex-push-proof.mjs — it runs an independent read-only Codex review of origin/main...HEAD and requires a machine verdict.\n` +
     `  4. If Codex flags blockers, fix them, push, and re-run until it reports clean; only a clean verdict on a stable, clean worktree mints the proof.\n` +
-    `  5. Retry the merge. (Proof is bound to head ${headSha || "<head>"} and to the base; it lasts 24 hours on an unchanged head and base, and new commits force a fresh review.)\n` +
+    `  5. Retry the merge. (Proof is bound to head ${headSha || "<head>"} and to the base; it lasts 24 hours on an unchanged head, keeps counting when main only moves forward afterwards, and new commits force a fresh review.)\n` +
     `If this head only merged a newer main into a branch Sol already reviewed clean, run \`node scripts/write-codex-push-proof.mjs --carry-forward\` instead of step 3.\n` +
     `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify.`
   );

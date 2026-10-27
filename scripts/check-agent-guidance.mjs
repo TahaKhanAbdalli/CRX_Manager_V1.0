@@ -190,7 +190,7 @@ const reviewChainChecks = [
   ["pinned reviewer models only", /never a newer model the gates do not yet accept/i],
   ["the Luna exit bar", /no BLOCKER or HIGH remains and every MED\/LOW is fixed, refuted with evidence, or named as a deferral/i],
   ["a fresh exact-SHA Sol review for every merge", /Every merge into `main` requires one fresh independent \*\*Sol\*\* high-effort review of the exact candidate SHA/i],
-  ["the Sol proof binding to HEAD and base", /binds to that HEAD and GitHub's real base, so a later commit or moved base voids it/i],
+  ["the Sol proof binding to HEAD and base", /binds to that HEAD and the base it reviewed, so a later commit voids it/i],
   ["review fixes staying on the same PR", /fixes stay on the same PR/i],
 ];
 for (const [name, pattern] of reviewChainChecks) {
