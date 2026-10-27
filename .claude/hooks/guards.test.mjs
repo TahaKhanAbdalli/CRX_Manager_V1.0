@@ -81,6 +81,15 @@ for (const p of ["Use the emergency flag to stop the deploy", "Flip the kill fla
   ok(isHoldPhrase(p), `tool-phrased stop latches: ${p}`);
 }
 ok(!isHoldPhrase("set X=0 in my user settings to stop the per-commit security reviews"), "a setting change is still descriptive");
+// "it" names no machine part (Luna, PR #1152).
+ok(isHoldPhrase("It should stop pushing to main"), "a bare 'it' subject does not make a stop descriptive");
+// A clause longer than the scan window latches; many stops stay fast (Luna, PR #1152).
+ok(isHoldPhrase(`make the gate ${"word ".repeat(300)}should stop pushing`), "an over-long clause latches");
+{
+  const t0 = Date.now();
+  isHoldPhrase("make the gate stop refusing ".repeat(20000));
+  ok(Date.now() - t0 < 2000, "a huge prompt full of stop words is checked quickly");
+}
 ok(!isHoldPhrase("change the setting to stop the nightly sweep"), "a setting verb plus a settings word is descriptive");
 // A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
 for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", " "]) {
