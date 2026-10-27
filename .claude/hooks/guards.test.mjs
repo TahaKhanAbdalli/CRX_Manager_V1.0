@@ -73,7 +73,9 @@ for (const p of ["stop re-running checks", "Great work. Stop re-running checks",
   "please stop re-running checks", "claude, stop re-running checks", "you stop re-running checks",
   "please wait and stop pushing", "finish the build and stop pushing",
   "Make sure to stop the deploy", "remember to stop the deploy", "don't forget to stop the deploy",
-  "be careful to stop the migration", "try to stop the push"]) {
+  "be careful to stop the migration", "try to stop the push",
+  "At this point stop pushing", "After this run stop pushing", "for now stop deploying",
+  "with that done stop re-running checks"]) {
   ok(isHoldPhrase(p), `an imperative stop before a hyphenated -ing verb latches: ${p}`);
 }
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");

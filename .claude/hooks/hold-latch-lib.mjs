@@ -65,7 +65,8 @@ export function isHoldPhrase(prompt) {
 // "stop" / "pause" used as an ordinary word rather than an order (2026-10-27).
 // Two shapes latched holds Mason never asked for:
 //   - a thing that should stop doing something: "make the gate stop refusing",
-//     "the hook should pause retrying" — the word is followed by an -ing verb;
+//     "the hook should pause retrying" — the word is followed by an -ing verb
+//     and comes right after a modal (should, will …) or later than "make";
 //   - a goal: "set X=0 in my user settings to stop the per-commit security
 //     reviews" — "to stop" plus a determiner, after an ordinary word.
 // Either is skipped only when the two words in front of it in the same clause are
@@ -86,6 +87,9 @@ const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", 
 // "…, and set X=0 in my user settings to stop the reviews" stays descriptive.
 const ACTOR_WORDS = new Set(["i", "you", "we", "us", "me", "lets", "let's", "everyone", "everybody", "guys",
   "claude", "codex", ...WANT_WORDS]);
+const MODAL_WORDS = new Set(["should", "would", "could", "will", "can", "must", "might", "may", "shall",
+  "shouldnt", "wouldnt", "couldnt", "wont", "cant", "shouldn't", "wouldn't", "couldn't", "won't", "can't"]);
+const CAUSATIVE_WORDS = new Set(["make", "makes", "made", "making"]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -97,7 +101,12 @@ function isDescriptiveStop(text, start, end) {
   const next = (/^[ \t]+([A-Za-z]+(?:-[A-Za-z]+)*)/.exec(text.slice(end)) || [])[1]?.toLowerCase().replace(/-/g, "") || "";
   if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w) || ACTOR_WORDS.has(w.replace(/'.*$/, "")))) return false;
   const [twoBack, oneBack] = before.slice(-2);
+  // The -ing form is skipped only when the clause positively describes something:
+  // a modal right before it ("the hook should pause retrying") or a causative
+  // earlier ("make the gate stop refusing"). An introductory phrase alone ("At
+  // this point stop pushing") is still an order (Codex App review, PR #1152).
   if (next.length > 4 && next.endsWith("ing")) {
+    if (!MODAL_WORDS.has(oneBack) && !before.some((w) => CAUSATIVE_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
   }
   if (oneBack === "to" && DETERMINERS.has(next)) {
