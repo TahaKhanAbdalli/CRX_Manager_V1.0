@@ -71,14 +71,15 @@ therefore fails earlier and with a clearer error, while the trigger remains auth
 Quote sections and quote items are RPC-owned: browser roles may read them but must not write them directly. `save_quote()` locks the parent quote and replaces its child collection in the same transaction, so its row-version check covers both header and line edits.
 
 ### Rules
-- Tier pricing: customers have assigned tier (1-3). Quote inherits the customer's tier but can be overridden per item.
+- Tier pricing: customers have assigned tier (1-3). Quote inherits the customer's tier but can be overridden per item. A tier or customer change re-prices tier-priced lines and keeps manual prices.
+- **Sent-price lock (migration `20261027040000`; Mason, 2026-10-13/14).** A draft that was never sent follows today's tier price on every save. Once a quote has a sent version (`quote_versions`), `save_quote` keeps the price of each line the save names by its saved id (same product); only a manual price (`price_override`) or the line's `use_todays_price` flag changes it, and a new line (or one matched only by product) takes today's price. The save reply's `item_prices` tells the screen the stored price. The version last sent is the price authority: `_assert_quote_prices_as_sent` refuses Convert, Partial Order (`draw_down_quote`), Schedule Job (`create_job_from_quote_section`) and the change of status into `accepted` with `QUOTE_RESEND_REQUIRED` when the customer changed or a line is not a sent line (same id and product) at its sent price. A quantity-, rate-, acre- or note-only revision converts at the sent prices without a re-send. Rewind (`restore_quote_version`) restores the last sent version's customer, tier and lines (under their own ids, with their manual prices), and each section's field when it still belongs to that customer. Convert skips the check only where it returns an existing order (an accepted quote with an order, or a drawn booking); a quote reopened after its order was cancelled is checked again. Editing a sent quote keeps its expiry; every send sets it to the Chicago business date plus `valid_days`. An expired quote is renewed with Duplicate (a new draft at today's prices). If cost rises above a locked price, Convert keeps the price and the `order_items` below-cost trigger requires an admin's approval with a reason. The blend-ticket and field-application invoice paths still read the current quote price (KNOWN_ISSUES KI-81).
 - `is_planned` flag: when true, inventory holds reserve stock while the quote is `draft`, `sent` or `revised`. They are released when the quote is accepted (including by conversion), declined, expired, cancelled or closed, or when `is_planned` is switched off.
 - Commission splits stored as JSONB: `{ splits: [{ recipient, recipient_user_id, percentage }] }` — the immutable `recipient_user_id` (profile UUID), not the display name, routes the money (since `20260722174029`).
 - Always call `logActivity()` after send/accept/decline events.
 
 ### What can go wrong
 - Forgetting to create a `quote_versions` snapshot before sending
-- Changing product prices after a quote was sent (the snapshot preserves the original)
+- Changing product prices after a quote was sent (the sent version is the price authority; a revision that changes a price must be sent again before it is billed)
 - Commission splits that don't add up to 100%
 
 ---

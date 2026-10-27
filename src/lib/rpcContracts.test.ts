@@ -1397,6 +1397,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   '_cancel_order_idem_impl_20260721',
   '_cancel_return_intent_impl_20260812',
   '_draw_down_quote_below_cost_impl_20260810',
+  '_draw_down_quote_intent_impl_20260819',
   '_price_order_below_cost_impl_20260810',
   '_restore_quote_version_below_cost_impl_20260810',
   '_save_field_app_split_invoice_impl',
@@ -1667,6 +1668,17 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // impl under its post-rename name, so the transitive-mutation walker could
   // not previously see through the wrapper to classify it at all.
   restore_quote_version: 'delegated',
+  // Same shape: the wrapper is _begin_below_cost_money_write(...) then RETURN of
+  // _convert_quote_to_order_below_cost_impl_20260810, which owns the operation-scoped
+  // check_idempotency lookup and the receipt update. 20261027040000 (sent-price lock) is the
+  // first on-disk CREATE of that impl under its post-rename name, so only now can the walker
+  // see through the wrapper.
+  convert_quote_to_order: 'delegated',
+  // The draw-down cutover barrier: takes the advisory lock, runs the sent-price check and the
+  // below-cost context, then RETURNs _draw_down_quote_below_cost_impl_20260810 with the key
+  // unchanged; that impl owns the replay. Direct EXECUTE is postgres-only. First re-emitted on
+  // disk by 20261027040000.
+  _draw_down_quote_intent_impl_20260819: 'delegated',
   // The private-provenance wrapper owns a bound replay claim, adds stable
   // order-item serialization and an owner-only creation claim, then invokes
   // the canonical private implementation without a second legacy key.
