@@ -68,7 +68,8 @@ export function isHoldPhrase(prompt) {
 //     "the hook should pause retrying" — the word is followed by an -ing verb
 //     and comes right after a modal (should, will …) or later than "make";
 //   - a goal: "set X=0 in my user settings to stop the per-commit security
-//     reviews" — "to stop" plus a determiner, after an ordinary word.
+//     reviews" — "to stop" plus a determiner, in a clause that names a setting
+//     or assigns a value with "=".
 // Either is skipped only when the two words in front of it in the same clause are
 // not addressing ones and no earlier word in that clause names a person or a
 // want, so "stop pushing", "you should stop pushing", "ok stop", "I need the
@@ -90,6 +91,8 @@ const ACTOR_WORDS = new Set(["i", "you", "we", "us", "me", "lets", "let's", "eve
 const MODAL_WORDS = new Set(["should", "would", "could", "will", "can", "must", "might", "may", "shall",
   "shouldnt", "wouldnt", "couldnt", "wont", "cant", "shouldn't", "wouldn't", "couldn't", "won't", "can't"]);
 const CAUSATIVE_WORDS = new Set(["make", "makes", "made", "making"]);
+const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env", "flag", "flags",
+  "option", "options", "variable", "variables"]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -109,7 +112,12 @@ function isDescriptiveStop(text, start, end) {
     if (!MODAL_WORDS.has(oneBack) && !before.some((w) => CAUSATIVE_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
   }
+  // "to stop the …" is skipped only as a configuration goal: the clause names a
+  // setting or assigns a value ("set X=0 in my user settings to stop the
+  // reviews"). A task or reminder ("Your next task is to stop the deploy", "Use
+  // the kill switch to stop the deploy") still latches (Codex App review, PR #1152).
   if (oneBack === "to" && DETERMINERS.has(next)) {
+    if (!clause.includes("=") && !before.some((w) => CONFIG_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
   }
   return false;
