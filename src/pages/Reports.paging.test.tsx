@@ -54,6 +54,8 @@ function serverRead(source: string, all: () => Row[]): Record<string, unknown> {
     if (H.failPage?.source === source && range && range[0] >= H.failPage.from) {
       return { data: null, error: { message: 'connection reset' }, count: null };
     }
+    // A source set to null answers with no list and no error (To-Do 10.5).
+    if (rows === null) return { data: null, error: null, count: null };
     const [from, to] = range ?? [0, Infinity];
     return { data: rows.slice(from, to + 1).slice(0, SERVER_ROW_CAP), error: null, count: countRequested ? rows.length : null };
   };
@@ -71,7 +73,7 @@ vi.mock('../lib/db', () => ({
       H.rpcCalls.push({ name, args });
       // The profitability report answers per grouping: H.functions['get_profitability_report:customer'].
       const source = name === 'get_profitability_report' ? `${name}:${String(args?.p_group_by)}` : name;
-      const read = serverRead(source, () => H.functions[source] ?? []);
+      const read = serverRead(source, () => (source in H.functions ? H.functions[source] : []));
       return (read.select as (c: string, o?: { count?: string }) => unknown)('*', options);
     },
   },
@@ -233,6 +235,15 @@ describe('Reports past the 1,000-row server cap', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded completely');
     expect(screen.queryByTestId('rows:No customer data')).not.toBeInTheDocument();
     expect(H.toast).toHaveBeenCalledWith('error', 'Failed to load customer profitability.');
+    expect(screen.getByRole('button', { name: /Export CSV/ })).toBeDisabled();
+  });
+
+  it('treats a page of the profit report that answers with no list as a failure, not an empty report', async () => {
+    H.functions['get_profitability_report:customer'] = null as unknown as Row[];
+    render(<MemoryRouter><Reports /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded completely');
+    expect(screen.queryByTestId('rows:No customer data')).not.toBeInTheDocument();
   });
 
   it('shows an error and blocks export, not the first 1,000 rows, when a later page fails', async () => {

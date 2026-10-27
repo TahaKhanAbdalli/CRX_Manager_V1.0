@@ -24,7 +24,7 @@ import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
-import { fetchAllRows, fetchAllRowsForIds } from '../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../lib/pagedRead';
 import { COMMISSION_COLUMNS, withAdminCosts } from '../lib/costFields';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
@@ -298,7 +298,8 @@ export default function Reports() {
   const fetchProfitabilityGroups = useCallback(async (
     groupBy: 'customer' | 'product' | 'month',
   ): Promise<ProfitabilityReportRow[] | null> => {
-    const { data, error } = await fetchAllRows<ProfitabilityReportRow>((from, to) => supabase
+    // pageWithList: a page answered with no list is a failure, not an empty report.
+    const { data, error } = await fetchAllRows<ProfitabilityReportRow>((from, to) => pageWithList(supabase
       .rpc('get_profitability_report', {
         p_group_by: groupBy,
         p_start_date: startDate || undefined,
@@ -306,7 +307,7 @@ export default function Reports() {
       }, { count: 'exact' })
       // One row per group: the group key is unique, so the pages neither skip nor repeat a row.
       .order('group_key')
-      .range(from, to));
+      .range(from, to)));
     if (error) {
       Sentry.captureException(new Error(error.message), { extra: { context: `profitability_report_${groupBy}` } });
       return null;
