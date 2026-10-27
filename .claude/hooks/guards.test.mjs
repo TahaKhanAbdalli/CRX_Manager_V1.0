@@ -75,6 +75,10 @@ ok(isHoldPhrase("You'd better stop pushing"), "a contracted person (you'd) still
 ok(isHoldPhrase("we’re going to stop deploying"), "a curly-apostrophe contraction (we’re) still latches");
 ok(!isHoldPhrase("the hook should stop re-running checks"), "a hyphenated -ing verb is descriptive");
 ok(!isHoldPhrase("make the gate stop re-running checks"), "a descriptive stop before a hyphenated -ing verb is skipped");
+// A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
+for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", " "]) {
+  ok(isHoldPhrase(`make the gate stop refusing${sep}stop pushing`), `a real stop after ${JSON.stringify(sep)} still latches`);
+}
 for (const p of ["stop re-running checks", "Great work. Stop re-running checks", "ok stop re-running checks",
   "please stop re-running checks", "claude, stop re-running checks", "you stop re-running checks",
   "please wait and stop pushing", "finish the build and stop pushing",

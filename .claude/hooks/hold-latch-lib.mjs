@@ -103,7 +103,10 @@ const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our
   "a", "an", "any", "all", "every", "each"]);
 
 function isDescriptiveStop(text, start, end) {
-  const clause = text.slice(0, start).split(/[.!?;:,\n—–]|\s-\s|--/).pop();
+  // Every line break ends a clause, and so does an earlier stop word: otherwise
+  // "make the gate stop refusing" lends its make and gate to a real "stop
+  // pushing" on the next line (Luna review, PR #1152).
+  const clause = text.slice(0, start).split(/[.!?;:,\n\r\u2028\u2029\u0085—–]|\s-\s|--|\b(?:stop|pause|hold)\b/i).pop();
   const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);
   // "re-running" reads as one word; a contraction counts as its base word, so
   // "You'd better stop pushing" is addressed (Luna review, PR #1152).
