@@ -4,6 +4,8 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**Live capture — 2026-10-27 08:26 UTC (3:26 AM Central; read-only `execute_sql` on `supabase_migrations.schema_migrations`, the full ledger, row by row, after row 989 applied for PR #1122):** 1066 rows / 1059 distinct names, `max(version)` `20261027044721` = `20261026140000_product_price_history_starting_snapshot` (row 989). The effective ordering high-water (each name's 14-digit stamp, else its version) is `20261026140000`, and no live row's effective stamp is at or above `20261027030000` (row 991, PR #1138, not yet applied).
+
 **Live capture — 2026-10-27 after 02:05 UTC (9:05 PM Central, 2026-10-26; read-only live check by the applying session, after row 985 applied for PR #1103):** 1065 rows, `max(version)` `20261027020546` = `20261026050000_field_tables_follow_field_access` (row 985). Rows 983 (`20261026142537`) and 984 (`20261026214418`) applied earlier on 2026-10-26. The effective ordering high-water is `20261026050000`.
 
 **Live capture — 2026-10-26 after 03:07 UTC (10:07 PM Central, 2026-10-25; read-only `execute_sql` on `supabase_migrations.schema_migrations`, the full ledger, after row 982 applied for PR #1080):** 1062 rows / 1055 distinct names, `max(version)` `20261026030708` = `20261023100000_revoke_load_recipe_into_job_app_access` (row 982). The row before it is `20261026021016` = `20261023090000_field_functions_require_field_access` (row 980, PR #1065). The effective ordering high-water is `20261023100000`.
