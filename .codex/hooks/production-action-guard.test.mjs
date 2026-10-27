@@ -1162,7 +1162,18 @@ try {
       `every listed protected file is protected by the regex too: ${file}`,
     );
   }
-  assert.equal(PROTECTED_HARNESS_FILES.length, 17, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  assert.equal(PROTECTED_HARNESS_FILES.length, 18, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  // app-repo-identity decides which repository the push gate and the CodeRabbit
+  // waiver treat as the app repo, and loads at startup through codex-push-lib
+  // (Codex App P1 on #1149): Codex may not edit it.
+  for (const file of [".claude/hooks/app-repo-identity.mjs", ".claude\\hooks\\app-repo-identity.mjs", ".claude/hooks/../hooks/app-repo-identity.mjs"]) {
+    assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: file } }).blocked, true,
+      `Codex may not write the app-repo identity module: ${file}`);
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: `*** Begin Patch\n*** Update File: ${file}\n@@\n-a\n+b\n*** End Patch` }).blocked, true,
+      `nor patch it: ${file}`);
+  }
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "Set-Content .claude/hooks/app-repo-identity.mjs -Value ''" } }).blocked, true,
+    "nor overwrite the app-repo identity module from the shell");
   // coderabbit-skip-lib decides whether Mason waived a money PR's CodeRabbit review
   // and is imported at startup (Codex App P1 on #1035): Codex may not edit it.
   for (const file of [".claude/hooks/coderabbit-skip-lib.mjs", ".claude\\hooks\\coderabbit-skip-lib.mjs", ".claude/hooks/../hooks/coderabbit-skip-lib.mjs"]) {
@@ -1181,6 +1192,22 @@ try {
       assert.ok(PROTECTED_HARNESS_FILES.includes(file), `startup import ${file} is on the protected harness list`);
     }
     assert.ok(imports.includes(".claude/hooks/coderabbit-skip-lib.mjs"), "the import scan sees the skip module");
+    // ...and every module THOSE import, transitively: a library one level down
+    // runs at startup just the same (Codex App P1 on #1149, app-repo-identity).
+    const seen = new Set(imports);
+    const queue = [...imports];
+    while (queue.length) {
+      const file = queue.shift();
+      const text = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+      for (const m of text.matchAll(/^import [^;]*? from "\.\/([^"]+\.mjs)";/gm)) {
+        const dep = `${file.slice(0, file.lastIndexOf("/") + 1)}${m[1]}`;
+        if (seen.has(dep)) continue;
+        seen.add(dep);
+        queue.push(dep);
+        assert.ok(PROTECTED_HARNESS_FILES.includes(dep), `startup import ${dep} (via ${file}) is on the protected harness list`);
+      }
+    }
+    assert.ok(seen.has(".claude/hooks/app-repo-identity.mjs"), "the transitive scan sees the app-repo identity module");
   }
   // sol-exempt-lib decides whether a merge needs Sol and is imported at startup
   // (Mason's documentation-only exemption, 2026-10-07): Codex may not edit it.
