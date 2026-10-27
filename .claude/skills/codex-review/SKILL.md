@@ -422,8 +422,10 @@ Mason's `skip coderabbit #<PR>` waiver, from any session — the merging session
 An unreadable answer refuses; retry in a minute. `--dry-run` prints the decision; `--carry-forward`
 skips it. Merge main in before this point, not after Sol alongside fixes (ship.md Step 8 item 4).
 
-**Main moved after a clean Sol pass? Carry it forward (Mason, 2026-10-21).** Do not pay for a second
-full Sol review just because another PR landed. Merge the new main into the branch (`git fetch origin`,
+**Main moved after a clean Sol pass? Usually nothing to do (Mason, 2026-10-26).** The merge gates accept
+a head behind main when the head contains the base its proof reviewed and main only moved forward, so
+merge as it is. Catch up only when GitHub reports a conflict, and then carry the review forward
+(Mason, 2026-10-21) rather than paying for a second full Sol review. Merge the new main into the branch (`git fetch origin`,
 `git merge origin/main`, push; no other edits in that commit), wait for the checks on the new head,
 then run `node scripts/write-codex-push-proof.mjs --carry-forward` (add `--dry-run` to see the
 decision only) immediately before the merge. It mints a carried proof for the new head only when:
