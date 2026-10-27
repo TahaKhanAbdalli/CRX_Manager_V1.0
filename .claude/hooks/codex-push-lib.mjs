@@ -2590,6 +2590,28 @@ export function proofValid(data, headSha, nowMs, expectedBaseSha, maxAgeMs = SOL
     && (!carried || carryRootReviewOk(data, nowMs));
 }
 
+// A PR merge may land a head that is BEHIND main (Mason, 2026-10-26: GitHub's
+// "branch must be up to date" rule was turned off, and the merge gates follow).
+// A clean Sol proof of this exact head still counts after main moves on when the
+// base it was reviewed against (1) is contained in the head, so the reviewed
+// origin/main...HEAD diff was exactly this PR's own changes, and (2) is the base
+// the merge lands on or an ancestor of it, so main only moved forward. Accepted
+// risk: the PR merges alongside newer main commits no review saw together with
+// it. `isAncestor(a, b)` answers "is commit a contained in commit b"; any throw
+// or unusable SHA answers "not covered".
+export function proofValidForMerge({ data, headSha, nowMs, baseSha, isAncestor }) {
+  const SHA = /^[0-9a-f]{40}$/i;
+  const proofBase = String(data?.base_sha || "");
+  if (!SHA.test(proofBase) || !SHA.test(String(headSha || "")) || !SHA.test(String(baseSha || ""))) return false;
+  if (!proofValid(data, headSha, nowMs, proofBase)) return false;
+  try {
+    if (isAncestor(proofBase, headSha) !== true) return false;
+    return proofBase === baseSha || isAncestor(proofBase, baseSha) === true;
+  } catch {
+    return false;
+  }
+}
+
 // The full review at the root of a carry chain must name a real head and base,
 // come no later than the carry itself, and be inside the 24 hours.
 function carryRootReviewOk(data, nowMs) {

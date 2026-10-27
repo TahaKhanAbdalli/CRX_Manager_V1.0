@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-26 — A pull request may merge behind main
+
+**Decision (Mason, in chat, 2026-10-26: "turn off the branch must be up to date setting first", then "let the merge gates accept a branch that is behind main, keep the migration gate as is").** GitHub's classic branch protection on `main` now has `strict: false` (changed and re-read live 2026-10-26; the `protect-main` ruleset was already `false`). Both agent merge gates accept a head behind main when its clean Sol proof names that exact head, was reviewed against a base the head contains, and GitHub's base has only moved forward from that review base (`proofValidForMerge()` in `.claude/hooks/codex-push-lib.mjs`).
+**Why.** Every merge on main voided every other ready PR's Sol proof: the agent had to merge main in, wait for checks, and carry the review forward or re-run Sol, a large share of the merge-gate friction in the 2026-10-26 guard inventory.
+**What this forbids/implies:** accepted risk: a PR's own changes merge alongside newer main commits that no review or CI run saw together with them. A new commit on the PR still needs a fresh (or carried) Sol review, and Sol still reviews a head that contains main (merge main in before Sol). Unchanged: the migration landing gate (a live apply needs the head to contain GitHub's base), a direct push to main, and the documentation-only exemption (a behind docs-only PR is caught up first; it needs no Sol rerun).
+
 ## 2026-10-25 — Field staff sent to a job see the entire job; jobs they are not on stay hidden
 
 **Decision (Mason, in the row 11.4 part B session, 2026-10-25: "they should be able to see the entire job" and "and entire ticket none of this needs hidden", then chose "Whole job, others hidden").** An applicator sent to a job, whether as the whole-job applicator, through a per-field dispatch or as a member of the dispatched ground crew, sees that whole job and its ticket while the assignment is current: every field of it, its maps, billing splits and billed customers, and its chemicals. Fields and jobs they are not assigned to stay hidden. Migration `20261026050000` (row 985, PR #1103) widens part A's `_can_see_field` from "the one field of my dispatch" to "every field of a job I am dispatched on".

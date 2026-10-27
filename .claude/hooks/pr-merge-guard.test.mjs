@@ -15,6 +15,7 @@ import {
   mcpMergeRequest,
   newestCheckRollup,
   proofSearchDirs,
+  proofValidForMerge,
   pullRequestApproved,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
@@ -588,18 +589,18 @@ eq(
   0,
   "no hard gate calls gh() directly, around the budget",
 );
-// Sol HIGH, round 7: the second hard gh call — GitHub's compare of base...head —
-// is handed hardGateGh itself, so it spends the same budget, and its denial sits
-// before the proof scan's single allow point.
+// Mason, 2026-10-26: a head behind main may merge. The proof's ancestry questions
+// go to GitHub's compare through hardGateGh itself, so they spend the same budget,
+// and the proof scan accepts only what proofValidForMerge accepts.
 ok(
-  /headContainsBaseOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\)/.test(gateRequestSource),
-  "the base-containment check runs through the budgeted hardGateGh",
+  /headContainsBaseOnGitHub\(\{\s*baseSha:\s*ancestor,\s*headSha:\s*descendant,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\)/.test(gateRequestSource),
+  "the proof's ancestry checks run through the budgeted hardGateGh",
 );
 ok(
-  gateRequestSource.indexOf("if (!headContainsBase)") > 0
-    && gateRequestSource.indexOf("if (!headContainsBase)") < gateRequestSource.indexOf("advisoryQueue.push(request)"),
-  "a head behind its base is denied before the merge's allow point",
+  /proofValidForMerge\(\{\s*data,\s*headSha,\s*nowMs:\s*Date\.now\(\),\s*baseSha,\s*isAncestor:\s*isAncestorOnGitHub\s*\}\)/.test(gateRequestSource),
+  "the proof scan binds the proof to this head, GitHub's base and GitHub's ancestry answers",
 );
+ok(!/if \(!headContainsBase\)/.test(gateRequestSource), "a head behind its base is no longer refused on that ground alone");
 
 // ── documentation-only exemption (Mason, 2026-10-07) ─────────────────────────
 // The behaviour is proven in sol-exempt-lib.test.mjs (the contract, with mutants)
@@ -625,7 +626,6 @@ ok(
     ["the --match-head-commit pin", "if (String(request.matchHeadCommit"],
     ["the --auto refusal", "if (request.auto)"],
     ["the green pipeline", "if (!pullRequestChecksGreen(pr))"],
-    ["the head-contains-base check", "if (!headContainsBase)"],
     ["the Sol proof scan", "if (valid) {"],
   ]) {
     ok(at(needle) > 0 && at(needle) < exemptionCall, `${gate} is checked before the exemption is asked`);
@@ -668,6 +668,38 @@ ok(
   eq(ghApiRepoPath("owner/re po"), null, "an unrecognizable repo is null, so the gate fails closed");
   eq(ghApiRepoPath("a/b/c/d"), null, "too many segments is null");
   ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, repo: "a/b/c/d", gh: fakeGh("0") }), "an unusable --repo is refused");
+}
+
+// proofValidForMerge (Mason, 2026-10-26): a clean Sol proof of this exact head
+// keeps counting after main moves forward, never after the head changes.
+{
+  const H = "a".repeat(40);   // the PR head
+  const B0 = "b".repeat(40);  // main when Sol reviewed the head (the head contains it)
+  const B1 = "c".repeat(40);  // main now, moved forward from B0
+  const X = "d".repeat(40);   // a base the head does not contain
+  const now = Date.now();
+  const proof = (over = {}) => ({
+    codex_ran: true, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high",
+    head_sha: H, base_sha: B0, timestamp: new Date(now - 60_000).toISOString(), ...over,
+  });
+  const edges = new Set([`${B0}>${H}`, `${B0}>${B1}`]);
+  const isAncestor = (a, b) => edges.has(`${a}>${b}`);
+  const check = (data, over = {}) => proofValidForMerge({ data, headSha: H, nowMs: now, baseSha: B1, isAncestor, ...over });
+
+  ok(check(proof(), { baseSha: B0 }), "a proof bound to the base the merge lands on still counts");
+  ok(check(proof()), "main moved forward after the review: the proof of the unchanged head still counts");
+  ok(!check(proof({ head_sha: X })), "a proof of a different head never counts");
+  ok(!check(proof({ base_sha: X })), "a proof whose base the head does not contain never counts");
+  ok(!check(proof(), { isAncestor: (a, b) => a === B0 && b === H }), "main that did not move forward from the reviewed base is refused");
+  ok(!check(proof(), { baseSha: B0, isAncestor: () => false }), "even an equal base needs the head to contain it");
+  ok(!check(proof(), { isAncestor: () => { throw new Error("HTTP 500"); } }), "a failed ancestry answer is refused (fail closed)");
+  ok(!check(proof(), { isAncestor: () => "true" }), "only a real true answer counts");
+  ok(!check(proof({ base_sha: "" })), "a proof with no base never counts");
+  ok(!check(proof({ base_sha: "main" })), "a proof with a non-sha base never counts");
+  ok(!check(proof(), { baseSha: "main" }), "an unusable GitHub base is refused");
+  ok(!check(proof({ verdict: "blocked" })), "a non-clean verdict never counts");
+  ok(!check(proof({ model: "gpt-6-luna" })), "a Luna review never counts");
+  ok(!check(proof({ timestamp: new Date(now - 25 * 3600_000).toISOString() })), "a proof older than 24 hours never counts");
 }
 ok(
   /function\s+listWorktreesFromProjectDir\(\)\s*\{\s*if \(!hardGateBudget\.admit\(\)\) deny\(/.test(guardSource),

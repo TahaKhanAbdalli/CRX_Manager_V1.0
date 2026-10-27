@@ -1958,12 +1958,13 @@ try {
       nowMs: now,
       runGh: ghFor(docsPr, compareOf(["docs/plans/2026-10-07-note.md"])),
     }).blocked, true, "--auto stays refused for docs-only PRs");
-    // GitHub's base moved past the head: the local ancestry check refuses before
-    // the exemption is ever asked, even though the comparison answer looks clean.
+    // GitHub's base moved past the head. A behind head may merge with a Sol proof
+    // (Mason, 2026-10-26), but the documentation-only exemption still needs a
+    // clean base..head comparison, so with no proof it stays refused.
     const movedBase = git(docs.repo, ["commit-tree", `${docs.base}^{tree}`, "-p", docs.base, "-m", "main moved"]);
     const behind = mergeDocs({ pr: { ...docsPr, baseRefOid: movedBase }, compare: compareOf(["docs/plans/2026-10-07-note.md"], { merge_base: movedBase }) });
-    assert.equal(behind.blocked, true, "a docs-only head that does not contain GitHub's base is refused");
-    assert.match(behind.reason, /does not\s+contain the base/, "by the head-contains-base gate, not the exemption");
+    assert.equal(behind.blocked, true, "a docs-only head that does not contain GitHub's base, with no proof, is refused");
+    assert.match(behind.reason, /documentation-only exemption does not apply/, "by the exemption, which does not cover a behind head");
   }
 
   // ── Mason's manual review override is his alone (2026-09-01) ──────────────
@@ -3847,38 +3848,41 @@ try {
       runGh: () => json,
     });
 
-    // A proof bound to the STALE local origin/main must no longer pass.
+    // Mason, 2026-10-26: a head behind main may merge. A proof of this exact head,
+    // reviewed against the main it contains, keeps counting once GitHub's main
+    // has only moved forward from that review base.
     writeProof(stale.repo, { ...valid, head_sha: stale.sha, base_sha: stale.base });
     const staleAttempt = mergeWith(prAt(githubBase));
     assert.equal(
       staleAttempt.blocked,
-      true,
-      "proof bound to stale local origin/main is denied when GitHub's base has moved"
+      false,
+      `proof of the unchanged head still counts after GitHub's main moved forward: ${staleAttempt.reason || ""}`
     );
     console.log(
       `TRANSCRIPT BASEOID: local origin/main=${stale.base.slice(0, 12)} ` +
-      `githubBase=${githubBase.slice(0, 12)} -> stale-bound proof blocked=${staleAttempt.blocked}`
+      `githubBase=${githubBase.slice(0, 12)} -> behind head with an earlier-base proof blocked=${staleAttempt.blocked}`
     );
 
-    // Rebinding the proof to GitHub's base is NOT sufficient on its own: this head
-    // is still BEHIND that base, so `baseSha...headSha` (three-dot = merge-base..head)
-    // silently omits every base-only commit and the review cannot have covered the
-    // real merge result. Risky merges must fail closed until the branch is updated.
-    // (Codex P1 #2, 2026-07-25 — the earlier revision of this test wrongly expected
-    // this case to pass.)
+    // A main with no shared history (rewritten) voids it. The ancestry rule itself
+    // is proven case by case on proofValidForMerge in pr-merge-guard.test.mjs.
+    const rewrittenBase = git(stale.repo, ["commit-tree", `${githubBase}^{tree}`, "-m", "main rewritten"]);
+    assert.equal(mergeWith(prAt(rewrittenBase)).blocked, true, "a GitHub base with no shared history is denied");
+
+    // A proof bound to a base the head does NOT contain never counts: its review
+    // diff (merge-base..head) was not this PR's own change against that base.
     writeProof(stale.repo, { ...valid, head_sha: stale.sha, base_sha: githubBase });
     const behindBase = mergeWith(prAt(githubBase));
     assert.equal(
       behindBase.blocked,
       true,
-      "risky head that does not contain GitHub's base is denied even with a base-bound proof"
+      "a proof bound to a base the head does not contain is denied"
     );
     assert.match(
       String(behindBase.reason || behindBase.message || JSON.stringify(behindBase)),
-      /does not contain the base/,
-      "behind-base denial explains that the branch must be updated"
+      /base the head does not contain/,
+      "the denial explains the head must contain the proof's base"
     );
-    console.log(`TRANSCRIPT BASEOID: risky head behind GitHub base -> blocked=${behindBase.blocked}`);
+    console.log(`TRANSCRIPT BASEOID: proof bound to an uncontained base -> blocked=${behindBase.blocked}`);
 
     // Once the branch actually contains the base, the base-bound proof clears it.
     git(stale.repo, ["merge", "--no-edit", "-q", githubBase]);
