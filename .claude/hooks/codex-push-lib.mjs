@@ -662,7 +662,10 @@ export function reviewProofPathMentioned(value) {
   // Every other file a gate TRUSTS is named here too (adversarial review
   // 2026-10-18): the migration reviewer proof, every owner-approval record (a
   // deleted used-code marker would let an approval code be replayed), the
-  // AUTOPILOT.on flag, the applied-migrations snapshot, and hold.json. Before,
+  // AUTOPILOT.on flag, the applied-migrations snapshot, and hold.json (the
+  // no-session fallback; each session's hold-<session_id>.json since 2026-10-27
+  // is covered by the state-directory rule below, as every path to it names
+  // .claude/session-state). Before,
   // only the broad "any .claude mention plus a destructive word" rule covered
   // them, and `cp`/`tee`/`echo >` into them walked through; that broad rule is
   // now narrowed to the state directory itself, so the names carry the weight.

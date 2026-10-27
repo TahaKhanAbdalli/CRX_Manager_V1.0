@@ -74,7 +74,9 @@ const temp = mkdtempSync(path.join(os.tmpdir(), "crx-hook-router-"));
 try {
   let output = run(PROMPT, { prompt: "pause now" }, { projectDir: temp });
   ok(output?.hookSpecificOutput?.additionalContext.includes("HOLD LATCHED"), "hold rule remains stateful and visible");
-  ok(existsSync(path.join(temp, ".claude", "session-state", "hold.json")), "hold router writes the original latch");
+  ok(existsSync(path.join(temp, ".claude", "session-state", "hold.json")), "hold router writes the shared latch when no session_id arrives");
+  run(PROMPT, { prompt: "pause now", session_id: "router-1" }, { projectDir: temp });
+  ok(existsSync(path.join(temp, ".claude", "session-state", "hold-router-1.json")), "hold router writes the session's own latch");
 
   // The autopilot reminder was unwired on 2026-10-02 (Mason), so a hands-free
   // request neither reminds nor writes the OVERNIGHT-INTENT flag that used to

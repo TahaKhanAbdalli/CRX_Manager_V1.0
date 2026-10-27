@@ -42,6 +42,13 @@ ok(isHoldPhrase("lets just stop here, cancel all background work"), "stop+cancel
 ok(isHoldPhrase("pause this loop"), "pause");
 ok(isHoldPhrase("im just scoping a future session, dont build yet"), "scope-only");
 ok(!isHoldPhrase("build me the invoices page"), "normal build is not a hold");
+// 2026-10-27: a descriptive stop / pause is skipped; an addressed one still latches.
+ok(!isHoldPhrase("the agent should stop pushing to main"), "descriptive stop + -ing is not a hold");
+ok(!isHoldPhrase("add a setting to stop the nightly sweep"), "a goal ('to stop the …') is not a hold");
+ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");
+ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
+ok(isHoldPhrase("I want to stop the merge"), "Mason's own want still latches");
+ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).
 eq(holdDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "warn", "edit source warns under hold");

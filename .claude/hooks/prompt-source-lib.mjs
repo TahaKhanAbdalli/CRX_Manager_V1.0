@@ -49,17 +49,20 @@ export const MACHINE_TAG_NAMES = [
   "command-name",
   "local-command-stdout",
   "heartbeat",
+  // The desktop app's CI / Auto-fix notice about a watched PR (2026-10-27).
+  "ci-monitor-event",
 ];
 
-// Full envelope tags anywhere in the prompt...
+// Full envelope tags anywhere in the prompt...  A relayed copy may carry the
+// harness's neutralised form (`<\~tag>`), so backslashes and a "~" are allowed.
 const CONTAINS_MACHINE_TAG_RE = new RegExp(
-  "<(?:" + MACHINE_TAG_NAMES.join("|") + ")>",
+  "<\\\\*~?(?:" + MACHINE_TAG_NAMES.join("|") + ")>",
   "i"
 );
 // ...or the trimmed prompt STARTS with one of those tag names (covers tags that
 // carry attributes, e.g. <task-notification source="...">).
 const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
-  "^<(?:" + MACHINE_TAG_NAMES.join("|") + ")\\b",
+  "^<\\\\*~?(?:" + MACHINE_TAG_NAMES.join("|") + ")\\b",
   "i"
 );
 
@@ -219,8 +222,22 @@ function nextNonBlank(lines, from) {
   return j;
 }
 
+// INCIDENT (2026-10-27, twice). The hook received a hand-back as the open tag
+// itself, `<agent-message from="…">` on the first line, with no "Another Claude
+// session sent a message:" preamble (the transcript shows the preamble; the hook
+// payload does not), so the report's own words latched the hold. Replayed: the
+// same text with the preamble does not latch. Without a preamble, the open tag
+// must sit alone at column zero and the very next line must be the harness's
+// WHOLE frame line (HANDBACK_FRAME_LINE above), exactly; the report then ends as
+// rule 2 describes. A typed tag, or one followed by anything else, is Mason's.
+function isBareTagHandbackAt(lines, i) {
+  return AGENT_OPEN_RE.test(lines[i].trimEnd()) &&
+    i + 1 < lines.length && lines[i + 1].trimEnd() === HANDBACK_FRAME_LINE;
+}
+
 // Index of a hand-back's open-tag line when line i is its preamble, else -1.
 function reportOpenAt(lines, i, strict) {
+  if (isBareTagHandbackAt(lines, i)) return i;
   const pre = PREAMBLE_LINE_RE.exec(lines[i]);
   if (!pre) return -1;
   let open = -1;

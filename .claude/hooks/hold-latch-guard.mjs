@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse half of the hold latch: while a HOLD is latched (hold.json held:true),
+// PreToolUse half of the hold latch: while a HOLD is latched (hold-<session>.json held:true),
 // block OUTWARD tool calls (push, merge, PR publishing, migration apply, deploy,
 // live SQL writes) and WARN on local ones (source Write/Edit, commit). Reads,
 // tests/builds, and notes stay allowed. See holdDecision in hold-latch-lib.mjs.
@@ -8,16 +8,17 @@
 // by the next user message (hold-latch-prompt.mjs), so it can never stick across turns.
 
 import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
-import { holdDecision } from "./hold-latch-lib.mjs";
+import { holdDecision, holdStatePath } from "./hold-latch-lib.mjs";
 
 function nothing() { process.exit(0); }
 
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
+// Only this session's own hold (hold-<session_id>.json); another session's
+// stop never blocks this one.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const holdPath = path.join(projectDir, ".claude", "session-state", "hold.json");
+const holdPath = holdStatePath(projectDir, payload?.session_id);
 
 if (!existsSync(holdPath)) nothing();
 let held = false;

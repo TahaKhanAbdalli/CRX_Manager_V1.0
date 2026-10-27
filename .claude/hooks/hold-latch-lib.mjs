@@ -4,8 +4,19 @@
 // and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
+import path from "node:path";
 import { DENY_TOOLNAME_RE, DENY_BASH_RES } from "./autopilot-lib.mjs";
 import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
+
+// One hold per session (2026-10-27). Every session whose hooks run from the main
+// checkout used to share one hold.json, so a misfire in one session froze all of
+// them (2026-10-23). The prompt hook writes, and the guard reads, only the file
+// named for its own session; hold.json is the fallback when no session_id
+// arrives. The id is reduced to [A-Za-z0-9_-] so it cannot leave the directory.
+export function holdStatePath(projectDir, sessionId) {
+  const id = String(sessionId || "").replace(/[^A-Za-z0-9_-]/g, "");
+  return path.join(projectDir, ".claude", "session-state", id ? `hold-${id}.json` : "hold.json");
+}
 
 // Mason wants to halt / pause / is only scoping a future session.
 //
@@ -18,6 +29,7 @@ import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 // in the set so "does stop/pause still work?" keeps matching. Path forms are
 // still caught through the "-" or the ".ext".
 const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bstop\b(?![-_]|\.[A-Za-z0-9])|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bpause\b(?![-_]|\.[A-Za-z0-9])|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
+const HOLD_SCAN_RE = new RegExp(HOLD_RE.source, "gi");
 
 // An affirmative "carry on" — not required to clear (any non-hold prompt clears),
 // but used to phrase the confirmation.
@@ -30,7 +42,45 @@ const RESUME_RE = /\b(resume|go ahead|continue|keep going|proceed|start (buildin
 // a subagent's <~agent-message> hand-back (2026-09-25). If you add a
 // caller, strip it there too — prompt-hooks.test.mjs asserts the hook still does.
 export function isHoldPhrase(prompt) {
-  return HOLD_RE.test(String(prompt || ""));
+  const text = String(prompt || "");
+  for (const m of text.matchAll(HOLD_SCAN_RE)) {
+    const word = m[0].toLowerCase();
+    if ((word === "stop" || word === "pause") && isDescriptiveStop(text, m.index, m.index + word.length)) continue;
+    return true;
+  }
+  return false;
+}
+
+// "stop" / "pause" used as an ordinary word rather than an order (2026-10-27).
+// Two shapes latched holds Mason never asked for:
+//   - a thing that should stop doing something: "make the gate stop refusing",
+//     "the hook should pause retrying" — the word is followed by an -ing verb;
+//   - a goal: "set X=0 in my user settings to stop the per-commit security
+//     reviews" — "to stop" plus a determiner, after an ordinary word.
+// Either is skipped only when the words in front of it in the same clause are
+// not addressing ones, so "stop pushing", "you should stop pushing", "ok stop",
+// "I need you to stop the deploy" and a stop right after "." or "," still latch.
+const ADDRESS_WORDS = new Set(["please", "pls", "ok", "okay", "so", "just", "now", "and", "then", "but", "hey",
+  "you", "we", "lets", "let's", "us", "i", "to", "all", "everyone", "everybody", "guys", "claude", "codex"]);
+// Before "to stop the …", these make it Mason's own want or an order to someone.
+const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", "has", "had", "got", "gotta",
+  "going", "time", "ready", "like", "wish", "ask", "asked", "tell", "told", "me"]);
+const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
+  "a", "an", "any", "all", "every", "each"]);
+
+function isDescriptiveStop(text, start, end) {
+  const clause = text.slice(0, start).split(/[.!?;:,\n—–]|\s-\s|--/).pop();
+  const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);
+  const next = (/^[ \t]+([A-Za-z]+)/.exec(text.slice(end)) || [])[1]?.toLowerCase() || "";
+  if (before.length < 2) return false;
+  const [twoBack, oneBack] = before.slice(-2);
+  if (next.length > 4 && next.endsWith("ing")) {
+    return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
+  }
+  if (oneBack === "to" && DETERMINERS.has(next)) {
+    return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
+  }
+  return false;
 }
 export function isResumePhrase(prompt) {
   return RESUME_RE.test(String(prompt || ""));
