@@ -75,6 +75,13 @@ ok(isHoldPhrase("You'd better stop pushing"), "a contracted person (you'd) still
 ok(isHoldPhrase("we’re going to stop deploying"), "a curly-apostrophe contraction (we’re) still latches");
 ok(!isHoldPhrase("the hook should stop re-running checks"), "a hyphenated -ing verb is descriptive");
 ok(!isHoldPhrase("make the gate stop re-running checks"), "a descriptive stop before a hyphenated -ing verb is skipped");
+// A flag, switch or settings page used as a tool is an order, not a config goal (Sol, PR #1152).
+for (const p of ["Use the emergency flag to stop the deploy", "Flip the kill flag to stop the deploy",
+  "Use the settings page to stop the deploy", "Open the config to stop the deploy"]) {
+  ok(isHoldPhrase(p), `tool-phrased stop latches: ${p}`);
+}
+ok(!isHoldPhrase("set X=0 in my user settings to stop the per-commit security reviews"), "a setting change is still descriptive");
+ok(!isHoldPhrase("change the setting to stop the nightly sweep"), "a setting verb plus a settings word is descriptive");
 // A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
 for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", " "]) {
   ok(isHoldPhrase(`make the gate stop refusing${sep}stop pushing`), `a real stop after ${JSON.stringify(sep)} still latches`);

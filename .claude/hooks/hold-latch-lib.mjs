@@ -97,8 +97,12 @@ const CAUSATIVE_WORDS = new Set(["make", "makes", "made", "making"]);
 const THING_WORDS = new Set(["hook", "hooks", "gate", "gates", "guard", "guards", "check", "checks", "test", "tests",
   "script", "scripts", "job", "jobs", "workflow", "workflows", "build", "builds", "latch", "ci", "linter", "monitor",
   "loop", "cron", "pipeline", "sweep", "reviewer", "it"]);
-const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env", "flag", "flags",
-  "option", "options", "variable", "variables"]);
+// A flag or switch is a tool you use to stop something ("Use the emergency flag
+// to stop the deploy" latches: Sol review, PR #1152); only a settings file is a
+// place you change, and only a setting verb changes it.
+const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env"]);
+const SETTING_VERBS = new Set(["set", "change", "update", "edit", "turn", "toggle", "disable", "enable",
+  "configure", "add", "remove", "put"]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -130,6 +134,7 @@ function isDescriptiveStop(text, start, end) {
   // the kill switch to stop the deploy") still latches (Codex App review, PR #1152).
   if (oneBack === "to" && DETERMINERS.has(next)) {
     if (!clause.includes("=") && !before.some((w) => CONFIG_WORDS.has(w))) return false;
+    if (!before.some((w) => SETTING_VERBS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
   }
   return false;
