@@ -369,7 +369,7 @@ export default function NewOrder() {
       if (!cancelled) {
         setRupWarnings(res.warnings);
         const logKey = `${customerId}|${rupProductKey}`;
-        if (res.warnings.length > 0 && profile?.id && lastRupLogKey.current !== logKey) {
+        if (res.warnings.length > 0 && !res.checkFailed && profile?.id && lastRupLogKey.current !== logKey) {
           lastRupLogKey.current = logKey;
           logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on direct order for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customerId, customerId });
         }
@@ -599,7 +599,8 @@ export default function NewOrder() {
       const totalCents = items.filter(i => i.product_id && i.quantity > 0)
         .reduce((sum, i) => sum + Math.round(i.total_price * 100), 0);
       const creditOk = await checkCreditLimit({ customerId, newAmountCents: totalCents });
-      if (!creditOk && !creditWarning?.dismissed) return;
+      // The hook lets an overridden over-limit warning through and never a check that could not run.
+      if (!creditOk) return;
     }
 
     await submitOrder();

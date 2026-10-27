@@ -818,7 +818,7 @@ export default function QuoteBuilder() {
       if (!cancelled) {
         setRupWarnings(res.warnings);
         const logKey = `${customerId}|${rupProductKey}`;
-        if (res.warnings.length > 0 && profile?.id && lastRupLogKey.current !== logKey) {
+        if (res.warnings.length > 0 && !res.checkFailed && profile?.id && lastRupLogKey.current !== logKey) {
           lastRupLogKey.current = logKey;
           logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customerId, customerId });
         }

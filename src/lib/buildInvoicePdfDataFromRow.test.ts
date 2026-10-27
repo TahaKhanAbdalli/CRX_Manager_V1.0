@@ -30,6 +30,7 @@ import {
   buildBatchInvoicePdfData,
   batchInvoicePrintToast,
   InvoiceLinesUnavailableError,
+  InvoiceDetailsUnavailableError,
   type InvoicePdfData,
 } from './invoicePdf';
 
@@ -43,6 +44,18 @@ interface PerTable {
   invoice_items_error?: { message: string } | null;
   invoice_shares?: Array<Record<string, unknown>>;
   invoices?: Record<string, unknown> | null; // the #33 billing re-fetch
+  field_app_locations?: Array<Record<string, unknown>>;
+  // Tables whose read fails, and how (To-Do 10.5 follow-up).
+  fail?: Partial<Record<string, FailMode>>;
+}
+
+type FailMode = 'error' | 'nodata' | 'notlist' | 'throws';
+
+function failedRead(mode: FailMode): Promise<{ data: unknown; error: unknown }> {
+  if (mode === 'throws') return Promise.reject(new Error('Failed to fetch'));
+  if (mode === 'error') return Promise.resolve({ data: null, error: { message: 'connection reset' } });
+  if (mode === 'nodata') return Promise.resolve({ data: null, error: null });
+  return Promise.resolve({ data: 'not a list', error: null });
 }
 
 function installFromMock(per: PerTable) {
@@ -50,25 +63,29 @@ function installFromMock(per: PerTable) {
     const chain: Record<string, unknown> = {};
     chain.select = vi.fn().mockReturnValue(chain);
     chain.eq = vi.fn().mockReturnValue(chain);
+    const mode = per.fail?.[table];
     // customers + invoices terminate on .maybeSingle(); items/shares on .order()/await.
-    chain.maybeSingle = vi.fn().mockResolvedValue({
-      data: table === 'customers' ? per.customers ?? null
-        : table === 'invoices' ? per.invoices ?? null
+    // Both rows exist unless a test says otherwise.
+    const single = () => mode ? failedRead(mode) : Promise.resolve({
+      data: table === 'customers' ? ('customers' in per ? per.customers : {})
+        : table === 'invoices' ? ('invoices' in per ? per.invoices : {})
         : null,
       error: null,
     });
+    chain.maybeSingle = vi.fn(single);
     const arrayData =
       table === 'invoice_items' ? (per.invoice_items === undefined ? [] : per.invoice_items)
       : table === 'invoice_shares' ? per.invoice_shares ?? []
+      : table === 'field_app_locations' ? per.field_app_locations ?? []
       : [];
-    chain.order = vi.fn().mockResolvedValue({
+    const list = () => mode ? failedRead(mode) : Promise.resolve({
       data: arrayData,
       error: table === 'invoice_items' ? per.invoice_items_error ?? null : null,
     });
+    chain.order = vi.fn(list);
     // invoice_shares is awaited directly after .eq(...) (no .order()); make the chain
     // thenable so `await supabase.from('invoice_shares').select(...).eq(...)` resolves.
-    chain.then = (resolve: (v: { data: unknown; error: unknown }) => void) =>
-      resolve({ data: arrayData, error: null });
+    chain.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => list().then(resolve, reject);
     return chain;
   });
 }
@@ -223,6 +240,49 @@ describe('buildInvoicePdfDataFromRow — B3 line-read guard', () => {
     installFromMock({ invoice_items: [ONE_LINE] });
     const data = await buildInvoicePdfDataFromRow(listRow());
     expect(data.items).toHaveLength(1);
+  });
+});
+
+// To-Do 10.5 follow-up: the customer, shares and billing reads ignored their errors, so a
+// failed read printed a PDF with the address, split shares, terms or notes silently blank.
+describe('buildInvoicePdfDataFromRow — customer / shares / billing / acres read guard', () => {
+  const MODES: FailMode[] = ['error', 'nodata', 'notlist', 'throws'];
+
+  for (const table of ['customers', 'invoice_shares', 'invoices']) {
+    for (const mode of MODES) {
+      // A single-row read answering a non-list object is a normal row, not a failure.
+      if (mode === 'notlist' && table !== 'invoice_shares') continue;
+      it(`refuses the PDF when the ${table} read ${mode === 'nodata' ? 'returns nothing' : mode}`, async () => {
+        installFromMock({ invoice_items: [ONE_LINE], fail: { [table]: mode } });
+        const built = buildInvoicePdfDataFromRow(listRow());
+        await expect(built).rejects.toBeInstanceOf(InvoiceDetailsUnavailableError);
+      });
+    }
+  }
+
+  for (const mode of ['error', 'nodata', 'notlist', 'throws'] as const) {
+    it(`refuses the PDF when the applied-acres read ${mode === 'nodata' ? 'returns nothing' : mode}`, async () => {
+      installFromMock({ invoice_items: [ONE_LINE], invoices: { diluent_rate_gpa: 15, total_acres: null }, fail: { field_app_locations: mode } });
+      await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toBeInstanceOf(InvoiceDetailsUnavailableError);
+    });
+  }
+
+  it('the message says to try again', async () => {
+    installFromMock({ invoice_items: [ONE_LINE], fail: { customers: 'error' } });
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toThrow('so no PDF was made. Please try again.');
+  });
+
+  it('a customer or invoice row that is missing is refused, not printed blank', async () => {
+    installFromMock({ invoice_items: [ONE_LINE], customers: null });
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toBeInstanceOf(InvoiceDetailsUnavailableError);
+    installFromMock({ invoice_items: [ONE_LINE], invoices: null });
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toBeInstanceOf(InvoiceDetailsUnavailableError);
+  });
+
+  it('still prints when the acres come from the locations', async () => {
+    installFromMock({ invoice_items: [ONE_LINE], invoices: { diluent_rate_gpa: 15, total_acres: null }, field_app_locations: [{ applied_acres: 40 }] });
+    const data = await buildInvoicePdfDataFromRow(listRow());
+    expect(data.total_acres).toBe(40);
   });
 });
 

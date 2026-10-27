@@ -20,7 +20,7 @@ type CallSite = { file: string; line: number; callback: string };
 // Shared readers outside src/pages and src/components that page with
 // fetchAllRows (paths under src). The integrity checks recompute ledgers from
 // reconciliation's reads, so a short read is a false result.
-const SHARED_FILES = ['lib/reconciliation.ts', 'lib/customerStatement.ts', 'hooks/useGuardrails.ts'];
+const SHARED_FILES = ['lib/reconciliation.ts', 'lib/customerStatement.ts'];
 
 // Components (under src/components) that page with fetchAllRows: Goal 4 part 2's
 // money, check, compliance and lookup panels. A file listed here must still exist.

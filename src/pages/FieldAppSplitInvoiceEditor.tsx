@@ -11,8 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { useCreditLimitCheck } from '../hooks/useGuardrails';
-import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
+import { checkSplitGroupBeforePost } from '../lib/splitGroupPostChecks';
 import { Sentry } from '../lib/sentry';
 import { INVOICES_POSTABLE } from '../lib/costFields';
 import { formatCents } from '../lib/money';
@@ -245,8 +244,8 @@ export default function FieldAppSplitInvoiceEditor() {
   const [saving, setSaving] = useState(false);
   const [posting, setPosting] = useState(false);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
+  const [postChecking, setPostChecking] = useState(false);
   // Codex round-8 P2: the credit-limit + RUP-license advisories the normal invoice post shows.
-  const { check: checkCreditLimit } = useCreditLimitCheck();
   const [postWarning, setPostWarning] = useState<string | null>(null);
   const [resultInvoices, setResultInvoices] = useState<ResultInvoice[]>([]);
   const [resultShares, setResultShares] = useState<ResultShare[]>([]);
@@ -756,43 +755,17 @@ export default function FieldAppSplitInvoiceEditor() {
     }
   };
 
-  // Codex round-8 P2: mirror the normal invoice post flow's guardrails BEFORE confirming the post.
-  // post_invoice_group posts EVERY co-owner child, so the credit-limit + RUP-license advisories must
-  // cover the WHOLE group. Advisory only — this NEVER blocks posting (parity with InvoiceDetail).
+  // The whole group's RUP-license and credit-limit checks, before the confirm. A check that
+  // could not run stops here with an error toast instead of opening a clean-looking confirm.
   const openPostConfirm = async () => {
-    let warning: string | null = null;
-    try {
-      const { data: grp } = await supabaseUntyped
-        .from('invoices')
-        .select('id, invoice_number, customer_id, total_amount_cents, invoice_items(product_id)')
-        .eq('invoice_group_id', invoiceGroupId)
-        .is('deleted_at', null)
-        .not('invoice_group_id', 'is', null);
-      const rupParts: string[] = [];
-      const creditParts: string[] = [];
-      for (const inv of ((grp as Array<{ invoice_number: string; customer_id: string | null; total_amount_cents: number | null; invoice_items: { product_id: string | null }[] | null }>) || [])) {
-        const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
-        if (inv.customer_id && pids.length > 0) {
-          const res = await checkRUPCompliance(inv.customer_id, pids);
-          if (res.hasRUPProducts && !res.hasValidLicense) {
-            const disp = rupRegisterDisposition(res);
-            rupParts.push(`${inv.invoice_number}: ${res.rupProductNames.join(', ')} — ${res.missingLicense ? 'NO applicator license' : 'EXPIRED license'} (${disp.label})`);
-          }
-        }
-        if (inv.customer_id && Number(inv.total_amount_cents ?? 0) > 0) {
-          const ok = await checkCreditLimit({ customerId: inv.customer_id, newAmountCents: Number(inv.total_amount_cents) });
-          if (!ok) creditParts.push(inv.invoice_number);
-        }
-      }
-      const bits: string[] = [];
-      if (rupParts.length > 0) bits.push(`Restricted-use products without a valid license — ${rupParts.join('; ')}. These will be recorded in the RUP sales register.`);
-      if (creditParts.length > 0) bits.push(`Over credit limit: invoice(s) ${creditParts.join(', ')}.`);
-      if (bits.length > 0) warning = `Posting this group posts every invoice in it. ${bits.join(' ')}`;
-    } catch (err) {
-      // Advisory must never block posting — a check failure falls through to the plain confirm.
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'split_post_guardrails' } });
+    // Post stays busy while the checks run (a few reads per member), so a second click waits.
+    setPostChecking(true);
+    const result = await checkSplitGroupBeforePost(invoiceGroupId).finally(() => setPostChecking(false));
+    if (!result.ok) {
+      toast('error', result.message);
+      return;
     }
-    setPostWarning(warning);
+    setPostWarning(result.warning);
     setShowPostConfirm(true);
   };
 
@@ -988,8 +961,8 @@ export default function FieldAppSplitInvoiceEditor() {
             variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
-            disabled={!invoiceGroupId || reopenBusy || posted || dirtyAfterSave || saving || posting}
-            loading={posting}
+            disabled={!invoiceGroupId || reopenBusy || posted || dirtyAfterSave || saving || posting || postChecking}
+            loading={posting || postChecking}
             onClick={openPostConfirm}
             title={dirtyAfterSave ? 'You have unsaved changes — re-save the draft before posting.' : undefined}
           >

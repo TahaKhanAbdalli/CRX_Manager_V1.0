@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/db';
-import { fetchAllRows } from '../lib/pagedRead';
+import { CREDIT_LIMIT_UNVERIFIED_MESSAGE, evaluateCreditLimit, type CreditLimitParams } from '../lib/creditLimitGuard';
 import { Sentry } from '../lib/sentry';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -10,89 +10,50 @@ export interface GuardrailWarning {
   severity: 'warning' | 'danger';
   message: string;
   dismissed: boolean;
+  /** False when the warning offers no "Continue Anyway" (a check that could not run). */
+  dismissible?: boolean;
 }
 
 // ── Credit Limit Check ─────────────────────────────────────────────
 
-interface CreditLimitParams {
-  customerId: string;
-  newAmountCents: number;
-}
-
+/**
+ * `check` resolves true when the action may go ahead. An over-limit warning can be overridden:
+ * after "Continue Anyway" the next check of an over-limit amount goes ahead once. A check that
+ * could not run cannot be overridden (Mason, 2026-10-26: a hard stop, "try again").
+ */
 export function useCreditLimitCheck() {
   const [warning, setWarning] = useState<GuardrailWarning | null>(null);
+  // Set by "Continue Anyway" on an over-limit warning; spent by the next over-limit check.
+  const overrideRef = useRef(false);
 
-  const check = useCallback(async ({ customerId, newAmountCents }: CreditLimitParams): Promise<boolean> => {
-    if (!customerId || newAmountCents <= 0) {
-      setWarning(null);
-      return true;
-    }
-
-    try {
-      // Get customer credit limit
-      const { data: customer } = await supabase
-        .from('customers')
-        .select('farm_name, credit_limit_cents')
-        .eq('id', customerId)
-        .single();
-
-      if (!customer?.credit_limit_cents) {
+  const check = useCallback(async (params: CreditLimitParams): Promise<boolean> => {
+    const result = await evaluateCreditLimit(params);
+    if (result.status === 'over') {
+      if (overrideRef.current) {
+        overrideRef.current = false;
         setWarning(null);
-        return true; // No limit set
+        return true;
       }
-
-      // Get current unpaid invoice balance
-      // Every open invoice, page by page: one request stopped at the server's
-      // row cap and understated the balance (Goal 4 L17). A failed read throws
-      // into the fail-closed branch below instead of reading as a zero balance.
-      const { data: invoices, error: invoicesError } = await fetchAllRows((from, to) => supabase
-        .from('invoices')
-        .select('id, balance_cents', { count: 'exact' })
-        .eq('customer_id', customerId)
-        .in('status', ['draft', 'unposted', 'posted', 'overdue'])
-        .order('id')
-        .range(from, to));
-      if (invoicesError) throw new Error(invoicesError.message);
-
-      const currentBalance = (invoices || []).reduce(
-        (sum, inv) => sum + (inv.balance_cents || 0),
-        0
-      );
-
-      const projectedTotal = currentBalance + newAmountCents;
-      const overBy = projectedTotal - customer.credit_limit_cents;
-
-      if (overBy > 0) {
-        setWarning({
-          id: 'credit-limit',
-          severity: 'danger',
-          message: `This will put ${customer.farm_name} $${(overBy / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })} over their $${(customer.credit_limit_cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })} credit limit.`,
-          dismissed: false,
-        });
-        return false;
-      }
-
-      setWarning(null);
-      return true;
-    } catch (error) {
-      // Audit #25: Fail-closed on guardrail-verification errors. A silent
-      // pass-through here lets over-limit deliveries through during transient
-      // Supabase outages. Surface a warning so the user can decide whether to
-      // override; the caller treats `false` like an over-limit and asks for
-      // explicit confirmation.
-      Sentry.captureException(error, { tags: { guardrail: 'credit_limit' } });
-      setWarning({
-        id: 'credit-limit-error',
-        severity: 'warning',
-        message: 'Could not verify credit limit. Please refresh and try again before completing this transaction.',
-        dismissed: false,
-      });
+      setWarning({ id: 'credit-limit', severity: 'danger', message: result.message, dismissed: false });
       return false;
     }
+    overrideRef.current = false;
+    if (result.status === 'unverified') {
+      // Audit #25 + To-Do 10.5: fail closed on guardrail-verification errors, with no override.
+      // A pass-through here lets over-limit orders and posts through during a Supabase outage.
+      setWarning({ id: 'credit-limit-error', severity: 'warning', message: CREDIT_LIMIT_UNVERIFIED_MESSAGE, dismissed: false, dismissible: false });
+      return false;
+    }
+    setWarning(null);
+    return true;
   }, []);
 
   const dismiss = useCallback(() => {
-    setWarning((prev) => (prev ? { ...prev, dismissed: true } : null));
+    setWarning((prev) => {
+      if (!prev || prev.dismissible === false) return prev;
+      overrideRef.current = true;
+      return { ...prev, dismissed: true };
+    });
   }, []);
 
   return { warning, check, dismiss };

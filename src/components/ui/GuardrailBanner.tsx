@@ -25,13 +25,15 @@ export default function GuardrailBanner({ warning, onDismiss, dismissLabel = 'Co
         <Icon className={`w-5 h-5 shrink-0 mt-0.5 ${iconClass}`} />
         <div className="flex-1 min-w-0">
           <p className={`text-sm ${textClass}`}>{warning.message}</p>
-          <button
-            type="button"
-            onClick={onDismiss}
-            className={`mt-1.5 text-xs font-medium px-2 py-1 rounded transition-colors ${btnClass}`}
-          >
-            {dismissLabel}
-          </button>
+          {warning.dismissible !== false && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className={`mt-1.5 text-xs font-medium px-2 py-1 rounded transition-colors ${btnClass}`}
+            >
+              {dismissLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>

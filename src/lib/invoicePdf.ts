@@ -283,12 +283,26 @@ export async function deriveFieldAppAppliedAcres(
   invoiceGroupId: string | null | undefined,
 ): Promise<number | null> {
   const locQuery = supabase.from('field_app_locations').select('applied_acres');
-  const { data: locRows } = invoiceGroupId
-    ? await locQuery.eq('invoice_group_id', invoiceGroupId)
-    : await locQuery.eq('invoice_id', invoiceId);
-  const summed = ((locRows || []) as Array<{ applied_acres: number | null }>)
+  const { data: locRows, error: locError } = await (invoiceGroupId
+    ? locQuery.eq('invoice_group_id', invoiceGroupId)
+    : locQuery.eq('invoice_id', invoiceId)
+  ).then((r) => r, () => { throw new InvoiceDetailsUnavailableError(); });
+  // A failed read would print the diluent rate with no total, as if no acres were recorded.
+  if (locError || !Array.isArray(locRows)) throw new InvoiceDetailsUnavailableError();
+  const summed = (locRows as Array<{ applied_acres: number | null }>)
     .reduce((s, r) => s + (Number(r.applied_acres) || 0), 0);
   return summed > 0 ? summed : null;
+}
+
+/**
+ * Thrown when the customer, shares, billing fields or applied acres of an invoice could
+ * not be read: a PDF made anyway would print with those parts silently blank.
+ */
+export class InvoiceDetailsUnavailableError extends Error {
+  constructor() {
+    super('Could not load the invoice details (customer, shares, billing or field acres), so no PDF was made. Please try again.');
+    this.name = 'InvoiceDetailsUnavailableError';
+  }
 }
 
 /** Thrown when an invoice's lines could not be read, so no PDF may be made from it. */
@@ -379,7 +393,13 @@ export async function buildInvoicePdfDataFromRow(
   inv: InvoiceRowForPdf,
   options?: InvoicePrintOptions
 ): Promise<InvoicePdfData> {
-  const [{ data: cust }, { data: items, error: itemsError }, { data: shares }, { data: billing }] = await Promise.all([
+  const [
+    { data: cust, error: custError },
+    { data: items, error: itemsError },
+    { data: shares, error: sharesError },
+    { data: billing, error: billingError },
+  ] = await Promise.all([
+    // A dropped request is a failed read too: the same refusal, not a raw network error.
     supabase
       .from('customers')
       .select('billing_address, city, state, zip, account_number, payment_terms')
@@ -405,9 +425,15 @@ export async function buildInvoicePdfDataFromRow(
       .select('discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date, diluent_rate_gpa, total_acres, invoice_group_id')
       .eq('id', inv.id)
       .maybeSingle(),
-  ]);
+  ]).catch(() => { throw new InvoiceDetailsUnavailableError(); });
   // Checked against the same total the PDF prints (total_amount_cents below).
   assertInvoiceLinesLoaded(itemsError, items, inv.total_amount_cents || 0);
+  // The customer and the invoice itself must both exist (no row is a failed read here),
+  // and the shares must come back as a list: otherwise the PDF would print with the
+  // address, split shares, terms or notes silently missing.
+  if (custError || !cust || sharesError || !Array.isArray(shares) || billingError || !billing) {
+    throw new InvoiceDetailsUnavailableError();
+  }
 
   const custRow = cust as {
     billing_address?: string | null; city?: string | null; state?: string | null;

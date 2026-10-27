@@ -15,6 +15,10 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockCaptureException, intent
   intentKeys: new Map<string, string>(),
   nextIntentKey: { value: 0 },
 }));
+// The credit check's customer_credit_exposure answer: no limit set unless a test says otherwise.
+const { mockCreditExposure } = vi.hoisted(() => ({
+  mockCreditExposure: vi.fn(() => Promise.resolve({ data: { customer_id: 'cust-1', credit_limit_cents: null, exposure_cents: 0 }, error: null })),
+}));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
   const self: Record<string, unknown> = {};
@@ -65,6 +69,10 @@ vi.mock('../lib/costFields', async (importOriginal) => ({
 vi.mock('../lib/db', () => ({
   // The version-bearing reads use the invoices_postable view (20261022090000): same rows as invoices here.
   supabase: { from: (table: string) => mockFrom(table === 'invoices_postable' ? 'invoices' : table), rpc: mockRpc },
+  supabaseUntyped: {
+    from: (table: string) => mockFrom(table),
+    rpc: (name: string, args: unknown) => (name === 'customer_credit_exposure' ? mockCreditExposure() : mockRpc(name, args)),
+  },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   sanitizeError: (e: unknown) => sanitizeError(e),
@@ -115,7 +123,9 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 }));
 
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
-vi.mock('../lib/invoicePdf', () => ({
+// The real line and detail guards; only PDF output and the acres read are stubbed.
+vi.mock('../lib/invoicePdf', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/invoicePdf')>()),
   downloadInvoicePdf: vi.fn(),
   generateInvoicePdf: vi.fn(),
   deriveFieldAppAppliedAcres: vi.fn(),
@@ -125,6 +135,7 @@ vi.mock('../lib/emailService', () => ({
   sendEmail: vi.fn(),
   pdfToBase64: vi.fn(),
   buildEmailHtml: vi.fn(() => '<p>test</p>'),
+  isInvoiceEmailSuppressed: vi.fn(() => false),
 }));
 vi.mock('../lib/dateUtils', () => ({
   localToday: vi.fn(() => '2026-03-16'),
@@ -148,7 +159,10 @@ vi.mock('../hooks/useUnsavedChanges', () => ({
   },
 }));
 vi.mock('../components/invoices/WriteOffModal', () => ({ default: () => null }));
-vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => null }));
+// Open, it offers one button that prints with default options, so Print can be driven end to end.
+vi.mock('../components/invoices/InvoicePrintDialog', () => ({
+  default: ({ open, onPrint }: { open: boolean; onPrint: (options: Record<string, never>) => void }) => (open ? <button type="button" onClick={() => onPrint({})}>Print with defaults</button> : null),
+}));
 
 import InvoiceDetail from './InvoiceDetail';
 
@@ -1650,6 +1664,10 @@ describe('InvoiceDetail — Post uses the saved, reviewed invoice', () => {
       if (table === 'invoice_items') {
         return buildChain({ data: [{ id: 'it-1', product_id: 'p-1', description: 'Chem', quantity: 2, unit_price_cents: 1000, extended_cents: 2000, sort_order: 0 }], error: null });
       }
+      if (table === 'customers') {
+        // The picker list reads a list; the credit check asks customer_credit_exposure (no limit).
+        return buildChain({ data: [], error: null });
+      }
       return buildChain({ data: [], error: null });
     });
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
@@ -1719,5 +1737,172 @@ describe('InvoiceDetail — Post uses the saved, reviewed invoice', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Post Invoice' }));
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('was changed after this screen loaded it')));
     await waitFor(() => expect(invoiceReads).toBeGreaterThan(readsBefore));
+  });
+
+  // To-Do 10.5 follow-up: a RUP check that could not read its data used to fall through to
+  // the plain confirm, so a restricted-use sale could be posted with no license check at all.
+  const RUP_FAILURES: Record<string, () => Record<string, unknown>> = {
+    error: () => buildChain({ data: null, error: { message: 'connection reset' } }),
+    nodata: () => buildChain({ data: null, error: null }),
+    notlist: () => buildChain({ data: { id: 'p-1' }, error: null }),
+    throws: () => buildDeferredChain().chain,
+  };
+  for (const [mode, failing] of Object.entries(RUP_FAILURES)) {
+    it(`stops before the confirm when the RUP products read ${mode === 'nodata' ? 'returns nothing' : mode}`, async () => {
+      const base = mockFrom.getMockImplementation()!;
+      mockFrom.mockImplementation((table: string) => {
+        if (table !== 'products') return base(table);
+        if (mode !== 'throws') return failing();
+        const { chain, reject } = buildDeferredChain();
+        reject(new Error('Failed to fetch'));
+        return chain;
+      });
+      await openLoaded();
+      fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+      await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('license check could not be run, so nothing was posted')));
+      expect(screen.queryByRole('button', { name: 'Post Invoice' })).not.toBeInTheDocument();
+      expect(mockRpc).not.toHaveBeenCalledWith('post_invoice', expect.anything());
+    });
+  }
+
+  it('stops a grouped invoice before the confirm when its sibling read fails', async () => {
+    const base = mockFrom.getMockImplementation()!;
+    const grouped = { ...savedInvoice, invoice_group_id: 'grp-1' };
+    let loaded = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'invoices') return base(table);
+      // Once the page has loaded, the post check's sibling read is the next invoices read: it fails.
+      if (loaded) return buildChain({ data: null, error: { message: 'connection reset' } });
+      // A read by id answers the invoice row; the group-members read answers its one member;
+      // any other list read (siblings by order) answers none.
+      let filter = '';
+      const chain: Record<string, unknown> = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === 'then') {
+            const members = [{ id: 'inv-123', invoice_number: 'INV-0200', invoice_post_version: 'v1:loaded' }];
+            const data = filter === 'id' ? grouped : filter === 'invoice_group_id' ? members : [];
+            return (resolve: (v: unknown) => unknown) => resolve({ data, error: null });
+          }
+          return (col: unknown) => { if (prop === 'eq' && !filter) filter = String(col); return chain; };
+        },
+      });
+      return chain;
+    });
+    await openLoaded();
+    loaded = true;
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('license check could not be run, so nothing was posted')));
+    expect(screen.queryByRole('button', { name: 'Post Invoice' })).not.toBeInTheDocument();
+  });
+
+  // To-Do 10.5 follow-up: Print took the address from the customer picker list (500 active
+  // customers, read error ignored), so a customer missing from it printed a blank address.
+  async function printWithCustomerRead(answer: () => Record<string, unknown>) {
+    const base = mockFrom.getMockImplementation()!;
+    let loaded = false;
+    mockFrom.mockImplementation((table: string) => (table === 'customers' && loaded ? answer() : base(table)));
+    await openLoaded();
+    loaded = true;
+    fireEvent.click(screen.getByRole('button', { name: /^Print$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Print with defaults' }));
+  }
+
+  for (const [mode, answer] of Object.entries({
+    error: () => buildChain({ data: null, error: { message: 'connection reset' } }),
+    nodata: () => buildChain({ data: null, error: null }),
+  })) {
+    it(`refuses to print when the customer address read ${mode === 'nodata' ? 'returns nothing' : mode}`, async () => {
+      const { downloadInvoicePdf } = await import('../lib/invoicePdf');
+      await printWithCustomerRead(answer);
+      await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Could not load the invoice details')));
+      expect(downloadInvoicePdf).not.toHaveBeenCalled();
+    });
+  }
+
+  it('prints the address read for the billed customer', async () => {
+    const { downloadInvoicePdf } = await import('../lib/invoicePdf');
+    await printWithCustomerRead(() => buildChain({ data: { billing_address: '9 Barn Rd', city: 'Town', state: 'IL', zip: '62000', account_number: 'A-9', payment_terms: 'Net 30' }, error: null }));
+    await waitFor(() => expect(downloadInvoicePdf).toHaveBeenCalledWith(expect.objectContaining({ customer_address: '9 Barn Rd', customer_city: 'Town' })));
+  });
+
+  it('still opens the confirm when the RUP check reads cleanly', async () => {
+    await openLoaded();
+    fireEvent.click(screen.getByRole('button', { name: /^Post$/ }));
+    expect(await screen.findByRole('button', { name: 'Post Invoice' })).toBeInTheDocument();
+  });
+});
+
+// CodeRabbit on #1132: Email took the address from the customer picker list (active customers,
+// capped at 500, read error ignored), so a customer missing from it read as "no email on file".
+describe('InvoiceDetail — Email reads the billed customer by id', () => {
+  const postedInvoice = {
+    id: 'inv-123', invoice_number: 'INV-0300', status: 'posted', invoice_type: 'chemical_sale',
+    customer_id: 'cust-9', order_id: 'ord-1', total_amount_cents: 2000, balance_cents: 2000,
+    invoice_date: '2026-03-15', due_date: null, created_at: '2026-03-15T00:00:00Z',
+    invoice_group_id: null, invoice_post_version: 'v1:loaded',
+  };
+
+  async function emailWithCustomerRead(answer: () => Record<string, unknown>) {
+    let loaded = false;
+    let invoiceReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      // Preflight and full read return the row; the order's sibling list returns none.
+      if (table === 'invoices') return buildChain({ data: ++invoiceReads % 3 === 0 ? [] : postedInvoice, error: null });
+      if (table === 'invoice_items') {
+        return buildChain({ data: [{ id: 'it-1', product_id: 'p-1', description: 'Chem', quantity: 2, unit_price_cents: 1000, extended_cents: 2000, sort_order: 0 }], error: null });
+      }
+      // The picker list never has this customer; once loaded, the by-id read gets `answer`.
+      if (table === 'customers') return loaded ? answer() : buildChain({ data: [], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    renderInvoiceDetail();
+    const email = await screen.findByRole('button', { name: /^Email$/ });
+    loaded = true;
+    fireEvent.click(email);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  for (const [mode, answer] of Object.entries({
+    error: () => buildChain({ data: null, error: { message: 'connection reset' } }),
+    nodata: () => buildChain({ data: null, error: null }),
+    throws: () => { const { chain, reject } = buildDeferredChain(); reject(new Error('Failed to fetch')); return chain; },
+  })) {
+    it(`sends nothing when the customer email read ${mode === 'nodata' ? 'returns nothing' : mode}`, async () => {
+      const { sendEmail } = await import('../lib/emailService');
+      await emailWithCustomerRead(answer);
+      await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Could not load the customer\'s email address')));
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+  }
+
+  it('emails a customer who is missing from the picker list', async () => {
+    const { generateInvoicePdf } = await import('../lib/invoicePdf');
+    await emailWithCustomerRead(() => buildChain({ data: { email: 'farm@example.com', billing_address: '9 Barn Rd', city: 'Town', state: 'IL', zip: '62000', account_number: 'A-9', payment_terms: 'Net 30' }, error: null }));
+    await waitFor(() => expect(generateInvoicePdf).toHaveBeenCalled());
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Customer does not have an email address on file');
+  });
+
+  // Codex App on #1132: Email stayed clickable during the lookup, so a second click sent twice.
+  it('a second click while the customer lookup is running sends nothing more', async () => {
+    // Each send attempt builds the PDF once, so the PDF count is the send count.
+    const { generateInvoicePdf } = await import('../lib/invoicePdf');
+    const { chain, resolve } = buildDeferredChain();
+    await emailWithCustomerRead(() => chain);
+    fireEvent.click(screen.getByRole('button', { name: /^Email$/ }));
+    resolve({ data: { email: 'farm@example.com', billing_address: '9 Barn Rd', city: 'Town', state: 'IL', zip: '62000', account_number: 'A-9', payment_terms: 'Net 30' }, error: null });
+    await waitFor(() => expect(generateInvoicePdf).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(generateInvoicePdf).toHaveBeenCalledTimes(1);
+  });
+
+  it('still says so when the customer has no email on file', async () => {
+    await emailWithCustomerRead(() => buildChain({ data: { email: null }, error: null }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Customer does not have an email address on file'));
   });
 });

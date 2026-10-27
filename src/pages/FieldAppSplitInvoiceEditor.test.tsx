@@ -58,9 +58,6 @@ vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({ getKey: () => 'idem', resetKey: vi.fn() }),
 }));
-vi.mock('../hooks/useGuardrails', () => ({
-  useCreditLimitCheck: () => ({ check: vi.fn() }),
-}));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockSentryCaptureException } }));
 
 import FieldAppSplitInvoiceEditor from './FieldAppSplitInvoiceEditor';

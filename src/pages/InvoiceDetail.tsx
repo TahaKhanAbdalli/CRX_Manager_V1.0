@@ -22,7 +22,7 @@ import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyM
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { Invoice, InvoiceChargeType, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { CHARGE_TYPE_OPTIONS, chargeTypeLabel, fromScratchLinesProblem, isFromScratchInvoice } from '../lib/invoiceChargeLines';
-import { assertInvoiceLinesLoaded, downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
+import { assertInvoiceLinesLoaded, downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, InvoiceDetailsUnavailableError, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { getTierPrice } from '../lib/quoteCalc';
 import { ilikeOrPattern } from '../lib/recordSearch';
@@ -32,7 +32,8 @@ import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { retryGenericInvoiceCutover } from '../lib/genericInvoiceCutoverRetry';
 import { Sentry } from '../lib/sentry';
-import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
+import { checkRUPCompliance, rupRegisterDisposition, RUP_POST_CHECK_FAILED_MESSAGE } from '../lib/rupCompliance';
+import { GROUP_CHECK_FAILED, groupMemberRupFinding, type GroupMemberRupInput } from '../lib/splitGroupPostChecks';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { todayInBusinessTz, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -211,6 +212,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Email invoice
   const [emailing, setEmailing] = useState(false);
+  const emailingRef = useRef(false);
 
   // Write-off modal + write-off list
   const [showWriteOff, setShowWriteOff] = useState(false);
@@ -371,8 +373,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
     postIdem.resetKey();
     let warning: string | null = null;
-    // The RUP check must NEVER block posting — any failure falls through to the
-    // plain confirm (warn+confirm by design, not a gate).
+    // A RUP finding is a warning on the confirm, not a gate. A check that could not run
+    // is different: it stops here with RUP_POST_CHECK_FAILED_MESSAGE, so an unchecked
+    // RUP sale never reaches the confirm looking clean.
+    const stopUnchecked = () => toast('error', RUP_POST_CHECK_FAILED_MESSAGE);
     try {
       if (invoice?.invoice_group_id) {
         // Posting a grouped invoice posts EVERY sibling atomically via
@@ -382,31 +386,33 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         // (customer, products) and aggregate. Still advisory, never a gate.
         // The siblings are read with their versions: if any changed (or the membership did) since
         // this screen loaded, the post would be refused, so reload now and show what would post.
-        const { data: grp } = await supabase
+        const { data: grp, error: grpError } = await supabase
           .from(INVOICES_POSTABLE)
           .select(`id, invoice_number, customer_id, ${INVOICE_POST_VERSION_COLUMNS}, invoice_items(product_id)`)
           .eq('invoice_group_id', invoice.invoice_group_id)
           .is('deleted_at', null);
-        if (grp) {
-          const current = Object.fromEntries(grp.map((m) => [m.id, m.invoice_post_version]));
-          const loaded = saved.groupVersions;
-          const same = Object.keys(current).length === Object.keys(loaded).length
-            && Object.entries(current).every(([memberId, version]) => loaded[memberId] === version);
-          if (!same) {
-            toast('error', 'This split group was changed somewhere else since you opened it. It has been reloaded — check it, then post again.');
-            fetchInvoice(id!);
-            return;
-          }
+        if (grpError || !Array.isArray(grp)) {
+          stopUnchecked();
+          return;
+        }
+        const current = Object.fromEntries(grp.map((m) => [m.id, m.invoice_post_version]));
+        const loaded = saved.groupVersions;
+        const same = Object.keys(current).length === Object.keys(loaded).length
+          && Object.entries(current).every(([memberId, version]) => loaded[memberId] === version);
+        if (!same) {
+          toast('error', 'This split group was changed somewhere else since you opened it. It has been reloaded — check it, then post again.');
+          fetchInvoice(id!);
+          return;
         }
         const parts: string[] = [];
-        for (const inv of (grp || []) as Array<{ invoice_number: string; customer_id: string | null; invoice_items: { product_id: string | null }[] | null }>) {
-          const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
-          if (!inv.customer_id || pids.length === 0) continue;
-          const res = await checkRUPCompliance(inv.customer_id, pids);
-          if (res.hasRUPProducts && !res.hasValidLicense) {
-            const disp = rupRegisterDisposition(res);
-            parts.push(`${inv.invoice_number}: ${res.rupProductNames.join(', ')} — ${res.missingLicense ? 'NO applicator license' : 'EXPIRED license'} (${disp.label})`);
+        for (const inv of grp as GroupMemberRupInput[]) {
+          // Missing lines, products with no customer, or a failed read: the check did not run.
+          const finding = await groupMemberRupFinding(inv);
+          if (finding === GROUP_CHECK_FAILED) {
+            stopUnchecked();
+            return;
           }
+          if (finding) parts.push(finding);
         }
         if (parts.length > 0) {
           warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
@@ -414,8 +420,17 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       } else {
         // The SAVED customer and lines — what post_invoice posts — not the on-screen copy.
         const productIds = saved.productIds;
-        if (saved.customerId && productIds.length > 0) {
+        if (productIds.length > 0) {
+          // Products with no customer to check a license for is not a pass.
+          if (!saved.customerId) {
+            stopUnchecked();
+            return;
+          }
           const res = await checkRUPCompliance(saved.customerId, productIds);
+          if (res.checkFailed) {
+            stopUnchecked();
+            return;
+          }
           if (res.hasRUPProducts && !res.hasValidLicense) {
             // #6: align the warning's stated disposition with what the DB actually
             // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
@@ -426,6 +441,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'rup_post_check' } });
+      stopUnchecked();
+      return;
     }
     setRupPostWarning(warning);
     setShowPostConfirm(true);
@@ -1212,7 +1229,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
     // Credit-limit check on the SAVED customer and total — the account and amount post_invoice
     // posts. Limitation (unchanged): for a split group this checks THIS invoice's total only,
-    // although post_invoice_group posts every sibling; it is a dismissible warning, not a gate.
+    // although post_invoice_group posts every sibling. Over the limit is a warning that "Continue
+    // Anyway" overrides; a check that could not run stops the post with no override (the hook).
     // `posting` is set before the check so the form stays locked from the confirm to the end.
     setPosting(true);
     let creditOk: boolean;
@@ -1223,7 +1241,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setPosting(false);
       throw err;
     }
-    if (!creditOk && !creditWarning?.dismissed) {
+    if (!creditOk) {
       setPosting(false);
       return;
     }
@@ -1613,7 +1631,18 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     const printedTotalCents = invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0);
     assertInvoiceLinesLoaded(itemsError, enrichedItems, printedTotalCents);
 
-    const cust = customers.find(c => c.id === invoice.customer_id);
+    // The billed customer's address, read by id: the picker list ignores its read error, leaves out
+    // inactive customers and stops at 500, so a customer missing from it printed a blank address.
+    let cust: Pick<Customer, 'billing_address' | 'city' | 'state' | 'zip' | 'account_number' | 'payment_terms'> | null = null;
+    if (invoice.customer_id) {
+      const { data: custRow, error: custError } = await supabase
+        .from('customers')
+        .select('billing_address, city, state, zip, account_number, payment_terms')
+        .eq('id', invoice.customer_id)
+        .maybeSingle();
+      if (custError || !custRow) throw new InvoiceDetailsUnavailableError();
+      cust = custRow;
+    }
 
     // ChemMan Gap-Closeout #2: wire the persisted diluent / carrier-water RATE
     // (gal/acre) into the PDF for a POSTED field-application invoice opened here
@@ -1704,8 +1733,39 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
       return;
     }
-    const cust = customers.find(c => c.id === invoice.customer_id);
-    if (!cust?.email) {
+    // Busy from the first click: a second click during the lookup would send a second email
+    // (each send carries its own idempotency key).
+    if (emailingRef.current) return;
+    emailingRef.current = true;
+    setEmailing(true);
+    try {
+      await sendInvoiceEmail();
+    } finally {
+      emailingRef.current = false;
+      setEmailing(false);
+    }
+  };
+
+  const sendInvoiceEmail = async () => {
+    if (!profile) return;
+    // Read the billed customer by id: the picker list skips inactive customers and stops at 500,
+    // so a customer missing from it would read as "no email on file".
+    let custEmail: string | null = null;
+    if (invoice.customer_id) {
+      const read = await supabase
+        .from('customers')
+        .select('email')
+        .eq('id', invoice.customer_id)
+        .maybeSingle()
+        .then((r) => r, () => null);
+      if (!read || read.error || !read.data) {
+        toast('error', 'Could not load the customer\'s email address, so nothing was sent. Please try again.');
+        return;
+      }
+      custEmail = read.data.email;
+    }
+    const cust = { email: custEmail };
+    if (!cust.email) {
       toast('error', 'Customer does not have an email address on file');
       return;
     }
@@ -1749,7 +1809,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       },
       toast,
       successMessage: `Invoice emailed to ${cust.email}`,
-      setLoading: setEmailing,
       sentryTag: 'email_invoice',
     });
   };
