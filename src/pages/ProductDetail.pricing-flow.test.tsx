@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockApplyPricing,
+  mockApprovePricing,
   mockPreviewPricing,
   mockProductUpdate,
   mockProductEq,
@@ -10,6 +11,7 @@ const {
   mockGetCostBasisWorkspace,
 } = vi.hoisted(() => ({
   mockApplyPricing: vi.fn(),
+  mockApprovePricing: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockProductUpdate: vi.fn(),
   mockProductEq: vi.fn(),
@@ -141,6 +143,7 @@ vi.mock('../lib/productPricing', async (importOriginal) => {
   return {
     ...actual,
     previewProductPricingChanges: mockPreviewPricing,
+    approvePricingChangeSet: mockApprovePricing,
     applyProductPricingChangeSet: mockApplyPricing,
   };
 });
@@ -199,9 +202,19 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 
 import ProductDetail from './ProductDetail';
 
+/** Answers the source-and-reason prompt a product-page price change opens before its preview. */
+async function giveSourceAndReason(source: string, reason?: string) {
+  fireEvent.change(await screen.findByLabelText('Source (supplier, document, date)'), { target: { value: source } });
+  if (reason !== undefined) {
+    fireEvent.change(screen.getByLabelText('Reason for the change'), { target: { value: reason } });
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+}
+
 describe('ProductDetail governed pricing flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApprovePricing.mockResolvedValue(undefined);
     routeProductId = product.id;
     productLoadResults = [];
     costHistoryLoadResult = { data: [], error: null };
@@ -679,6 +692,10 @@ describe('ProductDetail governed pricing flow', () => {
     fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '55.00' } });
     fireEvent.change(screen.getByLabelText('Change Note (optional)'), { target: { value: 'Mid-month supplier increase' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
+    // The cost note starts the reason; the source still has to be given.
+    expect(await screen.findByLabelText('Reason for the change')).toHaveValue('Mid-month supplier increase');
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeDisabled();
+    await giveSourceAndReason('Helena list Oct 2026');
 
     await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledWith(expect.objectContaining({
       source: 'product_page',
@@ -695,12 +712,19 @@ describe('ProductDetail governed pricing flow', () => {
         tier2_margin_percent: '15',
         tier3_margin_percent: '10',
         change_reason: 'Mid-month supplier increase',
+        price_source: 'Helena list Oct 2026',
       }],
     })));
     expect(await screen.findByText('Ready for approval')).toBeTruthy();
     expect(screen.getByText('$68.75')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+    await waitFor(() => expect(mockApprovePricing).toHaveBeenCalledWith(expect.objectContaining({
+      changeSetId: '22222222-2222-4222-8222-222222222222',
+      requestFingerprint: 'preview-fingerprint',
+      acknowledgements: [],
+      sourceFile: null,
+    })));
     await waitFor(() => expect(mockApplyPricing).toHaveBeenCalledWith(expect.objectContaining({
       changeSetId: '22222222-2222-4222-8222-222222222222',
       requestFingerprint: 'preview-fingerprint',
@@ -736,6 +760,7 @@ describe('ProductDetail governed pricing flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
     fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '55.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
+    await giveSourceAndReason('Helena list', 'Cost up');
     await screen.findByText('Ready for approval');
 
     // Keep the quick-cost modal mounted while apply finishes so its own lock is
@@ -768,6 +793,7 @@ describe('ProductDetail governed pricing flow', () => {
       target: { value: '90071992547410.01' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await giveSourceAndReason('Supplier quote 4471', 'New list price');
 
     await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledWith(expect.objectContaining({
       rows: [expect.objectContaining({

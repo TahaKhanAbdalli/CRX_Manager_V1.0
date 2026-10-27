@@ -12714,6 +12714,17 @@ export type Database = {
         }
         Returns: string
       }
+      approve_pricing_change_set: {
+        Args: {
+          p_acknowledgements?: Json
+          p_change_set_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_request_fingerprint: string
+          p_source_file?: Json
+        }
+        Returns: Json
+      }
       approve_return: {
         Args: {
           p_approved_by?: string

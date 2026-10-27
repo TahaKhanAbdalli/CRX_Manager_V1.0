@@ -1,7 +1,15 @@
-import type { PricingEffect, PricingPreviewResult, PricingPreviewRow } from '../../lib/productPricing';
+import { useState } from 'react';
+import {
+  pricingAcknowledgements,
+  type PricingAcknowledgement,
+  type PricingEffect,
+  type PricingPreviewResult,
+  type PricingPreviewRow,
+} from '../../lib/productPricing';
 import type { ProductCostBasisType } from '../../types';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
+import PricingWarningAcknowledgements from './PricingWarningAcknowledgements';
 
 interface PricingChangePreviewModalProps {
   open: boolean;
@@ -9,12 +17,21 @@ interface PricingChangePreviewModalProps {
   applying: boolean;
   title?: string;
   onClose: () => void;
-  onApprove: () => void;
+  /** Receives one acknowledgement per warned product; the caller approves, then applies. */
+  onApprove: (acknowledgements: PricingAcknowledgement[]) => void;
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
   PRICING_ROW_CONFLICT:
     'This product changed after the pricing data was loaded. Refresh the product and preview it again.',
+  PRICING_REASON_REQUIRED:
+    'Give a reason for this price or cost change.',
+  PRICING_SOURCE_REQUIRED:
+    'Say where the new number came from (supplier, document, date).',
+  PRICING_REASON_TOO_LONG:
+    'The reason is longer than 500 characters. Shorten it and try again.',
+  PRICING_SOURCE_TOO_LONG:
+    'The source is longer than 200 characters. Shorten it and try again.',
   WORKBOOK_FORMULA_REJECTED:
     'This row contains an Excel formula. Replace the formula with a plain value and upload the worksheet again.',
   WORKBOOK_IDENTITY_OR_BASELINE_TAMPERED:
@@ -283,10 +300,19 @@ export default function PricingChangePreviewModal({
   onClose,
   onApprove,
 }: PricingChangePreviewModalProps) {
+  // Reasons belong to one preview: a new preview starts with none.
+  const [reasons, setReasons] = useState<{ changeSetId: string | null; byProduct: Record<string, string> }>(
+    { changeSetId: null, byProduct: {} },
+  );
+  const changeSetId = preview?.change_set_id ?? null;
+  const reasonsByProduct = reasons.changeSetId === changeSetId ? reasons.byProduct : {};
+  const warnings = preview?.warnings ?? [];
+  const acknowledgements = pricingAcknowledgements(warnings, reasonsByProduct);
   const canApprove = Boolean(
     preview?.apply_allowed
       && (preview.status === 'previewed' || preview.status === 'no_changes')
-      && (preview.ready_count > 0 || (preview.basis_change_count ?? 0) > 0),
+      && (preview.ready_count > 0 || (preview.basis_change_count ?? 0) > 0)
+      && acknowledgements !== null,
   );
   const orderedRows = preview ? [...preview.rows].sort((a, b) => a.sequence - b.sequence) : [];
 
@@ -304,7 +330,7 @@ export default function PricingChangePreviewModal({
           </Button>
           {(preview?.status === 'previewed'
             || (preview?.status === 'no_changes' && (preview.basis_change_count ?? 0) > 0)) && (
-            <Button onClick={onApprove} disabled={!canApprove} loading={applying}>
+            <Button onClick={() => acknowledgements && onApprove(acknowledgements)} disabled={!canApprove} loading={applying}>
               Apply approved changes
             </Button>
           )}
@@ -355,6 +381,19 @@ export default function PricingChangePreviewModal({
               </div>
             </div>
           </section>
+
+          {preview.status === 'previewed' && (
+            <PricingWarningAcknowledgements
+              warnings={warnings}
+              rows={orderedRows}
+              reasons={reasonsByProduct}
+              disabled={applying}
+              onReasonChange={(productId, reason) => setReasons({
+                changeSetId,
+                byProduct: { ...reasonsByProduct, [productId]: reason },
+              })}
+            />
+          )}
 
           <ol className="space-y-3" aria-label="Pricing preview rows">
             {orderedRows.map((row) => {

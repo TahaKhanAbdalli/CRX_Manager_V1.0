@@ -214,6 +214,12 @@ export interface CostHistory {
   new_pricing_version: number | null;
   change_note: string | null;
   changed_at: string;
+  // 20261027050000 (To-Do 0.1); NULL on rows written before it.
+  price_source?: string | null;
+  old_rate_per_acre?: number | null;
+  new_rate_per_acre?: number | null;
+  old_rate_unit?: string | null;
+  new_rate_unit?: string | null;
 }
 
 // ── Pricing worksheet persistence (Phase 1a) ────────────────────

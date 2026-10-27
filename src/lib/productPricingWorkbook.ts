@@ -42,6 +42,7 @@ export const PRICING_WORKBOOK_HEADERS = [
   'tier3_margin_percent',
   'tier3_price',
   'change_reason',
+  'price_source',
   'suggested_rate',
   'rate_per_acre',
   'rate_unit',
@@ -70,6 +71,7 @@ const EDITABLE_HEADERS = new Set<PricingWorkbookHeader>([
   'tier3_margin_percent',
   'tier3_price',
   'change_reason',
+  'price_source',
   'suggested_rate',
   'rate_per_acre',
   'rate_unit',
@@ -125,6 +127,7 @@ const COLUMN_WIDTHS: Record<PricingWorkbookHeader, number> = {
   tier3_margin_percent: 20,
   tier3_price: 15,
   change_reason: 32,
+  price_source: 32,
   suggested_rate: 18,
   rate_per_acre: 16,
   rate_unit: 16,
@@ -444,6 +447,7 @@ function workbookRow(exportRow: PricingWorkbookExportRow): Record<PricingWorkboo
     tier3_margin_percent: exportRow.current_tier3_margin_percent ?? '',
     tier3_price: exportRow.current_tier3_price ?? '',
     change_reason: '',
+    price_source: '',
     suggested_rate: exportRow.suggested_rate ?? '',
     rate_per_acre: exportRow.rate_per_acre ?? '',
     rate_unit: exportRow.rate_unit ?? '',
@@ -492,7 +496,7 @@ function stylePricingWorksheet(worksheet: Worksheet, rowCount: number): void {
       cell.alignment = {
         vertical: 'middle',
         horizontal: DOLLAR_HEADERS.has(header) || MARGIN_HEADERS.has(header) ? 'right' : 'left',
-        wrapText: header === 'product_name' || header === 'change_reason'
+        wrapText: header === 'product_name' || header === 'change_reason' || header === 'price_source'
           || header === 'use_timing' || header === 'internal_notes'
           || header === 'quoting_notes',
       };

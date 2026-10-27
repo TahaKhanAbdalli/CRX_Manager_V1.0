@@ -489,10 +489,11 @@
     },
     "supplier_cost_basis_phase2_live": {
       "chain": "smoke-supplier-cost-basis-phase2-live.sql",
-      "description": "Supplier cost-basis Phase 2 live rollback proof: verifies the default-off gate and direct-ledger/RPC isolation, then creates two transaction-scoped Products. It proves the governed Product-page and server-generated monthly-workbook routes each preview and apply exact cents, replay the same idempotency key without changing the response or creating duplicate history/basis rows, and consumes the workbook export. No fixture IDs, cardinality assumptions, or temporary-file payload are required.",
+      "description": "Supplier cost-basis Phase 2 live rollback proof: verifies the default-off gate and direct-ledger/RPC isolation, then creates two transaction-scoped Products. It proves the governed Product-page and server-generated monthly-workbook routes each preview and apply exact cents, replay the same idempotency key without changing the response or creating duplicate history/basis rows, and consumes the workbook export. Since 20261027050000 (To-Do 0.1): rows carry a source and reason; approve_pricing_change_set refuses no-auth, a non-admin and a forged actor; an unapproved preview does not apply (PRICING_APPROVAL_REQUIRED); each route is approved first, acknowledging every warning it raised, and the workbook approval names its file. No fixture IDs, cardinality assumptions, or temporary-file payload are required.",
       "covers": [
         "preview_product_cost_basis_changes",
         "apply_product_cost_basis_change_set",
+        "approve_pricing_change_set",
         "create_pricing_workbook_export",
         "product_cost_basis"
       ],

@@ -69,9 +69,91 @@ function makePreview(overrides: Partial<PricingPreviewResult> = {}): PricingPrev
         },
       },
     ],
+    warnings: [],
     ...overrides,
   };
 }
+
+const belowCostWarning = {
+  product_id: 'product-1',
+  warning_codes: ['PRICE_BELOW_COST', 'MARGIN_UNDER_FLOOR'] as const,
+  details: {
+    cost_before_cents: 1000n,
+    cost_after_cents: 1200n,
+    margin_floor: 0.15,
+    tiers: [],
+    open_quote_count: 0,
+    open_quote_numbers: [],
+  },
+};
+
+describe('PricingChangePreviewModal warnings (To-Do 0.1)', () => {
+  it('lists each warned product and keeps approval locked until it has a reason', () => {
+    const onApprove = vi.fn();
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({ warnings: [{ ...belowCostWarning, warning_codes: [...belowCostWarning.warning_codes] }] })}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={onApprove}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Warnings to acknowledge' });
+    expect(within(panel).getByText('First Product')).toBeTruthy();
+    expect(within(panel).getByText('A price is below cost')).toBeTruthy();
+    expect(within(panel).getByText(/floor 15%/)).toBeTruthy();
+    const apply = screen.getByRole('button', { name: 'Apply approved changes' });
+    expect(apply).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Reason for First Product'), { target: { value: 'Clearance of old stock' } });
+    expect(apply).toBeEnabled();
+    fireEvent.click(apply);
+    expect(onApprove).toHaveBeenCalledWith([{
+      product_id: 'product-1',
+      warning_codes: ['PRICE_BELOW_COST', 'MARGIN_UNDER_FLOOR'],
+      reason: 'Clearance of old stock',
+    }]);
+  });
+
+  it('starts a new preview with no reasons, so an old reason never carries over', () => {
+    const preview = makePreview({ warnings: [{ ...belowCostWarning, warning_codes: [...belowCostWarning.warning_codes] }] });
+    const { rerender } = render(
+      <PricingChangePreviewModal open preview={preview} applying={false} onClose={vi.fn()} onApprove={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByLabelText('Reason for First Product'), { target: { value: 'Clearance' } });
+    rerender(
+      <PricingChangePreviewModal
+        open
+        preview={{ ...preview, change_set_id: 'change-set-2' }}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('Reason for First Product')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Apply approved changes' })).toBeDisabled();
+  });
+
+  it('explains a missing source or reason on a row in plain English', () => {
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({
+          status: 'invalid',
+          rows: [{
+            sequence: 1, product_id: 'product-3', submitted_row: { product_name: 'No Source' },
+            row_status: 'invalid', error_code: 'PRICING_SOURCE_REQUIRED', effect: null,
+          }],
+        })}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Say where the new number came from (supplier, document, date).')).toBeTruthy();
+  });
+});
 
 describe('PricingChangePreviewModal', () => {
   it('renders Product information old-to-new values without a pricing card for info-only rows', () => {

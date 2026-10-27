@@ -15,12 +15,95 @@ vi.mock('./db', () => ({
 
 import {
   applyProductPricingChangeSet,
+  approvePricingChangeSet,
   assertPricingPreviewRowsSafe,
   createPricingWorkbookExport,
   formatPricingMarginPercent,
   pricingDollarInputToCents,
   previewProductPricingChanges,
+  sha256Hex,
 } from './productPricing';
+
+describe('price sheet approval (To-Do 0.1)', () => {
+  beforeEach(() => {
+    mockRpc.mockReset();
+    mockAssertRpcResult.mockClear();
+  });
+
+  it('sends the acknowledgements with trimmed reasons, the file and the key, and checks the result', async () => {
+    mockRpc.mockResolvedValue({ data: { status: 'approved' }, error: null });
+    await approvePricingChangeSet({
+      changeSetId: 'change-1',
+      requestFingerprint: 'fp-1',
+      acknowledgements: [{ product_id: 'p1', warning_codes: ['PRICE_BELOW_COST'], reason: '  clearance  ' }],
+      sourceFile: { name: 'prices.xlsx', sha256: 'a'.repeat(64) },
+      performedBy: 'actor-1',
+      idempotencyKey: 'approve-key',
+    });
+    expect(mockRpc).toHaveBeenCalledWith('approve_pricing_change_set', {
+      p_change_set_id: 'change-1',
+      p_request_fingerprint: 'fp-1',
+      p_acknowledgements: [{ product_id: 'p1', warning_codes: ['PRICE_BELOW_COST'], reason: 'clearance' }],
+      p_source_file: { name: 'prices.xlsx', sha256: 'a'.repeat(64) },
+      p_performed_by: 'actor-1',
+      p_idempotency_key: 'approve-key',
+    });
+    expect(mockAssertRpcResult).toHaveBeenCalledWith({ status: 'approved' }, 'approve_pricing_change_set');
+  });
+
+  it('sends no file for a product-page approval and throws the database refusal', async () => {
+    const refusal = new Error('PRICING_WARNINGS_UNACKNOWLEDGED: every warning must be acknowledged with a reason');
+    mockRpc.mockResolvedValue({ data: null, error: refusal });
+    await expect(approvePricingChangeSet({
+      changeSetId: 'change-1',
+      requestFingerprint: 'fp-1',
+      acknowledgements: [],
+      sourceFile: null,
+      performedBy: 'actor-1',
+      idempotencyKey: 'approve-key',
+    })).rejects.toBe(refusal);
+    expect(mockRpc.mock.calls[0][1].p_source_file).toBeUndefined();
+  });
+
+  it('reads preview warnings with exact bigint cents and numeric margins', async () => {
+    mockRpc.mockResolvedValue({
+      data: {
+        change_set_id: 'change-1',
+        rows: [],
+        warnings: [{
+          product_id: 'p1',
+          warning_codes: ['COST_MOVE_OVER_10_PERCENT', 'MARGIN_UNDER_FLOOR'],
+          details: {
+            cost_before_cents: 2250,
+            cost_after_cents: '9007199254740993',
+            margin_floor: '0.15',
+            tiers: [{ tier: 1, before_cents: 3000, after_cents: null, margin: '0.1' }],
+            open_quote_count: 0,
+            open_quote_numbers: [],
+          },
+        }],
+      },
+      error: null,
+    });
+    const preview = await previewProductPricingChanges({
+      source: 'product_page', rows: [], performedBy: 'actor-1', idempotencyKey: 'k',
+    });
+    expect(preview.warnings[0].details).toEqual({
+      cost_before_cents: 2250n,
+      cost_after_cents: 9007199254740993n,
+      margin_floor: 0.15,
+      tiers: [{ tier: 1, before_cents: 3000n, after_cents: null, margin: 0.1 }],
+      open_quote_count: 0,
+      open_quote_numbers: [],
+    });
+  });
+
+  it('fingerprints a file as lower-case hex SHA-256', async () => {
+    await expect(sha256Hex(new Blob(['abc']))).resolves.toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
+  });
+});
 
 describe('pricingDollarInputToCents', () => {
   it('preserves cents beyond JavaScript safe-integer precision', () => {
@@ -109,7 +192,7 @@ describe('product pricing RPC wrappers', () => {
       rows,
       performedBy: 'actor-1',
       idempotencyKey: 'preview-key',
-    })).resolves.toEqual(response);
+    })).resolves.toEqual({ ...response, warnings: [] });
 
     expect(mockRpc).toHaveBeenCalledWith('preview_product_cost_basis_changes', {
       p_source: 'product_page',
@@ -260,6 +343,7 @@ describe('product pricing RPC wrappers', () => {
       tier3_margin_percent: '10',
       tier3_price: '139.33',
       change_reason: '',
+      price_source: '',
       has_formula: false,
       formula_cells: [],
     }];
@@ -324,6 +408,7 @@ describe('product pricing RPC wrappers', () => {
       tier3_margin_percent: '10',
       tier3_price: '',
       change_reason: 'Monthly update',
+      price_source: 'Helena list Oct 2026',
       has_formula: false,
       formula_cells: [],
     };
@@ -351,6 +436,7 @@ describe('product pricing RPC wrappers', () => {
       tier3_margin_percent: '',
       tier3_price: '',
       change_reason: '',
+      price_source: '',
     };
     mockRpc.mockResolvedValue({ data: response, error: null });
 

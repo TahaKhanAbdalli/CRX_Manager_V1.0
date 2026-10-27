@@ -26,13 +26,16 @@ import { useLatestRef } from '../hooks/useLatestRef';
 import type { CostHistory, EpaLookupResult, Product, UnitConversion } from '../types';
 import {
   applyProductPricingChangeSet,
+  approvePricingChangeSet,
   formatPricingMarginPercent,
   pricingDollarInputToCents,
   previewProductPricingChanges,
+  type PricingAcknowledgement,
   type PricingMode,
   type PricingPreviewInputRow,
   type PricingPreviewResult,
 } from '../lib/productPricing';
+import PricingSourceReasonModal, { type PricingSourceReason } from '../components/products/PricingSourceReasonModal';
 import {
   getProductCostBasisWorkspace,
   formatCostBasisDollars,
@@ -106,7 +109,7 @@ function pricingPreviewRow(
   product: Partial<Product>,
   persisted: Product,
   mode: PricingMode,
-  reason: string,
+  note: PricingSourceReason,
   moneyDrafts: ProductPricingMoneyDrafts,
   costOverride?: string,
 ): PricingPreviewInputRow {
@@ -122,7 +125,8 @@ function pricingPreviewRow(
     row_version: persisted.pricing_version!,
     pricing_mode: mode,
     new_cost: cost,
-    change_reason: reason.trim() || 'Product page pricing update',
+    change_reason: note.reason.trim(),
+    price_source: note.source.trim(),
   };
   if (mode === 'margin_driven') {
     for (const tier of [1, 2, 3] as const) {
@@ -226,6 +230,11 @@ export default function ProductDetail() {
   const [pricingMoneyDrafts, setPricingMoneyDrafts] = useState<ProductPricingMoneyDrafts>({});
   const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
   const [pricingPreviewTitle, setPricingPreviewTitle] = useState('Review Product Pricing');
+  // A pricing change waiting for its source and reason before the preview.
+  const [pendingPricingReview, setPendingPricingReview] = useState<
+    { costOverride?: string; initialReason: string } | null
+  >(null);
+  const [previewingPricing, setPreviewingPricing] = useState(false);
   const [applyingPricing, setApplyingPricing] = useState(false);
   const [pricingReloadRequired, setPricingReloadRequired] = useState(false);
   const [pricingReloading, setPricingReloading] = useState(false);
@@ -257,6 +266,10 @@ export default function ProductDetail() {
     getKey: getPreviewPricingKey,
     resetKey: resetPreviewPricingKey,
   } = useIdempotencyKey('preview_product_pricing_changes', profile?.id ?? '');
+  const {
+    getKeyFor: getApprovePricingKeyFor,
+    resetKeyFor: resetApprovePricingKeyFor,
+  } = useIdempotencyKey('approve_pricing_change_set', profile?.id ?? '');
   const {
     getKey: getApplyPricingKey,
     resetKey: resetApplyPricingKey,
@@ -415,13 +428,8 @@ export default function ProductDetail() {
     });
   };
 
-  const requestPricingReview = async ({
-    costOverride,
-    reason,
-  }: {
-    costOverride?: string;
-    reason: string;
-  }) => {
+  // The preview row for this page's pricing change; throws the first thing that blocks a review.
+  const buildPricingReviewRow = (note: PricingSourceReason, costOverride?: string) => {
     if (pricingReloadRequired) {
       throw new Error('Reload this Product before making another change.');
     }
@@ -432,14 +440,24 @@ export default function ProductDetail() {
     if (pricingMode !== 'margin_driven' && pricingMode !== 'price_driven') {
       throw new Error('Choose margin-driven or price-driven before reviewing pricing.');
     }
-    const row = pricingPreviewRow(
-      product,
-      persistedProduct,
-      pricingMode,
-      reason,
-      pricingMoneyDrafts,
-      costOverride,
-    );
+    return pricingPreviewRow(product, persistedProduct, pricingMode, note, pricingMoneyDrafts, costOverride);
+  };
+
+  // Check everything but the source and reason before asking for them, so nobody types them for nothing.
+  const openPricingReview = (costOverride?: string, initialReason = '') => {
+    buildPricingReviewRow({ source: '', reason: '' }, costOverride);
+    setPendingPricingReview({ costOverride, initialReason });
+  };
+
+  const requestPricingReview = async ({
+    costOverride,
+    note,
+  }: {
+    costOverride?: string;
+    note: PricingSourceReason;
+  }) => {
+    const row = buildPricingReviewRow(note, costOverride);
+    if (!profile || !persistedProduct) return;
     const intent = JSON.stringify(row);
     if (pricingPreviewIntentRef.current !== intent) {
       resetPreviewPricingKey();
@@ -643,9 +661,8 @@ export default function ProductDetail() {
       }
 
       if (hasPricingChanges) {
-        await requestPricingReview({
-          reason: 'Product page pricing update',
-        });
+        // Ask where the new numbers came from and why; the preview runs from that prompt.
+        openPricingReview();
         return;
       }
 
@@ -662,7 +679,7 @@ export default function ProductDetail() {
     }
   };
 
-  const handleCostUpdate = async () => {
+  const handleCostUpdate = () => {
     if (pricingReloadRequired) {
       toast('error', 'Reload this Product before making another change.');
       return;
@@ -677,17 +694,27 @@ export default function ProductDetail() {
       return;
     }
     try {
-      await requestPricingReview({
-        costOverride: newCost,
-        reason: costNote || 'Minor mid-month supplier increase',
-      });
+      openPricingReview(newCost, costNote);
       setCostModal(false);
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
   };
 
-  const handleApplyPricing = async () => {
+  const submitPricingReview = async (note: PricingSourceReason) => {
+    if (!pendingPricingReview) return;
+    setPreviewingPricing(true);
+    try {
+      await requestPricingReview({ costOverride: pendingPricingReview.costOverride, note });
+      setPendingPricingReview(null);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    } finally {
+      setPreviewingPricing(false);
+    }
+  };
+
+  const handleApplyPricing = async (acknowledgements: PricingAcknowledgement[]) => {
     if (!pricingPreview || !profile) return;
     const previewProductIds = [...new Set(
       pricingPreview.rows.map((row) => row.product_id).filter((productId): productId is string => Boolean(productId)),
@@ -700,12 +727,26 @@ export default function ProductDetail() {
     }
     setApplyingPricing(true);
     try {
+      // The database applies only an approved preview, with every warning acknowledged. One key per
+      // exact approval: a corrected reason is a new request (a re-approval replaces the receipt).
+      const approveIntent = JSON.stringify([pricingPreview.change_set_id, acknowledgements]);
+      await approvePricingChangeSet({
+        changeSetId: pricingPreview.change_set_id,
+        requestFingerprint: pricingPreview.request_fingerprint,
+        acknowledgements,
+        sourceFile: null,
+        performedBy: profile.id,
+        idempotencyKey: getApprovePricingKeyFor(approveIntent),
+      });
       const result = await applyProductPricingChangeSet({
         changeSetId: pricingPreview.change_set_id,
         requestFingerprint: pricingPreview.request_fingerprint,
         performedBy: profile.id,
         idempotencyKey: getApplyPricingKey(),
       });
+      // Both keys are kept until the apply is confirmed: if its answer is lost, a retry replays the
+      // approval (the database checks the key before refusing an applied change set) and then the apply.
+      resetApprovePricingKeyFor(approveIntent);
       resetApplyPricingKey();
       setPricingReloadRequired(true);
       setIsDirty(true);
@@ -1732,7 +1773,17 @@ export default function ProductDetail() {
           setPricingPreview(null);
           resetApplyPricingKey();
         }}
-        onApprove={() => void handleApplyPricing()}
+        onApprove={(acknowledgements) => void handleApplyPricing(acknowledgements)}
+      />
+
+      <PricingSourceReasonModal
+        key={pendingPricingReview ? 'open' : 'closed'}
+        open={pendingPricingReview !== null}
+        busy={previewingPricing}
+        productCount={1}
+        initialReason={pendingPricingReview?.initialReason}
+        onCancel={() => setPendingPricingReview(null)}
+        onSubmit={(value) => void submitPricingReview(value)}
       />
 
       <UnsavedChangesModal

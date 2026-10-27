@@ -148,6 +148,22 @@ function createZipWithForgedSmallExpandedSize(actualSize: number): ArrayBuffer {
 }
 
 describe('product pricing workbook', () => {
+  it('has an editable source column after the reason, and reads what the admin typed into both', async () => {
+    const reasonIndex = PRICING_WORKBOOK_HEADERS.indexOf('change_reason');
+    expect(PRICING_WORKBOOK_HEADERS[reasonIndex + 1]).toBe('price_source');
+
+    const { workbook } = await loadGeneratedWorkbook();
+    const sheet = workbook.getWorksheet(PRICING_WORKBOOK_SHEET)!;
+    const sourceColumn = PRICING_WORKBOOK_HEADERS.indexOf('price_source') + 1;
+    expect(sheet.getCell(2, sourceColumn).protection?.locked).toBe(false);
+    sheet.getCell(2, reasonIndex + 1).value = 'Supplier raised cost';
+    sheet.getCell(2, sourceColumn).value = 'Helena list Oct 2026';
+
+    const parsed = await parseProductPricingWorkbook(await writeWorkbook(workbook));
+    expect(parsed.rows[0]).toMatchObject({ change_reason: 'Supplier raised cost', price_source: 'Helena list Oct 2026' });
+    expect(parsed.rows[1]).toMatchObject({ change_reason: '', price_source: '' });
+  }, 20000);
+
   it('round-trips exact server strings and preserves leading-zero SKUs', async () => {
     const { buffer } = await loadGeneratedWorkbook();
 
