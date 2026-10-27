@@ -54,7 +54,18 @@ const LEDGER_ONLY = new Set([
   '20261007150100_mark_spring_2026_deliveries_billed_in_chem_man.sql',
   '20261007150200_release_reservations_of_deleted_spring_orders.sql',
 ]);
-const TOUCHED = /get_gross_sales_report|get_inventory_cost_report|get_field_profitability|get_profitability_report|get_bottom_line_pnl|get_sales_detail_report|get_sales_summary_report|get_inventory_position|save_quote\(|_enforce_below_cost_line|dashboard_summary\(|_save_quote_below_cost_impl_20260810/;
+// A later or parked file that (re)defines, alters, drops or re-grants anything the candidate
+// replaces or relies on. Later files that only name these functions in their own preflight pins
+// change nothing here.
+const TOUCHED = /(FUNCTION|ROUTINE|PROCEDURE)\s+(IF\s+EXISTS\s+)?("?public"?\s*\.\s*)?"?(get_gross_sales_report|get_inventory_cost_report|get_field_profitability|get_profitability_report|get_bottom_line_pnl|get_sales_detail_report|get_sales_summary_report|get_inventory_position|save_quote|_enforce_below_cost_line|dashboard_summary|_save_quote_below_cost_impl_20260810)\b/i;
+// A schema-wide grant or revoke reaches every covered function without naming one.
+const SCHEMA_WIDE = /ALL\s+(FUNCTIONS|ROUTINES|PROCEDURES)\s+IN\s+SCHEMA/i;
+// Comments are stripped first, so one between two SQL words cannot hide a match. A trigger's
+// EXECUTE FUNCTION clause only calls _enforce_below_cost_line, so it is not counted.
+function touches(file) {
+  const sql = lf(file).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+  return SCHEMA_WIDE.test(sql) || TOUCHED.test(sql.replace(/EXECUTE\s+(FUNCTION|PROCEDURE)/gi, 'EXECUTE'));
+}
 // The image's auth.uid() reads only request.jwt.claim.sub; live's falls back to
 // request.jwt.claims ->> 'sub'. Install live's exact body.
 const LIVE_AUTH_UID_SRC = '\n  select \n  coalesce(\n'
@@ -132,12 +143,12 @@ function plan() {
   assert.ok(at >= 0, 'the candidate must be selected for post-baseline replay');
   const before = all.slice(0, at);
   for (const file of all.slice(at + 1)) {
-    assert.ok(!TOUCHED.test(lf(file)), `${path.basename(file)} sorts after the candidate and touches what it changes; re-think this proof`);
+    assert.ok(!touches(file), `${path.basename(file)} sorts after the candidate and touches what it changes; re-think this proof`);
   }
   for (const name of PARKED) {
     const file = before.find((f) => path.basename(f) === name);
     assert.ok(file, `${name} must be in the replay plan (re-check the PARKED list)`);
-    assert.ok(!TOUCHED.test(lf(file)), `${name} now touches what this proof covers; replay it or re-think the skip`);
+    assert.ok(!touches(file), `${name} now touches what this proof covers; replay it or re-think the skip`);
   }
   return before;
 }

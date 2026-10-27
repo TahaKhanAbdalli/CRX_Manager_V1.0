@@ -15,8 +15,11 @@
 --     anon/authenticated — six, which is the full write-capable set minus
 --     MAINTAIN, deliberately kept and explained at the migration's REVOKE.
 --     (TRUNCATE matters independently — RLS policies do not apply to it at all);
---   * SELECT and qversions_select preserved, because version history must keep
---     rendering and this predicate must not pass by having broken reads;
+--   * reads and qversions_select preserved, because version history must keep
+--     rendering and this predicate must not pass by having broken reads. Since
+--     20261022101000 (cost columns admin-only) that read is column-level: every
+--     column except snapshot_data, which reaches the browser only through the
+--     SECURITY DEFINER get_quote_versions(uuid);
 --   * the owner-side writer _create_quote_version_owner_impl stays a
 --     search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role and
 --     stays uncallable by anon/authenticated — it is the ONLY routine in the
@@ -89,16 +92,164 @@ SELECT 'quote_versions:column-mutation-privilege' AS violation_key,
 
 UNION ALL
 
+-- 20261022101000 replaced the table-wide SELECT with a column-level grant on
+-- every column except snapshot_data, so the read path is checked column by
+-- column; has_table_privilege is false there by design. The nine columns are
+-- the migration's grant list. Each is resolved through pg_attribute rather
+-- than by name, so a dropped or renamed column reports here instead of making
+-- has_column_privilege raise and turning the whole predicate into an ERROR.
+-- The snapshot itself is read through get_quote_versions(uuid), so losing that
+-- routine or its EXECUTE breaks version history just as surely as losing a
+-- column; its body, owner and search_path are pinned in their own branch below.
+-- The policy's row condition is pinned by digest of pg_get_expr(polqual): a
+-- USING (true) would widen reads to every signed-in user and a USING (false)
+-- would empty history, and neither changes the policy's name or command.
+-- Inherited privileges of a role, not an exact role match, decide whether a
+-- policy applies (row security uses has_privs_of_role), so a policy aimed at a
+-- role authenticated inherits from still counts; 'USAGE' is that test, where
+-- 'MEMBER' would also accept a NOINHERIT membership that never applies.
 SELECT 'quote_versions:read-path-regressed' AS violation_key,
-       'authenticated lost SELECT or qversions_select was removed — the write boundary must not be satisfied by breaking version history' AS reason
- WHERE NOT has_table_privilege('authenticated', 'public.quote_versions', 'SELECT')
+       'authenticated lost its column-level read of a version-history column, qversions_select was removed, changed its row condition or no longer applies to authenticated, or get_quote_versions(uuid) is missing or not authenticated-callable — the write boundary must not be satisfied by breaking version history; an intended policy change must update the condition digest here (expected 466a3791a1874c9cba20ac690f330c7b)' AS reason
+ WHERE NOT has_any_column_privilege('authenticated', 'public.quote_versions', 'SELECT')
+    OR EXISTS (
+      SELECT 1
+        FROM unnest(ARRAY['id', 'quote_id', 'version_number', 'sent_by', 'sent_at',
+                          'sent_method', 'pdf_url', 'notes', 'restore_trusted_at']) AS c(name)
+       WHERE NOT EXISTS (
+         SELECT 1
+           FROM pg_attribute a
+          WHERE a.attrelid = 'public.quote_versions'::regclass
+            AND a.attname = c.name
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+            AND has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT')
+       )
+    )
     OR NOT EXISTS (
       SELECT 1
         FROM pg_policy p
        WHERE p.polrelid = 'public.quote_versions'::regclass
          AND p.polname = 'qversions_select'
          AND p.polcmd = 'r'
+         AND p.polpermissive
+         -- 0 in polroles means PUBLIC, which includes authenticated.
+         AND EXISTS (
+           SELECT 1 FROM unnest(p.polroles) AS pr(role_oid)
+            WHERE pr.role_oid = 0 OR pg_has_role('authenticated', pr.role_oid, 'USAGE')
+         )
+         AND md5(pg_get_expr(p.polqual, p.polrelid)) = '466a3791a1874c9cba20ac690f330c7b'
     )
+    OR CASE
+         WHEN to_regprocedure('public.get_quote_versions(uuid)') IS NULL THEN true
+         ELSE NOT has_function_privilege('authenticated', 'public.get_quote_versions(uuid)', 'EXECUTE')
+       END
+
+UNION ALL
+
+-- Pinning qversions_select's condition means little if a second SELECT policy
+-- sits beside it: permissive policies are OR-ed, so one with USING (true)
+-- widens reads to every signed-in user; restrictive ones are AND-ed, so one
+-- with USING (false) empties history. FOR ALL policies are already reported by
+-- the external-mutation-policy branch above.
+SELECT 'quote_versions:extra-select-policy' AS violation_key,
+       'public.quote_versions has a SELECT policy other than qversions_select — permissive ones widen who can read version history, restrictive ones can empty it; review it against the pinned qversions_select condition' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_policy p
+    WHERE p.polrelid = 'public.quote_versions'::regclass
+      AND p.polcmd = 'r'
+      AND p.polname <> 'qversions_select'
+ )
+
+UNION ALL
+
+-- get_quote_versions(uuid) is the one browser path to snapshot_data, so it is a
+-- SECURITY DEFINER reader of cost. 20261022101000 checked its reviewed shape
+-- once, at apply time (COST_LOCK_PREFLIGHT); this makes the same claims
+-- standing, with the same body digest formula. A re-emitted body could return
+-- every quote's snapshot, or none, with the name, mode and grants unchanged; an
+-- owner without access to snapshot_data would fail every call. An intentionally
+-- reviewed re-emission must update this pin in the same change.
+SELECT 'get_quote_versions:contract-pinned' AS violation_key,
+       'get_quote_versions(uuid) drifted from the reviewed admin-checked SECURITY DEFINER reader (body, owner postgres, or search_path) — expected body 8f0592c4877da51eb5b9074b775ed0cc, measured '
+         || coalesce((SELECT md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public.get_quote_versions(uuid)')), 'signature unresolvable') AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+    WHERE p.oid = to_regprocedure('public.get_quote_versions(uuid)')
+      AND p.prosecdef
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
+      AND md5(replace(p.prosrc, chr(13), '')) = '8f0592c4877da51eb5b9074b775ed0cc'
+      -- The browser calls it by the argument NAME (p_quote_id) and reads the
+      -- returned columns by name, so a rename breaks history with the body
+      -- digest unchanged.
+      AND p.proargnames IS NOT DISTINCT FROM ARRAY['p_quote_id', 'id', 'quote_id', 'version_number',
+            'sent_by', 'sent_at', 'sent_method', 'snapshot_data', 'pdf_url', 'notes', 'restore_trusted_at']
+ )
+
+UNION ALL
+
+-- The other half of 20261022101000: snapshot_data carries the sent quote's cost
+-- lines, so neither browser role may read it directly. has_column_privilege is
+-- also true when a role holds table-wide SELECT, so a later blanket
+-- re-grant of the table reports here too. The column is resolved through
+-- pg_attribute, like the history columns above, so a rename or drop reports
+-- here (every snapshot check in this file was written against that name)
+-- instead of making the whole predicate ERROR.
+SELECT 'quote_versions:snapshot-data-readable' AS violation_key,
+       'anon/authenticated can read public.quote_versions.snapshot_data directly, or the column no longer exists under that name — it carries cost and must be reached only through get_quote_versions(uuid) (20261022101000)' AS reason
+ WHERE NOT EXISTS (
+         SELECT 1 FROM pg_attribute a
+          WHERE a.attrelid = 'public.quote_versions'::regclass
+            AND a.attname = 'snapshot_data'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+       )
+    OR EXISTS (
+         SELECT 1 FROM pg_attribute a
+          WHERE a.attrelid = 'public.quote_versions'::regclass
+            AND a.attname = 'snapshot_data'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+            AND (has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT')
+              OR has_column_privilege('anon', a.attrelid, a.attnum, 'SELECT'))
+       )
+
+UNION ALL
+
+-- The nine history columns are the WHOLE of authenticated's read, not a
+-- minimum. A column added later is born ungranted, so reading it takes a
+-- deliberate grant; if that column carries cost (a landed_cost, say), this is
+-- the branch that notices. An intended new readable column must be added to
+-- this list and to the read-path list above in the same change.
+SELECT 'quote_versions:unexpected-readable-column' AS violation_key,
+       'authenticated can read a public.quote_versions column outside the nine reviewed version-history columns — check it carries no cost before adding it to this predicate''s list' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_attribute a
+    WHERE a.attrelid = 'public.quote_versions'::regclass
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+      AND a.attname <> ALL (ARRAY['id', 'quote_id', 'version_number', 'sent_by', 'sent_at',
+                                  'sent_method', 'pdf_url', 'notes', 'restore_trusted_at'])
+      AND has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT')
+ )
+
+UNION ALL
+
+-- anon held no read on quote_versions before 20261022101000 and was given none
+-- by it. Any column grant to anon, or anon being able to call the SECURITY
+-- DEFINER snapshot reader (a PUBLIC grant counts), exposes version history to
+-- signed-out callers while the snapshot_data check above stays clean.
+SELECT 'quote_versions:anon-read' AS violation_key,
+       'anon can read a column of public.quote_versions or call get_quote_versions(uuid) — version history, snapshot included, must stay signed-in only' AS reason
+ WHERE has_any_column_privilege('anon', 'public.quote_versions', 'SELECT')
+    OR CASE
+         WHEN to_regprocedure('public.get_quote_versions(uuid)') IS NULL THEN false
+         ELSE has_function_privilege('anon', 'public.get_quote_versions(uuid)', 'EXECUTE')
+       END
 
 UNION ALL
 

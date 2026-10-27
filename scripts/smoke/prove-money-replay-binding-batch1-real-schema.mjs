@@ -17,7 +17,11 @@
  *      rollback-only against live), and every covering chain that passed BEFORE still passes;
  *   5. RE-APPLY: refused by the preflight's own pins;
  *   6. MUTATION: with each wrapper's target or payload taken out of its fingerprint, or with the
- *      receipt binder broken, the new chain fails at the step that proves it.
+ *      receipt binder broken, the new chain fails at the step that proves it;
+ *   7. LATER: every migration after the candidate replays on top of it (batches 2, 3a and 3b
+ *      rebuild the commit-time guard trigger), and the trigger still covers the nine operations
+ *      and refuses an unbound receipt for each. A later file that redefines, alters, drops or
+ *      re-grants a covered function stops the proof before it starts.
  *
  * Run: node scripts/smoke/prove-money-replay-binding-batch1-real-schema.mjs   (needs Docker)
  * Prints MONEY_REPLAY_BINDING_BATCH1_PROOF_PASS on success.
@@ -71,6 +75,23 @@ const WRAPPED = [
   'void_payment', 'delete_prepay_credit', 'edit_prepay_credit', 'apply_write_off', 'reverse_write_off',
   'apply_prepay_to_invoice', 'create_prepay_check_splits', 'batch_apply_prepayments', 'batch_void_invoices',
 ];
+// A later file that (re)defines, alters, drops or re-grants anything the candidate creates or relies
+// on. A trigger's EXECUTE FUNCTION clause only calls the guard, so it is not counted here.
+const COVERED_FUNCTIONS = [
+  ...WRAPPED, ...WRAPPED.map((w) => `_${w}_replay_impl_20261015`),
+  '_replay_fingerprint_20261015', '_bind_replay_receipt_20261015', '_require_bound_replay_receipt_20261015',
+  'check_idempotency_intent',
+];
+const TOUCHED = new RegExp(`(FUNCTION|ROUTINE|PROCEDURE)\\s+(IF\\s+EXISTS\\s+)?("?public"?\\s*\\.\\s*)?"?(${COVERED_FUNCTIONS.join('|')})\\b`, 'i');
+// A schema-wide grant or revoke reaches every covered function without naming one.
+const SCHEMA_WIDE = /ALL\s+(FUNCTIONS|ROUTINES|PROCEDURES)\s+IN\s+SCHEMA/i;
+// Comments are stripped first, so one between two SQL words cannot hide a match.
+function touches(file) {
+  const sql = lf(file).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+  return SCHEMA_WIDE.test(sql) || TOUCHED.test(sql.replace(/EXECUTE\s+(FUNCTION|PROCEDURE)/gi, 'EXECUTE'));
+}
+// Later replay-binding batches (2, 3a, 3b) rebuild the commit-time guard trigger with a longer
+// covered list; step 7 replays them and checks the nine are still guarded.
 
 const id = (n) => `7b600000-0000-4000-8000-${n.padStart(12, '0')}`;
 const U = { ADMIN: id('a1'), ADMIN_B: id('a2'), REP: id('b1') };
@@ -134,15 +155,34 @@ function plan() {
   const all = r.stdout.split(/\r?\n/).filter((x) => x.startsWith('supabase/migrations/')).map((x) => path.join(ROOT, x));
   const at = all.indexOf(CANDIDATE);
   assert.ok(at >= 0, 'the candidate must be selected for post-baseline replay');
-  assert.equal(at, all.length - 1, 'the candidate must be the last migration in the replay plan');
   const before = all.slice(0, at);
+  const later = all.slice(at + 1);
+  for (const file of later) {
+    assert.ok(!touches(file), `${path.basename(file)} sorts after the candidate and touches what it changes; re-think this proof`);
+  }
   const touched = new RegExp(WRAPPED.join('|'));
   for (const name of PARKED) {
     const file = before.find((f) => path.basename(f) === name);
     assert.ok(file, `${name} must be in the replay plan (re-check the PARKED list)`);
     assert.ok(!touched.test(lf(file)), `${name} now touches what this proof covers; replay it or re-think the skip`);
   }
-  return before;
+  return { before, later };
+}
+// Replay every migration after the candidate, as the replay before it does (parked files are
+// recorded in the ledger, as live has them, but not replayed).
+function replayLater(later) {
+  let replayed = 0;
+  for (const [i, file] of later.entries()) {
+    const base = path.basename(file);
+    for (const only of LEDGER_ONLY) if (only < base) ledger(path.basename(only, '.sql'));
+    if (LEDGER_ONLY.has(base)) continue;
+    if (PARKED.has(base)) { ledger(path.basename(file, '.sql')); continue; }
+    const name = `later-${i}.sql`; stageText(name, lf(file)); const r = apply(name);
+    if (r.status !== 0) throw new Error(`later replay failed at ${base}:\n${r.output}`);
+    ledger(path.basename(file, '.sql'));
+    replayed += 1;
+  }
+  return replayed;
 }
 function buildContainer() {
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
@@ -152,14 +192,18 @@ function buildContainer() {
   const schema = spawnSync(process.execPath, ['scripts/decompress-schema-baseline.mjs'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
   if (schema.status !== 0) throw new Error(schema.stderr.toString());
   psql('\\i /tmp/20260727174805_extensions.sql'); psql(schema.stdout.toString());
+  // storage.objects carries metadata and a (bucket_id, name) key, and postgres may read it, as live
+  // has them: 20261022075000 (replayed after the candidate in step 7) checks that shape.
   psql(`CREATE SCHEMA IF NOT EXISTS storage;
     CREATE TABLE IF NOT EXISTS storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
-    CREATE TABLE IF NOT EXISTS storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL, name text NOT NULL, owner_id text);
+    CREATE TABLE IF NOT EXISTS storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL, name text NOT NULL, owner_id text, metadata jsonb, UNIQUE (bucket_id, name));
     CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT string_to_array(name, '/') $$;
-    CREATE OR REPLACE FUNCTION storage.filename(name text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;`, { user: 'supabase_admin' });
+    CREATE OR REPLACE FUNCTION storage.filename(name text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;
+    GRANT USAGE ON SCHEMA storage TO postgres;
+    GRANT ALL ON storage.objects, storage.buckets TO postgres;`, { user: 'supabase_admin' });
   psql('CREATE SCHEMA IF NOT EXISTS supabase_migrations; CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text PRIMARY KEY, name text NOT NULL, statements text[]);');
   for (const name of ['20260727174805_acl_lockdown.sql', '20260727174805_platform_overlay.sql', '20260727174805_cron_jobs.sql', '20260727174805_migration_history.sql']) psql(`\\i /tmp/${name}`, { user: name.includes('overlay') ? 'supabase_admin' : 'postgres' });
-  const files = plan();
+  const { before: files, later } = plan();
   let replayed = 0;
   for (const [i, file] of files.entries()) {
     const base = path.basename(file);
@@ -175,6 +219,7 @@ function buildContainer() {
   psql(`CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $live_uid$${LIVE_AUTH_UID_SRC}$live_uid$;`, { user: 'supabase_admin' });
   assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'auth.uid()'::regprocedure;"), LIVE_AUTH_UID_MD5, "auth.uid() is not live's body");
   console.log(`[prover] replayed ${replayed} post-baseline migrations before the candidate (skipped: ${[...PARKED].join(', ')}; ledger only: ${[...LEDGER_ONLY].join(', ')})`);
+  return later;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -269,12 +314,12 @@ ROLLBACK;`,
   return /ERROR:[^\n]*/.exec(`${r.stdout}\n${r.stderr}`)?.[0] ?? 'no error';
 }
 /** Insert an unbound receipt for a wrapped operation and force the deferred guard to run now. */
-function unboundReceipt(prefix = '') {
+function unboundReceipt(prefix = '', operation = 'apply_write_off') {
   const r = docker([...psqlArgs()], {
     input: `BEGIN;
 ${prefix}
 INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
-VALUES ('prover-unbound-' || gen_random_uuid(), 'apply_write_off', '{"id":"x"}'::jsonb);
+VALUES ('prover-unbound-' || gen_random_uuid(), '${operation}', '{"id":"x"}'::jsonb);
 SET CONSTRAINTS ALL IMMEDIATE;
 SELECT 'UNBOUND_RECEIPT_ACCEPTED';
 ROLLBACK;`,
@@ -322,7 +367,7 @@ function mutate(fn, find, replacement, label) {
 }
 
 function main() {
-  buildContainer();
+  const later = buildContainer();
   fidelity();
   seed();
 
@@ -506,6 +551,21 @@ COMMIT;`,
   assert.ok(!blind.refused && blind.committed === '1',
     `MUTATION guard SECURITY DEFINER: an invoker guard still refused the receipt: ${JSON.stringify(blind)}`);
   console.log('[prover] MUTATION: without SECURITY DEFINER the guard lets an unbound receipt commit under the authenticated role');
+
+  // 7. LATER: every migration after the candidate replays on top of it, and on that current-main
+  // database the rebuilt guard trigger still covers the nine operations and still refuses an
+  // unbound receipt for each of them.
+  const replayedLater = replayLater(later);
+  const triggerDef = scalar(`SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t
+    WHERE t.tgrelid = 'public.idempotency_keys'::regclass AND t.tgname = 'require_bound_replay_receipt_20261015'
+      AND t.tgfoid = to_regprocedure('public._require_bound_replay_receipt_20261015()') AND t.tgenabled = 'O';`);
+  const unguarded = WRAPPED.filter((op) => !triggerDef.includes(`'${op}'::text`));
+  assert.deepEqual(unguarded, [], `LATER: the receipt guard trigger no longer covers ${unguarded.join(', ')}: ${triggerDef}`);
+  for (const op of WRAPPED) {
+    const refused = unboundReceipt('', op);
+    assert.match(refused, /REPLAY_RECEIPT_UNBOUND/, `LATER: an unbound ${op} receipt was not refused at commit: ${refused}`);
+  }
+  console.log(`[prover] LATER: replayed ${replayedLater} later migrations (through ${path.basename(later.at(-1))}); the guard trigger still covers all nine operations and refuses an unbound receipt for each`);
 
   console.log('MONEY_REPLAY_BINDING_BATCH1_PROOF_PASS');
 }
