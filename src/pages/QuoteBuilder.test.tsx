@@ -2,7 +2,7 @@
  * QuoteBuilder.test.tsx — Tests for the quote builder page
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Suspense } from 'react';
 import { Link, MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter, useParams } from 'react-router-dom';
 
@@ -289,6 +289,9 @@ vi.mock('../components/ui/CommissionSplitEditor', () => ({
   default: () => <div data-testid="commission-split-editor">CommissionSplitEditor</div>,
 }));
 vi.mock('../components/ui/UnsavedChangesModal', () => ({ default: () => null }));
+// Has its own tests (LastChargedPrices.test.tsx); here a marker stands in, so its load and Retry stay
+// out of these tests while who sees it is still checked.
+vi.mock('../components/quotes/LastChargedPrices', () => ({ default: () => <div data-testid="last-charged-card" /> }));
 
 import { preferredQuoteNotes } from '../lib/quoteNotes';
 import QuoteBuilder from './QuoteBuilder';
@@ -507,6 +510,25 @@ describe('QuoteBuilder', () => {
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
     mockSendEmail.mockResolvedValue({ deduplicated: false });
+  });
+
+  it('shows the Last Charged card to admins and sales reps, never in Customer View or to other roles', async () => {
+    renderQuoteBuilder();
+    expect(await screen.findByTestId('last-charged-card')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Customer View/ }));
+    expect(screen.queryByTestId('last-charged-card')).not.toBeInTheDocument();
+    cleanup();
+
+    authState.role = 'sales_rep';
+    renderQuoteBuilder();
+    expect(await screen.findByTestId('last-charged-card')).toBeInTheDocument();
+    cleanup();
+
+    authState.role = 'driver';
+    renderQuoteBuilder();
+    expect(await screen.findByRole('button', { name: 'More actions' })).toBeInTheDocument();
+    expect(screen.queryByTestId('last-charged-card')).not.toBeInTheDocument();
   });
 
   it('prices from the searched customer\'s tier and clears a section field of another customer', async () => {

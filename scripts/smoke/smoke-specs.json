@@ -1581,6 +1581,20 @@
         "inventory"
       ]
     },
+    "get_last_charged_prices": {
+      "chain": "smoke-get-last-charged-prices.sql",
+      "container_prover": "prove-last-charged-prices-real-schema.mjs",
+      "description": "Last charged price per customer and product (20261027060000, To-Do 0.3). Live, rollback-only, plants [SMOKE] rows. Auth probes P1 no-auth and P2 anon refused (AUTH_REQUIRED), P3 a driver or applicator refused, P4 admin and a sales rep read the same answer. Business chain on a throwaway tier-2 customer: nothing charged yet; a confirmed order line is stamped tier 2 and becomes the last charge (order, date, whole-cent price); the customer moving to tier 3 does not move the stamp; a draft invoice line for it is stamped 2 from the order line and does not count; a cancelled order does not count; an unknown customer is refused. The container prover covers every status, type and line kind that counts or not, the same-date tie, another customer, every role, the tier stamp on each path, grants, preflight drift and a role-gate mutation, and runs this chain once.",
+      "covers": [
+        "get_last_charged_prices",
+        "_stamp_price_tier_at_sale_20261026",
+        "_order_line_price_tier_20261026"
+      ],
+      "area": [
+        "pricing",
+        "security"
+      ]
+    },
     "cost_history_starting_snapshot": {
       "chain": "smoke-price-history-snapshot.sql",
       "container_prover": "prove-price-history-snapshot-real-schema.mjs",

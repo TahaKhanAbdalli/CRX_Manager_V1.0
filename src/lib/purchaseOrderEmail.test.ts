@@ -21,7 +21,9 @@ describe('purchaseOrderEmailBlocker', () => {
 
 describe('buildPurchaseOrderEmailPayload', () => {
   const snapshot = {
+    po_number: 'PO-2026-0040',
     vendor: 'Spinner Ag',
+    submitted_date: '2026-10-27',
     expected_delivery_date: '2026-11-03',
     notes: null,
     lines: [{ id: 'l-1', product_id: 'p-1', product_name: 'Atrazine 4L', epa_registration: null, unit_size: 'gal', notes: null, quantity_ordered: 3, unit_cost: 19.99 }],

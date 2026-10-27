@@ -18,6 +18,9 @@ import {
 import { formatCents } from './money';
 import { parseLocalDate } from './dateUtils';
 import { purchaseOrderLineTotalCents, purchaseOrderUnitCostCents } from './purchaseOrderMoney';
+import { purchaseOrderStatusBanner } from './purchaseOrderFingerprint';
+
+export { purchaseOrderStatusBanner };
 
 export interface PdfPurchaseOrderLine {
   product_name: string;
@@ -98,13 +101,6 @@ export function buildPurchaseOrderPdfRows(lines: readonly PdfPurchaseOrderLine[]
     };
   });
   return { rows, totalCents, hasUnpriced, hasUnconfirmed };
-}
-
-/** A banner for a PO that is not a live order, so a vendor never mistakes it for one. */
-export function purchaseOrderStatusBanner(status: string): string | null {
-  if (status === 'draft') return 'DRAFT - NOT YET SUBMITTED';
-  if (status === 'cancelled') return 'CANCELLED - DO NOT FILL';
-  return null;
 }
 
 export function purchaseOrderPdfFilename(poNumber: string): string {

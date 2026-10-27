@@ -80,6 +80,10 @@ const TOUCHED = new RegExp(`(GRANT|REVOKE|ALTER\\s+TABLE)[^;]*\\b(public\\.)?(${
 // Later files that match TOUCHED and were checked against this proof. This proof replays only up to
 // its candidate, so a later file never runs here; each entry says why it leaves the lock intact.
 const REVIEWED_LATER = new Set([
+  // Adds price_tier_at_sale (not a cost) to order_items and invoice_items with only the read grants
+  // every non-cost column there has and no write grant; its own VERIFY and
+  // prove-last-charged-prices-real-schema.mjs check that. No cost column's grant changes.
+  '20261027060000_last_charged_prices.sql',
   // Alters cost_history (not a locked table); its FK clause names public.products, which is what
   // matches. No grant on, and no column of, any locked table changes.
   '20261026140000_product_price_history_starting_snapshot.sql',

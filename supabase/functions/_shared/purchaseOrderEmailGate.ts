@@ -19,8 +19,10 @@ export const PO_EMAILABLE_STATUSES = ["submitted", "partially_received"];
 
 export interface PoGateOrder {
   id: string;
+  po_number: string;
   status: string;
   vendor: string | null;
+  submitted_date: string | null;
   expected_delivery_date: string | null;
   notes: string | null;
 }
@@ -51,7 +53,9 @@ export interface PoGateSnapshotLine {
 
 /** What the attached PDF printed, sent by the app alongside the PDF. */
 export interface PoGateSnapshot {
+  po_number: string;
   vendor: string | null;
+  submitted_date: string | null;
   expected_delivery_date: string | null;
   notes: string | null;
   lines: PoGateSnapshotLine[];
@@ -64,8 +68,9 @@ const nullableString = (value: unknown): value is string | null => value === nul
 /** The snapshot the app sent, or null when it is missing or malformed. */
 export function parsePurchaseOrderSnapshot(value: unknown): PoGateSnapshot | null {
   if (!value || typeof value !== "object") return null;
-  const { vendor, expected_delivery_date, notes, lines } = value as Record<string, unknown>;
-  if (!nullableString(vendor) || !nullableString(expected_delivery_date) || !nullableString(notes)) return null;
+  const { po_number, vendor, submitted_date, expected_delivery_date, notes, lines } = value as Record<string, unknown>;
+  if (typeof po_number !== "string" || !nullableString(vendor) || !nullableString(submitted_date)) return null;
+  if (!nullableString(expected_delivery_date) || !nullableString(notes)) return null;
   if (!Array.isArray(lines) || lines.length === 0) return null;
   const parsed: PoGateSnapshot["lines"] = [];
   for (const entry of lines) {
@@ -78,13 +83,15 @@ export function parsePurchaseOrderSnapshot(value: unknown): PoGateSnapshot | nul
     if (!Number.isFinite(quantity_ordered) || !Number.isFinite(unit_cost)) return null;
     parsed.push({ id, product_id, product_name, epa_registration, unit_size, notes: lineNotes, quantity_ordered, unit_cost });
   }
-  return { vendor, expected_delivery_date, notes, lines: parsed };
+  return { po_number, vendor, submitted_date, expected_delivery_date, notes, lines: parsed };
 }
 
 /** True when the PDF shows the PO as it is today: same header details and the same lines. */
 function snapshotMatches(order: PoGateOrder, lines: readonly PoGateLine[], snapshot: PoGateSnapshot): boolean {
   if (
+    order.po_number !== snapshot.po_number ||
     order.vendor !== snapshot.vendor ||
+    order.submitted_date !== snapshot.submitted_date ||
     order.expected_delivery_date !== snapshot.expected_delivery_date ||
     order.notes !== snapshot.notes
   ) return false;
@@ -109,7 +116,7 @@ function snapshotMatches(order: PoGateOrder, lines: readonly PoGateLine[], snaps
 /**
  * Decides whether this PO copy may be sent to `requestedTo`. The recipient is never
  * trusted: it must be the company ordering address. The attached PDF is built by
- * the app, so the app also sends what it printed (vendor name, requested date, notes
+ * the app, so the app also sends what it printed (PO number, vendor name, order date, requested date, notes
  * and each line's product, name, EPA number, unit size, note, quantity and cost),
  * and the send is refused unless that is the PO today: an order is never placed
  * from a copy with yesterday's details. Not covered, by design: the attachment bytes

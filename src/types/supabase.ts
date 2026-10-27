@@ -4380,6 +4380,7 @@ export type Database = {
           notes: string | null
           order_item_id: string | null
           price_source: string | null
+          price_tier_at_sale: number | null
           product_form: string | null
           product_id: string | null
           quantity: number
@@ -4415,6 +4416,7 @@ export type Database = {
           notes?: string | null
           order_item_id?: string | null
           price_source?: string | null
+          price_tier_at_sale?: number | null
           product_form?: string | null
           product_id?: string | null
           quantity?: number
@@ -4450,6 +4452,7 @@ export type Database = {
           notes?: string | null
           order_item_id?: string | null
           price_source?: string | null
+          price_tier_at_sale?: number | null
           product_form?: string | null
           product_id?: string | null
           quantity?: number
@@ -6679,6 +6682,7 @@ export type Database = {
           notes: string | null
           order_id: string
           price_per_unit: number
+          price_tier_at_sale: number | null
           pricing_pending: boolean
           product_id: string
           product_name: string
@@ -6704,6 +6708,7 @@ export type Database = {
           notes?: string | null
           order_id: string
           price_per_unit?: number
+          price_tier_at_sale?: number | null
           pricing_pending?: boolean
           product_id: string
           product_name?: string
@@ -6729,6 +6734,7 @@ export type Database = {
           notes?: string | null
           order_id?: string
           price_per_unit?: number
+          price_tier_at_sale?: number | null
           pricing_pending?: boolean
           product_id?: string
           product_name?: string
@@ -13916,6 +13922,10 @@ export type Database = {
         }[]
       }
       get_label_coverage_report: { Args: never; Returns: Json }
+      get_last_charged_prices: {
+        Args: { p_customer_id: string; p_product_ids: string[] }
+        Returns: Json
+      }
       get_logbook_by_applicator: {
         Args: {
           p_applicator_id: string
