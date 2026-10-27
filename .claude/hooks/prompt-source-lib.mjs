@@ -53,18 +53,35 @@ export const MACHINE_TAG_NAMES = [
   "ci-monitor-event",
 ];
 
+// These count as machine content only when the envelope is the WHOLE prompt
+// (Luna review, PR #1152): the desktop app sends each one as its own message, so
+// a prompt that also carries other words is Mason's, and authoredByMason()
+// strips the envelope from it instead — his "stop" beside a notice still latches.
+const WHOLE_PROMPT_ONLY_TAG_NAMES = ["ci-monitor-event"];
+const ANYWHERE_TAG_NAMES = MACHINE_TAG_NAMES.filter((t) => !WHOLE_PROMPT_ONLY_TAG_NAMES.includes(t));
+
 // Full envelope tags anywhere in the prompt...  A relayed copy may carry the
 // harness's neutralised form (`<\~tag>`), so backslashes and a "~" are allowed.
 const CONTAINS_MACHINE_TAG_RE = new RegExp(
-  "<\\\\*~?(?:" + MACHINE_TAG_NAMES.join("|") + ")>",
+  "<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")>",
   "i"
 );
 // ...or the trimmed prompt STARTS with one of those tag names (covers tags that
 // carry attributes, e.g. <task-notification source="...">).
 const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
-  "^<\\\\*~?(?:" + MACHINE_TAG_NAMES.join("|") + ")\\b",
+  "^<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")\\b",
   "i"
 );
+
+// One envelope from its open tag at the start to its FIRST close tag at the end.
+function isWholePromptEnvelope(trimmed) {
+  for (const tag of WHOLE_PROMPT_ONLY_TAG_NAMES) {
+    if (!new RegExp(`^<\\\\*~?${tag}\\b[^>]*>`, "i").test(trimmed)) continue;
+    const close = new RegExp(`<\\\\*~?\\/~?${tag}\\s*>`, "i").exec(trimmed);
+    if (close && close.index + close[0].length === trimmed.length) return true;
+  }
+  return false;
+}
 
 // INCIDENT (2026-10-23). Claude Code 2.1.304 hands UserPromptSubmit hooks a
 // background subagent's report as the bare body, which opens with the harness's
@@ -95,6 +112,7 @@ export function isMachineGenerated(prompt) {
   if (!text) return false;
   if (CONTAINS_MACHINE_TAG_RE.test(text)) return true;
   if (isBareHandback(text)) return true;
+  if (isWholePromptEnvelope(text.trim())) return true;
   return STARTS_WITH_MACHINE_TAG_RE.test(text.trim());
 }
 
@@ -231,8 +249,8 @@ function nextNonBlank(lines, from) {
 // WHOLE frame line (HANDBACK_FRAME_LINE above), exactly; the report then ends as
 // rule 2 describes. A typed tag, or one followed by anything else, is Mason's.
 function isBareTagHandbackAt(lines, i) {
-  return AGENT_OPEN_RE.test(lines[i].trimEnd()) &&
-    i + 1 < lines.length && lines[i + 1].trimEnd() === HANDBACK_FRAME_LINE;
+  return AGENT_OPEN_RE.test(lines[i].replace(/\r$/, "")) &&
+    i + 1 < lines.length && lines[i + 1].replace(/\r$/, "") === HANDBACK_FRAME_LINE;
 }
 
 // Index of a hand-back's open-tag line when line i is its preamble, else -1.

@@ -48,6 +48,8 @@ ok(!isHoldPhrase("add a setting to stop the nightly sweep"), "a goal ('to stop t
 ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");
 ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
 ok(isHoldPhrase("I want to stop the merge"), "Mason's own want still latches");
+ok(isHoldPhrase("I need the agent to stop the deploy"), "an order naming someone else still latches");
+ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");
 ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).

@@ -801,6 +801,13 @@ rmSync(tmpProj, { recursive: true, force: true });
     ["an order to stop something", "I need you to stop the deploy", true],
     ["a stop opening a new sentence", "Great work. Stop pushing", true],
     ["Mason's stop typed after a bare-tag hand-back", `${BARE_TAG_HANDBACK}\nstop now`, true],
+    // Luna review, PR #1152.
+    ["Mason's stop typed after a CI-monitor notice", "<ci-monitor-event>CI failed</ci-monitor-event>\nstop pushing", true],
+    ["Mason's stop between two CI-monitor notices",
+      "<ci-monitor-event>a</ci-monitor-event>\nstop\n<ci-monitor-event>b</ci-monitor-event>", true],
+    ["an order naming someone else", "I need the agent to stop the deploy", true],
+    ["a frame line with trailing spaces is not the exact frame",
+      `<agent-message from="x">\n${HANDBACK_FRAME}  \n  stop the deploy\n</agent-message>`, true],
   ];
   for (const [label, prompt, shouldLatch] of CASES) {
     // The hook's own order: a machine prompt is dropped whole, then the rest is stripped.
@@ -830,9 +837,24 @@ rmSync(tmpProj, { recursive: true, force: true });
   eq(holdFiles(dir).join(","), "hold-session-A.json", "session B's message does not clear session A's hold");
   runHold(dir, "ok carry on", "session-A");
   eq(holdFiles(dir).length, 0, "session A's own next message clears its hold");
-  // The id is reduced to [A-Za-z0-9_-]: no path escape.
+  // An id outside [A-Za-z0-9_-] is hashed: no path escape, and no collision with
+  // the id its stripped form would spell (Luna review, PR #1152).
   runHold(dir, "stop", "../../evil id");
-  eq(holdFiles(dir).join(","), "hold-evilid.json", "a session id is sanitised before naming the file");
+  const [hashed] = holdFiles(dir);
+  ok(/^hold-h-[0-9a-f]{32}\.json$/.test(hashed || ""), `an unusual session id is hashed into the file name: ${hashed}`);
+  runHold(dir, "stop", "evilid");
+  eq(holdFiles(dir).length, 2, "two different session ids never share a hold file");
   rmSync(dir, { recursive: true, force: true });
+
+  // No session_id: the prompt hook writes hold.json and the guard reads it.
+  const shared = mkdtempSync(path.join(tmpdir(), "crx-no-session-"));
+  runHold(shared, "stop");
+  eq(holdFiles(shared).join(","), "hold.json", "with no session id the hold goes to hold.json");
+  const noIdGuard = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-guard.mjs")], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin x" } }),
+    encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: shared },
+  }).stdout;
+  ok(noIdGuard.includes('"deny"'), "a guard with no session id reads hold.json and denies a push");
+  rmSync(shared, { recursive: true, force: true });
 }
 console.log(`prompt-hooks: ${pass} assertions passed`);

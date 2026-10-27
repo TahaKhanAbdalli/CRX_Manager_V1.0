@@ -4,6 +4,7 @@
 // and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { DENY_TOOLNAME_RE, DENY_BASH_RES } from "./autopilot-lib.mjs";
 import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
@@ -12,9 +13,13 @@ import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
 // checkout used to share one hold.json, so a misfire in one session froze all of
 // them (2026-10-23). The prompt hook writes, and the guard reads, only the file
 // named for its own session; hold.json is the fallback when no session_id
-// arrives. The id is reduced to [A-Za-z0-9_-] so it cannot leave the directory.
+// arrives. An id already made of [A-Za-z0-9_-] (a real one is a UUID) names the
+// file as-is; any other id is hashed rather than stripped, so it cannot leave the
+// directory and two different ids never share a file (Luna review, PR #1152).
 export function holdStatePath(projectDir, sessionId) {
-  const id = String(sessionId || "").replace(/[^A-Za-z0-9_-]/g, "");
+  const raw = String(sessionId || "");
+  const id = !raw ? "" : /^[A-Za-z0-9_-]{1,128}$/.test(raw) ? raw
+    : `h-${createHash("sha256").update(raw).digest("hex").slice(0, 32)}`;
   return path.join(projectDir, ".claude", "session-state", id ? `hold-${id}.json` : "hold.json");
 }
 
@@ -57,14 +62,21 @@ export function isHoldPhrase(prompt) {
 //     "the hook should pause retrying" — the word is followed by an -ing verb;
 //   - a goal: "set X=0 in my user settings to stop the per-commit security
 //     reviews" — "to stop" plus a determiner, after an ordinary word.
-// Either is skipped only when the words in front of it in the same clause are
-// not addressing ones, so "stop pushing", "you should stop pushing", "ok stop",
-// "I need you to stop the deploy" and a stop right after "." or "," still latch.
+// Either is skipped only when the two words in front of it in the same clause are
+// not addressing ones and no earlier word in that clause names a person or a
+// want, so "stop pushing", "you should stop pushing", "ok stop", "I need the
+// agent to stop the deploy" and a stop right after "." or "," still latch.
 const ADDRESS_WORDS = new Set(["please", "pls", "ok", "okay", "so", "just", "now", "and", "then", "but", "hey",
   "you", "we", "lets", "let's", "us", "i", "to", "all", "everyone", "everybody", "guys", "claude", "codex"]);
 // Before "to stop the …", these make it Mason's own want or an order to someone.
 const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", "has", "had", "got", "gotta",
   "going", "time", "ready", "like", "wish", "ask", "asked", "tell", "told", "me"]);
+// Anywhere earlier in the same clause, these make it an order or Mason's own
+// want ("I need the agent to stop the deploy"), so the stop latches (Luna
+// review, PR #1152). Filler such as "and" / "so" is deliberately absent:
+// "…, and set X=0 in my user settings to stop the reviews" stays descriptive.
+const ACTOR_WORDS = new Set(["i", "you", "we", "us", "me", "lets", "let's", "everyone", "everybody", "guys",
+  "claude", "codex", ...WANT_WORDS]);
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -72,7 +84,7 @@ function isDescriptiveStop(text, start, end) {
   const clause = text.slice(0, start).split(/[.!?;:,\n—–]|\s-\s|--/).pop();
   const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);
   const next = (/^[ \t]+([A-Za-z]+)/.exec(text.slice(end)) || [])[1]?.toLowerCase() || "";
-  if (before.length < 2) return false;
+  if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w))) return false;
   const [twoBack, oneBack] = before.slice(-2);
   if (next.length > 4 && next.endsWith("ing")) {
     return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
