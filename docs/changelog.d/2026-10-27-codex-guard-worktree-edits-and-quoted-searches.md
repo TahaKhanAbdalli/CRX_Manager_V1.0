@@ -10,3 +10,5 @@ Codex reproduced three problems with its production-action guard today; each was
 Unchanged: secret protection, review-proof ownership (`review-proof-guard.mjs` untouched), migration protection, the push-to-`main` guard, and every merge gate.
 
 Tests: `read-only-search-lib.test.mjs` (new, wired into `test:correction-guards`), new cases in `production-action-guard.test.mjs` and `bash-safety.test.mjs`. Docs: `docs/reference/agent-guardrails.md`.
+
+Proof through the real tool path: a `codex exec` session on this branch created a file in its own worktree and one in a sibling worktree with `apply_patch`, ran the three previously refused searches plus a `Get-ChildItem | Select-String` search, and was still refused on a sibling worktree's guard file, on `C:/CRX_Manager/.git/hooks`, on a search naming a review-proof file, and on a search redirected into the guard. This paragraph was then added with `apply_patch`, committed with a conventional `docs(changelog): …` message, and pushed to this feature branch by Codex through the same guards.
