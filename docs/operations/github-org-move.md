@@ -1,7 +1,9 @@
 # Moving the app repo into the `croprxsolutions` GitHub organization
 
-**Status:** prepared 2026-10-27, not started. Mason does the clicks marked **YOU**; an agent session does the
-steps marked **AGENT**.
+**Status:** done. Mason moved the repo on 2026-10-28 and the after-move check (step 7) passed; the PR that adds
+`docs/changelog.d/2026-10-28-org-move-address-switch.md` covers step 8. The one open item is step 7's first
+Sentry **Suspect Commit**, which waits on a real production error. Mason did the clicks marked **YOU**; agent
+sessions did the steps marked **AGENT**.
 
 ## Why
 

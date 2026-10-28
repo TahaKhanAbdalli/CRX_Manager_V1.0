@@ -18,7 +18,7 @@ account lookups. Anything not visible that way is marked **Mason to confirm**.
 |---|---|---|
 | **Vercel project env** (`crx-manager-v1-0`) | Values baked into the browser app at build time, plus the Sentry upload token | Members of the Vercel team "Mason Wells' projects" |
 | **Supabase Edge Function secrets** (project `rhyzpcqhnizqbxphqdkr`) | Keys the server-side functions use: email, OCR, error reporting, CORS | Supabase org members |
-| **GitHub Actions secrets**, app repo `masonwells1/CRX_Manager_V1.0` | Values for CI builds and the paused browser tests | Repo admins (Mason) |
+| **GitHub Actions secrets**, app repo `croprxsolutions/CRX_Manager_V1.0` | Values for CI builds and the paused browser tests | Repo admins (Mason) |
 | **GitHub Actions secrets**, private backup repo `masonwells1/CRX_Backups` | Database and file-storage backup credentials, backup passphrase | Repo admins (Mason) |
 | **Mason's Windows Credential Manager** | Mason's Supabase CLI login token (target `Supabase CLI:supabase`), used by agents to apply migrations | Mason's Windows login only |
 | **Mason's password manager** | The backup decryption passphrase and account passwords | Mason only |
@@ -30,10 +30,12 @@ template is `.env.example`.
 
 ### 1. GitHub (code, CI, backups)
 
-- **Used for:** the code (`masonwells1/CRX_Manager_V1.0`, public), CI checks
+- **Used for:** the code (`croprxsolutions/CRX_Manager_V1.0`, public), CI checks
   (`.github/workflows/ci.yml`), Dependabot updates, the daily landing summary, and the private
   backup repo `masonwells1/CRX_Backups`.
-- **Owner:** Mason's personal account `masonwells1`. He is the only collaborator.
+- **Owner:** the app repo belongs to the `croprxsolutions` organization (moved 2026-10-28), which
+  Mason owns; an outside developer has read-only access. The backup repo stays on Mason's personal
+  account `masonwells1`.
 - **Secrets in the app repo:** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
   `VITE_MAPBOX_TOKEN`, `VITE_SENTRY_DSN`, `E2E_TEST_EMAIL`, `E2E_TEST_PASSWORD`.
   The CI job "E2E Smoke Tests" also reads `STAGING_SUPABASE_URL` and

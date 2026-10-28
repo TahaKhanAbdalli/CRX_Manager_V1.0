@@ -16,7 +16,7 @@
 | Edge Functions | Supabase (one per folder in `supabase/functions/`, excluding `_shared`) | Supabase → Edge Functions tab |
 | Email | Resend (via `send-email` Edge Function) | https://resend.com/dashboard |
 | OCR | Google Vision API (via `process-blend-ticket` and `process-document`) | https://console.cloud.google.com |
-| Repo | GitHub `masonwells1/CRX_Manager_V1.0` | https://github.com/masonwells1/CRX_Manager_V1.0 |
+| Repo | GitHub `croprxsolutions/CRX_Manager_V1.0` | https://github.com/croprxsolutions/CRX_Manager_V1.0 |
 | CI | GitHub Actions (`.github/workflows/ci.yml`) | Repo → Actions tab |
 | Error tracking | Sentry | https://sentry.io |
 

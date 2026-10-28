@@ -72,7 +72,7 @@ eq(parsed(undefined), null, "missing");
 // The gate's note names the repository, so following it comments on THIS PR
 // even from another checkout (Codex App P2 on #1035).
 ok(coderabbitSkipNotice("PR MERGE GATE", "1018", { pullRequest: 1018, said: "skip coderabbit #1018", recordedAt: "t", expiresAt: "u" })
-  .includes("gh pr comment 1018 --repo masonwells1/CRX_Manager_V1.0 --body"), "the suggested PR comment names this repository");
+  .includes("gh pr comment 1018 --repo croprxsolutions/CRX_Manager_V1.0 --body"), "the suggested PR comment names this repository");
 
 // ── which repository a waiver covers (Codex App P2 on #1035) ────────────────
 eq(isSkipRepository("masonwells1", "CRX_Manager_V1.0"), true, "this repository");

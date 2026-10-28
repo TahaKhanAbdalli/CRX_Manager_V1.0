@@ -6,7 +6,7 @@ Shared rules for all agents; keep durable rules here. `CLAUDE.md` imports this f
 
 ## Project and Owner
 
-Crop RX Solutions' production agricultural chemical distribution app. Repository `masonwells1/CRX_Manager_V1.0`; production `https://croprxsolutions.app`; Supabase `rhyzpcqhnizqbxphqdkr`.
+Crop RX Solutions' production agricultural chemical distribution app. Repository `croprxsolutions/CRX_Manager_V1.0`; production `https://croprxsolutions.app`; Supabase `rhyzpcqhnizqbxphqdkr`.
 
 ## Owner Communication
 

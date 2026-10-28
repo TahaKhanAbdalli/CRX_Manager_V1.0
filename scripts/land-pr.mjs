@@ -34,7 +34,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { riskyFiles, contentIsRisky } from "../.claude/hooks/codex-push-lib.mjs";
 
-const REPO = "masonwells1/CRX_Manager_V1.0";
+const REPO = "croprxsolutions/CRX_Manager_V1.0";
 const POLL_SECONDS = 60;
 
 const args = process.argv.slice(2);

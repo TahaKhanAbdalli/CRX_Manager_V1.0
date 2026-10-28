@@ -39,7 +39,7 @@ import { accessChangeCheck, dataRewriteCheck } from "../.claude/hooks/migration-
 
 const ISSUE_TITLE = "Daily landing summary";
 const MASON = "masonwells1";
-const DEFAULT_REPO = "masonwells1/CRX_Manager_V1.0";
+const DEFAULT_REPO = "croprxsolutions/CRX_Manager_V1.0";
 const NEEDS_MASON_LABEL = "needs-mason";
 
 // PR titles and changelog headings are written by anyone who can open a PR on a
