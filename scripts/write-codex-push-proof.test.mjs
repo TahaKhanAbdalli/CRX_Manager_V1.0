@@ -22,6 +22,7 @@ import {
   coderabbitCheckRunInProgress,
   evaluateSolPreflight,
   readSolPreflightFacts,
+  openPullsAtHead,
   headPushedAt,
   parseGithubSlug,
   SOL_PREFLIGHT_QUIET_MS,
@@ -1512,6 +1513,143 @@ function collisionPromptSkipsWork(prompt) {
   const refusal = runBody.slice(preflightAt, runBody.indexOf("let reviewWorkspace;"));
   assert.equal(refusal.includes("clearCodexPushProof"), false, "preflight: a refusal does not revoke an existing proof");
   assert.match(refusal, /return 1;/, "preflight: a refusal exits non-zero");
+}
+
+// Pull request lookup for the head commit, against a fake GitHub (no network). Every lookup
+// reads the canonical repository's complete open-PR list (GitHub's commit-to-PR association
+// is unreliable for fork-pushed heads and is never used) and matches by exact head SHA, open
+// state and base repository; anything unreadable, malformed or ambiguous refuses.
+{
+  const OWNER = "croprxsolutions";
+  const NAME = "CRX_Manager_V1.0";
+  const HEAD = "63ee0fb03f97d8a61f8a97da3ef7f5ca7e401f70";
+  const pr = (number, over = {}) => ({
+    number,
+    state: "open",
+    draft: false,
+    head: { sha: HEAD },
+    base: { repo: { full_name: `${OWNER}/${NAME}` } },
+    ...over,
+  });
+  // pages: answer for the paginated open-PR list, as `gh --paginate --slurp` returns it (an array
+  // of pages): a value, or a function of the call number. Any other endpoint (notably the
+  // commit-to-PR association) fails the test, proving it is never consulted.
+  const fakeGh = ({ pages = [[]] } = {}) => {
+    const calls = { list: 0 };
+    const gh = (args) => {
+      assert.equal(args[1].includes("/pulls?state=open&per_page=100"), true, `lookup: only the open-PR list is read, got ${args[1]}`);
+      assert.equal(args[1].startsWith(`repos/${OWNER}/${NAME}/`), true, "lookup: only the canonical repository is read");
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"), "lookup: the open-PR list is read in full with --paginate --slurp");
+      const picked = typeof pages === "function" ? pages(++calls.list) : (++calls.list, pages);
+      if (picked instanceof Error) throw picked;
+      return typeof picked === "string" ? picked : JSON.stringify(picked);
+    };
+    return { gh, calls };
+  };
+  const numbers = (found) => (found === null ? null : found.map((p) => p.number));
+  const lookup = (opts, head = HEAD) => {
+    const fake = fakeGh(opts);
+    return { found: openPullsAtHead(fake.gh, OWNER, NAME, head), calls: fake.calls };
+  };
+
+  // The PR is found on a later page of the list (a fork-pushed head, or simply a long list).
+  {
+    const { found, calls } = lookup({
+      pages: [[pr(1100, { head: { sha: "a".repeat(40) } }), pr(1101, { head: { sha: "b".repeat(40) } })], [pr(1167)]],
+    });
+    assert.deepEqual(numbers(found), [1167], "lookup: the head is found on a later page of the open-PR list");
+    assert.equal(calls.list, 1, "lookup: the open-PR list is read once per lookup");
+  }
+  // No match anywhere is an empty (readable) answer, never an invented PR.
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1100, { head: { sha: "a".repeat(40) } })], []] }).found), [], "lookup: no exact head means no PR");
+  assert.deepEqual(numbers(lookup({ pages: [[]] }).found), [], "lookup: an empty open-PR list means no PR");
+  // A different head, a closed PR and another base repository never match.
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167, { head: { sha: HEAD.replace(/.$/, "1") } })]] }).found), [], "lookup: a different head SHA does not match");
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167, { state: "closed" })]] }).found), [], "lookup: a closed PR does not match");
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167, { base: { repo: { full_name: `TahaKhanAbdalli/${NAME}` } } })]] }).found), [], "lookup: a PR into another repository does not match");
+  // Owner and repository case differences do not matter; the head SHA case does not either.
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167, { head: { sha: HEAD.toUpperCase() }, base: { repo: { full_name: "CROPRXSOLUTIONS/crx_manager_v1.0" } } })]] }).found), [1167], "lookup: owner, repository and SHA case are ignored");
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167)]] }, HEAD.toUpperCase()).found), [1167], "lookup: an upper-case head argument matches");
+  // Two exact matches, including one on a later page, are returned as-is so the caller refuses them as ambiguous.
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167)], [pr(1170)]] }).found), [1167, 1170], "lookup: ambiguous exact matches across pages are surfaced, not picked");
+  assert.deepEqual(numbers(lookup({ pages: [[pr(1167), pr(1170)]] }).found), [1167, 1170], "lookup: ambiguous exact matches on one page are surfaced");
+  // Invalid inputs refuse before any read.
+  for (const badHead of ["", "abc123", "g".repeat(40), "a".repeat(39), "a".repeat(41), null, undefined]) {
+    const fake = fakeGh({ pages: [[pr(1167)]] });
+    assert.equal(openPullsAtHead(fake.gh, OWNER, NAME, badHead), null, `lookup: an invalid head (${String(badHead)}) refuses`);
+    assert.equal(fake.calls.list, 0, "lookup: an invalid head reads nothing");
+  }
+  for (const [badOwner, badName] of [["", NAME], [OWNER, ""], ["a/b", NAME], [OWNER, "x?y=1"], [null, NAME]]) {
+    assert.equal(openPullsAtHead(fakeGh({ pages: [[pr(1167)]] }).gh, badOwner, badName, HEAD), null, `lookup: an unsafe repository (${badOwner}/${badName}) refuses`);
+  }
+  // Anything unreadable or malformed is null (refuses), never an empty answer.
+  assert.equal(lookup({ pages: new Error("gh api failed") }).found, null, "lookup: a failing list read refuses");
+  assert.equal(lookup({ pages: "<html>" }).found, null, "lookup: a non-JSON list answer refuses");
+  assert.equal(lookup({ pages: [] }).found, null, "lookup: a list with no pages at all refuses");
+  assert.equal(lookup({ pages: { message: "rate limited" } }).found, null, "lookup: a list that is not an array of pages refuses");
+  assert.equal(lookup({ pages: [pr(1167)] }).found, null, "lookup: an unslurped list (entries instead of pages) refuses");
+  assert.equal(lookup({ pages: [[pr(1100)], { message: "page failed" }] }).found, null, "lookup: a malformed page refuses");
+  assert.equal(lookup({ pages: [[pr(1100, { head: {} }), pr(1167)]] }).found, null, "lookup: an entry without a head SHA makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[pr(1100, { head: { sha: "short" } }), pr(1167)]] }).found, null, "lookup: an entry with an invalid head SHA makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[pr(1100, { base: null }), pr(1167)]] }).found, null, "lookup: an entry without a base repository makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[pr(1100, { number: "1100" }), pr(1167)]] }).found, null, "lookup: an entry without a numeric PR number makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[pr(1100, { state: undefined }), pr(1167)]] }).found, null, "lookup: an entry without a state makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[null, pr(1167)]] }).found, null, "lookup: a null entry makes the whole list untrusted");
+  assert.equal(lookup({ pages: [[pr(1167)], [pr(1170, { head: null })]] }).found, null, "lookup: a malformed entry on a later page makes the whole list untrusted");
+
+  // End to end through readSolPreflightFacts, with a real git repository whose origin is the canonical repository.
+  {
+    const repo = mkdtempSync(path.join(tmpdir(), "crx-preflight-lookup-"));
+    const git = (...args) => execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", ...args], { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      git("remote", "add", "origin", `https://github.com/${OWNER}/${NAME}.git`);
+      writeFileSync(path.join(repo, "a.txt"), "a\n");
+      git("add", ".");
+      git("commit", "-qm", "base");
+      const head = git("rev-parse", "HEAD");
+      const mine = (number, over = {}) => pr(number, { head: { sha: head }, ...over });
+      // Other reads (comments, statuses, threads) fail closed in the fake; only the PR lookups matter here.
+      const factsWith = (pagesFor) => {
+        const state = { lookups: 0 };
+        const result = readSolPreflightFacts(repo, head, head, (args) => {
+          if (args[1].includes("/pulls?state=open&per_page=100")) {
+            state.lookups += 1;
+            const picked = pagesFor(state.lookups);
+            if (picked instanceof Error) throw picked;
+            return JSON.stringify(picked);
+          }
+          throw new Error("fake gh: other reads fail closed");
+        });
+        return { result, state };
+      };
+
+      const found = factsWith(() => [[mine(1167, { draft: true })]]);
+      assert.equal(found.result.unreadable, undefined, "facts: a PR found through the list is readable");
+      assert.deepEqual(found.result.pr, { number: 1167, draft: true }, "facts: the head resolves to its PR");
+      assert.equal(found.state.lookups, 2, "facts: the same list lookup serves the first read and the final re-read");
+
+      assert.equal(factsWith(() => [[]]).result.pr, null, "facts: no PR at this head is reported as none");
+      assert.equal(factsWith(() => [[mine(1167, { state: "closed" })]]).result.pr, null, "facts: a closed PR is not this head's PR");
+      assert.deepEqual(factsWith(() => [[mine(1167)], [mine(1170)]]).result.pr, { ambiguous: [1167, 1170] }, "facts: two PRs at this head, one on a later page, are ambiguous");
+      assert.match(factsWith(() => new Error("boom")).result.unreadable, /could not ask GitHub which pull request/, "facts: a failing lookup is unreadable");
+      assert.match(factsWith(() => [[mine(1167), { number: 1 }]]).result.unreadable, /could not ask GitHub which pull request/, "facts: a malformed entry makes the lookup unreadable");
+
+      // The head changes between the first read and the final re-read (a push landed): unreadable, not trusted.
+      const moved = factsWith((n) => (n === 1 ? [[mine(1167)]] : [[mine(1167, { head: { sha: "c".repeat(40) } })]]));
+      assert.match(moved.result.unreadable, /#1167 no longer has this commit as its head/, "facts: a head that moved between the two reads is refused");
+      const rereadAmbiguous = factsWith((n) => (n === 1 ? [[mine(1167)]] : [[mine(1167)], [mine(1170)]]));
+      assert.match(rereadAmbiguous.result.unreadable, /no longer has this commit as its head/, "facts: an ambiguous final re-read is refused");
+      const rereadOtherPr = factsWith((n) => (n === 1 ? [[mine(1167)]] : [[mine(1170)]]));
+      assert.match(rereadOtherPr.result.unreadable, /no longer has this commit as its head/, "facts: a different PR at the final re-read is refused");
+      const rereadFails = factsWith((n) => (n === 1 ? [[mine(1167)]] : new Error("boom")));
+      assert.match(rereadFails.result.unreadable, /could not re-read which pull request/, "facts: an unreadable final re-read is refused");
+      const rereadMalformed = factsWith((n) => (n === 1 ? [[mine(1167)]] : [[mine(1167)], { message: "page failed" }]));
+      assert.match(rereadMalformed.result.unreadable, /could not re-read which pull request/, "facts: a malformed final re-read is refused");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }
 }
 
 console.log("OK - write-codex-push-proof helpers passed.");

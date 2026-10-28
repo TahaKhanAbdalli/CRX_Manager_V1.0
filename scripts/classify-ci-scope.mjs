@@ -69,6 +69,19 @@ export function classifyPullRequestEvent(eventName, eventPayload) {
   return { route: 'code', reason: 'code-event' };
 }
 
+// Draft pull requests skip the two Windows jobs (Mason 2026-10-27: draft pushes need not get the
+// full check). Only GitHub's explicit `draft: true` counts; anything else runs Windows.
+export function isDraftPullRequest(eventName, eventPayload) {
+  return eventName === 'pull_request'
+    && isPlainObject(eventPayload)
+    && isPlainObject(eventPayload.pull_request)
+    && eventPayload.pull_request.draft === true;
+}
+
+export function applyDraftWindowsHold(result, draft) {
+  return { ...result, windowsCi: result.fullCi === true && draft !== true };
+}
+
 export function fullProofArtifactName(baseSha, headSha) {
   const base = String(baseSha ?? '').toLowerCase();
   const head = String(headSha ?? '').toLowerCase();
@@ -405,6 +418,7 @@ function writeGithubOutputs(outputPath, result) {
     [
       `docs_only=${result.docsOnly}`,
       `full_ci=${result.fullCi}`,
+      `windows_ci=${result.windowsCi}`,
       `reason=${result.reason}`,
       `changed_count=${result.changedPaths.length}`,
       `event_route=${result.eventRoute}`,
@@ -420,14 +434,17 @@ export async function runClassifier(options, { fetchImpl = globalThis.fetch } = 
     throw new Error('required arguments: --repo-root --event-name --base --head --github-output');
   }
   let eventClassification = { route: 'code', reason: 'event-routing-not-requested' };
+  let draft = false;
   if (options.eventPath) {
     try {
       const eventBuffer = readFileSync(options.eventPath);
       const eventPayload = JSON.parse(decodeUtf8Exact(eventBuffer, 'GitHub event payload'));
       eventClassification = classifyPullRequestEvent(options.eventName, eventPayload);
+      draft = isDraftPullRequest(options.eventName, eventPayload);
     } catch (error) {
       console.error(`PR event classification failed closed: ${error.message}`);
       eventClassification = { route: 'error', reason: 'event-classification-error' };
+      draft = false;
     }
   }
 
@@ -441,7 +458,7 @@ export async function runClassifier(options, { fetchImpl = globalThis.fetch } = 
     }
     result = applyPriorFullProof(result, eventClassification.route, priorFullProof);
   }
-  result = { ...result, eventRoute: eventClassification.route, priorFullProof };
+  result = { ...applyDraftWindowsHold(result, draft), eventRoute: eventClassification.route, priorFullProof };
   writeGithubOutputs(options.githubOutput, result);
   console.log(JSON.stringify(result));
   return result;
