@@ -402,7 +402,7 @@ for (const requiredFragment of [
   'windows_ci: ${{ steps.scope.outputs.windows_ci }}',
   'WINDOWS_CI: ${{ needs.ci-scope.outputs.windows_ci }}',
   'true:true) expected_windows="success" ;;',
-  'true:false|false:false) expected_windows="skipped" ;;',
+  'true:false|false:false|false:true) expected_windows="skipped" ;;',
   '*) echo "Trusted windows_ci output is invalid: full_ci=$FULL_CI windows_ci=$WINDOWS_CI" >&2; exit 1 ;;',
   'test "$WINDOWS_PACKET_RESULT" = "$expected_windows"',
   'test "$WINDOWS_GUARD_RESULT" = "$expected_windows"',
@@ -456,6 +456,57 @@ equal(
   equal(jobSlice('regression-tests').includes('run: npm run test:correction-guards'), true, 'guard regressions run on Ubuntu');
   equal(jobSlice('guard-hooks-windows').includes('run: npm run test:correction-guards'), true, 'guard regressions run on Windows');
   equal(jobSlice('phase3c-containment-windows').includes('run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs'), true, 'packet regressions run on Windows');
+
+  // Behavior: run the ACTUAL "Bind all prerequisite results" shell from ci.yml under Bash.
+  const bindStep = gate.slice(gate.indexOf('Bind all prerequisite results'));
+  const bindRun = bindStep.slice(bindStep.indexOf('        run: |') + '        run: |'.length).split(/\r?\n      - name:/)[0];
+  const bindScript = bindRun.split(/\r?\n/).map((line) => line.replace(/^ {10}/, '')).join('\n');
+  equal(bindScript.includes('case "$FULL_CI:$WINDOWS_CI" in'), true, 'extracted the real required-check shell');
+  const bindBash = process.platform === 'win32'
+    ? ['C:\\Program Files\\Git\\bin\\bash.exe'].find((candidate) => existsSync(candidate))
+    : 'bash';
+  if (bindBash) {
+    const bindGate = (fullCi, windowsCi, windowsResult, testsResult) => spawnSync(bindBash, ['-c', bindScript], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        CONTAINMENT_RESULT: 'success',
+        CI_SCOPE_RESULT: 'success',
+        SQL_VALIDATION_RESULT: 'success',
+        LINT_BUILD_RESULT: 'success',
+        UNIT_TESTS_RESULT: testsResult,
+        REGRESSION_TESTS_RESULT: testsResult,
+        WINDOWS_PACKET_RESULT: windowsResult,
+        WINDOWS_GUARD_RESULT: windowsResult,
+        FULL_CI: fullCi,
+        WINDOWS_CI: windowsCi,
+      },
+    });
+    const bindCases = [
+      // [full_ci, windows_ci, tests result, windows result, passes]
+      ['true', 'true', 'success', 'success', true],
+      ['true', 'true', 'success', 'skipped', false],
+      ['true', 'false', 'success', 'skipped', true],
+      ['true', 'false', 'success', 'success', false],
+      ['false', 'false', 'skipped', 'skipped', true],
+      ['false', 'true', 'skipped', 'skipped', true], // older classifier, docs-only: pre-seeded windows_ci=true
+      ['false', 'true', 'skipped', 'success', false],
+      ['true', '', 'success', 'success', false],
+      ['true', 'maybe', 'success', 'success', false],
+      ['', 'true', 'skipped', 'skipped', false],
+      ['yes', 'false', 'skipped', 'skipped', false],
+    ];
+    for (const [fullCi, windowsCi, testsResult, windowsResult, passes] of bindCases) {
+      const result = bindGate(fullCi, windowsCi, windowsResult, testsResult);
+      equal(result.error, undefined, `bash ran for full_ci=${fullCi} windows_ci=${windowsCi}`);
+      equal(
+        result.status === 0,
+        passes,
+        `required check full_ci=${fullCi} windows_ci=${windowsCi} tests=${testsResult} windows=${windowsResult}: ${result.stderr}`,
+      );
+    }
+  }
   for (const run of ['npm run lint', 'npm run typecheck', 'npm run build', 'npm audit --audit-level=high', 'npm run test:ci-scope', 'npm run check:docs']) {
     equal(jobSlice('lint-typecheck-build').includes(`run: ${run}`), true, `lint/build part runs ${run}`);
   }

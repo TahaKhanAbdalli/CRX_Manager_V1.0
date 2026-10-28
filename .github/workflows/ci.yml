@@ -596,9 +596,11 @@ jobs:
           test "$UNIT_TESTS_RESULT" = "$expected_tests" || { echo "Unit tests: expected $expected_tests, got $UNIT_TESTS_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
           test "$REGRESSION_TESTS_RESULT" = "$expected_tests" || { echo "Regression tests: expected $expected_tests, got $REGRESSION_TESTS_RESULT (full_ci=$FULL_CI)" >&2; exit 1; }
           # The Windows parts may also be skipped on a draft pull request (windows_ci=false).
+          # false:true is a documentation-only run by an older trusted classifier that emits no
+          # windows_ci (the pre-seeded true stays); full_ci=false already skips both Windows jobs.
           case "$FULL_CI:$WINDOWS_CI" in
             true:true) expected_windows="success" ;;
-            true:false|false:false) expected_windows="skipped" ;;
+            true:false|false:false|false:true) expected_windows="skipped" ;;
             *) echo "Trusted windows_ci output is invalid: full_ci=$FULL_CI windows_ci=$WINDOWS_CI" >&2; exit 1 ;;
           esac
           test "$WINDOWS_PACKET_RESULT" = "$expected_windows" || { echo "Windows packet tests: expected $expected_windows, got $WINDOWS_PACKET_RESULT (full_ci=$FULL_CI windows_ci=$WINDOWS_CI)" >&2; exit 1; }
