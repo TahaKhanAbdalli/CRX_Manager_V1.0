@@ -585,6 +585,27 @@ for (const command of [
   eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
   ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows the ordinary shape: ${command}`);
 }
+// A plain search whose quoted pattern names a dangerous command is text, not
+// that command (Codex was refused on these 2026-10-27). The same command
+// outside quotes, or chained after the search, is still refused.
+for (const command of [
+  'rg -n "supabase db push" docs/workflows/DATABASE_CHANGE_CHECKLIST.md',
+  "rg -n 'rm -rf' docs",
+  "git grep -n 'git reset --hard' -- docs",
+  "Get-ChildItem -Recurse docs | Select-String 'git push --force'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
+  ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows the plain search: ${command}`);
+}
+for (const command of [
+  "rg -n x docs; git reset --hard",
+  "rg -n 'x' docs && git push --force origin main",
+  "rg --pre 'git reset --hard' x docs",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs still denies a search chained to a dangerous command: ${command}`);
+}
 // A computed script path is no longer refused by the LIVE hook either
 // (2026-10-02, Mason): the retired producer was the only reason for the rule.
 for (const command of ['F=x; node</dev/null "$F"', 'node > "out file" "$F"', 'for f in scripts/*.mjs; do node "$f" --check; done']) {
