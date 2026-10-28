@@ -34,7 +34,8 @@ template is `.env.example`.
   (`.github/workflows/ci.yml`), Dependabot updates, the daily landing summary, and the private
   backup repo `masonwells1/CRX_Backups`.
 - **Owner:** the app repo belongs to the `croprxsolutions` organization (moved 2026-10-28), which
-  Mason owns; an outside developer has read-only access. The backup repo stays on Mason's personal
+  Mason owns. The developer, Taha K. (`TahaKhanAbdalli`), is an outside collaborator with
+  **admin** access (Mason's decision, 2026-10-28). The backup repo stays on Mason's personal
   account `masonwells1`.
 - **Secrets in the app repo:** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
   `VITE_MAPBOX_TOKEN`, `VITE_SENTRY_DSN`, `E2E_TEST_EMAIL`, `E2E_TEST_PASSWORD`.
@@ -54,7 +55,10 @@ template is `.env.example`.
 - **Used for:** the PostgreSQL database, staff logins, photo and document storage, nightly and
   weekly in-database jobs, and eight Edge Functions (`supabase/functions/`).
 - **Owner:** organization "Crop RX Solutions", run by Mason. Production project
-  `rhyzpcqhnizqbxphqdkr`.
+  `rhyzpcqhnizqbxphqdkr`. Mason stays the organization's Owner. On 2026-10-28 he decided to add
+  the developer, Taha K., as an **Administrator**; Mason sends that invite from the dashboard. The
+  organization also holds the FarmRx project (`farm-rx`), and an organization role covers every
+  project in it.
 - **Plan / cost:** **Free plan** (confirmed 2026-10-23). There is no point-in-time recovery and
   no leaked-password protection. Goal list: upgrade to Pro (public price US$25/month) before
   next season; Mason makes that billing change.
@@ -205,6 +209,14 @@ passphrase.
    `protect-main` ruleset and the review gates.
 5. **Production Supabase and Vercel admin**, only if Mason decides they will run the system.
    Rotate any key they handled when the engagement ends.
+
+**Current state (2026-10-28):** Mason gave Taha K. GitHub admin and decided to make him a Supabase
+Administrator, skipping steps 1 to 3. GitHub admin can merge without the agents' review gates and
+change `main`'s protection. When the engagement ends, remove him from GitHub and Supabase on the
+same day. Admin access can read or create credentials without anyone noticing, so rotate every key
+those roles reach, not only the ones he is known to have used: the Supabase service-role key,
+database password and Edge Function secrets, and the GitHub Actions secrets. Then delete any deploy
+keys, webhooks or app installations he added.
 
 The backup repo `CRX_Backups`, the backup passphrase, the domain registrar, Google Workspace
 and billing stay with Mason.
