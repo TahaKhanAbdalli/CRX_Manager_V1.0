@@ -59,7 +59,7 @@ on `main`. When the two differ, the stricter one wins.
 
 - Changes reach `main` only through a pull request. Required approving reviews: **0**.
 - Required checks: **`Lint, Type Check, Test, Build`**, **`SQL Migration Validation`** (both from
-  `ci.yml`) and **`Vercel`**. The older branch protection also requires its checks to be on an
+  `ci.yml`) and **`Vercel – crx-manager-v1-0`** (Vercel renamed it from `Vercel` on 2026-10-28). The older branch protection also requires its checks to be on an
   up-to-date branch.
 - No force pushes, no deleting `main`, a stale approval is dismissed when new commits arrive.
 - Bypass list: empty. Conversation resolution: not required.
