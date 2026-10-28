@@ -65,8 +65,9 @@ CodeRabbit reviews done under the old address won't count for those PRs after th
 5. **YOU: reconnect Vercel if needed.** Vercel → project → **Settings → Git**. It should show
    `croprxsolutions/CRX_Manager_V1.0`. If it shows "disconnected", click **Connect Git Repository** and pick it.
    The production branch stays `main`; don't change environment variables.
-6. **YOU: add Taha read-only.** github.com/croprxsolutions/CRX_Manager_V1.0 → **Settings → Collaborators
-   and teams → Add people** → `TahaKhanAbdalli` → role **Read**.
+6. **YOU: add Taha.** github.com/croprxsolutions/CRX_Manager_V1.0 → **Settings → Collaborators
+   and teams → Add people** → `TahaKhanAbdalli`. The plan said role **Read**; on 2026-10-28 Mason
+   chose **Admin** instead (`docs/manual/SERVICES_AND_ACCOUNTS.md`, GitHub).
 7. **AGENT: check everything came across**, in a fresh session ("check the GitHub org move"):
    - point the local checkout's `origin` at `https://github.com/croprxsolutions/CRX_Manager_V1.0.git`
      (every worktree shares it) and confirm `git fetch` works;
@@ -76,7 +77,7 @@ CodeRabbit reviews done under the old address won't count for those PRs after th
      GitHub integration lists `croprxsolutions/CRX_Manager_V1.0`, and that the first Sentry error from
      production after the move shows a **Suspect Commit** (listing the repo alone does not prove the link
      works). Errors are rare, so this item may stay open for days; nothing else waits on it;
-   - confirm Taha's access shows as **Read**.
+   - confirm Taha's access shows the role Mason chose (**Admin** since 2026-10-28).
 8. **AGENT: follow-up PR** that switches the remaining fixed references to the new address:
    `scripts/land-pr.mjs`, `scripts/daily-landing-summary.mjs` (default only; Actions already passes the
    real name), the command text in `.claude/hooks/coderabbit-skip-prompt.mjs`, the badge comment in
