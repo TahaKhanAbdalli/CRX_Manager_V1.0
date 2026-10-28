@@ -810,6 +810,9 @@ rmSync(tmpProj, { recursive: true, force: true });
     ["Mason's stop between two CI-monitor notices",
       "<ci-monitor-event>a</ci-monitor-event>\nstop\n<ci-monitor-event>b</ci-monitor-event>", true],
     ["an order naming someone else", "I need the agent to stop the deploy", true],
+    // Sol, PR #1152: a neutralised tag Mason mentions never makes his whole message machine text.
+    ["Mason's stop beside a mentioned neutralised tag", "Stop pushing. I saw <~heartbeat> in the notice.", true],
+    ["Mason's stop beside a backslashed neutralised tag", "Stop pushing. I saw <\\~task-notification> there.", true],
     ["a frame line with trailing spaces is not the exact frame",
       `<agent-message from="x">\n${HANDBACK_FRAME}  \n  stop the deploy\n</agent-message>`, true],
   ];

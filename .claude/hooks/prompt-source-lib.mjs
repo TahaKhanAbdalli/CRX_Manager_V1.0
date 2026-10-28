@@ -60,16 +60,18 @@ export const MACHINE_TAG_NAMES = [
 const WHOLE_PROMPT_ONLY_TAG_NAMES = ["ci-monitor-event"];
 const ANYWHERE_TAG_NAMES = MACHINE_TAG_NAMES.filter((t) => !WHOLE_PROMPT_ONLY_TAG_NAMES.includes(t));
 
-// Full envelope tags anywhere in the prompt...  A relayed copy may carry the
-// harness's neutralised form (`<\~tag>`), so backslashes and a "~" are allowed.
+// Full envelope tags anywhere in the prompt...  Only the exact tag counts here:
+// a neutralised relay form (`<\~tag>`) Mason mentions must not turn his whole
+// message into machine text (Sol, PR #1152); authoredByMason() strips that form
+// where it appears instead.
 const CONTAINS_MACHINE_TAG_RE = new RegExp(
-  "<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")>",
+  "<(?:" + ANYWHERE_TAG_NAMES.join("|") + ")>",
   "i"
 );
 // ...or the trimmed prompt STARTS with one of those tag names (covers tags that
 // carry attributes, e.g. <task-notification source="...">).
 const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
-  "^<\\\\*~?(?:" + ANYWHERE_TAG_NAMES.join("|") + ")(?=[\\s>])",
+  "^<(?:" + ANYWHERE_TAG_NAMES.join("|") + ")(?=[\\s>])",
   "i"
 );
 
