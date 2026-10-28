@@ -142,11 +142,10 @@ export default function CustomerDetail() {
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
-  // Reps edit any customer (2026-10-13), but only an admin or the customer's own rep changes its
-  // default commission split (customers_guard_rep_edit_20261013 refuses anyone else).
-  const canEditDefaultSplit = isNew
-    || profile?.role === 'admin'
-    || (profile?.role === 'sales_rep' && customer.assigned_sales_rep === profile.id);
+  // Reps edit any customer (2026-10-13), but only an admin sets or changes a customer's default
+  // commission split, new customers included (2026-10-14, 2026-10-27; customers_guard_rep_edit_20261013
+  // refuses reps). A rep's create sends no split.
+  const canEditDefaultSplit = profile?.role === 'admin';
   // Read by the route-change reset, which must not re-run when the profile
   // resolves — that would clobber an already-loaded customer.
   // Committed value; the reset is a passive effect, so it runs after this layout-effect update.
@@ -831,7 +830,7 @@ export default function CustomerDetail() {
     }
 
     // Commission split validation - mirrors the server-side RPC guard.
-    if (customer.default_commission_split?.splits?.length) {
+    if (canEditDefaultSplit && customer.default_commission_split?.splits?.length) {
       const seenRecipients = new Set<string>();
       let splitTotal = 0;
       for (const split of customer.default_commission_split.splits) {
@@ -874,13 +873,13 @@ export default function CustomerDetail() {
         soybean_acres: customer.soybean_acres,
         other_acres: customer.other_acres,
         payment_terms: customer.payment_terms,
-        ...buildCommissionSplitPatch({
+        ...(canEditDefaultSplit ? buildCommissionSplitPatch({
           isUpdate: !isNew,
           touched: defaultSplitTouchedRef.current,
           key: 'default_commission_split',
           value: customer.default_commission_split ?? null,
           loaded: loadedDefaultSplitRef.current,
-        }),
+        }) : {}),
         ...buildRowVersionPatch(!isNew, customerRowVersionRef.current),
         credit_limit_cents: customer.credit_limit_cents || 0,
         finance_charge_rate: customer.finance_charge_rate || 0,
@@ -1380,7 +1379,9 @@ export default function CustomerDetail() {
               />
             ) : (
               <div className="space-y-1 text-sm">
-                {(customer.default_commission_split?.splits ?? []).length === 0 ? (
+                {isNew ? (
+                  <p className="text-secondary">An admin sets this customer&apos;s commission split after it&apos;s created.</p>
+                ) : (customer.default_commission_split?.splits ?? []).length === 0 ? (
                   <p className="text-secondary">No default split set.</p>
                 ) : (
                   (customer.default_commission_split?.splits ?? []).map((split, index) => (
@@ -1390,7 +1391,7 @@ export default function CustomerDetail() {
                   ))
                 )}
                 <p className="text-xs text-secondary">
-                  Only an admin or this customer&apos;s assigned sales rep can change its default commission split.
+                  Only an admin can change a customer&apos;s default commission split.
                 </p>
               </div>
             )}
