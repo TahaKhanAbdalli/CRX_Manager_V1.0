@@ -2,7 +2,7 @@
 
 > **Recovered history — read with the correction below.** This file was rescued on 2026-07-29 from
 > the deleted branch `codex/noninterference-queue-ledger-20260725` (see
-> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md`). It is committed so the
+> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`)). It is committed so the
 > intermediate reasoning survives; it is **not** a statement about current state.
 >
 > **The "77 Main Warehouse `quantity_on_order` mismatches" figure below is not supported and should

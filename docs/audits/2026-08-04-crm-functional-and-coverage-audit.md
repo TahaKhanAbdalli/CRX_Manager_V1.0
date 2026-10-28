@@ -103,7 +103,7 @@ Ranked by value to CRX specifically. Nothing here is broken; these are things th
 
 Identified in the June 2026 idea-mining audit as CRX's loudest CRM gap and still open. There is no lead, no opportunity, no stage, no probability, no expected close date, and therefore no forecast. Work only becomes visible once someone builds a quote. For a dealer working a book of growers through a booking season, "what deals are we working and what will they close at" is not answerable today.
 
-**Recommendation:** the design is already written up in `docs/audits/2026-06-19-future-projects-idea-mining/theme-CRM-UX.md` (candidate #1: `sales_opportunities` + admin-editable `sales_stages`, Kanban by stage, weighted forecast, convert-to-quote). This is a net-new subsystem — table, RLS, page, report — and needs your decision before anyone starts.
+**Recommendation:** the design is already written up in `docs/audits/2026-06-19-future-projects-idea-mining/theme-CRM-UX.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) (candidate #1: `sales_opportunities` + admin-editable `sales_stages`, Kanban by stage, weighted forecast, convert-to-quote). This is a net-new subsystem — table, RLS, page, report — and needs your decision before anyone starts.
 
 ### G3 — No duplicate-customer detection (MEDIUM)
 

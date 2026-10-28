@@ -30,7 +30,7 @@ history.)
 | Document | What it is | Read it when |
 |---|---|---|
 | **This file** | The complete record — issues, reasoning, changes | **Now, before you approve** |
-| `2026-08-18-product-data-model-plan.md` | The full working plan + three review rounds | Someone is building and needs the *why* |
+| `2026-08-18-product-data-model-plan.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) | The full working plan + three review rounds | Someone is building and needs the *why* |
 | `2026-08-18-product-data-model-PRD.md` | Numbered requirements with acceptance tests | Someone is building and needs the *what* |
 
 Everything below is either quoted from you, or verified against the live database and the

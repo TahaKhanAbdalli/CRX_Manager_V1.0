@@ -336,7 +336,7 @@ duplicate rows (an open HIGH in the plan).
 ## 2026-08-09 (recovered 2026-10-13) — Pricing: commission clawed back on returns, no historical backfill, per-product margin targets, below-cost as a hard rule
 
 **Recovered** from never-merged PRs #350 (`claude/pricing-audit-strategy-jym8rr`) and #397
-(`codex/pr389-coderabbit-fixes`). Source: `docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md`.
+(`codex/pr389-coderabbit-fixes`). Source: `docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`).
 **Decision (Mason, in chat, 2026-08-09):** (1) a return claws back commission proportionally: unpaid
 commission is reduced, and paid commission becomes a debit against the rep's next check. **Not built as
 of 2026-10-13** (trace in `KNOWN_ISSUES.md`). (2) No backfill of return costs: credit memos issued before
@@ -856,7 +856,7 @@ is tracked as a follow-up in the changelog entry, not silently changed.
 ## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
 
 **Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
-gate strict?", from `docs/audits/2026-09-02-github-branch-cleanup-audit.md` §1 item 8 (K2).
+gate strict?", from `docs/audits/2026-09-02-github-branch-cleanup-audit.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) §1 item 8 (K2).
 
 **Decision.** The `codex-push-lib` risky-content scan keeps flagging money/security words in
 prose. The parked "content-gate prose exemption" (`claude/guard-content-scan-and-savegate-flake`,
@@ -3160,7 +3160,7 @@ this ordering from scratch — it is a consequence of the md5 pin, not a prefere
 Its branch was marked for deletion after a live check confirmed its other protections
 (`AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`, the soft-delete exclusion, `BOOKING_CLOSED`)
 had already landed through other migrations — see
-`docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`. The decision itself (any rep) stands; the
+`docs/audits/2026-09-01-no-pr-branch-disposition-plan.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`). The decision itself (any rep) stands; the
 sequencing above is moot.]
 
 ---

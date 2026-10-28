@@ -2,7 +2,7 @@
 
 > **Recovered history — read with the note below.** Rescued on 2026-07-29 from the deleted branch
 > `codex/protected-pr-readiness-20260726` (see
-> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md`). It records readiness as of
+> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`)). It records readiness as of
 > 2026-07-26 and is **not** a statement about current state.
 >
 > **On Section 1 at `53f6177e`, this packet and the queue ledger do not actually conflict.**
@@ -46,7 +46,7 @@ None of these immutable accepted SHAs is publish-ready: each forks from the pre-
 | --- | --- | --- |
 | 1 | `docs/audits/gauntlet/2026-07-25-section-01-security-remediation-lane-ledger.md` at `53f6177` | Local security remediation/proof history. It expressly leaves a fresh exact-SHA Sol adversarial review, live read-only predicate proof, owner-approved guarded migration apply, rollback-only smoke, and live invariant sweep outstanding. |
 | 11 | `docs/audits/gauntlet/2026-07-25-section-11-pdfs-compliance-documents-refresh.md` at `b754bf8` | Read-only audit of `25363345`; it records two test-coverage follow-ups and a blocked authenticated browser/download proof, not a confirmed defect. |
-| 12 | `docs/audits/gauntlet/2026-07-25-section-12-edge-functions-refresh.md` at `a94ef7f` | Read-only audit of `25363345`; it records S12-1 (MEDIUM invoice-email retry deduplication) and an observed July 25 live metadata inventory, not bundle parity, secret proof, invocation, or deployment proof. |
+| 12 | `docs/audits/gauntlet/2026-07-25-section-12-edge-functions-refresh.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) at `a94ef7f` | Read-only audit of `25363345`; it records S12-1 (MEDIUM invoice-email retry deduplication) and an observed July 25 live metadata inventory, not bundle parity, secret proof, invocation, or deployment proof. |
 
 ## Fresh ancestry, cleanliness, and remote state
 

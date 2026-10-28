@@ -50,7 +50,7 @@ All ran with Claude Code CLI `2.1.207`, `--output-format json`, `--permission-mo
 
 | Evidence | Result | Notes |
 |---|---|---|
-| Preconditions in `docs/audits/2026-07-18-claude-to-codex-phase1b-golive-execution.md` section 4 | pass | Verified before database work. |
+| Preconditions in `docs/audits/2026-07-18-claude-to-codex-phase1b-golive-execution.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) section 4 | pass | Verified before database work. |
 | Phase 1b evidence migration | live | Ledger version `20260718225511`, submitted name `20260718230000_supplier_price_evidence_phase1b`. |
 | Phase 1b alias migration | live | Ledger version `20260718235717`, submitted name `20260718235900_stage_supplier_vendor_aliases_phase1b`. |
 | Live database catalog proof | pass | Six RLS tables, eleven secured fixed-search-path RPCs, immutable observation trigger, private PDF bucket, PO provenance columns. |
@@ -103,7 +103,7 @@ All ran with Claude Code CLI `2.1.207`, `--output-format json`, `--permission-mo
 - `.claude/session-state/history/claude-review-2026-07-20T18-10-30-472Z-92d0b8c1.txt` - first Opus failure and raw JSON.
 - `.claude/session-state/history/claude-review-2026-07-20T18-17-39-015Z-85824468.txt` - second Opus failure and raw JSON.
 - `.claude/session-state/history/claude-review-2026-07-20T18-27-45-249Z-55897657.txt` - Sonnet fallback failure and raw JSON.
-- `docs/audits/2026-07-18-claude-to-codex-phase1b-golive-execution.md` - controlling go-live plan and PARK rules.
+- `docs/audits/2026-07-18-claude-to-codex-phase1b-golive-execution.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) - controlling go-live plan and PARK rules.
 - `AGENTS.md`, `CLAUDE.md`, and `docs/workflows/SAFE_DEVELOPMENT_RULES.md` - release authority and safety boundaries.
 - `git show --stat --oneline 1338a7df` and `git diff origin/main...1338a7df` - exact release change after the wiring investigation is understood.
 
