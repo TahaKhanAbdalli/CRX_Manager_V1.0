@@ -28,7 +28,7 @@ Current code, migrations, tests, grants, and live read-only evidence outrank his
 
 | Task | Read or invoke |
 |---|---|
-| First session or unfamiliar area | `docs/manual/AGENT_ONBOARDING.md`, then `docs/manual/ARCHITECTURE.md` |
+| First session or unfamiliar area | `docs/manual/start-here/Home.md` and `docs/manual/start-here/Codebase-Map.md` (the Obsidian vault's hub notes; follow their links instead of searching `docs/`), then `docs/manual/AGENT_ONBOARDING.md` and `docs/manual/ARCHITECTURE.md` |
 | Any code change | `docs/reference/coding-guidelines.md`; relevant `docs/reference/gotchas.md` sections; `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for multi-file, data, money, security, permission, production, migration, or customer-facing work |
 | Architecture, difficult debugging, workflow/migration tracing, structural audit, or PR impact | `graphify` first; focused source inspection for docs outside its code-only corpus |
 | Database, migration, or RLS | `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`, `docs/workflows/RLS_SECURITY_GUIDE.md`, `.claude/schema-registry.json` |
