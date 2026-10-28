@@ -7,11 +7,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  applyDraftWindowsHold,
   applyPriorFullProof,
   classifyCiScope,
   classifyPathList,
   classifyPullRequestEvent,
   fullProofArtifactName,
+  isDraftPullRequest,
   isFastDocumentationPath,
   parseChangedEntries,
   parseChangedPaths,
@@ -357,6 +359,17 @@ await assert.rejects(
 );
 assertions += 1;
 
+equal(isDraftPullRequest('pull_request', { action: 'synchronize', pull_request: { draft: true } }), true, 'explicit draft PR is a draft');
+equal(isDraftPullRequest('pull_request', { action: 'ready_for_review', pull_request: { draft: false } }), false, 'a PR marked ready is not a draft');
+equal(isDraftPullRequest('pull_request', { action: 'synchronize', pull_request: {} }), false, 'missing draft flag runs Windows');
+equal(isDraftPullRequest('pull_request', { action: 'synchronize', pull_request: { draft: 'true' } }), false, 'only a boolean draft flag counts');
+equal(isDraftPullRequest('pull_request', null), false, 'invalid payload runs Windows');
+equal(isDraftPullRequest('push', { pull_request: { draft: true } }), false, 'a push to main is never a draft');
+equal(applyDraftWindowsHold({ fullCi: true }, false).windowsCi, true, 'full lane on a ready PR runs Windows');
+equal(applyDraftWindowsHold({ fullCi: true }, true).windowsCi, false, 'full lane on a draft PR skips Windows');
+equal(applyDraftWindowsHold({ fullCi: false }, false).windowsCi, false, 'documentation-only lane never runs Windows');
+equal(applyDraftWindowsHold({ fullCi: true }, true).fullCi, true, 'a draft still gets the Linux full lane');
+
 const workflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 for (const requiredFragment of [
   'types: [opened, reopened, synchronize, ready_for_review, edited]',
@@ -375,8 +388,6 @@ for (const requiredFragment of [
   'needs: [phase3-private-artifact-containment, ci-scope, sql-validation, lint-typecheck-build, unit-tests, regression-tests, phase3c-containment-windows, guard-hooks-windows]',
   'WINDOWS_PACKET_RESULT: ${{ needs.phase3c-containment-windows.result }}',
   'WINDOWS_GUARD_RESULT: ${{ needs.guard-hooks-windows.result }}',
-  'test "$WINDOWS_PACKET_RESULT" = "$expected_tests"',
-  'test "$WINDOWS_GUARD_RESULT" = "$expected_tests"',
   'CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}',
   'LINT_BUILD_RESULT: ${{ needs.lint-typecheck-build.result }}',
   'UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}',
@@ -388,6 +399,13 @@ for (const requiredFragment of [
   'test "$UNIT_TESTS_RESULT" = "$expected_tests"',
   'test "$REGRESSION_TESTS_RESULT" = "$expected_tests"',
   'if: ${{ needs.ci-scope.outputs.full_ci == \'true\' }}',
+  'windows_ci: ${{ steps.scope.outputs.windows_ci }}',
+  'WINDOWS_CI: ${{ needs.ci-scope.outputs.windows_ci }}',
+  'true:true) expected_windows="success" ;;',
+  'true:false|false:false) expected_windows="skipped" ;;',
+  '*) echo "Trusted windows_ci output is invalid: full_ci=$FULL_CI windows_ci=$WINDOWS_CI" >&2; exit 1 ;;',
+  'test "$WINDOWS_PACKET_RESULT" = "$expected_windows"',
+  'test "$WINDOWS_GUARD_RESULT" = "$expected_windows"',
 ]) {
   equal(workflow.includes(requiredFragment), true, `workflow contract: ${requiredFragment}`);
 }
@@ -409,13 +427,30 @@ equal(
   equal(gate.indexOf('Bind all prerequisite results') < gate.indexOf('Write exact full-CI proof'), true, 'gate binds part results before writing the proof');
   equal(workflow.split('name: Publish exact full-CI proof').length, 2, 'exactly one job publishes the full-CI proof');
   equal(gate.includes('name: Publish exact full-CI proof'), true, 'the required gate publishes the full-CI proof');
-  for (const id of ['unit-tests', 'regression-tests', 'phase3c-containment-windows', 'guard-hooks-windows']) {
+  for (const id of ['unit-tests', 'regression-tests']) {
     equal(
       jobSlice(id).includes("if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}"),
       true,
       `${id} skips only on the trusted documentation-only route`,
     );
   }
+  // Draft pull requests also skip the Windows parts (Mason 2026-10-27); marking ready runs them.
+  for (const id of ['phase3c-containment-windows', 'guard-hooks-windows']) {
+    equal(
+      jobSlice(id).includes("if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' && needs.ci-scope.outputs.windows_ci == 'true' }}"),
+      true,
+      `${id} skips only on the documentation-only route or a draft pull request`,
+    );
+  }
+  // Only a run that included the Windows parts may publish the full-CI proof a later
+  // title/body edit reuses, so a draft run is never mistaken for full proof.
+  equal(
+    gate.split("if: ${{ needs.ci-scope.outputs.full_ci == 'true' && needs.ci-scope.outputs.windows_ci == 'true' && github.event_name == 'pull_request' }}").length,
+    3,
+    'full-CI proof is written and published only after the Windows parts ran',
+  );
+  // An older trusted-base classifier emits no windows_ci; both fallbacks run Windows.
+  equal(workflow.split("echo 'windows_ci=true'").length, 3, 'bootstrap and pre-seeded routes run Windows');
   equal(jobSlice('lint-typecheck-build').includes("if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' }}"), true, 'lint/build part runs in both lanes');
   equal(jobSlice('unit-tests').includes('run: npm run test:coverage'), true, 'Vitest coverage runs in the unit-tests part');
   equal(jobSlice('regression-tests').includes('run: npm run test:correction-guards'), true, 'guard regressions run on Ubuntu');
@@ -515,6 +550,30 @@ try {
     equal(result.fullCi, true, 'malformed event payload wiring preserves full CI');
     equal(result.eventRoute, 'error', 'malformed event payload emits the accepted error route');
     equal(readFileSync(outputPath, 'utf8').includes('event_route=error'), true, 'CLI output records the fail-closed error route');
+    equal(readFileSync(outputPath, 'utf8').includes('windows_ci=true'), true, 'malformed event payload still runs Windows');
+  }
+
+  for (const [draft, action, expectedWindows] of [[true, 'synchronize', false], [false, 'synchronize', true], [false, 'ready_for_review', true]]) {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', `export const value = ${expectedWindows ? 41 : 42};\n`);
+    const head = commitAll(root, `draft=${draft} ${action} integration fixture`);
+    const eventPath = path.join(root, 'draft-event.json');
+    const outputPath = path.join(root, 'draft-output.txt');
+    writeFileSync(eventPath, JSON.stringify({ action, pull_request: { draft } }), 'utf8');
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    });
+    equal(result.fullCi, true, `code change on draft=${draft} ${action} keeps the Linux full lane`);
+    equal(result.windowsCi, expectedWindows, `draft=${draft} ${action} windows_ci`);
+    equal(readFileSync(outputPath, 'utf8').includes(`windows_ci=${expectedWindows}`), true, `CLI output records windows_ci=${expectedWindows}`);
   }
 
   {
