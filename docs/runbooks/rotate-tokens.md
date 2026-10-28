@@ -20,8 +20,8 @@ visible command-line argument), but **rotation is the real fix and only you can 
 
 1. Open https://github.com/settings/personal-access-tokens (Fine-grained tokens).
 2. Find the existing token used for the GitHub MCP → **Delete** it.
-3. **Generate new token**: name `claude-mcp-2026-07`, scope it to **only the
-   `masonwells1/CRX_Manager_V1.0` repository**, with Contents + Pull requests +
+3. **Generate new token**: name `claude-mcp-2026-07`, resource owner `croprxsolutions`, scope it
+   to **only the `croprxsolutions/CRX_Manager_V1.0` repository**, with Contents + Pull requests +
    Issues + Actions read/write. 90-day expiry is fine (rotate again when it expires).
 4. Tell Claude: *"here's the new GitHub token: github_pat_..."* — Claude updates settings
    and verifies with a read-only API call.

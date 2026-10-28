@@ -67,7 +67,8 @@ on the workstation.
 
 ## Required Codex fine-grained token
 
-Create a fine-grained personal access token owned by `masonwells1`, limited to only
+Create a fine-grained personal access token owned by `masonwells1`, with resource owner
+`croprxsolutions` (where the repo has lived since 2026-10-28), limited to only
 `CRX_Manager_V1.0`, with the minimum permissions needed for normal delivery:
 
 - Actions: **read only** (inspect runs; never dispatch, rerun, cancel, or approve).

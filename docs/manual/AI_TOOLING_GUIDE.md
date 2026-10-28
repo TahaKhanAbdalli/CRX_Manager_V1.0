@@ -54,7 +54,7 @@ hooks themselves. If this page and those disagree, they win; please fix this pag
 
 ### What GitHub actually enforces (read 2026-10-23)
 
-From `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` and the older branch protection
+From `gh api repos/croprxsolutions/CRX_Manager_V1.0/rulesets/18904218` and the older branch protection
 on `main`. When the two differ, the stricter one wins.
 
 - Changes reach `main` only through a pull request. Required approving reviews: **0**.

@@ -153,9 +153,9 @@ const usablePr = (n) => Number.isInteger(n) && n > 0;
 // P2 on #1035: `gh pr merge -R other/repo 1018`). "This repository" is the app
 // repo under either owner (app-repo-identity.mjs), so the move to the
 // `croprxsolutions` organization keeps a waiver working. The address below is only
-// the one printed in instructions (GitHub redirects it after the move); it is not
-// exported, so nothing can use it as the identity check.
-const CODERABBIT_SKIP_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
+// the one printed in instructions (the repo's current home); it is not exported,
+// so nothing can use it as the identity check.
+const CODERABBIT_SKIP_REPOSITORY = "croprxsolutions/CRX_Manager_V1.0";
 export const isSkipRepository = (owner, name) => isAppRepoPath(`${String(owner ?? "")}/${String(name ?? "")}`);
 
 /**
@@ -163,7 +163,7 @@ export const isSkipRepository = (owner, name) => isAppRepoPath(`${String(owner ?
  * PR being merged or applied: its `url` must be github.com's address for THIS
  * repository and that same number, else null (no waiver). The host is checked
  * too: GH_HOST can point gh at an enterprise server that also has a
- * masonwells1/CRX_Manager_V1.0 (Codex App P2 on #1035).
+ * croprxsolutions/CRX_Manager_V1.0 (Codex App P2 on #1035).
  */
 export function skipPullRequestFor(url, number) {
   if (!usablePr(number)) return null;
