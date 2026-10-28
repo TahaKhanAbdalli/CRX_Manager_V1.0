@@ -83,7 +83,7 @@ template is `.env.example`.
 
 - **Used for:** hosting the app at `https://croprxsolutions.app` (also
   `crx-manager-v1-0.vercel.app`). Every merge to `main` deploys to production automatically.
-  Pull requests get preview deploys, and the "Vercel" check is required on `main`.
+  Pull requests get preview deploys, and the "Vercel – crx-manager-v1-0" check is required on `main`.
 - **Owner:** team "Mason Wells' projects" (Mason's account), project `crx-manager-v1-0`.
 - **Env vars the build reads:** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (required);
   `VITE_MAPBOX_TOKEN`, `VITE_SENTRY_DSN` (optional); `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`,
