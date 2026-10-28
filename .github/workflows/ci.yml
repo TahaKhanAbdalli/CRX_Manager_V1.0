@@ -1,5 +1,5 @@
 # CI -- Lint, Type Check, Test, Build + E2E Smoke
-# Status badge: ![CI](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml/badge.svg)
+# Status badge: ![CI](https://github.com/croprxsolutions/CRX_Manager_V1.0/actions/workflows/ci.yml/badge.svg)
 
 name: CI -- Lint, Type Check, Test, Build
 

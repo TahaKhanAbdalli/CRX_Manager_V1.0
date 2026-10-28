@@ -40,7 +40,7 @@ You need three things installed on the machine before anything else works:
 ## Step 2 — Get the code
 
 ```
-git clone https://github.com/masonwells1/CRX_Manager_V1.0.git
+git clone https://github.com/croprxsolutions/CRX_Manager_V1.0.git
 cd CRX_Manager_V1.0
 ```
 

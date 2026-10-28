@@ -329,7 +329,7 @@ reading "Review rate limited". Read the **comment body**, never the check row:
 
 ```bash
 PR_NUMBER=411
-REPO="masonwells1/CRX_Manager_V1.0"
+REPO="croprxsolutions/CRX_Manager_V1.0"
 gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
@@ -398,7 +398,7 @@ proves only that **the Vercel deployment finished** — it says nothing about wh
 required checks passed, so read those separately rather than concluding the PR is healthy:
 
 ```bash
-REPO="masonwells1/CRX_Manager_V1.0"
+REPO="croprxsolutions/CRX_Manager_V1.0"
 SHA="711aecfb"
 gh api "repos/$REPO/commits/$SHA/status" --jq '[.statuses[].context]'
 ```

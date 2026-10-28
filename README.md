@@ -31,7 +31,7 @@ It runs in the office on a desktop and in the field on a phone, including an off
 ### Setup
 
 ```bash
-git clone https://github.com/masonwells1/CRX_Manager_V1.0.git
+git clone https://github.com/croprxsolutions/CRX_Manager_V1.0.git
 cd CRX_Manager_V1.0
 npm install
 cp .env.example .env

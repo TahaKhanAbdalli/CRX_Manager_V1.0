@@ -168,7 +168,7 @@
 > worktree records, finds and cancels the same file; a folder outside a git checkout holds none). `skip coderabbit` with no PR number records nothing; the agent asks
 > which PR. Both merge gates and the migration landing gate accept a waiver only for the PR it names
 > (the number GitHub returns for the PR being merged or applied, and only a PR in
-> `masonwells1/CRX_Manager_V1.0`: a merge in any other repository gets no waiver), and only when that
+> `croprxsolutions/CRX_Manager_V1.0`: a merge in any other repository gets no waiver), and only when that
 > merge or apply runs FROM THAT SESSION; every other qualifying PR still needs its review, and the agent requests no
 > review for a waived PR. A message starting with `use coderabbit` (or `require coderabbit`) cancels
 > every waiver the session holds. The waiver covers only the missing review: the exact-SHA Sol

@@ -87,6 +87,6 @@ emit([
   `This is Mason's own instruction, recorded from his message: he does not want a CodeRabbit review (@coderabbitai full review) requested for ${named}. Every other money PR still needs its review.`,
   "Everything else still applies: the exact-SHA Sol review, every required check, and replying to and resolving any CodeRabbit thread already on the PR.",
   `When you merge ${named} with no CodeRabbit review under this waiver, post one comment on it first: ` +
-    "gh pr comment <n> --repo masonwells1/CRX_Manager_V1.0 --body \"CodeRabbit review skipped at Mason's request (said in the session that merged this PR).\"",
+    "gh pr comment <n> --repo croprxsolutions/CRX_Manager_V1.0 --body \"CodeRabbit review skipped at Mason's request (said in the session that merged this PR).\"",
   "Confirm to Mason in one line. He cancels it by starting a message with: use coderabbit",
 ].join("\n"));

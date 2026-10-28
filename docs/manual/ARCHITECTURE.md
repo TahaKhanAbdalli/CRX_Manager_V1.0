@@ -72,7 +72,7 @@ way you'd explain something to a smart non-technical business partner.
 - **Backend**: Supabase, which bundles a Postgres database, authentication,
   file storage, "Edge Functions" (small serverless Deno programs — see §6),
   and `pg_cron` (a Postgres extension that runs SQL on a schedule — see §7).
-- **Repo**: `https://github.com/masonwells1/CRX_Manager_V1.0`. **Production**:
+- **Repo**: `https://github.com/croprxsolutions/CRX_Manager_V1.0`. **Production**:
   `https://croprxsolutions.app`.
 
 ---
