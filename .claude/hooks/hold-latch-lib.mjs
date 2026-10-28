@@ -125,6 +125,20 @@ const HARMLESS_THING_WORDS = new Set(["review", "reviews", "check", "checks", "p
   "warnings", "nag", "nags", "reminder", "reminders", "notification", "notifications", "popup", "popups",
   "retry", "retries", "percommit", "security", "automatic", "extra", "duplicate", "repeated", "lint", "codex",
   "luna", "hook", "hooks", "gate", "guard", "permission", "approval"]);
+// These verbs carry out what follows them, so what is retried must be harmless
+// too: "stop retrying database writes" latches, "stop retrying on a red check"
+// does not (Codex App review, PR #1152). Stopping a refusal or a warning only
+// lets things through, so those verbs need no such check.
+const ACTING_ING = new Set(["retrying", "rerunning", "reporting", "looping"]);
+const HARMLESS_TAIL_WORDS = new Set([...HARMLESS_THING_WORDS, "on", "about", "for", "at", "in", "of", "when",
+  "every", "each", "all", "the", "a", "an", "my", "our", "this", "that", "these", "those", "any", "again", "so",
+  "much", "often", "anymore", "now", "docs", "doc", "file", "files", "commit", "commits", "red", "green",
+  "failing", "failed", "ci", "build", "builds", "test", "tests"]);
+// The words after the stop, up to the end of its clause; the first is the word right after it.
+function wordsAfter(text, end) {
+  return text.slice(end).split(/[.!?;:,\n\r]|\s-\s|--/)[0].split(/\s+/)
+    .map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean);
+}
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
 
@@ -156,6 +170,10 @@ function isDescriptiveStop(text, start, end) {
   // this point stop pushing") is still an order (Codex App review, PR #1152).
   if (next.length > 4 && next.endsWith("ing")) {
     if (!HARMLESS_ING.has(next)) return false;
+    if (ACTING_ING.has(next)) {
+      const tail = wordsAfter(text, end).slice(1);
+      if (tail.length > 6 || !tail.every((w) => HARMLESS_TAIL_WORDS.has(w))) return false;
+    }
     // The causative must govern this stop: "make [the] <machine part> stop",
     // with the machine part right before it. "After making the build green stop
     // pushing" names a prerequisite, not the thing stopping (Codex App, PR #1152).
@@ -177,8 +195,7 @@ function isDescriptiveStop(text, start, end) {
     if (!before.some((w) => SETTING_VERBS.has(w))) return false;
     // Every word of what is stopped, up to the end of the clause, must be on the
     // safe list: "the per-commit security reviews" skips, "the nightly export" latches.
-    const thing = text.slice(end).split(/[.!?;:,\n\r]|\s-\s|--/)[0].split(/\s+/)
-      .map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean).slice(1);
+    const thing = wordsAfter(text, end).slice(1);
     if (thing.length < 1 || thing.length > 6 || !thing.every((w) => HARMLESS_THING_WORDS.has(w))) return false;
     return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
   }

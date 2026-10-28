@@ -66,6 +66,8 @@ for (const p of [
   "the hook should stop sending invoices",
   "the hook should stop retrying the deletes",
   "the hook should stop retrying at some point before deploying",
+  "Make the CI job stop retrying database writes",
+  "Make the job stop retrying the invoice updates",
   "add a setting to stop the nightly sweep",
   "set X=0 in my settings to stop the customer exports",
 ]) ok(isHoldPhrase(p), `off the safe list latches: ${p}`);
