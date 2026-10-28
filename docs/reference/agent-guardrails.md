@@ -116,7 +116,10 @@
 > commit's earliest check suite, which GitHub sets — a commit's own date is never used, and no suite never counts as
 > quiet; a commit pushed to another branch first can look quiet sooner, an accepted gap that costs one early Sol run); an App review of this commit that is still running is waited for until its summary has not changed for over an hour (timed from the summary's last update, never the commit's age — Codex App on #1075)
 > (`CODEX_APP_STALE_RUN_MS`); a newest App summary that cannot be parsed refuses; exactly one open PR has this head,
-> re-read after every other read; no unanswered Codex App thread on this commit (`evaluateCodexBotReview`) and no unanswered
+> re-read after every other read (found through GitHub's commit-to-PR association, or, when that has no exact match, for
+> example a head pushed from a fork, through the canonical repository's complete paginated open-PR list matched by exact
+> head SHA and base repository; the final re-read uses the same lookup; a closed PR, another base repository, another SHA,
+> two matches or an unreadable or malformed page refuses, and a PR is never inferred from a branch name — `openPullsAtHead`); no unanswered Codex App thread on this commit (`evaluateCodexBotReview`) and no unanswered
 > CodeRabbit thread (`coderabbitThreadCount`); CodeRabbit's newest status on this commit is not a PENDING it set less
 > than an hour ago (an older one is a dead review); and a money or Mason-named PR's completed CodeRabbit review
 > (`readCodeRabbitRequirement`, including a minor-only review covering narrow fixes, whose fixes the Sol prompt then

@@ -1478,21 +1478,42 @@ function anyCodeRabbitWaiver(root, number) {
 // Read every fact evaluateSolPreflight() needs. Any read that fails leaves its
 // fact null, which refuses.
 // The open pull requests whose head is exactly this commit, or null when GitHub
-// could not be read.
-function openPullsAtHead(root, owner, name, headSha) {
-  let pulls;
+// could not be read. `gh` takes an argument list and returns stdout (throws on failure).
+// GitHub's commit-to-PR association can return [] for a head pushed from a fork even
+// though the PR is open, so when it has no exact match the canonical repository's own
+// open-PR list is read in full and matched by exact head SHA and base repository. Both
+// paths accept only open PRs of this repository whose head SHA matches; a PR is never
+// inferred from a branch name, and any unreadable or malformed page returns null.
+export function openPullsAtHead(gh, owner, name, headSha) {
+  const want = String(headSha || "").toLowerCase();
+  const repoFullName = `${owner}/${name}`.toLowerCase();
+  const exact = (pull) => pull?.state === "open"
+    && String(pull?.head?.sha || "").toLowerCase() === want
+    && String(pull?.base?.repo?.full_name || "").toLowerCase() === repoFullName;
   try {
-    pulls = JSON.parse(preflightGh(root, ["api", `repos/${owner}/${name}/commits/${headSha}/pulls?per_page=100`]));
+    const associated = JSON.parse(gh(["api", `repos/${owner}/${name}/commits/${headSha}/pulls?per_page=100`]));
+    if (!Array.isArray(associated)) return null;
+    const matches = associated.filter(exact);
+    if (matches.length) return matches;
+    const pages = JSON.parse(gh(["api", `repos/${owner}/${name}/pulls?state=open&per_page=100`, "--paginate", "--slurp"]));
+    if (!Array.isArray(pages) || !pages.length || !pages.every(Array.isArray)) return null;
+    const all = pages.flat();
+    // A malformed entry makes the list untrustworthy, never skippable.
+    const wellFormed = (pull) => Number.isInteger(pull?.number)
+      && typeof pull?.state === "string"
+      && /^[0-9a-f]{40}$/i.test(String(pull?.head?.sha || ""))
+      && typeof pull?.base?.repo?.full_name === "string";
+    if (!all.every(wellFormed)) return null;
+    return all.filter(exact);
   } catch {
     return null;
   }
-  if (!Array.isArray(pulls)) return null;
-  return pulls.filter((pull) => pull?.state === "open" && String(pull?.head?.sha || "").toLowerCase() === headSha.toLowerCase());
 }
 
 // baseSha is the exact origin/main the review would pin (read once by the caller),
-// so a fetch between this check and the review cannot slip past it.
-export function readSolPreflightFacts(root, headSha, baseSha) {
+// so a fetch between this check and the review cannot slip past it. `gh` is injectable
+// for tests.
+export function readSolPreflightFacts(root, headSha, baseSha, gh = (args) => preflightGh(root, args)) {
   const facts = { headSha, pr: null, nowMs: Date.now(), headPushedMs: Number.NaN };
   facts.headContainsBase = /^[0-9a-f]{40}$/i.test(String(baseSha || ""))
     ? gitOk(["merge-base", "--is-ancestor", baseSha, headSha], root)
@@ -1500,7 +1521,7 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
   const slug = parseGithubSlug(runGit(["remote", "get-url", "origin"], { cwd: root }));
   if (!slug) return { ...facts, unreadable: "could not read the origin remote's GitHub owner and name" };
   const { owner, name } = slug;
-  const pulls = openPullsAtHead(root, owner, name, headSha);
+  const pulls = openPullsAtHead(gh, owner, name, headSha);
   if (!pulls) return { ...facts, unreadable: "could not ask GitHub which pull request has this head" };
   if (pulls.length === 0) return facts;
   if (pulls.length > 1) return { ...facts, pr: { ambiguous: pulls.map((pull) => pull.number) } };
@@ -1508,7 +1529,7 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
   facts.pr = { number: open.number, draft: open.draft === true };
   const number = open.number;
   try {
-    const comments = JSON.parse(preflightGh(root, [
+    const comments = JSON.parse(gh([
       "api", `repos/${owner}/${name}/issues/${number}/comments?per_page=100`, "--paginate", "--slurp",
     ])).flat();
     facts.codexState = codexAppReviewState(comments);
@@ -1516,13 +1537,13 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
   try {
     // Read CodeRabbit's completion BEFORE the threads, as the merge gate does: a
     // review finishing between the reads must not pair with a stale thread list.
-    facts.coderabbitRequirement = readCodeRabbitRequirement((args) => preflightGh(root, args), { owner, name, number });
+    facts.coderabbitRequirement = readCodeRabbitRequirement(gh, { owner, name, number });
   } catch { facts.coderabbitRequirement = null; }
   try {
-    const statuses = JSON.parse(preflightGh(root, [
+    const statuses = JSON.parse(gh([
       "api", `repos/${owner}/${name}/commits/${headSha}/statuses?per_page=100`, "--paginate", "--slurp",
     ])).flat();
-    const pages = JSON.parse(preflightGh(root, [
+    const pages = JSON.parse(gh([
       "api", `repos/${owner}/${name}/commits/${headSha}/check-runs?check_name=CodeRabbit&app_id=${CODERABBIT_APP_ID}&per_page=100`,
       "--paginate", "--slurp",
     ]));
@@ -1537,13 +1558,13 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
     facts.coderabbitBusy = byStatus === null || byRun === null ? null : byStatus || byRun;
   } catch { facts.coderabbitBusy = null; }
   try {
-    const pages = JSON.parse(preflightGh(root, [
+    const pages = JSON.parse(gh([
       "api", `repos/${owner}/${name}/commits/${headSha}/check-suites?per_page=100`, "--paginate", "--slurp",
     ]));
     facts.headPushedMs = headPushedAt(pages.flatMap((page) => page?.check_suites || []));
   } catch { /* NaN: never quiet */ }
   try {
-    const pages = JSON.parse(preflightGh(root, [
+    const pages = JSON.parse(gh([
       "api", `repos/${owner}/${name}/issues/${number}/timeline?per_page=100`, "--paginate", "--slurp",
     ]));
     facts.readyForReviewMs = readyForReviewAt(pages.flat());
@@ -1559,7 +1580,7 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
         "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
       ];
       if (cursor) args.push("-F", `after=${cursor}`);
-      return JSON.parse(preflightGh(root, args))?.data?.repository?.pullRequest;
+      return JSON.parse(gh(args))?.data?.repository?.pullRequest;
     });
     // Threads read for a different head than the one Sol would review prove nothing.
     if (String(node.headRefOid || "").toLowerCase() === headSha.toLowerCase()) {
@@ -1576,7 +1597,7 @@ export function readSolPreflightFacts(root, headSha, baseSha) {
   }
   // Read the PR's head once more LAST: a push during the reads above would leave
   // them describing a commit the PR no longer points at (Luna round 1).
-  const after = openPullsAtHead(root, owner, name, headSha);
+  const after = openPullsAtHead(gh, owner, name, headSha);
   if (!after) return { ...facts, unreadable: "could not re-read which pull request has this head" };
   if (after.length !== 1 || after[0].number !== number) {
     return { ...facts, unreadable: `#${number} no longer has this commit as its head (a push landed during the check)` };
