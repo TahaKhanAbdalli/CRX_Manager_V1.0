@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-10-27",
+    "generated_at": "2026-10-28",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261027160349",
+    "migrations_high_water": "20261028121259",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -451,6 +451,11 @@
       "20261027040000_quote_sent_price_lock",
       "20261027050000_price_sheet_warnings_and_approval",
       "20261027060000_last_charged_prices",
+      "20261027070000_email_type_purchase_order",
+      "20261027080000_stock_tables_governed_writes_only",
+      "20261027080100_number_generators_active_signed_in_only",
+      "20261027080200_commission_split_admin_only",
+      "20261027080300_notification_sender_recorded",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -8031,7 +8036,8 @@
       "is_read",
       "related_entity_type",
       "related_entity_id",
-      "created_at"
+      "created_at",
+      "created_by"
     ],
     "ocr_processing_queue": [
       "id",
