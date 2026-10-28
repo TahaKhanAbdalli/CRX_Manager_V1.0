@@ -993,6 +993,11 @@ for (const command of [
   "find . -name 'hold?*.json' -delete",
   "find . -name 'hold[-.]*.json' -delete",
   "rm hold{-a,-b}.json",
+  // A wildcard straight after "hold" needs no ".json" ending (Luna review, PR #1152).
+  "find . -name 'hold-*' -delete",
+  "rm hold*",
+  "cp /tmp/clear.json hold-*",
+  "rm hold.?*",
   "echo '{\"held\":false}' > hold-session-a.json",
   "printf x > hold.0123456789abcdef0123456789abcdef.json",
   "cp /tmp/snap.json applied-migrations.json",

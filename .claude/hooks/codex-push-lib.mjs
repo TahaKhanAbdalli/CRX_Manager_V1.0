@@ -666,14 +666,16 @@ export function reviewProofPathMentioned(value) {
   // AUTOPILOT.on flag, the applied-migrations snapshot, and every hold latch:
   // hold.json plus, since 2026-10-27, each session's hold-<session_id>.json and
   // hashed hold.<hash>.json (a bare `find . -name hold-x.json -delete` never
-  // names the state directory, so the names must carry it). Before,
+  // names the state directory, so the names must carry it). A wildcard
+  // straight after "hold" (`hold-*`, `hold*`) counts without the ".json"
+  // ending (Luna review, PR #1152). Before,
   // only the broad "any .claude mention plus a destructive word" rule covered
   // them, and `cp`/`tee`/`echo >` into them walked through; that broad rule is
   // now narrowed to the state directory itself, so the names carry the weight.
   // Their legitimate writers (write-apply-proofs, owner-approval-prompt,
   // autopilot-arm, refresh-applied-migrations, hold-latch-prompt) all write
   // internally and never name the file in a tool command.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold(?:[-.*?[{][^\s/"']*)?\.json)(?![\w.-])/i.test(text);
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold(?:[-.*?[{][^\s/"']*)?\.json|hold[-.]?(?:[*[{]|\?(?=\S))[^\s/"']*)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
