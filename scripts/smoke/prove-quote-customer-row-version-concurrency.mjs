@@ -708,7 +708,10 @@ function assertChildOwnershipContract() {
   assert.match(smoke, /non-owner sales rep quote save succeeded/, 'registered smoke must prove direct quote ownership');
   assert.match(smoke, /non-owner sales rep received another actor''s quote replay/, 'registered smoke must prove replay ownership');
   assert.match(smoke, /non-owner sales rep created another rep''s quote version/, 'registered smoke must prove quote-version ownership');
-  assert.match(smoke, /non-owner sales rep converted another rep''s quote/, 'registered smoke must prove quote-conversion ownership');
+  // Conversion is open to every active rep since 20261027080400; ownership stays on edit/version/restore.
+  assert.match(smoke, /authorized non-owner conversion did not keep the booking''s commission with its own recipient/, 'registered smoke must prove a non-owner conversion keeps the booking commission');
+  assert.match(smoke, /SMOKE_CONVERT_ROLLBACK/, 'registered smoke must roll the non-owner conversion back so later checks keep their fixture');
+  assert.match(smoke, /non-office conversion succeeded/, 'registered smoke must still refuse conversion by a non-office role');
   assert.match(smoke, /non-owner sales rep restored another rep''s quote/, 'registered smoke must prove quote-restore ownership');
   assert.match(smoke, /non-owner sales rep received another actor''s restore replay/, 'registered smoke must prove quote-restore replay ownership');
   assert.match(smoke, /cached token after later writes/, 'registered smoke must reject stale cached save tokens');

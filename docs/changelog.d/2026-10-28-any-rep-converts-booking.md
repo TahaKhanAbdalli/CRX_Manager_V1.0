@@ -20,6 +20,19 @@
   and Rep 2's attempt to edit the booking is still refused (`NOT_QUOTE_OWNER`). The other booking
   scenarios give the same results as main. Static test:
   `src/lib/anyRepConvertsBookingMigration.test.ts`.
+- Smoke chain: `scripts/smoke/smoke-save-quote-customer-row-version.sql` used to expect a
+  non-owner rep's conversion to be refused (`NOT_QUOTE_OWNER`), which would fail once this applies.
+  It now proves the new rule instead: the non-owner rep's Convert creates the order and accepts the
+  booking, the order carries the booking's own commission split with no salesperson set, and the one
+  commission row goes to the booking's rep. That step runs in a subtransaction that is rolled back
+  on purpose, so the booking, its token and the later checks are untouched. Editing, versioning and
+  restoring by a non-owner are still refused, and a non-office role still gets `INSUFFICIENT_ROLE`
+  on Convert. The companion `prove-quote-customer-row-version-concurrency.mjs` text checks follow
+  the new wording. The real-schema prover (`prove-quote-customer-row-version-real-schema.mjs`)
+  replays every migration, including this one, and runs the chain (local disposable replay, no
+  live access: `ROW_VERSION_REAL_SCHEMA_RESTORE_PASS` with this migration applied last). The step
+  first gives the booking a 100% split to its own rep, because the chain's earlier restore leaves
+  none.
 - Sweep fingerprint: the `convert_quote_to_order` actor-forgery pin in
   `scripts/db-invariant-sweeps/allowlist.json` is already tracked as stale (KNOWN_ISSUES KI-85,
   To-Do 11.12); re-pin it from the body this migration leaves (`p_performed_by` handling is

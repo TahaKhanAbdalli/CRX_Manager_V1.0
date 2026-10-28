@@ -15,6 +15,7 @@ DECLARE
   v_sent_at_first timestamptz; v_sent_at_after timestamptz; v_split_after jsonb;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_sections jsonb;
+  v_conv jsonb; v_conv_order uuid; v_booking_split jsonb; v_booking_token bigint; v_status_before text;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
   SELECT id INTO v_rep FROM public.profiles WHERE role = 'sales_rep' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -570,17 +571,66 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: quote-version ownership gate %', v_error;
     END IF;
   END;
+  -- Since 20261027080400 any active sales rep converts any booking (Mason, 2026-10-27), and the
+  -- order's commissions stay with the booking's own commission split, never the person converting.
+  -- Editing, versioning and restoring stay owner-only (checked above and below). The conversion
+  -- runs in a subtransaction that is rolled back on purpose, so the quote the later checks use is
+  -- left exactly as it was (same status, same token, no order, no replay key).
+  SELECT status INTO v_status_before FROM public.quotes WHERE id = v_quote;
   BEGIN
-    PERFORM public.convert_quote_to_order(
-      v_quote, v_rep, 'rv-convert-nonowner-' || v_suffix, v_quote_after);
-    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep converted another rep''s quote';
+    -- The restore above rewound the booking's split to a version saved before any split existed,
+    -- so give it the owner's 100% split here (admin-only edit; undone with the rollback below).
+    PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+    UPDATE public.quotes SET commission_split = v_split_after WHERE id = v_quote;
+    PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
+    SELECT commission_split, row_version INTO v_booking_split, v_booking_token FROM public.quotes WHERE id = v_quote;
+    IF v_booking_split#>>'{splits,0,recipient_user_id}' IS DISTINCT FROM v_admin::text THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: could not give the booking its own commission split: %', v_booking_split;
+    END IF;
+    v_conv := public.convert_quote_to_order(
+      v_quote, v_rep, 'rv-convert-nonowner-' || v_suffix, v_booking_token);
+    v_conv_order := NULLIF(v_conv->>'order_id', '')::uuid;
+    IF v_conv->>'status' IS DISTINCT FROM 'created' OR v_conv_order IS NULL
+       OR NOT EXISTS (SELECT 1 FROM public.orders WHERE id = v_conv_order AND quote_id = v_quote)
+       OR (SELECT status FROM public.quotes WHERE id = v_quote) IS DISTINCT FROM 'accepted' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: authorized non-owner conversion did not create the order: %', v_conv;
+    END IF;
+    -- Commission provenance: the order carries the booking's split, is not credited to the
+    -- converting rep as salesperson, and every commission row goes to the booking's own recipient.
+    IF (SELECT commission_split FROM public.orders WHERE id = v_conv_order) IS DISTINCT FROM v_booking_split
+       OR (SELECT salesman_id FROM public.orders WHERE id = v_conv_order) IS NOT NULL
+       OR (SELECT created_by FROM public.quotes WHERE id = v_quote) IS DISTINCT FROM v_admin
+       OR (SELECT count(*) FROM public.commissions WHERE order_id = v_conv_order) <> 1
+       OR NOT EXISTS (SELECT 1 FROM public.commissions
+                       WHERE order_id = v_conv_order AND recipient_user_id = v_admin AND split_percentage = 100)
+       OR EXISTS (SELECT 1 FROM public.commissions
+                   WHERE order_id = v_conv_order AND recipient_user_id IS DISTINCT FROM v_admin) THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: authorized non-owner conversion did not keep the booking''s commission with its own recipient: order split %, expected %, salesman %, commissions %',
+        (SELECT commission_split FROM public.orders WHERE id = v_conv_order), v_booking_split,
+        (SELECT salesman_id FROM public.orders WHERE id = v_conv_order),
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object('recipient_user_id', recipient_user_id, 'pct', split_percentage)), '[]'::jsonb)
+           FROM public.commissions WHERE order_id = v_conv_order);
+    END IF;
+    RAISE EXCEPTION 'SMOKE_CONVERT_ROLLBACK';
   EXCEPTION WHEN OTHERS THEN
     v_error := SQLERRM;
     IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_error <> 'NOT_QUOTE_OWNER' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: quote-conversion ownership gate %', v_error;
+    IF v_error <> 'SMOKE_CONVERT_ROLLBACK' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: authorized non-owner conversion raised %', v_error;
     END IF;
   END;
+  IF (SELECT status FROM public.quotes WHERE id = v_quote) IS DISTINCT FROM v_status_before
+     OR (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after
+     OR EXISTS (SELECT 1 FROM public.orders WHERE quote_id = v_quote)
+     OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key = 'rv-convert-nonowner-' || v_suffix) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the rolled-back non-owner conversion left the quote, an order or its replay key behind: status %, token % (expected %), orders %, keys %',
+      (SELECT status FROM public.quotes WHERE id = v_quote),
+      (SELECT row_version FROM public.quotes WHERE id = v_quote), v_quote_after,
+      (SELECT count(*) FROM public.orders WHERE quote_id = v_quote),
+      (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = 'rv-convert-nonowner-' || v_suffix);
+  END IF;
   BEGIN
     PERFORM public.restore_quote_version(
       v_quote,
@@ -624,6 +674,9 @@ BEGIN
   -- catalog that prove-quote-customer-row-version-real-schema.mjs replays.
   BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'sent', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM NOT IN ('INSUFFICIENT_ROLE', 'Not authorized to save quotes') THEN RAISE EXCEPTION 'SMOKE_FAIL: quote role gate %', SQLERRM; END IF; END;
+  -- Opening conversion to every rep did not open it to other roles.
+  BEGIN PERFORM public.convert_quote_to_order(v_quote, v_nonoffice, 'rv-convert-nonoffice-' || v_suffix, v_quote_after); RAISE EXCEPTION 'SMOKE_FAIL: non-office conversion succeeded';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'INSUFFICIENT_ROLE' THEN RAISE EXCEPTION 'SMOKE_FAIL: conversion role gate %', SQLERRM; END IF; END;
 
   -- Keep fixtures addressable after this privileged setup so the following
   -- authenticated-role block can prove child writes are RPC-only.
