@@ -71,12 +71,16 @@ for (const p of [
   "make the gate stop refusing database writes",
   "make the gate stop blocking live SQL writes",
   "Make the job stop reviewing and sending invoices",
+  "Make the job stop reviewing, sending invoices, and updating records",
+  "make the gate stop refusing, deleting rows",
   "add a setting to stop the nightly sweep",
   "set X=0 in my settings to stop the customer exports",
 ]) ok(isHoldPhrase(p), `off the safe list latches: ${p}`);
 for (const p of [
   "the hook should stop warning on every commit",
   "make the gate stop flagging docs",
+  "make the gate stop refusing, warning, and flagging",
+  "make the local merge gate stop refusing a branch that is behind main, record the Git result",
   "change the config to stop the duplicate approval prompts",
 ]) ok(!isHoldPhrase(p), `on the safe list skips: ${p}`);
 ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");

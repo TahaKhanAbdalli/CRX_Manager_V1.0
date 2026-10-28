@@ -133,11 +133,23 @@ const HARMLESS_TAIL_WORDS = new Set([...HARMLESS_THING_WORDS, "on", "about", "fo
   "every", "each", "all", "the", "a", "an", "my", "our", "this", "that", "these", "those", "any", "again", "so",
   "much", "often", "anymore", "now", "docs", "doc", "file", "files", "commit", "commits", "red", "green",
   "failing", "failed", "ci", "build", "builds", "test", "tests", "branch", "branches", "is", "are", "behind",
-  "ahead", "main", "stale", "out", "date"]);
+  "ahead", "main", "stale", "out", "date", "and", "or", ...HARMLESS_ING]);
 // The words after the stop, up to the end of its clause; the first is the word right after it.
+// A comma ends it unless a list of activities goes on ("stop reviewing, sending
+// invoices, and updating records": Codex App review, PR #1152), so a part that
+// starts with an -ing word, alone or after "and" / "or", is read too. Only a
+// bounded window is read, so a huge prompt stays fast (Luna review).
 function wordsAfter(text, end) {
-  return text.slice(end).split(/[.!?;:,\n\r]|\s-\s|--/)[0].split(/\s+/)
-    .map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean);
+  const norm = (s) => s.split(/\s+/).map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean);
+  const [first, ...rest] = text.slice(end, end + 1000).split(/[.!?;:\n\r]|\s-\s|--/)[0].split(",");
+  const words = norm(first);
+  for (const part of rest) {
+    const w = norm(part);
+    const lead = w[0] === "and" || w[0] === "or" ? w[1] : w[0];
+    if (!lead || lead.length < 5 || !lead.endsWith("ing")) break;
+    words.push(...w);
+  }
+  return words;
 }
 const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
   "a", "an", "any", "all", "every", "each"]);
