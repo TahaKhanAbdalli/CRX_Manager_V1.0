@@ -1,8 +1,8 @@
 // Pure helpers for the stop/pause/scope "hold latch" (hold-latch-*.mjs).
 //
 // Safety model: the latch only affects tool calls between Mason saying "stop"
-// and his NEXT message in that same session. Any non-hold prompt there clears
-// it (another session's messages never touch it), so it can never get stuck
+// and his NEXT message in that same session. Any non-hold prompt he types there
+// clears it (machine text and another session's messages never do), so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
 import { createHash } from "node:crypto";
@@ -47,7 +47,6 @@ export function holdStatePath(projectDir, sessionId) {
 // in the set so "does stop/pause still work?" keeps matching. Path forms are
 // still caught through the "-" or the ".ext".
 const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bstop\b(?![-_]|\.[A-Za-z0-9])|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bpause\b(?![-_]|\.[A-Za-z0-9])|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
-const HOLD_SCAN_RE = new RegExp(HOLD_RE.source, "gi");
 
 // An affirmative "carry on" — not required to clear (any non-hold prompt clears),
 // but used to phrase the confirmation.
@@ -60,149 +59,7 @@ const RESUME_RE = /\b(resume|go ahead|continue|keep going|proceed|start (buildin
 // a subagent's <~agent-message> hand-back (2026-09-25). If you add a
 // caller, strip it there too — prompt-hooks.test.mjs asserts the hook still does.
 export function isHoldPhrase(prompt) {
-  const text = String(prompt || "");
-  for (const m of text.matchAll(HOLD_SCAN_RE)) {
-    const word = m[0].toLowerCase();
-    if ((word === "stop" || word === "pause") && isDescriptiveStop(text, m.index, m.index + word.length)) continue;
-    return true;
-  }
-  return false;
-}
-
-// "stop" / "pause" used as an ordinary word rather than an order (2026-10-27).
-// Two shapes latched holds Mason never asked for:
-//   - a thing that should stop doing something: "make the gate stop refusing",
-//     "the hook should pause retrying" — the word is followed by an -ing verb
-//     and comes right after a modal (should, will …) or later than "make";
-//   - a goal: "set X=0 in my user settings to stop the per-commit security
-//     reviews" — "to stop" plus a determiner, in a clause that names a setting
-//     or assigns a value with "=".
-// Either is skipped only when the two words in front of it in the same clause are
-// not addressing ones and no earlier word in that clause names a person or a
-// want, so "stop pushing", "you should stop pushing", "ok stop", "I need the
-// agent to stop the deploy" and a stop right after "." or "," still latch.
-// Both shapes also need what stops to be on the safe list below.
-const ADDRESS_WORDS = new Set(["please", "pls", "ok", "okay", "so", "just", "now", "and", "then", "but", "hey",
-  "you", "we", "lets", "let's", "us", "i", "to", "all", "everyone", "everybody", "guys", "claude", "codex"]);
-// Before "to stop the …", these make it Mason's own want or an order to someone;
-// the reminder words cover "make sure / remember / don't forget to stop the deploy"
-// (Luna review, PR #1152).
-const WANT_WORDS = new Set(["want", "wants", "wanted", "need", "needs", "have", "has", "had", "got", "gotta",
-  "going", "time", "ready", "like", "wish", "ask", "asked", "tell", "told", "me",
-  "sure", "remember", "forget", "try", "careful"]);
-// Anywhere earlier in the same clause, these make it an order or Mason's own
-// want ("I need the agent to stop the deploy"), so the stop latches (Luna
-// review, PR #1152). Filler such as "and" / "so" is deliberately absent:
-// "…, and set X=0 in my user settings to stop the reviews" stays descriptive.
-// Agents and sessions, singly or collectively ("All agents must stop pushing"),
-// are addressees, not hooks or gates being described (Codex App review, PR #1152).
-const ACTOR_WORDS = new Set(["i", "you", "we", "us", "me", "lets", "let's", "everyone", "everybody", "guys",
-  "claude", "codex", "agent", "agents", "subagent", "subagents", "session", "sessions", "helper", "helpers",
-  "bot", "bots", "worker", "workers", "team", "both", ...WANT_WORDS]);
-const MODAL_WORDS = new Set(["should", "would", "could", "will", "can", "must", "might", "may", "shall",
-  "shouldnt", "wouldnt", "couldnt", "wont", "cant", "shouldn't", "wouldn't", "couldn't", "won't", "can't"]);
-const CAUSATIVE_WORDS = new Set(["make", "makes", "made", "making"]);
-const THING_WORDS = new Set(["hook", "hooks", "gate", "gates", "guard", "guards", "check", "checks", "test", "tests",
-  "script", "scripts", "job", "jobs", "workflow", "workflows", "build", "builds", "latch", "ci", "linter", "monitor",
-  "loop", "cron", "pipeline", "sweep", "reviewer"]);
-// A flag or switch is a tool you use to stop something ("Use the emergency flag
-// to stop the deploy" latches: Sol review, PR #1152); only a settings file is a
-// place you change, and only a setting verb changes it.
-const CONFIG_WORDS = new Set(["setting", "settings", "config", "configs", "configuration", "env"]);
-const SETTING_VERBS = new Set(["set", "change", "update", "edit", "turn", "toggle", "disable", "enable",
-  "configure", "add", "remove", "put"]);
-// Matched anywhere in the word, so "force-pushing" and "re-deploying" count.
-// Destructive stems are here too, so "stop retrying the deletes" latches.
-const OUTWARD_STEM_RE = /(?:push|deploy|merg|publish|releas|ship|launch|migrat|rollout|apply|applie|applying|delet|drop|remov|truncat|wipe|wiping|purg|overwrit|eras|destr|revert|rewrit|forc)/;
-// The safe list (Mason, 2026-10-27): a descriptive stop is skipped only when
-// what stops is one of a hook's own harmless behaviours named here. Any other
-// verb or thing latches, so a missing word can only add a hold, never lose one
-// ("the job should stop deleting customer records" latches: Sol review, PR #1152).
-const HARMLESS_ING = new Set(["refusing", "retrying", "blocking", "warning", "flagging", "nagging", "prompting",
-  "asking", "denying", "rejecting", "complaining", "erroring", "failing", "looping", "latching", "misfiring",
-  "reporting", "rerunning", "reviewing"]);
-const HARMLESS_THING_WORDS = new Set(["review", "reviews", "check", "checks", "prompt", "prompts", "warning",
-  "warnings", "nag", "nags", "reminder", "reminders", "notification", "notifications", "popup", "popups",
-  "retry", "retries", "percommit", "security", "automatic", "extra", "duplicate", "repeated", "lint", "codex",
-  "luna", "hook", "hooks", "gate", "guard", "permission", "approval"]);
-// Whatever follows a safe verb must be harmless too: "stop retrying database
-// writes" and "stop refusing database writes" latch, "stop retrying on a red
-// check" and "stop refusing a branch that is behind main" do not (Codex App and
-// Luna review, PR #1152).
-const HARMLESS_TAIL_WORDS = new Set([...HARMLESS_THING_WORDS, "on", "about", "for", "at", "in", "of", "when",
-  "every", "each", "all", "the", "a", "an", "my", "our", "this", "that", "these", "those", "any", "again", "so",
-  "much", "often", "anymore", "now", "docs", "doc", "file", "files", "commit", "commits", "red", "green",
-  "failing", "failed", "ci", "build", "builds", "test", "tests", "branch", "branches", "is", "are", "behind",
-  "ahead", "main", "stale", "out", "date", "and", "or", ...HARMLESS_ING]);
-// The words after the stop, up to the end of its clause; the first is the word right after it.
-// Read to the end of the SENTENCE, through commas: a list can carry a harmful
-// item after any comma ("stop reviewing, sending invoices, and updating records",
-// "to stop the reviews, invoice updates, and database writes": Codex App review,
-// PR #1152), so every word up to the full stop must be safe. Only a bounded
-// window is read, so a huge prompt stays fast (Luna review).
-function wordsAfter(text, end) {
-  return text.slice(end, end + 1000).split(/[.!?;\n\r]/)[0].split(/\s+/)
-    .map((w) => w.toLowerCase().replace(/[^a-z]/g, "")).filter(Boolean);
-}
-const DETERMINERS = new Set(["the", "this", "that", "these", "those", "my", "our", "your", "its", "their",
-  "a", "an", "any", "all", "every", "each"]);
-
-function isDescriptiveStop(text, start, end) {
-  // Every line break ends a clause, and so does an earlier stop word: otherwise
-  // "make the gate stop refusing" lends its make and gate to a real "stop
-  // pushing" on the next line (Luna review, PR #1152). Only a bounded window is
-  // scanned, so a huge prompt full of stop words stays linear; a clause longer
-  // than the window is not judged descriptive, and the stop latches.
-  const from = Math.max(0, start - 1000);
-  const parts = text.slice(from, start).split(/[.!?;:,\n\r\v\f\u2028\u2029\u0085—–]|\s-\s|--|\b(?:stop|pause|hold)\b/i);
-  if (from > 0 && parts.length === 1) return false;
-  const clause = parts.pop();
-  const before = clause.split(/\s+/).map((w) => w.toLowerCase().replace(/’/g, "'").replace(/[^a-z']/g, "")).filter(Boolean);
-  // "re-running" reads as one word; a contraction counts as its base word, so
-  // "You'd better stop pushing" is addressed (Luna review, PR #1152).
-  const next = (/^[ \t]+([A-Za-z]+(?:-[A-Za-z]+)*)/.exec(text.slice(end)) || [])[1]?.toLowerCase().replace(/-/g, "") || "";
-  if (before.length < 2 || before.some((w) => ACTOR_WORDS.has(w) || ACTOR_WORDS.has(w.replace(/'.*$/, "")))) return false;
-  // Stopping an outward action is always an order, whatever the phrasing: the
-  // guard exists for pushes, deploys, merges and releases, so "Make the CI job
-  // stop deploying now" and "Change the config to stop the deployment" latch
-  // (Sol review, PR #1152). The skips below are for a hook's own behaviour.
-  const after = text.slice(end, end + 200).split(/\s+/).filter(Boolean).slice(0, 6).map((w) => w.toLowerCase().replace(/[^a-z]/g, ""));
-  if (after.some((w) => OUTWARD_STEM_RE.test(w))) return false;
-  const [twoBack, oneBack] = before.slice(-2);
-  // The -ing form is skipped only when the clause positively describes something:
-  // a modal right before it ("the hook should pause retrying") or a causative
-  // earlier ("make the gate stop refusing"). An introductory phrase alone ("At
-  // this point stop pushing") is still an order (Codex App review, PR #1152).
-  if (next.length > 4 && next.endsWith("ing")) {
-    if (!HARMLESS_ING.has(next)) return false;
-    const tail = wordsAfter(text, end).slice(1);
-    if (tail.length > 6 || !tail.every((w) => HARMLESS_TAIL_WORDS.has(w))) return false;
-    // The causative must govern this stop: "make [the] <machine part> stop",
-    // with the machine part right before it. "After making the build green stop
-    // pushing" names a prerequisite, not the thing stopping (Codex App, PR #1152).
-    const causes = THING_WORDS.has(oneBack) && before.slice(-6, -1).some((w) => CAUSATIVE_WORDS.has(w));
-    if (!MODAL_WORDS.has(oneBack) && !causes) return false;
-    // ...and a machine part is the one doing it: the subject right before the
-    // modal ("the hook should stop"), so an order to people or agents in any
-    // wording still latches, even beside a machine word ("The CI maintainer
-    // should stop pushing": Codex App and Luna review, PR #1152).
-    if (!causes && !THING_WORDS.has(twoBack)) return false;
-    return !ADDRESS_WORDS.has(twoBack) && !ADDRESS_WORDS.has(oneBack);
-  }
-  // "to stop the …" is skipped only as a configuration goal: the clause names a
-  // setting or assigns a value ("set X=0 in my user settings to stop the
-  // reviews"). A task or reminder ("Your next task is to stop the deploy", "Use
-  // the kill switch to stop the deploy") still latches (Codex App review, PR #1152).
-  if (oneBack === "to" && DETERMINERS.has(next)) {
-    if (!clause.includes("=") && !before.some((w) => CONFIG_WORDS.has(w))) return false;
-    if (!before.some((w) => SETTING_VERBS.has(w))) return false;
-    // Every word of what is stopped, up to the end of the clause, must be on the
-    // safe list: "the per-commit security reviews" skips, "the nightly export" latches.
-    const thing = wordsAfter(text, end).slice(1);
-    if (thing.length < 1 || thing.length > 6 || !thing.every((w) => HARMLESS_THING_WORDS.has(w))) return false;
-    return !ADDRESS_WORDS.has(twoBack) && !WANT_WORDS.has(twoBack);
-  }
-  return false;
+  return HOLD_RE.test(String(prompt || ""));
 }
 export function isResumePhrase(prompt) {
   return RESUME_RE.test(String(prompt || ""));

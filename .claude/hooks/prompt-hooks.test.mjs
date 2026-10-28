@@ -785,10 +785,11 @@ rmSync(tmpProj, { recursive: true, force: true });
     "  BLOCKED. I changed no files.\n  \n  **What stopped me.** A harness hook refused every edit; stop hooks ran.\n</agent-message>";
   const CASES = [
     // [label, prompt, latches?]
-    ["make the gate stop refusing", "make the gate stop refusing", false],
-    ["the hook should pause retrying", "the hook should pause retrying", false],
+    // Every halt word Mason types latches, even a descriptive one (Mason, 2026-10-27).
+    ["make the gate stop refusing", "make the gate stop refusing", true],
+    ["the hook should pause retrying", "the hook should pause retrying", true],
     ["Mason's settings goal (the real 2026-10-27 message)",
-      "Carry on: merge 1145, and set ENABLE_COMMIT_REVIEW=0 in my user settings to stop the per-commit security reviews.", false],
+      "Carry on: merge 1145, and set ENABLE_COMMIT_REVIEW=0 in my user settings to stop the per-commit security reviews.", true],
     ["a CI-monitor notice", "<ci-monitor-event>CI failed on PR #9. stop and fix it</ci-monitor-event>", false],
     ["a relayed (neutralised) CI-monitor notice", "<\\~ci-monitor-event>CI failed. stop<\\~/ci-monitor-event>", false],
     ["a bare-tag subagent hand-back", BARE_TAG_HANDBACK, false],

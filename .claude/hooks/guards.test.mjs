@@ -42,52 +42,12 @@ ok(isHoldPhrase("lets just stop here, cancel all background work"), "stop+cancel
 ok(isHoldPhrase("pause this loop"), "pause");
 ok(isHoldPhrase("im just scoping a future session, dont build yet"), "scope-only");
 ok(!isHoldPhrase("build me the invoices page"), "normal build is not a hold");
-// 2026-10-27: a descriptive stop / pause is skipped; an addressed one still latches.
-ok(!isHoldPhrase("the hook should stop retrying on a red check"), "descriptive stop + -ing is not a hold");
-// Stopping an outward action always latches, whatever the phrasing (Sol, PR #1152).
-for (const p of ["Make the CI job stop deploying now", "Change the config to stop the deployment",
-  "the hook should stop pushing to main", "make the gate stop merging", "set FOO=1 in my settings to stop the release",
-  "update the settings to stop the migration", "the hook should stop force-pushing to main",
-  "make the job stop re-deploying"]) {
-  ok(isHoldPhrase(p), `stopping an outward action latches: ${p}`);
+// Every halt word Mason types latches, even phrased as a description (Mason, 2026-10-27:
+// PR #1152 dropped the descriptive-word guessing; only machine and helper text is ignored).
+for (const p of ["make the gate stop refusing", "the hook should pause retrying",
+  "set ENABLE_COMMIT_REVIEW=0 in my user settings to stop the per-commit security reviews"]) {
+  ok(isHoldPhrase(p), `a typed halt word latches: ${p}`);
 }
-// An order to agents or sessions, even collectively, is not a description (Codex App review, PR #1152).
-for (const p of ["the agent should stop pushing to main", "All agents must stop pushing", "Both agents must stop deploying",
-  "every session should stop merging", "the subagents must stop running migrations",
-  "the deployers must stop pushing", "the new folks should stop merging"]) {
-  ok(isHoldPhrase(p), `an order to agents latches: ${p}`);
-}
-ok(!isHoldPhrase("add a setting to stop the security checks"), "a safe-list goal ('to stop the …') is not a hold");
-// The safe list (Mason, 2026-10-27): only a hook's own harmless behaviour skips;
-// anything else stopped latches (Sol review, PR #1152).
-for (const p of [
-  "the job should stop deleting customer records now",
-  "make the gate stop dropping tables",
-  "the hook should stop sending invoices",
-  "the hook should stop retrying the deletes",
-  "the hook should stop retrying at some point before deploying",
-  "Make the CI job stop retrying database writes",
-  "Make the job stop retrying the invoice updates",
-  "make the gate stop refusing database writes",
-  "make the gate stop blocking live SQL writes",
-  "Make the job stop reviewing and sending invoices",
-  "Make the job stop reviewing, sending invoices, and updating records",
-  "make the gate stop refusing, deleting rows",
-  "Change the settings to stop the reviews, invoice updates, and database writes",
-  "make the local merge gate stop refusing a branch that is behind main, record the change, and ship it",
-  "add a setting to stop the nightly sweep",
-  "set X=0 in my settings to stop the customer exports",
-]) ok(isHoldPhrase(p), `off the safe list latches: ${p}`);
-for (const p of [
-  "the hook should stop warning on every commit",
-  "make the gate stop flagging docs",
-  "make the gate stop refusing, warning, and flagging",
-  "change the config to stop the duplicate approval prompts",
-]) ok(!isHoldPhrase(p), `on the safe list skips: ${p}`);
-ok(isHoldPhrase("we should stop pushing"), "an addressed stop + -ing still latches");
-ok(isHoldPhrase("claude should pause retrying"), "naming the agent still latches");
-ok(isHoldPhrase("I want to stop the merge"), "Mason's own want still latches");
-ok(isHoldPhrase("I need the agent to stop the deploy"), "an order naming someone else still latches");
 // Per-session hold files (2026-10-27): only a MISSING id shares hold.json.
 eq(path.basename(holdStatePath("p", undefined)), "hold.json", "no session id → hold.json");
 eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hold.json");
@@ -104,56 +64,6 @@ ok(hashedName(-0) !== hashedName(0), "the numbers -0 and 0 get different files")
 ok(new Set([Infinity, -Infinity, NaN].map(hashedName)).size === 3, "the infinities and NaN get different files");
 ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\n")) && /^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\r\n")),
   "an id with a trailing line break is hashed, never used as a file name");
-ok(isHoldPhrase("I think the agent should stop pushing"), "a person earlier in the clause still latches");
-ok(isHoldPhrase("the gate should stop refusing. also stop"), "a second, plain stop still latches");
-ok(isHoldPhrase("You'd better stop pushing"), "a contracted person (you'd) still latches");
-ok(isHoldPhrase("we’re going to stop deploying"), "a curly-apostrophe contraction (we’re) still latches");
-ok(!isHoldPhrase("the hook should stop re-running checks"), "a hyphenated -ing verb is descriptive");
-ok(!isHoldPhrase("make the gate stop re-running checks"), "a descriptive stop before a hyphenated -ing verb is skipped");
-// A flag, switch or settings page used as a tool is an order, not a config goal (Sol, PR #1152).
-for (const p of ["Use the emergency flag to stop the deploy", "Flip the kill flag to stop the deploy",
-  "Use the settings page to stop the deploy", "Open the config to stop the deploy"]) {
-  ok(isHoldPhrase(p), `tool-phrased stop latches: ${p}`);
-}
-ok(!isHoldPhrase("set X=0 in my user settings to stop the per-commit security reviews"), "a setting change is still descriptive");
-// A causative only exempts the stop it governs (Codex App, PR #1152).
-for (const p of ["After making the build green stop pushing", "Make the build green, then stop pushing",
-  "After you make the gate pass stop deploying", "making the checks pass stop merging"]) {
-  ok(isHoldPhrase(p), `a prerequisite causative does not hide the order: ${p}`);
-}
-for (const p of ["make the gate stop refusing", "Please make the CI job stop retrying", "made the hook stop blocking"]) {
-  ok(!isHoldPhrase(p), `a governed causative stays descriptive: ${p}`);
-}
-// The machine part must be the modal's subject (Luna, PR #1152).
-for (const p of ["The CI maintainer should stop pushing", "the build engineer must stop deploying", "our hook author should stop merging"]) {
-  ok(isHoldPhrase(p), `a person beside a machine word still latches: ${p}`);
-}
-ok(!isHoldPhrase("the CI job should stop retrying"), "a machine subject before the modal stays descriptive");
-// "it" names no machine part (Luna, PR #1152).
-ok(isHoldPhrase("It should stop pushing to main"), "a bare 'it' subject does not make a stop descriptive");
-// A clause longer than the scan window latches; many stops stay fast (Luna, PR #1152).
-ok(isHoldPhrase(`make the gate ${"word ".repeat(300)}should stop pushing`), "an over-long clause latches");
-{
-  const t0 = Date.now();
-  isHoldPhrase("make the gate stop refusing ".repeat(20000));
-  ok(Date.now() - t0 < 2000, "a huge prompt full of stop words is checked quickly");
-}
-ok(!isHoldPhrase("change the setting to stop the codex reviews"), "a setting verb plus a settings word is descriptive");
-// A descriptive stop cannot lend its subject to a real stop after any line break or with none (Luna, PR #1152).
-for (const sep of ["\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f", " "]) {
-  ok(isHoldPhrase(`make the gate stop refusing${sep}stop pushing`), `a real stop after ${JSON.stringify(sep)} still latches`);
-}
-for (const p of ["stop re-running checks", "Great work. Stop re-running checks", "ok stop re-running checks",
-  "please stop re-running checks", "claude, stop re-running checks", "you stop re-running checks",
-  "please wait and stop pushing", "finish the build and stop pushing",
-  "Make sure to stop the deploy", "remember to stop the deploy", "don't forget to stop the deploy",
-  "be careful to stop the migration", "try to stop the push",
-  "At this point stop pushing", "After this run stop pushing", "for now stop deploying",
-  "with that done stop re-running checks",
-  "Your next task is to stop the deploy", "Be certain to stop the deploy", "Use the kill switch to stop the deploy",
-  "the plan is to stop the migration"]) {
-  ok(isHoldPhrase(p), `an imperative stop before a hyphenated -ing verb latches: ${p}`);
-}
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).
 eq(holdDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "warn", "edit source warns under hold");
