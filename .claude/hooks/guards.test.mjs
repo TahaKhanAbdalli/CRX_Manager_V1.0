@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold, holdDecision } from "./hold-latch-lib.mjs";
+import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold, holdDecision, holdStatePath } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
 import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, contentIsRisky, proofValid, programAssembledAtRuntime } from "./codex-push-lib.mjs";
 import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
@@ -42,6 +42,28 @@ ok(isHoldPhrase("lets just stop here, cancel all background work"), "stop+cancel
 ok(isHoldPhrase("pause this loop"), "pause");
 ok(isHoldPhrase("im just scoping a future session, dont build yet"), "scope-only");
 ok(!isHoldPhrase("build me the invoices page"), "normal build is not a hold");
+// Every halt word Mason types latches, even phrased as a description (Mason, 2026-10-27:
+// PR #1152 dropped the descriptive-word guessing; only machine and helper text is ignored).
+for (const p of ["make the gate stop refusing", "the hook should pause retrying",
+  "set ENABLE_COMMIT_REVIEW=0 in my user settings to stop the per-commit security reviews"]) {
+  ok(isHoldPhrase(p), `a typed halt word latches: ${p}`);
+}
+// Per-session hold files (2026-10-27): only a MISSING id shares hold.json.
+eq(path.basename(holdStatePath("p", undefined)), "hold.json", "no session id → hold.json");
+eq(path.basename(holdStatePath("p", "")), "hold.json", "empty session id → hold.json");
+eq(path.basename(holdStatePath("p", null)), "hold.json", "null session id → hold.json");
+eq(path.basename(holdStatePath("p", "abc-123")), "hold-abc-123.json", "a plain id names the file as-is");
+const hashedName = (id) => path.basename(holdStatePath("p", id));
+ok(new Set([[-0], [0], [Infinity], [null], ["0"]].map(hashedName)).size === 5, "nested -0, 0, Infinity, null and \"0\" get different files");
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("../x")), "an unusual id is hashed");
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName(0)), "a falsy but present id still gets its own file");
+ok(hashedName(0) !== hashedName("0"), "the number 0 and the string \"0\" get different files");
+ok(hashedName("ABC") !== hashedName("abc"), "ids differing only in case get different files on a case-insensitive disk");
+ok(hashedName("\uD800") !== hashedName("\uD801"), "two malformed (lone-surrogate) ids get different files");
+ok(hashedName(-0) !== hashedName(0), "the numbers -0 and 0 get different files");
+ok(new Set([Infinity, -Infinity, NaN].map(hashedName)).size === 3, "the infinities and NaN get different files");
+ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\n")) && /^hold\.[0-9a-f]{32}\.json$/.test(hashedName("sess\r\n")),
+  "an id with a trailing line break is hashed, never used as a file name");
 ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 // Local, reversible work WARNS under a hold; outward actions stay denied (2026-10-18).
 eq(holdDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "warn", "edit source warns under hold");

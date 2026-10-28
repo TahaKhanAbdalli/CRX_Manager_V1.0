@@ -41,6 +41,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isAppRepoPath } from "./app-repo-identity.mjs";
 
 export const CODERABBIT_SKIP_PURPOSE = "crx-coderabbit-skip-v2";
 export const CODERABBIT_SKIP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -149,10 +150,13 @@ const usablePr = (n) => Number.isInteger(n) && n > 0;
 // A waiver names a PR NUMBER, and numbers repeat across repositories, so it
 // only ever covers this repository's PRs. A merge gate passes the owner/name
 // GitHub returned for the PR; any other repository gets no waiver (Codex App
-// P2 on #1035: `gh pr merge -R other/repo 1018`).
-export const CODERABBIT_SKIP_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
-export const isSkipRepository = (owner, name) =>
-  `${String(owner ?? "")}/${String(name ?? "")}`.toLowerCase() === CODERABBIT_SKIP_REPOSITORY.toLowerCase();
+// P2 on #1035: `gh pr merge -R other/repo 1018`). "This repository" is the app
+// repo under either owner (app-repo-identity.mjs), so the move to the
+// `croprxsolutions` organization keeps a waiver working. The address below is only
+// the one printed in instructions (GitHub redirects it after the move); it is not
+// exported, so nothing can use it as the identity check.
+const CODERABBIT_SKIP_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
+export const isSkipRepository = (owner, name) => isAppRepoPath(`${String(owner ?? "")}/${String(name ?? "")}`);
 
 /**
  * The PR number a waiver may be looked up for, from GitHub's own answer for the

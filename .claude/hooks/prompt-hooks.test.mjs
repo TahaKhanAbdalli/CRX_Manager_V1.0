@@ -764,4 +764,114 @@ rmSync(tmpProj, { recursive: true, force: true });
   ok(existsSync(holdFile), "automation prompt does not clear Mason's hold");
   rmSync(dir, { recursive: true, force: true });
 }
+
+// ── 2026-10-27: narrowing the latch (machine notices, ordinary words, sessions) ──
+{
+  const runHold = (dir, prompt, sessionId) => {
+    const r = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+      input: JSON.stringify(sessionId === undefined ? { prompt } : { prompt, session_id: sessionId }),
+      encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    eq(r.status, 0, `hold-latch-prompt exits 0: ${JSON.stringify(prompt.slice(0, 40))}`);
+    return r;
+  };
+  const holdFiles = (dir) => {
+    try { return readdirSync(path.join(dir, ".claude", "session-state")).filter((f) => /^hold/.test(f)); } catch { return []; }
+  };
+  // The hand-back exactly as the hook received it twice on 2026-10-27: the open
+  // tag first, no "Another Claude session sent a message:" preamble.
+  const BARE_TAG_HANDBACK = `<agent-message from="a8c04b3c3db27dbbf">\n${HANDBACK_FRAME}\n` +
+    "  [harness: subagent output matched instruction-shaped pattern(s): settings-json.]\n  \n" +
+    "  BLOCKED. I changed no files.\n  \n  **What stopped me.** A harness hook refused every edit; stop hooks ran.\n</agent-message>";
+  const CASES = [
+    // [label, prompt, latches?]
+    // Every halt word Mason types latches, even a descriptive one (Mason, 2026-10-27).
+    ["make the gate stop refusing", "make the gate stop refusing", true],
+    ["the hook should pause retrying", "the hook should pause retrying", true],
+    ["Mason's settings goal (the real 2026-10-27 message)",
+      "Carry on: merge 1145, and set ENABLE_COMMIT_REVIEW=0 in my user settings to stop the per-commit security reviews.", true],
+    ["a CI-monitor notice", "<ci-monitor-event>CI failed on PR #9. stop and fix it</ci-monitor-event>", false],
+    ["a relayed (neutralised) CI-monitor notice", "<\\~ci-monitor-event>CI failed. stop<\\~/ci-monitor-event>", false],
+    ["a bare-tag subagent hand-back", BARE_TAG_HANDBACK, false],
+    ["stop", "stop", true],
+    ["stop pushing", "stop pushing", true],
+    ["you should stop pushing", "you should stop pushing", true],
+    ["ok stop, do not continue", "ok stop, do not continue", true],
+    ["pause", "pause", true],
+    ["hold on", "hold on", true],
+    ["an order to stop something", "I need you to stop the deploy", true],
+    ["a stop opening a new sentence", "Great work. Stop pushing", true],
+    ["Mason's stop typed after a bare-tag hand-back", `${BARE_TAG_HANDBACK}\nstop now`, true],
+    // Luna review, PR #1152.
+    ["a relayed CI-monitor notice beside Mason's words", "<\\~ci-monitor-event>CI failed; stop and fix it<\\~/ci-monitor-event>\nCarry on with the approved work.", false],
+    ["Mason's stop beside a relayed CI-monitor notice", "<\\~ci-monitor-event>CI failed<\\~/ci-monitor-event>\nstop pushing", true],
+    ["a look-alike tag name is not a CI-monitor notice", "<ci-monitor-event-debug>stop pushing</ci-monitor-event>", true],
+    ["Mason's stop typed after a CI-monitor notice", "<ci-monitor-event>CI failed</ci-monitor-event>\nstop pushing", true],
+    ["Mason's stop between two CI-monitor notices",
+      "<ci-monitor-event>a</ci-monitor-event>\nstop\n<ci-monitor-event>b</ci-monitor-event>", true],
+    ["an order naming someone else", "I need the agent to stop the deploy", true],
+    // Sol, PR #1152: a neutralised tag Mason mentions never makes his whole message machine text.
+    ["Mason's stop beside a mentioned neutralised tag", "Stop pushing. I saw <~heartbeat> in the notice.", true],
+    ["Mason's stop beside a backslashed neutralised tag", "Stop pushing. I saw <\\~task-notification> there.", true],
+    ["Mason's stop after a mentioned unclosed neutralised CI tag", "I saw <~ci-monitor-event> in the notice. Stop the deployment.", true],
+    ["Mason's stop after a mentioned unclosed CI tag", "I saw <ci-monitor-event> in the notice. Stop the deployment.", true],
+    ["Mason's stop after a mentioned unclosed neutralised heartbeat tag", "I saw <\\~heartbeat> earlier. Stop the deployment.", true],
+    ["a frame line with trailing spaces is not the exact frame",
+      `<agent-message from="x">\n${HANDBACK_FRAME}  \n  stop the deploy\n</agent-message>`, true],
+  ];
+  for (const [label, prompt, shouldLatch] of CASES) {
+    // The hook's own order: a machine prompt is dropped whole, then the rest is stripped.
+    const latches = !isMachineGenerated(prompt) && isHoldPhrase(authoredByMason(prompt));
+    ok(latches === shouldLatch, `phrase: ${label} → ${shouldLatch ? "latches" : "does not latch"}`);
+    const dir = mkdtempSync(path.join(tmpdir(), "crx-narrow-"));
+    runHold(dir, prompt, "sess-1");
+    eq(holdFiles(dir).length > 0, shouldLatch, `hook: ${label} → hold ${shouldLatch ? "LATCHED" : "not latched"}`);
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // A notice sent as its own message is machine content; one with words after it is not.
+  ok(isMachineGenerated("<ci-monitor-event>CI failed</ci-monitor-event>"), "a whole CI-monitor notice is machine content");
+  ok(isMachineGenerated("<\\~ci-monitor-event>x<\\~/ci-monitor-event>"), "a whole relayed CI-monitor notice is machine content");
+  ok(!isMachineGenerated("<ci-monitor-event>a</ci-monitor-event>\nstop"), "a CI-monitor notice plus Mason's words is not machine content");
+  // A typed tag followed by anything other than the exact frame line is Mason's.
+  ok(isHoldPhrase(authoredByMason('<agent-message from="x">\n[Subagent hand-back] stop\n</agent-message>')),
+    "a typed agent-message tag without the exact frame line still latches");
+  ok(!hasAuthoredText(BARE_TAG_HANDBACK), "a bare-tag hand-back is not Mason speaking (cannot clear a hold)");
+
+  // One hold per session: session A's stop is invisible to session B's guard.
+  const dir = mkdtempSync(path.join(tmpdir(), "crx-two-sessions-"));
+  runHold(dir, "stop", "session-a");
+  eq(holdFiles(dir).join(","), "hold-session-a.json", "session A's stop writes only its own hold file");
+  const guard = (sessionId) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-guard.mjs")], {
+    input: JSON.stringify({ session_id: sessionId, tool_name: "Bash", tool_input: { command: "git push origin x" } }),
+    encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  }).stdout;
+  ok(guard("session-a").includes('"deny"'), "session A's guard sees its own hold");
+  eq(guard("session-b").trim(), "", "session B's guard sees no hold");
+  runHold(dir, "ok carry on", "session-b");
+  eq(holdFiles(dir).join(","), "hold-session-a.json", "session B's message does not clear session A's hold");
+  runHold(dir, "ok carry on", "session-a");
+  eq(holdFiles(dir).length, 0, "session A's own next message clears its hold");
+  // An id outside lowercase [a-z0-9_-] is hashed: no path escape, and no collision with
+  // the id its stripped form would spell (Luna review, PR #1152).
+  runHold(dir, "stop", "../../evil id");
+  const [hashed] = holdFiles(dir);
+  ok(/^hold\.[0-9a-f]{32}\.json$/.test(hashed || ""), `an unusual session id is hashed into the file name: ${hashed}`);
+  runHold(dir, "stop", "evilid");
+  runHold(dir, "stop", `h-${hashed.slice(5, 37)}`); // a plain id spelling the hash cannot collide
+  eq(holdFiles(dir).length, 3, "three different session ids never share a hold file");
+  runHold(dir, "stop", 0);
+  eq(holdFiles(dir).length, 4, "a numeric session id 0 reaches the hook and gets its own file");
+  rmSync(dir, { recursive: true, force: true });
+
+  // No session_id: the prompt hook writes hold.json and the guard reads it.
+  const shared = mkdtempSync(path.join(tmpdir(), "crx-no-session-"));
+  runHold(shared, "stop");
+  eq(holdFiles(shared).join(","), "hold.json", "with no session id the hold goes to hold.json");
+  const noIdGuard = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-guard.mjs")], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin x" } }),
+    encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: shared },
+  }).stdout;
+  ok(noIdGuard.includes('"deny"'), "a guard with no session id reads hold.json and denies a push");
+  rmSync(shared, { recursive: true, force: true });
+}
 console.log(`prompt-hooks: ${pass} assertions passed`);

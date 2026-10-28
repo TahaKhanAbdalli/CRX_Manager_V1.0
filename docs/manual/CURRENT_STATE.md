@@ -346,6 +346,16 @@ APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Ma
 
 ## Recent production deployments
 
+- **2026-10-27 (purchase order copy email live, To-Do 0.15):** the `send-email` Edge Function was
+  deployed live as v20 (was v19) on Mason's in-chat approval ("yes, deploy send-email"), from main
+  `14761c400`, after migration row 995 (`purchase_order` email type) was applied and PRs #1114 and #1147
+  merged. ACTIVE with JWT checking on; the five deployed files (`index.ts` and `_shared/` cors, auth,
+  sentry, purchaseOrderEmailGate) match main byte for byte. Proven end to end: on croprxsolutions.app,
+  Email PO Copy on PO-2026-0024 (Wells Ag Supply) sent one email; its `email_log` row is `sent` with a
+  Resend id, the `Purchase-Order-PO-2026-0024.pdf` attachment and no customer, and the message arrived
+  at mason@croprxsolutions.com with the PDF. The browser had to drop a stale service-worker bundle
+  first. Every other email type is unchanged; the rollback is redeploying v19.
+
 - **2026-10-23 (Create User activates the new user in one step):** the `create-user` Edge Function
   was deployed live as v25 on Mason's in-chat approval (ACTIVE; the preflight answers the production
   origin, a call with no login is refused with 401, and the deployed files match the reviewed ones); the

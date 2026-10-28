@@ -50,7 +50,7 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 
 | Status | Count |
 |---|---|
-| Open or partly open entries (KI-15 closed; several entries bundle related items and UNVERIFIED sub-items) | 51 |
+| Open or partly open entries (KI-15 closed; several entries bundle related items and UNVERIFIED sub-items) | 52 |
 | Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED, with proof (bottom of file and archive) | 7 |
 
@@ -408,6 +408,21 @@ for it. Two screens read one column of it directly (`QuickDeliveryModal.tsx` and
 `request_fingerprint` exists), so nothing is broken; the gap only means the migration review's TypeScript
 cross-check, which reads `src/types/index.ts`, cannot confirm those writes. Fix: confirm with the
 `typescript-types-drift-reviewer` whether to add an interface or record the table as intentionally untyped.
+
+### KI-85 — Four sweep fingerprints went stale when the sent-quote price lock applied
+**MED · OPEN · database/sweeps · unassigned (Mason, 2026-10-27: noted, not now; To-Do 11.12)**
+The live db-invariant sweeps run after PR #1119 (2026-10-27, all 29 predicates, adjudicated `complete: true`)
+returned `ok: false` with 4 unallowlisted rows. All four functions were rewritten by `20261027040000_quote_sent_price_lock`
+(PR #1105, applied 12:37 UTC), whose PR did not update their reviewed fingerprints. The sweep after row 991 that
+morning was 29/29 clean. Two are `actor-forgery` rows: `save_quote` and `convert_quote_to_order` (their
+`allowlist.json` entries pin `_save_quote_below_cost_impl_20260810` and `_convert_quote_to_order_below_cost_impl_20260810`
+bodies that no longer match live). Two are `quote-versions-rpc-owned` rows: the body pins of
+`_create_quote_version_owner_impl` and `_restore_quote_version_owner_impl`. None touches PR #1119's objects. Not yet
+known: whether the rewritten bodies still hold the actor binding and the database-owned quote-version write rule;
+that needs a reading of each live body before re-pinning. Until it is fixed, **every post-apply sweep will show these
+same 4 rows**: compare against this list, and treat any OTHER unallowlisted row as new. Fix: read the four live bodies,
+then re-pin in `scripts/db-invariant-sweeps/allowlist.json`, the `quote-versions-rpc-owned` predicate and its test,
+through the security ship path; never re-pin a body that lost its guard. Done = a full live sweep adjudicates `ok: true`.
 
 ---
 
