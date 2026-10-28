@@ -813,6 +813,9 @@ rmSync(tmpProj, { recursive: true, force: true });
     // Sol, PR #1152: a neutralised tag Mason mentions never makes his whole message machine text.
     ["Mason's stop beside a mentioned neutralised tag", "Stop pushing. I saw <~heartbeat> in the notice.", true],
     ["Mason's stop beside a backslashed neutralised tag", "Stop pushing. I saw <\\~task-notification> there.", true],
+    ["Mason's stop after a mentioned unclosed neutralised CI tag", "I saw <~ci-monitor-event> in the notice. Stop the deployment.", true],
+    ["Mason's stop after a mentioned unclosed CI tag", "I saw <ci-monitor-event> in the notice. Stop the deployment.", true],
+    ["Mason's stop after a mentioned unclosed neutralised heartbeat tag", "I saw <\\~heartbeat> earlier. Stop the deployment.", true],
     ["a frame line with trailing spaces is not the exact frame",
       `<agent-message from="x">\n${HANDBACK_FRAME}  \n  stop the deploy\n</agent-message>`, true],
   ];

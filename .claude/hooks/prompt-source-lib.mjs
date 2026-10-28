@@ -412,7 +412,13 @@ function stripUnclosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
-    out = out.replace(new RegExp(`${envOpen(tag)}[\\s\\S]*$`, "i"), " ");
+    // Only the exact open tag, as before PR #1152, and never a CI notice: an
+    // unclosed tag Mason mentions (neutralised or a CI notice) must not swallow
+    // the "stop" he typed after it (Sol, PR #1152). Those are stripped only as
+    // closed pairs.
+    if (!WHOLE_PROMPT_ONLY_TAG_NAMES.includes(tag)) {
+      out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    }
     // Any orphaned closing tag left behind.
     out = out.replace(new RegExp(envClose(tag), "gi"), " ");
   }
