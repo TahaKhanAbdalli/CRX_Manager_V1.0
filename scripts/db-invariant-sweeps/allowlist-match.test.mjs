@@ -26,7 +26,29 @@ try {
   // 21 after the 2026-10-20 review: +2 save_job / save_field_app_invoice (cost/margin step-2 wrappers, 20261019230000),
   //    -3 create_application_record_from_blend_ticket / create_direct_order / create_rush_order, whose replay-binding
   //    wrappers refuse a forged actor up front and are no longer flagged, so their stale exceptions were removed.
-  equal(actorEntries.length, 21, '21 reviewed exceptions (save_job and save_field_app_invoice added; three unflagged order/application exceptions removed)');
+  // 22 after 2026-10-28 (KNOWN_ISSUES KI-85): convert_quote_to_order keeps its current-live entry and gains a second,
+  //    separately pinned entry for the candidate body of 20261027080400 (controlled rollout/rollback pair).
+  equal(actorEntries.length, 22, '22 reviewed exceptions (save_job and save_field_app_invoice added; three unflagged order/application exceptions removed; convert_quote_to_order has a live and a candidate entry)');
+  const convertEntries = actorEntries.filter((entry) => entry.violation_key.startsWith('convert_quote_to_order('));
+  equal(convertEntries.length, 2, 'convert_quote_to_order has exactly one current-live and one candidate contract set');
+  const convertImplKey = Object.keys(convertEntries[0].reviewed_contracts).find((key) => key.startsWith('public._convert_quote_to_order_below_cost_impl_20260810('));
+  const [liveConvertPin, candidateConvertPin] = convertEntries.map((entry) => entry.reviewed_contracts[convertImplKey]);
+  check(liveConvertPin !== candidateConvertPin, 'the live and candidate convert delegate pins differ');
+  equal(convertEntries.map((entry) => Object.keys(entry.reviewed_contracts).sort()), [Object.keys(convertEntries[0].reviewed_contracts).sort(), Object.keys(convertEntries[0].reviewed_contracts).sort()], 'both convert contract sets pin the same dependencies');
+  for (const entry of convertEntries) {
+    for (const key of Object.keys(entry.reviewed_contracts).filter((k) => k !== convertImplKey)) {
+      equal(entry.reviewed_contracts[key], convertEntries[0].reviewed_contracts[key], `both convert entries pin the same ${key} contract`);
+    }
+  }
+  // Exactly one of the two contract sets clears the row for a given live catalog, and neither clears a mixed one.
+  {
+    const row = { violation_key: convertEntries[0].violation_key, suspect_param: convertEntries[0].suspect_param };
+    const catalogFor = (entry) => Object.entries(entry.reviewed_contracts).map(([function_key, contract_md5]) => ({ function_key, contract_md5 }));
+    equal(subtractAllowlist('actor-forgery', [row], convertEntries, catalogFor(convertEntries[0])), [], 'the current-live body clears under its own entry');
+    equal(subtractAllowlist('actor-forgery', [row], convertEntries, catalogFor(convertEntries[1])), [], 'the candidate body clears under its own entry');
+    equal(subtractAllowlist('actor-forgery', [row], convertEntries, catalogFor(convertEntries[0]).map((item) => item.function_key === convertImplKey ? { ...item, contract_md5: '0'.repeat(32) } : item)).length, 1, 'a third (unreviewed) delegate body stays visible');
+    equal(subtractAllowlist('actor-forgery', [row], convertEntries, catalogFor(convertEntries[1]).map((item) => item.function_key === 'auth.uid()' ? { ...item, contract_md5: '0'.repeat(32) } : item)).length, 1, 'the candidate delegate with a changed identity source stays visible');
+  }
   for (const retired of ['create_application_record_from_blend_ticket(', 'create_direct_order(', 'create_rush_order(']) {
     check(!actorEntries.some((entry) => entry.violation_key.startsWith(retired)), `remove the retired ${retired}) exemption`);
   }

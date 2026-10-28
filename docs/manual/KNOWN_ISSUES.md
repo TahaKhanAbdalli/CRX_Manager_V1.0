@@ -410,7 +410,7 @@ cross-check, which reads `src/types/index.ts`, cannot confirm those writes. Fix:
 `typescript-types-drift-reviewer` whether to add an interface or record the table as intentionally untyped.
 
 ### KI-85 — Four sweep fingerprints went stale when the sent-quote price lock applied
-**MED · OPEN · database/sweeps · unassigned (Mason, 2026-10-27: noted, not now; To-Do 11.12)**
+**MED · OPEN (correction written 2026-10-28 on the PR #1165 branch; not yet reviewed, merged or confirmed by a live sweep) · database/sweeps · Mason authorized the fix 2026-10-28 (To-Do 11.12)**
 The live db-invariant sweeps run after PR #1119 (2026-10-27, all 29 predicates, adjudicated `complete: true`)
 returned `ok: false` with 4 unallowlisted rows. All four functions were rewritten by `20261027040000_quote_sent_price_lock`
 (PR #1105, applied 12:37 UTC), whose PR did not update their reviewed fingerprints. The sweep after row 991 that
@@ -423,6 +423,14 @@ that needs a reading of each live body before re-pinning. Until it is fixed, **e
 same 4 rows**: compare against this list, and treat any OTHER unallowlisted row as new. Fix: read the four live bodies,
 then re-pin in `scripts/db-invariant-sweeps/allowlist.json`, the `quote-versions-rpc-owned` predicate and its test,
 through the security ship path; never re-pin a body that lost its guard. Done = a full live sweep adjudicates `ok: true`.
+2026-10-28 reading and correction (PR #1165 branch): an independent RLS review read all four live bodies and found the
+actor binding, strict actor-mismatch refusal, active-role gates, private-function EXECUTE restrictions and the
+quote-version trust-marker route intact, so these were stale fingerprints, not defects. The correction re-pins the
+`save_quote` and `convert_quote_to_order` dependency digests and the two quote-version body pins from live; the
+`convert_quote_to_order` exception also gets a second, separately reviewed entry for the candidate body of
+`20261027080400` (any active rep may convert; the actor stays bound), so the sweep is clean both before and after
+that migration applies. The candidate digest was captured from a disposable PostgreSQL replica that first reproduced
+every live digest. Still open until: review, merge, and a fresh live sweep after the candidate migration is applied.
 
 ---
 

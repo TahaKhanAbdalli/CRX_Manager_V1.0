@@ -1017,16 +1017,24 @@ describe('quote_versions write boundary — standing predicate', () => {
       [
         '_create_quote_version_owner_impl:body-pinned',
         'public._create_quote_version_owner_impl(uuid,uuid,text,text)',
-        3362,
-        '4ecb8accbaf6be4fb64aadbc79e492e3',
+        3824,
+        '725e938050898eeb9bf17f10cb6b86fd',
       ],
       [
         '_restore_quote_version_owner_impl:body-pinned',
         'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)',
-        13566,
-        '6972f2d6b76b2d8872b0a027e7f9ee93',
+        14825,
+        '7122779401f7a43f2b31d43d2c96e9d4',
       ],
     ];
+    // The two owner-impl pins were renewed 2026-10-28 (KNOWN_ISSUES KI-85) after
+    // the sent-quote price lock re-emitted both bodies. The migration's own
+    // apply-time copies (3362/4ecb8acc…, 13566/6972f2d6…) are history and must
+    // stay exactly as applied; the live pins above must never fall back to them.
+    expect(liveBodyPins.some(([, , , digest]) => digest === '4ecb8accbaf6be4fb64aadbc79e492e3')).toBe(false);
+    expect(liveBodyPins.some(([, , , digest]) => digest === '6972f2d6b76b2d8872b0a027e7f9ee93')).toBe(false);
+    expect(restoreTrustMigration).toContain("= '4ecb8accbaf6be4fb64aadbc79e492e3'");
+    expect(restoreTrustMigration).toContain("= '6972f2d6b76b2d8872b0a027e7f9ee93'");
     for (const [key, signature, length, digest] of liveBodyPins) {
       const start = predicateCode.indexOf(`'${key}' AS violation_key`);
       expect(start, `predicate must contain the ${key} branch`).toBeGreaterThanOrEqual(0);

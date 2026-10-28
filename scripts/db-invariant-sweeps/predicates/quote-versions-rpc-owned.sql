@@ -957,32 +957,38 @@ SELECT 'restore_quote_version:route-pinned' AS violation_key,
 
 UNION ALL
 
+-- The two owner-impl pins below were renewed 2026-10-28 (KNOWN_ISSUES KI-85):
+-- the sent-quote price lock (20261027040000) re-emitted both bodies after the
+-- 2026-08-26 measurement. The new length/digest pairs were measured read-only
+-- from live and reproduced in a disposable replica of live plus every later
+-- migration. The 20260826220000 migration's own copies are apply-time pins of
+-- that migration's baseline and stay as applied.
 SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
-       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at; expected 3362/4ecb8accbaf6be4fb64aadbc79e492e3, measured '
+       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at; expected 3824/725e938050898eeb9bf17f10cb6b86fd, measured '
          || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
                         FROM pg_proc p
                        WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')), 'signature unresolvable')
-         || ' — an intentionally reviewed re-emission must update this pin, the 20260826220000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+         || ' — an intentionally reviewed re-emission must update this live pin and quoteVersionWriteBoundary.test.ts in the same change; the 20260826220000 migration keeps its own apply-time pin copy, which stays as applied' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')
-     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3362
-     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '4ecb8accbaf6be4fb64aadbc79e492e3'
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3824
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '725e938050898eeb9bf17f10cb6b86fd'
  )
 
 UNION ALL
 
 SELECT '_restore_quote_version_owner_impl:body-pinned' AS violation_key,
-       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked; expected 13566/6972f2d6b76b2d8872b0a027e7f9ee93, measured '
+       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked; expected 14825/7122779401f7a43f2b31d43d2c96e9d4, measured '
          || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
                         FROM pg_proc p
                        WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')), 'signature unresolvable')
-         || ' — an intentionally reviewed re-emission must update this pin, the 20260826220000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+         || ' — an intentionally reviewed re-emission must update this live pin and quoteVersionWriteBoundary.test.ts in the same change; the 20260826220000 migration keeps its own apply-time pin copy, which stays as applied' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')
-     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 13566
-     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 14825
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '7122779401f7a43f2b31d43d2c96e9d4'
  )
 
 UNION ALL

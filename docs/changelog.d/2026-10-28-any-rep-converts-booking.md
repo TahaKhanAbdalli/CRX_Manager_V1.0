@@ -33,8 +33,23 @@
   live access: `ROW_VERSION_REAL_SCHEMA_RESTORE_PASS` with this migration applied last). The step
   first gives the booking a 100% split to its own rep, because the chain's earlier restore leaves
   none.
-- Sweep fingerprint: the `convert_quote_to_order` actor-forgery pin in
-  `scripts/db-invariant-sweeps/allowlist.json` is already tracked as stale (KNOWN_ISSUES KI-85,
-  To-Do 11.12); re-pin it from the body this migration leaves (`p_performed_by` handling is
-  unchanged).
-- Not verified: live body md5 (local replay only).
+- Sweep fingerprints (KNOWN_ISSUES KI-85): four sweep pins had gone stale when the sent-quote price
+  lock (#1105) rewrote their functions; an independent review of the live bodies found the actor
+  binding, role gates and quote-version trust route intact, so they are re-pinned from live:
+  the `save_quote` and `convert_quote_to_order` actor-forgery dependency digests in
+  `scripts/db-invariant-sweeps/allowlist.json`, and the two quote-version body pins in the
+  `quote-versions-rpc-owned` predicate and `src/lib/quoteVersionWriteBoundary.test.ts` (the old
+  applied migration `20260826220000` keeps its own pin copies untouched). The `convert_quote_to_order`
+  exception keeps one reviewed entry for today's live body and gains a second, separately reviewed
+  entry for this migration's body, whose digest was captured by applying the migration in a
+  disposable PostgreSQL copy of live (which first reproduced every live digest). Its wording says
+  that after this migration every active rep may convert while the acting user stays bound to the
+  signed-in caller. No matcher, other exemption or permission code changed. The live-data guard's
+  list of known sweep files (`.claude/hooks/live-testdata-lib.mjs`) gets one new fingerprint, for the
+  edited `quote-versions-rpc-owned.sql` only (Mason approved that single edit in the normal prompt);
+  no guard logic or other fingerprint changed. Proof: the 29 live read-only sweeps adjudicate clean
+  (`ok: true`, `complete: true`), every db-invariant-sweeps test passes, and in a disposable
+  PostgreSQL copy of live each changed grant, search path, actor-mismatch or role-gate edit made the
+  exemption stop matching. Limit: that copy differs from live on three unrelated functions, so its
+  own sweep still shows three unrelated rows.
+- Not verified: live body md5 of the candidate (local replay only).
