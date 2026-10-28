@@ -20,6 +20,7 @@ import {
   parseNativePatch,
   protectedBasenameMentioned,
   realPathThroughLinks,
+  repositoryWorktreeRoots,
   pullRequestChecksGreen,
   shellSegmentHead,
   unrecognizedCommandWord,
@@ -1162,7 +1163,7 @@ try {
       `every listed protected file is protected by the regex too: ${file}`,
     );
   }
-  assert.equal(PROTECTED_HARNESS_FILES.length, 18, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  assert.equal(PROTECTED_HARNESS_FILES.length, 19, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
   // app-repo-identity decides which repository the push gate and the CodeRabbit
   // waiver treat as the app repo, and loads at startup through codex-push-lib
   // (Codex App P1 on #1149): Codex may not edit it.
@@ -3632,6 +3633,119 @@ try {
   } finally {
     rmSync(linkRoot, { recursive: true, force: true });
   }
+
+  // A session started in one worktree may patch another worktree of the SAME repository
+  // (Codex reproduced the refusal 2026-10-27). Every per-file check still applies there, an
+  // unrelated folder is still outside, and nothing inside a .git folder can be patched.
+  {
+    const { repo } = makeRepo("src/a.ts", "export const a = 1;\n");
+    const sibling = `${repo}-sibling-worktree`;
+    tempRoots.push(sibling);
+    git(repo, ["worktree", "add", "-b", "feature/sibling", sibling]);
+    const unrelated = mkdtempSync(path.join(tmpdir(), "crx-unrelated-"));
+    tempRoots.push(unrelated);
+    const roots = repositoryWorktreeRoots(repo);
+    assert.equal(roots.length, 2, "both worktrees of the repository are listed");
+    assert.equal(roots[0], path.resolve(repo), "the guard's own checkout comes first");
+    assert.deepEqual(repositoryWorktreeRoots(repo, () => { throw new Error("git unavailable"); }), [path.resolve(repo)],
+      "when git cannot list worktrees, only the checkout itself is allowed");
+    const patchIn = (destination, eventCwd = repo) => evaluateProductionAction({
+      toolName: "apply_patch",
+      repoDir: repo,
+      patchRoot: repo,
+      patchWorktrees: (root) => repositoryWorktreeRoots(root),
+      eventCwd,
+      toolInput: { command: nativePatch(`*** Add File: ${destination}`, "+a") },
+    });
+    const siblingSlash = sibling.replaceAll("\\", "/");
+    const repoSlash = repo.replaceAll("\\", "/");
+    for (const [label, destination, eventCwd, shouldBlock] of [
+      ["an absolute path in another worktree", `${siblingSlash}/docs/new.md`, repo, false],
+      ["a relative path from a session started in the other worktree", "docs/new.md", sibling, false],
+      ["the guard file in another worktree", `${siblingSlash}/.codex/hooks/production-action-guard.mjs`, repo, true],
+      ["a Husky hook in another worktree", `${siblingSlash}/.husky/pre-push`, repo, true],
+      ["a review proof in another worktree", `${siblingSlash}/.claude/session-state/claude-review-push.json`, repo, true],
+      ["git's config in the main checkout", `${repoSlash}/.git/config`, sibling, true],
+      ["a git hook in the main checkout", `${repoSlash}/.git/hooks/pre-push`, sibling, true],
+      ["a .git folder spelled in capitals", `${repoSlash}/.GIT/hooks/pre-commit`, sibling, true],
+      ["a folder outside every worktree", `${unrelated.replaceAll("\\", "/")}/x.md`, repo, true],
+      ["a session started in an unrelated folder", "x.md", unrelated, true],
+    ]) {
+      assert.equal(patchIn(destination, eventCwd).blocked, shouldBlock, `worktree patch: ${label}`);
+    }
+    assert.match(patchIn(`${unrelated.replaceAll("\\", "/")}/x.md`).reason, /outside the repository .* and its other worktrees/,
+      "the refusal names the worktree rule");
+  }
+
+  // A plain search reads files and runs nothing: a quoted pattern that names a push, a live
+  // apply or a deploy is text (the three refusals Codex reproduced 2026-10-27). Proof files stay
+  // off-limits, and a search chained to something else gets every ordinary check.
+  for (const command of [
+    "rg -n 'git push' AGENTS.md",
+    'rg -n "supabase db push" docs/workflows/DATABASE_CHANGE_CHECKLIST.md',
+    "git grep -n 'apply-migration-file.mjs' -- AGENTS.md",
+    "Get-ChildItem -Recurse docs | Select-String 'git push'",
+    "rg -n '$(foo)' src",
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, false, `plain search allowed: ${command}`);
+  }
+  for (const command of [
+    "rg -n 'claude-review-push.json' docs",
+    "rg -n x .claude/session-state/claude-review-push.json",
+    "rg -n 'x' docs; node scripts/apply-migration-file.mjs x.sql",
+    "rg --pre 'node scripts/apply-migration-file.mjs' x docs",
+    "rg --p\\re='node scripts/apply-migration-file.mjs' x AGENTS.md",
+    "git grep -1O'node scripts/apply-migration-file.mjs' CRX -- AGENTS.md",
+    "rg -n 'x' docs | node scripts/apply-migration-file.mjs x.sql",
+    "rg -n 'x' docs > .codex/hooks/production-action-guard.mjs",
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, true, `still refused: ${command}`);
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "shell_command", toolInput: { command: "rg -n x docs", workdir: ".claude/session-state" } }).blocked,
+    true,
+    "a search run from inside the review state directory is still refused",
+  );
+
+  // A `(` inside plain double-quoted text is not a subexpression: Codex's own
+  // `git commit -m "docs(changelog): …"` was refused on 2026-10-27. Anything that
+  // can expand inside the quotes, or a quote that only some shells honour, still counts.
+  for (const command of [
+    'git commit -m "docs(changelog): record the real Codex tool-path proof"',
+    `git commit -m "fix(guard): don't block (quoted) text"`,
+    'git commit -m "docs(changelog): document C:\\Program Files"',
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, false, `commit message allowed: ${command}`);
+  }
+  for (const command of [
+    'git commit -m "docs(x): $(Get-Content .codex/hooks/production-action-guard.mjs)"',
+    'git commit -m "docs(x): `whoami`"',
+    'Write-Output "a(b)" | Tee-Object -FilePath (Join-Path .codex hooks)',
+    `Write-Output '"' | Tee-Object '"' (Join-Path .codex/hooks production-action-guard.mjs) '"'`,
+    'Write-Output "x" | Tee-Object -FilePath "$d$f"',
+    "Write-Output \"x\" | Tee-Object -FilePath “(Join-Path .codex hooks)”",
+    'cmd /c "echo %PATH%(x)"',
+    'Write-Output "a\\" (Invoke-Evil x) "b"',
+    `Write-Output 'a\\' (Invoke-Evil x) '"'`,
+    'Write-Output "a" (Invoke-Evil x) "b"',
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "shell_command", toolInput: { command } }).blocked, true, `computed text still refused: ${command}`);
+  }
+
+  // A refused harness change points at the path that exists: a Claude session and the reviewed PR.
+  // The "reviewed maintenance workflow" it used to name was retired on 2026-09-05.
+  for (const verdict of [
+    evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".codex/hooks/production-action-guard.mjs" } }),
+    evaluateProductionAction({ toolName: "apply_patch", toolInput: { command: nativePatch("*** Update File: .husky/pre-push", "@@", "-a", "+b") } }),
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "Set-Content .claude/hooks/codex-push-lib.mjs -Value ''" } }),
+  ]) {
+    assert.equal(verdict.blocked, true);
+    assert.match(verdict.reason, /hand the change to a Claude session/, "names the supported repair path");
+    assert.match(verdict.reason, /ship\.md/, "and the reviewed PR procedure");
+    assert.doesNotMatch(verdict.reason, /maintenance workflow|use Edit\/Write/i, "not the retired instructions");
+  }
+  assert.doesNotMatch(readFileSync(guardPath, "utf8"), /reviewed maintenance workflow|use Edit\/Write for a deliberate change/,
+    "no retired instruction is left in the guard");
 
   // Resolving destinations touches the filesystem once per path component, and a hook killed at its
   // time limit ALLOWS the action (Codex App P1, PR #1083). The patch is therefore bounded in path
