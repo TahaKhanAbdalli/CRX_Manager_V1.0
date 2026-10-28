@@ -6,7 +6,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { isHoldPhrase, isResumePhrase } from "./hold-latch-lib.mjs";
+import { isHoldPhrase, isResumePhrase, holdStatePath } from "./hold-latch-lib.mjs";
 import { isMachineGenerated, authoredByMason, hasAuthoredText, withoutSubagentReports } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
@@ -54,8 +54,8 @@ const prompt = isPeerTurn
   : authoredByMason(payload?.prompt);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const stateDir = path.join(projectDir, ".claude", "session-state");
-const holdPath = path.join(stateDir, "hold.json");
+const holdPath = holdStatePath(projectDir, payload?.session_id);
+const stateDir = path.dirname(holdPath);
 
 function wasHeld() {
   try { return existsSync(holdPath) && JSON.parse(readFileSync(holdPath, "utf8")).held === true; } catch { return false; }

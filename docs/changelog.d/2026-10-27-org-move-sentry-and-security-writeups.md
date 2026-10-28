@@ -1,0 +1,4 @@
+## 2026-10-27 — Org-move checklist covers Sentry; security fixes withhold exploit detail until live
+
+- `docs/operations/github-org-move.md`: step 3 installs Sentry's GitHub integration on the `croprxsolutions` organization (it links errors to suspect commits and is installed per account), and step 7 checks that Vercel deploys, Sentry lists the repo, and a new production error shows a Suspect Commit after the move. Raised by Taha K.
+- `AGENTS.md` › Safety and Protected Delivery: until a security fix is live in production (migration applied and code deployed), everything public about it (PR, issue, commit, review reply, changelog entry, release note, doc) says what changes, not how to use the hole; the full explanation may follow once it is live (the repository is public). Agreed with Taha K. after #1103 described an open hole for several days.

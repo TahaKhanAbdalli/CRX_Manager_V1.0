@@ -46,6 +46,8 @@ You never need technical wording, file names, or a copy of the project rules —
 
 `AGENTS.md` holds the shared rules for both agents; `CLAUDE.md` imports it and adds Claude-specific routing. Detailed shipping and review procedures stay in the linked workflows so ordinary tasks load only the guidance they need. Codex uses the supported Claude handoff for a live migration apply; that handoff keeps every approval and proof requirement.
 
+The shared contract keeps mandatory task routes, database rules, release checks, and approval boundaries explicit. Its enforcement hooks and guidance checks remain unchanged.
+
 The hook-cleanup exception applies only to local agent hooks, through a reviewed PR. It does not authorize weakening merge, direct-push, migration-apply, secret, CI, review, or branch-protection safeguards.
 
 > Fix [what is wrong] so [what should happen].
