@@ -7,7 +7,9 @@
 --
 -- WHAT: every notification records who sent it (Mason 2026-10-26). New column
 --   notifications.created_by, set by a BEFORE INSERT trigger to auth.uid() whenever the insert runs
---   as a signed-in (or anon) API user, whatever the client sent. Server functions (SECURITY DEFINER,
+--   as a signed-in (or anon) API user, whatever the client sent; the same trigger on UPDATE keeps the
+--   original sender for those users (Codex App on #1164), so marking read still works but the sender
+--   cannot be rewritten. Server functions (SECURITY DEFINER,
 --   run as postgres) and service_role keep what they set, normally NULL = a system notice. The
 --   app's ~12 screen flows that alert other staff (src/lib/notificationTriggers.ts, notifyAdmins)
 --   keep working. The notification list and panel show "From <name>" when the sender is not the
@@ -60,9 +62,14 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  -- An API user cannot choose (or blank) the sender; server functions run as their owner and keep theirs.
+  -- An API user cannot choose (or blank) the sender, and cannot change it later (marking read
+  -- still works); server functions run as their owner and keep theirs.
   IF current_user IN ('authenticated', 'anon') THEN
-    NEW.created_by := auth.uid();
+    IF TG_OP = 'INSERT' THEN
+      NEW.created_by := auth.uid();
+    ELSE
+      NEW.created_by := OLD.created_by;
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -71,7 +78,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.stamp_notification_sender() FROM PUBLIC, anon, authenticated;
 
 CREATE TRIGGER notifications_stamp_sender
-  BEFORE INSERT ON public.notifications
+  BEFORE INSERT OR UPDATE ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.stamp_notification_sender();
 
 DO $postflight$
@@ -85,7 +92,8 @@ BEGIN
                     AND column_name = 'created_by' AND data_type = 'uuid' AND is_nullable = 'YES')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger
                      WHERE tgname = 'notifications_stamp_sender' AND tgrelid = 'public.notifications'::regclass
-                       AND tgfoid = 'public.stamp_notification_sender()'::regprocedure AND tgenabled = 'O')
+                       AND tgfoid = 'public.stamp_notification_sender()'::regprocedure AND tgenabled = 'O'
+                       AND (tgtype & 2) <> 0 AND (tgtype & 4) <> 0 AND (tgtype & 16) <> 0)
      OR (SELECT NOT p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres'
                 AND p.proconfig = ARRAY['search_path=public, pg_temp']
            FROM pg_proc p WHERE p.oid = 'public.stamp_notification_sender()'::regprocedure) IS NOT TRUE
