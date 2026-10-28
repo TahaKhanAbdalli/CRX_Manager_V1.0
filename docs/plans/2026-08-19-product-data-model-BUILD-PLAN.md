@@ -1,5 +1,12 @@
 # Product Data Model — Build Plan and Handoff Contract
 
+> **UPDATE 2026-10-28: WP-1 and WP-2 refreshed; density goes first.** Read
+> `docs/plans/2026-10-28-product-data-model-REFRESH.md` before building anything here.
+> - It records Mason's 2026-10-28 decisions: density before ingredients; weight on the loader worksheet and blend ticket; one value per generic; an admin-only comparison.
+> - Its section 4 corrects about 18 stale details in WP-1 and WP-2, including grants, retry safety, write lock-down, apply gates and the brand-proposal parts.
+>
+> Where it differs from this file, it wins. To-Do row 2.9.
+
 > **UPDATE 2026-10-22 — WP-3 is replaced.** Mason chose to build delivery-time brand capture first
 > (`docs/manual/DECISION_LOG.md`, 2026-10-22 generic-products entry). WP-3 below, and its row on the loop
 > ledger (`docs/loops/product-data-model-ledger.md`), are replaced by
