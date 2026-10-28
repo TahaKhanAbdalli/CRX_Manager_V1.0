@@ -82,3 +82,57 @@ these. The October goals doc (`docs/plans/2026-10-13-direction-and-goals.md`) an
 | `docs/research/2026-06-10-world-class-product-deep-dive-prompt.md` | The prompt that produced that report. |
 | `docs/audits/split-billing-B-perdelivery-design-2026-07-10.md` | Unbuilt July split-billing design; split billing is now built from the goals doc. |
 | `docs/audits/nightly-debug/DESIGN-split-invoices-multifield-by-acres.md` | Unbuilt June split-billing design; same reason. |
+
+## Part 2: archive, roadmap and other folders (2026-10-28)
+
+These sat outside the documentation-only folders, so they went in a second, fully reviewed change.
+
+| File | Why it went |
+|---|---|
+| `docs/archive/` (27 files, listed below) | Records already archived by earlier cleanups. The eight archive files a migration, agent instruction or the migration ledger names are kept; `docs/archive/README.md` lists them. |
+| `docs/ROADMAP.md` | March–July backlog; its own header said the goals doc and to-do list replaced it. Mason chose to remove it. |
+| `docs/roadmap/offline-work-stage1b-receipt-design-2026-07-13.md` | Design for offline delivery receipts; shipped 2026-07-15. |
+| `docs/roadmap/epa-label-lookup-plan-2026-07-10.md` | EPA label lookup plan; shipped. |
+| `docs/roadmap/shelved-earmark-engine/*.sql` (5 files, listed below) | June earmark engine drafts. Mason kept the summary README and dropped the drafts, which no longer match the database. |
+| `docs/reference/parked-migration-scan-unknown-diagnosis.md` | Diagnosis resolved by PR #437; header said "history". |
+| `docs/walkthroughs/fsa-boundary-research.md` | July field-boundary data research; Mason chose to remove it. |
+| `docs/2026-05-11-unused-index-report.txt` | Raw May database index dump; nothing referred to it. |
+
+Kept on purpose in part 2: the July work-loop records in `docs/loops/` (their mission documents
+are named by agent tools and scripts), `docs/plans/2026-09-11-open-pr-backlog-plan.md` (named by
+an agent model-tuning reference), and the August draw-down handoff (named by the migration ledger).
+
+### Exact files removed in part 2 from `docs/archive/` and the earmark folder
+
+- `docs/roadmap/shelved-earmark-engine/06b-booking-prepay-apply.sql`
+- `docs/roadmap/shelved-earmark-engine/06bB-auto-apply-on-post.sql`
+- `docs/roadmap/shelved-earmark-engine/20260613240000_booking_prepay_earmark_and_apply.sql`
+- `docs/roadmap/shelved-earmark-engine/20260613250000_auto_apply_booking_prepay_on_post.sql`
+- `docs/roadmap/shelved-earmark-engine/20260613280000_aggregate_prepay_reserve_earmarked.sql`
+- `docs/archive/2026-Q1-brainstorms/2026-03-01-gap-remediation-handoff.md`
+- `docs/archive/2026-Q1-brainstorms/2026-03-01-superpower-brainstorm-inventory-delivery-blendtickets.md`
+- `docs/archive/2026-Q1-brainstorms/2026-03-01-team-board-brainstorm.md`
+- `docs/archive/2026-Q1-brainstorms/README.md`
+- `docs/archive/2026-autumn-cleanup/README.md`
+- `docs/archive/2026-autumn-cleanup/audits/2026-08-25-codex-to-claude-pr361-cogs-review-handoff.md`
+- `docs/archive/2026-autumn-cleanup/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
+- `docs/archive/2026-autumn-cleanup/loops/supplier-pricing-phase3c-review-packet-ledger-2026-07-26.md`
+- `docs/archive/2026-autumn-cleanup/loops/supplier-pricing-phase3c-review-packet-loop-2026-07-26.md`
+- `docs/archive/2026-autumn-cleanup/reports/cleanup-sprint-progress.md`
+- `docs/archive/2026-spring/2026-05-07-final-wave-review-prompt.md`
+- `docs/archive/2026-spring/README.md`
+- `docs/archive/2026-spring/SESSION_FINAL_WAVE_3.md`
+- `docs/archive/2026-summer-closeout/README.md`
+- `docs/archive/2026-summer-closeout/loops/structure-fix-ledger.md`
+- `docs/archive/2026-summer/GAP-ANALYSIS.md`
+- `docs/archive/2026-summer/README.md`
+- `docs/archive/2026-summer/chemman-field-application-research.md`
+- `docs/archive/2026-summer/walkthrough-extracted/Field_Mapping/analysis.md`
+- `docs/archive/2026-summer/walkthrough-extracted/Field_Mapping/transcript.txt`
+- `docs/archive/2026-summer/walkthrough-extracted/Job_Application_Scheduling_Layout/analysis.md`
+- `docs/archive/2026-summer/walkthrough-extracted/Job_Application_Scheduling_Layout/transcript.txt`
+- `docs/archive/2026-summer/walkthrough-extracted/Job_Printing_for_sprayer_applicator/analysis.md`
+- `docs/archive/2026-summer/walkthrough-extracted/Job_Printing_for_sprayer_applicator/transcript.txt`
+- `docs/archive/2026-summer/walkthrough-extracted/Mixer_Loader_Sheet_setup/analysis.md`
+- `docs/archive/2026-summer/walkthrough-extracted/Mixer_Loader_Sheet_setup/transcript.txt`
+- `docs/archive/2026-summer/walkthrough-extracted/crx-current-state.md`

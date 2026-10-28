@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
-> **Note (2026-10-28):** this is a frozen history file. Some audit and handoff documents it cites
-> were removed in the 2026-10-28 docs cleanup; they are listed, with how to restore them, in
+> **Note (2026-10-28):** this is a frozen history file. Some documents it cites (audits,
+> handoffs, `docs/ROADMAP.md`, roadmap designs and earmark SQL drafts) were removed in the
+> 2026-10-28 docs cleanup; they are listed, with how to restore them, in
 > `docs/audits/2026-10-28-removed-finished-docs.md`.
 
 **Last verified: 2026-10-22 (America/Chicago) against the live migration ledger** (read-only
