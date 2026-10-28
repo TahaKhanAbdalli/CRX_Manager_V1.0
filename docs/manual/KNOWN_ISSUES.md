@@ -474,7 +474,7 @@ authenticate proof contents. CodeRabbit's backstop was removed 2026-10-19, which
   checkout (`applied-snapshot-invalidate.mjs`); Supabase's ledger is the backstop. LOW-MED.
 - The migration-drift reviewer's overload check sees only authored history, not the live catalog
   (`.claude/agents/migration-drift-reviewer.md` CHECK 2). Deferred by Mason. MED.
-- Whole-body hash pins on the quote-version trust chain must be updated in three files together (ACCEPTED, KI-63).
+- Whole-body hash pins on the quote-version trust chain must be updated in the two live files together (the applied migration `20260826220000` keeps its own apply-time copy) (ACCEPTED, KI-63).
 
 ### KI-49 — Codex review tooling
 **HIGH (per older record), mitigated · OPEN · tooling-guards/process · wiring a hook needs Mason's approval**
@@ -539,7 +539,7 @@ catalog (#1110). Done = the chain passes on main and still fails first against 2
 | KI-60 | A permitted staff member can mint a temporary link to a private photo | Mason, option A, 2026-10-14 |
 | KI-61 | A `LOCK TABLE` in a migration does not stop an already-running call of the OLD function body | Mason 2026-09-03; both instances applied with zero activity; future migrations of that shape need a quiet rollout and a concurrency proof |
 | KI-62 | Live migration ledger has older entries with no file on `main` | Pre-existing drift, not new |
-| KI-63 | Quote-version trust chain is hash-pinned in 3 files (`quote-versions-rpc-owned.sql`, migration `20260826220000`, `quoteVersionWriteBoundary.test.ts`) | Intentional friction; a change must update all three |
+| KI-63 | Quote-version trust chain has live pins in two files (`quote-versions-rpc-owned.sql`, `quoteVersionWriteBoundary.test.ts`); migration `20260826220000` keeps its apply-time pin copy | Intentional friction; a live-pin change must update both live files, while the applied migration stays unchanged |
 | KI-64 | All agents share Mason's admin GitHub identity; the manual merge override is fenced only by command matching | Mason declined a separate non-admin credential twice (2026-09-01) |
 | KI-65 | The write-time actor-binding guard is bypassable by design limits | Capped by decision 2026-09-01; real controls are Codex review and post-apply sweeps |
 | KI-66 | `review-proof-guard` denies destructive commands that spell out a worktree path | Mason "document, don't fix" 2026-08-20; use relative paths |
