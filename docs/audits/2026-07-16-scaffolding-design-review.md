@@ -80,9 +80,9 @@ Landing work changed from "push to main" to "branch → PR → checks → merge,
 
 ### Theme 5 — No end-of-life story for loops, and status surfaces misreport
 - `/fleet` and the SessionStart summary count **every** finished ledger as "active" (8 claimed active; the loops finished by ~2026-07-11), date them by file-mtime (= checkout date in fresh worktrees), and surface placeholder text as "last entry." `docs/build-loops/` is a second, older loop system whose STATE files still claim to be live and carry expired one-night push authorizations.
-- Two roadmaps compete: newcomers find the superseded top-level `ROADMAP.md`; the real 2026-07-15 execution board is referenced by **nothing**. (The parallel docs-cleanup session is already sweeping archives/ROADMAP — coordinate, don't duplicate.)
+- Two roadmaps compete: newcomers find the superseded top-level `ROADMAP.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`); the real 2026-07-15 execution board is referenced by **nothing**. (The parallel docs-cleanup session is already sweeping archives/ROADMAP — coordinate, don't duplicate.)
 
-**Fix:** add a required `Status: ACTIVE|FINISHED <date>` line to the ledger format (validator already exists to enforce it), make fleet-status read it instead of mtime, archive finished loops, tombstone-banner ROADMAP.md → point at the 07-15 plan, and link the plan from the manual layer.
+**Fix:** add a required `Status: ACTIVE|FINISHED <date>` line to the ledger format (validator already exists to enforce it), make fleet-status read it instead of mtime, archive finished loops, tombstone-banner ROADMAP.md (since removed 2026-10-28 instead) → point at the 07-15 plan, and link the plan from the manual layer.
 
 ### Theme 6 — Two-manifest parity and sync brittleness
 - Nothing enforces parity between `.claude/settings.json` (33 hook wirings) and `.codex/hooks.json` (29). Today's asymmetries are deliberate; tomorrow's new Claude guard silently never fires for Codex — the designated builder. DECISION_LOG also wrongly records `.codex/hooks.json` as generated.
@@ -137,7 +137,7 @@ Severities shown are post-verification (10 HIGHs were downgraded to MED by adver
 15. [manual-layer] Manual freshness protected only by prose; stamp check accepts any date; violated 3× in 48h — `scripts/check-doc-drift.mjs`
 16. [reference-drift] QUOTE_TO_DELIVERY teaches dropped/wrong money columns — `docs/workflows/QUOTE_TO_DELIVERY.md`
 17. [reference-drift] RLS matrix contradicted by July migrations — `docs/workflows/RLS_SECURITY_GUIDE.md`
-18. [docs-sprawl] Two roadmaps, current one referenced by nothing; newcomers find the superseded one — `docs/ROADMAP.md`
+18. [docs-sprawl] Two roadmaps, current one referenced by nothing; newcomers find the superseded one — `docs/ROADMAP.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`)
 19. [sync-adapters] No hook-manifest parity guard; DECISION_LOG falsely says .codex/hooks.json is generated — `.codex/hooks.json`
 20. [junior-redteam] /ship, OWNER_PLAYBOOK, production-runbook still instruct direct main pushes — `.claude/commands/ship.md`
 21. [junior-redteam] Interactive live-apply approval prose-only; apply-guard block message omits Mason's OK — `.claude/hooks/migration-apply-guard.mjs`

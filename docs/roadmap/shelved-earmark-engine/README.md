@@ -3,29 +3,32 @@
 **Status (checked 2026-09-26):** still SHELVED (Mason's call, 2026-06-14). The redesign was
 first planned for "the next few days" but has not been scheduled; it is parked in `TODO.md` §3
 ("Earmark engine") and must not be applied as-is. None of these three migrations is in the live
-ledger. These three migration files are NOT in `supabase/migrations/` and were NOT part of the
-G5 go-live batch. They are preserved here verbatim as the starting point for the
-proper "reserved prepay pool" redesign.
+ledger. These three migration files were never in `supabase/migrations/` and were NOT part of the
+G5 go-live batch.
+
+**2026-10-28:** Mason kept this summary and removed the five June draft SQL files listed below:
+they no longer match today's database and any redesign rewrites them. Each is still in git
+(restore steps in `docs/audits/2026-10-28-removed-finished-docs.md`).
 
 Since then, prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) was
 hard-disabled live by `20260620200000_prepay_bulk_apply_block_guard.sql`
 (`PREPAY_BULK_APPLY_DISABLED`). This redesign is the stated real fix for that too.
 
 ## What was shelved
-- `20260613240000_booking_prepay_earmark_and_apply.sql` — `set_prepay_credit_booking`
+- `20260613240000_booking_prepay_earmark_and_apply.sql` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) — `set_prepay_credit_booking`
   (earmark a prepay credit to a booking) + `apply_booking_prepay` (FIFO auto-apply a
   booking's earmarked credits to its draw invoices via Mechanism A).
-- `20260613250000_auto_apply_booking_prepay_on_post.sql` — AFTER UPDATE OF status
+- `20260613250000_auto_apply_booking_prepay_on_post.sql` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) — AFTER UPDATE OF status
   trigger that fires `apply_booking_prepay` when a draw invoice posts.
-- `20260613280000_aggregate_prepay_reserve_earmarked.sql` — `apply_remaining_prepayments`
+- `20260613280000_aggregate_prepay_reserve_earmarked.sql` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) — `apply_remaining_prepayments`
   rewrite that reserved earmarked credits from the legacy aggregate spend path.
 
 Also here: the two rolled-back smoke proofs for this engine, moved from `docs/roadmap/smoke/` on
 2026-09-26 so they stay with the code they test. Both are written against the June G5 apply order
 and must be re-checked against the redesign before use.
-- `06b-booking-prepay-apply.sql` — proves `set_prepay_credit_booking` + `apply_booking_prepay`
+- `06b-booking-prepay-apply.sql` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) — proves `set_prepay_credit_booking` + `apply_booking_prepay`
   (for `20260613240000`).
-- `06bB-auto-apply-on-post.sql` — proves the auto-apply-on-post trigger (for `20260613250000`).
+- `06bB-auto-apply-on-post.sql` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) — proves the auto-apply-on-post trigger (for `20260613250000`).
 
 The matching **frontend** was also removed from the branch: the PrepaymentManager
 "Assign to booking" earmark control and the OrderDetail "Apply booking prepay" button.

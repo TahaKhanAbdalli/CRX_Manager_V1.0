@@ -35,7 +35,7 @@ lot/tote chain stays untouched — `application_record_lots` holds 0 rows. Brand
 **delivery** path; see WP-3),
 1.18 (density precedence), 1.9b (brand table and `product_families` are both needed).
 Phases 0 and 0b were judged executor-ready after small edits; Phase 1 was not.
-**Design source:** `docs/plans/2026-08-18-product-data-model-plan.md`
+**Design source:** `docs/plans/2026-08-18-product-data-model-plan.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`)
 **Intended executor:** **[REV3b] Undecided — Mason has 0 Codex credits as of 2026-08-18.**
 The plan was written for Codex (`terra`); with no credits, Claude is the available builder.
 **Consequence the executor must respect:** the adversarial cross-model gate that

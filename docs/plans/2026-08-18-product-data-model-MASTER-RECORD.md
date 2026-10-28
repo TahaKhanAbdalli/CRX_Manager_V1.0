@@ -1,5 +1,13 @@
 # Product Data Model — Master Record
 
+> **UPDATE 2026-10-28: ingredients and density refreshed.** `docs/plans/2026-10-28-product-data-model-REFRESH.md`
+> records Mason's decisions and the corrections to WP-1 and WP-2:
+> - weight per gallon is built first and shown on the loader worksheet and blend ticket;
+> - one value per generic;
+> - an admin-only cost-per-lb-of-active comparison.
+>
+> It wins where it differs from this record.
+
 > **UPDATE 2026-10-22 — the brand part comes first, refreshed.** Mason chose to build delivery-time brand
 > capture before receiving (`docs/manual/DECISION_LOG.md`, 2026-10-22 generic-products entry). The refreshed
 > step 1 is `docs/plans/2026-10-22-product-brands-step1-PLAN.md`. It replaces the brand layer described
@@ -30,7 +38,7 @@ history.)
 | Document | What it is | Read it when |
 |---|---|---|
 | **This file** | The complete record — issues, reasoning, changes | **Now, before you approve** |
-| `2026-08-18-product-data-model-plan.md` | The full working plan + three review rounds | Someone is building and needs the *why* |
+| `2026-08-18-product-data-model-plan.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) | The full working plan + three review rounds | Someone is building and needs the *why* |
 | `2026-08-18-product-data-model-PRD.md` | Numbered requirements with acceptance tests | Someone is building and needs the *what* |
 
 Everything below is either quoted from you, or verified against the live database and the

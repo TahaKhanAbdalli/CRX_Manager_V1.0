@@ -1,5 +1,12 @@
 # Product Data Model — Build Plan and Handoff Contract
 
+> **UPDATE 2026-10-28: WP-1 and WP-2 refreshed; density goes first.** Read
+> `docs/plans/2026-10-28-product-data-model-REFRESH.md` before building anything here.
+> - It records Mason's 2026-10-28 decisions: density before ingredients; weight on the loader worksheet and blend ticket; one value per generic; an admin-only comparison.
+> - Its section 4 corrects about 18 stale details in WP-1 and WP-2, including grants, retry safety, write lock-down, apply gates and the brand-proposal parts.
+>
+> Where it differs from this file, it wins. To-Do row 2.9.
+
 > **UPDATE 2026-10-22 — WP-3 is replaced.** Mason chose to build delivery-time brand capture first
 > (`docs/manual/DECISION_LOG.md`, 2026-10-22 generic-products entry). WP-3 below, and its row on the loop
 > ledger (`docs/loops/product-data-model-ledger.md`), are replaced by
@@ -166,7 +173,7 @@ things that are not technical.**
 | **Codex credits are at zero** | Sol cannot execute, and the `gpt-5.6-sol` adversarial gate cannot run | **Mason** |
 | **Supabase connector scope in the Codex app** | `.codex/config.toml` targets `rhyzpcqhnizqbxphqdkr` with `read_only=false`; the OAuth grant was recorded dead (`invalid_grant`) 2026-08-14 | **Mason** |
 | **The database backup is 10 days old** *(as of 2026-08-19; on 2026-09-26 the local `backups/LATEST-OK.json` still read `2026-08-09`, 48 days old)* | `backups/LATEST-OK.json` = `2026-08-09`, 156 tables, 9,927 rows. Prior cadence was 4–6 days, so the schedule has degraded. **The Supabase org is on the free plan — there is no point-in-time recovery, so this file is the only restore path.** *(Since superseded: a weekly off-site encrypted backup now also exists.)* WP-0 mutates live rows | **Prerequisite** — see §7 |
-| **The parked-migration scan is fail-closed** | `scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds three migrations to a queue that cannot currently be counted | **Done** — fixed by PR #437 (merged 2026-08-21); see `docs/reference/parked-migration-scan-unknown-diagnosis.md` |
+| **The parked-migration scan is fail-closed** | `scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds three migrations to a queue that cannot currently be counted | **Done** — fixed by PR #437 (merged 2026-08-21); see `docs/reference/parked-migration-scan-unknown-diagnosis.md` (removed 2026-10-28; listed in `docs/audits/2026-10-28-removed-finished-docs.md`) |
 | **The plan documents exist only as unpushed local commits** | Sol starting from `origin/main` cannot read them | **Done** — on `main` via PRs #429, #435 and #498 |
 
 ### One consequence of Sol executing, stated plainly
