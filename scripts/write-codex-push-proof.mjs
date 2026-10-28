@@ -1479,32 +1479,31 @@ function anyCodeRabbitWaiver(root, number) {
 // fact null, which refuses.
 // The open pull requests whose head is exactly this commit, or null when GitHub
 // could not be read. `gh` takes an argument list and returns stdout (throws on failure).
-// GitHub's commit-to-PR association can return [] for a head pushed from a fork even
-// though the PR is open, so when it has no exact match the canonical repository's own
-// open-PR list is read in full and matched by exact head SHA and base repository. Both
-// paths accept only open PRs of this repository whose head SHA matches; a PR is never
-// inferred from a branch name, and any unreadable or malformed page returns null.
+// GitHub's commit-to-PR association is NOT used: it can return [] for a head pushed from a
+// fork even though the PR is open, and it is paginated. Every lookup (the first read and
+// the final re-read) instead reads the canonical repository's complete open-PR list
+// (`--paginate --slurp`) and matches by exact head SHA, open state and base repository.
+// A PR is never inferred from a branch name. A missing or non-40-hex head, an unsafe
+// owner/name, a failing or non-JSON answer, a page that is not a list, or any entry
+// without a number, state, 40-hex head SHA and base repository makes the whole list
+// untrustworthy and returns null (refuses), never an empty answer.
 export function openPullsAtHead(gh, owner, name, headSha) {
-  const want = String(headSha || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/i.test(String(headSha || ""))) return null;
+  if (!/^[\w.-]+$/.test(String(owner || "")) || !/^[\w.-]+$/.test(String(name || ""))) return null;
+  const want = headSha.toLowerCase();
   const repoFullName = `${owner}/${name}`.toLowerCase();
-  const exact = (pull) => pull?.state === "open"
-    && String(pull?.head?.sha || "").toLowerCase() === want
-    && String(pull?.base?.repo?.full_name || "").toLowerCase() === repoFullName;
   try {
-    const associated = JSON.parse(gh(["api", `repos/${owner}/${name}/commits/${headSha}/pulls?per_page=100`]));
-    if (!Array.isArray(associated)) return null;
-    const matches = associated.filter(exact);
-    if (matches.length) return matches;
     const pages = JSON.parse(gh(["api", `repos/${owner}/${name}/pulls?state=open&per_page=100`, "--paginate", "--slurp"]));
     if (!Array.isArray(pages) || !pages.length || !pages.every(Array.isArray)) return null;
     const all = pages.flat();
-    // A malformed entry makes the list untrustworthy, never skippable.
     const wellFormed = (pull) => Number.isInteger(pull?.number)
       && typeof pull?.state === "string"
       && /^[0-9a-f]{40}$/i.test(String(pull?.head?.sha || ""))
       && typeof pull?.base?.repo?.full_name === "string";
     if (!all.every(wellFormed)) return null;
-    return all.filter(exact);
+    return all.filter((pull) => pull.state === "open"
+      && pull.head.sha.toLowerCase() === want
+      && pull.base.repo.full_name.toLowerCase() === repoFullName);
   } catch {
     return null;
   }
