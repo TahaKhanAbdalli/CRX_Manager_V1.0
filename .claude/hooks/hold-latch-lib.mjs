@@ -125,15 +125,15 @@ const HARMLESS_THING_WORDS = new Set(["review", "reviews", "check", "checks", "p
   "warnings", "nag", "nags", "reminder", "reminders", "notification", "notifications", "popup", "popups",
   "retry", "retries", "percommit", "security", "automatic", "extra", "duplicate", "repeated", "lint", "codex",
   "luna", "hook", "hooks", "gate", "guard", "permission", "approval"]);
-// These verbs carry out what follows them, so what is retried must be harmless
-// too: "stop retrying database writes" latches, "stop retrying on a red check"
-// does not (Codex App review, PR #1152). Stopping a refusal or a warning only
-// lets things through, so those verbs need no such check.
-const ACTING_ING = new Set(["retrying", "rerunning", "reporting", "looping"]);
+// Whatever follows a safe verb must be harmless too: "stop retrying database
+// writes" and "stop refusing database writes" latch, "stop retrying on a red
+// check" and "stop refusing a branch that is behind main" do not (Codex App and
+// Luna review, PR #1152).
 const HARMLESS_TAIL_WORDS = new Set([...HARMLESS_THING_WORDS, "on", "about", "for", "at", "in", "of", "when",
   "every", "each", "all", "the", "a", "an", "my", "our", "this", "that", "these", "those", "any", "again", "so",
   "much", "often", "anymore", "now", "docs", "doc", "file", "files", "commit", "commits", "red", "green",
-  "failing", "failed", "ci", "build", "builds", "test", "tests"]);
+  "failing", "failed", "ci", "build", "builds", "test", "tests", "branch", "branches", "is", "are", "behind",
+  "ahead", "main", "stale", "out", "date"]);
 // The words after the stop, up to the end of its clause; the first is the word right after it.
 function wordsAfter(text, end) {
   return text.slice(end).split(/[.!?;:,\n\r]|\s-\s|--/)[0].split(/\s+/)
@@ -170,10 +170,8 @@ function isDescriptiveStop(text, start, end) {
   // this point stop pushing") is still an order (Codex App review, PR #1152).
   if (next.length > 4 && next.endsWith("ing")) {
     if (!HARMLESS_ING.has(next)) return false;
-    if (ACTING_ING.has(next)) {
-      const tail = wordsAfter(text, end).slice(1);
-      if (tail.length > 6 || !tail.every((w) => HARMLESS_TAIL_WORDS.has(w))) return false;
-    }
+    const tail = wordsAfter(text, end).slice(1);
+    if (tail.length > 6 || !tail.every((w) => HARMLESS_TAIL_WORDS.has(w))) return false;
     // The causative must govern this stop: "make [the] <machine part> stop",
     // with the machine part right before it. "After making the build green stop
     // pushing" names a prerequisite, not the thing stopping (Codex App, PR #1152).
