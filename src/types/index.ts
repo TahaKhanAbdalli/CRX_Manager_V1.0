@@ -1652,6 +1652,10 @@ export interface Notification {
   related_entity_type: string | null;
   related_entity_id: string | null;
   created_at: string;
+  /** Who sent it (stamped by the DB to the signed-in sender); null = a system notice. */
+  created_by: string | null;
+  /** Sender's display name, resolved client-side by withSenderNames when another person sent it. */
+  sender_name?: string;
 }
 
 export interface AppSetting {

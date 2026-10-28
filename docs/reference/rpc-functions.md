@@ -254,8 +254,8 @@ The `next_*_number` generators use the America/Chicago calendar year (`202609081
 - `next_cycle_count_number()` -> CC-YYYY-NNNNN (5 digits)
 - `next_return_number()` -> RMA-YYYY-NNNN
 - `next_commission_payment_number()` -> CP-YYYY-NNNN
-- `generate_order_number()` — auto-generate order number
-- `generate_quote_number()` — auto-generate quote number
+- `generate_order_number()` — auto-generate order number. Active admins, sales reps and server functions only: no EXECUTE for anon/PUBLIC, `PROFILE_INACTIVE` for an inactive account, `NUMBER_ROLE_REQUIRED` for any other role (migration `20261027080100`, not applied)
+- `generate_quote_number()` — auto-generate quote number. Same rule as `generate_order_number()`
 - `generate_ticket_number()` — auto-generate blend ticket number
 
 ## Reporting (12 live RPCs)

@@ -2,22 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bell, Check, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import { withSenderNames } from '../../lib/activityLogger';
+import type { Notification } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useRealtimeNotifications } from '../../hooks/useRealtimeSubscription';
 import { useNavigate } from 'react-router-dom';
-
-interface Notification {
-  id: string;
-  user_id: string;
-  notification_type: string;
-  title: string;
-  message: string;
-  related_entity_type: string | null;
-  related_entity_id: string | null;
-  is_read: boolean;
-  created_at: string;
-}
 
 export default function NotificationsPanel() {
   const { profile } = useAuth();
@@ -81,7 +71,9 @@ export default function NotificationsPanel() {
       setLoading(false);
       return;
     }
-    setNotifications((listRes.data || []) as Notification[]);
+    const rows = await withSenderNames((listRes.data || []) as Notification[]);
+    if (seq !== loadSeq.current) return;
+    setNotifications(rows);
     setListFailed(false);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -287,6 +279,9 @@ export default function NotificationsPanel() {
                         <p className="text-xs text-secondary mt-1 line-clamp-2">
                           {notification.message}
                         </p>
+                        {notification.sender_name && (
+                          <p className="text-xs text-secondary mt-0.5">From {notification.sender_name}</p>
+                        )}
                         <p className="text-xs text-gray-400 mt-1">
                           {formatTime(notification.created_at)}
                         </p>

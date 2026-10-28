@@ -1,6 +1,7 @@
 // Shared helpers for Claude's and Codex's production-push guards.
 
 import path from "node:path";
+import { APP_REPO_OWNERS, APP_REPO_PATHS } from "./app-repo-identity.mjs";
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
 // checks whether the push actually TARGETS main before doing anything.
@@ -662,14 +663,19 @@ export function reviewProofPathMentioned(value) {
   // Every other file a gate TRUSTS is named here too (adversarial review
   // 2026-10-18): the migration reviewer proof, every owner-approval record (a
   // deleted used-code marker would let an approval code be replayed), the
-  // AUTOPILOT.on flag, the applied-migrations snapshot, and hold.json. Before,
+  // AUTOPILOT.on flag, the applied-migrations snapshot, and every hold latch:
+  // hold.json plus, since 2026-10-27, each session's hold-<session_id>.json and
+  // hashed hold.<hash>.json (a bare `find . -name hold-x.json -delete` never
+  // names the state directory, so the names must carry it). A wildcard
+  // straight after "hold" (`hold-*`, `hold*`) counts without the ".json"
+  // ending (Luna review, PR #1152). Before,
   // only the broad "any .claude mention plus a destructive word" rule covered
   // them, and `cp`/`tee`/`echo >` into them walked through; that broad rule is
   // now narrowed to the state directory itself, so the names carry the weight.
   // Their legitimate writers (write-apply-proofs, owner-approval-prompt,
   // autopilot-arm, refresh-applied-migrations, hold-latch-prompt) all write
   // internally and never name the file in a tool command.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold\.json)(?![\w.-])/i.test(text);
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json|migration-review-[^\s/"']+\.json|owner-approval-[^\s/"']+\.json|AUTOPILOT\.on|applied-migrations\.json|hold(?:[-.*?[{][^\s/"']*)?\.json|hold[-.]?(?:[*[{]|\?(?=\S))[^\s/"']*)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
@@ -1057,7 +1063,12 @@ export function riskyFiles(files) {
 // no RLS, and no production surface. Scope the gate by the repository's own
 // remotes so it keeps FULL strength on the app repo (the path patterns are
 // deliberately untouched) and stops policing unrelated ones.
-export const GUARDED_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
+// Every owner the app repo has lived under (app-repo-identity.mjs): the move to the
+// `croprxsolutions` organization must not turn the moved repo into "unrelated".
+export const GUARDED_REPO_RE = new RegExp(
+  `[:/](?:${APP_REPO_OWNERS.join("|")})\\/CRX_Manager_V1\\.0(?:\\.git)?$`,
+  "i",
+);
 
 // Raw string matching is not repository identity. `https://github.com/masonwells1/
 // ./CRX_Manager_V1.0.git` is the production repo — every URL parser and git itself
@@ -1176,7 +1187,7 @@ function canonicalHost(host) {
 // unknown host. That gates slightly more than git would actually deliver — the
 // safe direction, because a false positive costs one extra review and a false
 // negative is an ungated production push.
-const GUARDED_REPO_PATH = "masonwells1/crx_manager_v1.0";
+const GUARDED_REPO_PATHS = APP_REPO_PATHS;
 function idPath(id) {
   const slash = String(id).indexOf("/");
   return slash === -1 ? "" : String(id).slice(slash + 1);
@@ -1184,7 +1195,7 @@ function idPath(id) {
 function idNamesGuardedRepo(id) {
   if (typeof id !== "string" || id.length === 0) return false;
   const p = idPath(id);
-  return p === GUARDED_REPO_PATH || p.endsWith(`/${GUARDED_REPO_PATH}`);
+  return GUARDED_REPO_PATHS.some((guarded) => p === guarded || p.endsWith(`/${guarded}`));
 }
 // Accepts `git remote -v` output. Fails CLOSED: anything unparseable or empty is
 // treated as the guarded repo, so a broken remote lookup cannot skip the gate.
@@ -2206,8 +2217,8 @@ function rewriteBaseReachesGuardedApp(rawBase) {
   // Git substitutes raw prefixes, not path segments. That means both an owner
   // prefix (`.../masonwells1/`) and a partial repository name
   // (`.../masonwells1/CRX_`) can be completed by the destination's suffix.
-  // Classify any non-empty canonical path prefix of the guarded repository.
-  return p !== "" && GUARDED_REPO_PATH.startsWith(p);
+  // Classify any non-empty canonical path prefix of a guarded repository path.
+  return p !== "" && GUARDED_REPO_PATHS.some((guarded) => guarded.startsWith(p));
 }
 
 // Extract rewrite-setting names from `git config --list` output. Backup and

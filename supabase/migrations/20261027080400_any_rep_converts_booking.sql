@@ -32,8 +32,8 @@
 --   screen change. Frozen provers (scripts/smoke/prove-quote-customer-row-version-concurrency.mjs,
 --   prove-quote-pricing-real-schema.mjs) read their own historical migration files and keep
 --   describing those. scripts/db-invariant-sweeps/allowlist.json pins this function in the
---   convert_quote_to_order actor-forgery entry; that pin predates #1105 and is re-pinned on the
---   next live sweep (p_performed_by handling is unchanged).
+--   convert_quote_to_order actor-forgery entry; that pin is already stale since #1105 (KNOWN_ISSUES
+--   KI-85) and is re-pinned from this body (p_performed_by handling is unchanged).
 --
 -- EVIDENCE: read on a local replay of main 51d212fa (no live access from the fork); Mason to
 --   re-read live before applying: owner postgres, SECURITY DEFINER, search_path=public, pg_temp,

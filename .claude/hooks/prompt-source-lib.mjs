@@ -49,19 +49,42 @@ export const MACHINE_TAG_NAMES = [
   "command-name",
   "local-command-stdout",
   "heartbeat",
+  // The desktop app's CI / Auto-fix notice about a watched PR (2026-10-27).
+  "ci-monitor-event",
 ];
 
-// Full envelope tags anywhere in the prompt...
+// These count as machine content only when the envelope is the WHOLE prompt
+// (Luna review, PR #1152): the desktop app sends each one as its own message, so
+// a prompt that also carries other words is Mason's, and authoredByMason()
+// strips the envelope from it instead — his "stop" beside a notice still latches.
+const WHOLE_PROMPT_ONLY_TAG_NAMES = ["ci-monitor-event"];
+const ANYWHERE_TAG_NAMES = MACHINE_TAG_NAMES.filter((t) => !WHOLE_PROMPT_ONLY_TAG_NAMES.includes(t));
+
+// Full envelope tags anywhere in the prompt...  Only the exact tag counts here:
+// a neutralised relay form (`<\~tag>`) Mason mentions must not turn his whole
+// message into machine text (Sol, PR #1152); authoredByMason() strips that form
+// where it appears instead.
 const CONTAINS_MACHINE_TAG_RE = new RegExp(
-  "<(?:" + MACHINE_TAG_NAMES.join("|") + ")>",
+  "<(?:" + ANYWHERE_TAG_NAMES.join("|") + ")>",
   "i"
 );
 // ...or the trimmed prompt STARTS with one of those tag names (covers tags that
 // carry attributes, e.g. <task-notification source="...">).
 const STARTS_WITH_MACHINE_TAG_RE = new RegExp(
-  "^<(?:" + MACHINE_TAG_NAMES.join("|") + ")\\b",
+  "^<(?:" + ANYWHERE_TAG_NAMES.join("|") + ")(?=[\\s>])",
   "i"
 );
+
+// One envelope from its open tag at the start to its FIRST close tag at the end.
+function isWholePromptEnvelope(trimmed) {
+  for (const tag of WHOLE_PROMPT_ONLY_TAG_NAMES) {
+    // (?=[\s>]) not \b: "<ci-monitor-event-debug>" is not this tag (Luna review, PR #1152).
+    if (!new RegExp(`^<\\\\*~?${tag}(?=[\\s>])[^>]*>`, "i").test(trimmed)) continue;
+    const close = new RegExp(`<\\\\*~?\\/~?${tag}\\s*>`, "i").exec(trimmed);
+    if (close && close.index + close[0].length === trimmed.length) return true;
+  }
+  return false;
+}
 
 // INCIDENT (2026-10-23). Claude Code 2.1.304 hands UserPromptSubmit hooks a
 // background subagent's report as the bare body, which opens with the harness's
@@ -92,6 +115,7 @@ export function isMachineGenerated(prompt) {
   if (!text) return false;
   if (CONTAINS_MACHINE_TAG_RE.test(text)) return true;
   if (isBareHandback(text)) return true;
+  if (isWholePromptEnvelope(text.trim())) return true;
   return STARTS_WITH_MACHINE_TAG_RE.test(text.trim());
 }
 
@@ -219,8 +243,22 @@ function nextNonBlank(lines, from) {
   return j;
 }
 
+// INCIDENT (2026-10-27, twice). The hook received a hand-back as the open tag
+// itself, `<agent-message from="…">` on the first line, with no "Another Claude
+// session sent a message:" preamble (the transcript shows the preamble; the hook
+// payload does not), so the report's own words latched the hold. Replayed: the
+// same text with the preamble does not latch. Without a preamble, the open tag
+// must sit alone at column zero and the very next line must be the harness's
+// WHOLE frame line (HANDBACK_FRAME_LINE above), exactly; the report then ends as
+// rule 2 describes. A typed tag, or one followed by anything else, is Mason's.
+function isBareTagHandbackAt(lines, i) {
+  return AGENT_OPEN_RE.test(lines[i].replace(/\r$/, "")) &&
+    i + 1 < lines.length && lines[i + 1].replace(/\r$/, "") === HANDBACK_FRAME_LINE;
+}
+
 // Index of a hand-back's open-tag line when line i is its preamble, else -1.
 function reportOpenAt(lines, i, strict) {
+  if (isBareTagHandbackAt(lines, i)) return i;
   const pre = PREAMBLE_LINE_RE.exec(lines[i]);
   if (!pre) return -1;
   let open = -1;
@@ -354,10 +392,16 @@ const BLOCKQUOTE_LINE_RE = /^[ \t]{0,3}>.*$/gm;
 // Closed blocks anywhere in the prompt: an open tag through its matching close.
 // Non-greedy, so two envelopes in one prompt are two separate removals and what
 // Mason typed BETWEEN them survives.
+// The tag name must end at whitespace or ">" (not \b), so a look-alike such as
+// <ci-monitor-event-debug> is not an envelope (Luna review, PR #1152). The
+// harness's neutralised relay form (<\~tag> … <\~/tag>) is stripped too
+// (Codex App review, PR #1152).
+const envOpen = (tag) => `<\\\\*~?${tag}(?=[\\s>])[^>]*>`;
+const envClose = (tag) => `<\\\\*~?\\/~?${tag}\\s*>`;
 function stripClosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(`${envOpen(tag)}[\\s\\S]*?${envClose(tag)}`, "gi"), " ");
   }
   return out;
 }
@@ -368,9 +412,15 @@ function stripUnclosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    // Only the exact open tag, as before PR #1152, and never a CI notice: an
+    // unclosed tag Mason mentions (neutralised or a CI notice) must not swallow
+    // the "stop" he typed after it (Sol, PR #1152). Those are stripped only as
+    // closed pairs.
+    if (!WHOLE_PROMPT_ONLY_TAG_NAMES.includes(tag)) {
+      out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    }
     // Any orphaned closing tag left behind.
-    out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(envClose(tag), "gi"), " ");
   }
   return out;
 }

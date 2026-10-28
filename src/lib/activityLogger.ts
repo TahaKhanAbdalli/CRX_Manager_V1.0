@@ -1,5 +1,6 @@
 import { supabase } from './db';
 import { Sentry } from './sentry';
+import type { Notification } from '../types';
 
 export interface LogActivityParams {
   event: string;
@@ -102,4 +103,18 @@ export async function notifyAdmins(
   } catch (err) {
     Sentry.captureException(err, { tags: { source: 'activity_logger', action: 'notify_admins' } });
   }
+}
+
+/**
+ * Adds the sender's name to notifications another person sent (Mason 2026-10-26), so a notice a
+ * person typed never looks like a system one. created_by is stamped by the database; null = system.
+ * Names come from profile_public_view (safe columns), as in ActivityFeed.
+ */
+export async function withSenderNames(rows: Notification[]): Promise<Notification[]> {
+  const sentByOther = (n: Notification) => Boolean(n.created_by && n.created_by !== n.user_id);
+  const ids = [...new Set(rows.filter(sentByOther).map((n) => n.created_by as string))];
+  if (ids.length === 0) return rows;
+  const { data } = await supabase.from('profile_public_view').select('id, full_name').in('id', ids);
+  const names = new Map((data || []).map((p: { id: string | null; full_name: string | null }) => [p.id, p.full_name]));
+  return rows.map((n) => (sentByOther(n) ? { ...n, sender_name: names.get(n.created_by) || 'a team member' } : n));
 }

@@ -70,6 +70,7 @@ import {
 } from "../../.claude/hooks/codex-bot-review-lib.mjs";
 import { solExemptionOnGitHub } from "../../.claude/hooks/sol-exempt-lib.mjs";
 import { coderabbitSkipNotice, findCodeRabbitSkip, skipPullRequestFor, skipStateDirs } from "../../.claude/hooks/coderabbit-skip-lib.mjs";
+import { literalReadOnlySearch } from "../../.claude/hooks/read-only-search-lib.mjs";
 
 // Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
 // write-enabled, ANY mutating Supabase tool Codex can reach is a route to
@@ -119,7 +120,9 @@ const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 // the same reason: imported at startup, and it decides whether a merge needs Sol.
 // `coderabbit-skip-lib` joined 2026-10-22 likewise: imported at startup, and it
 // decides whether Mason waived a money PR's CodeRabbit review (Codex App P1, #1035).
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|sol-exempt-lib|coderabbit-skip-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+// `read-only-search-lib` joined 2026-10-27: imported at startup, and it decides
+// which shell commands skip the checks below as plain searches.
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|sol-exempt-lib|coderabbit-skip-lib|read-only-search-lib|app-repo-identity)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 // The same set, spelled out, for the glob matcher below: a wildcard token has
@@ -135,6 +138,10 @@ export const PROTECTED_HARNESS_FILES = Object.freeze([
   ".claude/hooks/live-testdata-lib.mjs",
   ".claude/hooks/sol-exempt-lib.mjs",
   ".claude/hooks/coderabbit-skip-lib.mjs",
+  ".claude/hooks/read-only-search-lib.mjs",
+  // Imported by codex-push-lib and coderabbit-skip-lib, so it loads at guard
+  // startup too (Codex App P1 on #1149).
+  ".claude/hooks/app-repo-identity.mjs",
   ".codex/hooks/production-action-guard.mjs",
   ".codex/hooks/codex-hook-adapter.mjs",
   "scripts/run-claude-review.mjs",
@@ -691,6 +698,31 @@ export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
   }
   return null;
 }
+// A conventional commit message (`git commit -m "docs(changelog): …"`) holds a
+// `(` that no shell runs: inside double quotes it is plain text in bash,
+// PowerShell and cmd.exe alike. So for the computed-text test below, a
+// double-quoted span is blanked when its body cannot expand in any of them (no
+// `$`, backtick, `%` or `!`). The segment is left untouched when anything could
+// make the quotes mean something else: a backslash right before a quote or any
+// backtick (an escaped quote) or a smart quote (PowerShell reads it as a quote,
+// the others do not). A backslash elsewhere (`C:\Program Files`) is plain text.
+// Single-quoted text is stepped over unchanged, so a `"` inside it never opens
+// a span (`Tee-Object '"' (Join-Path a b) '"'` keeps its subexpression visible).
+export function literalDoubleQuotedTextBlanked(segment) {
+  const text = String(segment || "");
+  if (/\\["']|[`‘’‚‛“”„]/.test(text)) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const quote = text[i];
+    if (quote !== "'" && quote !== '"') { out += quote; continue; }
+    const close = text.indexOf(quote, i + 1);
+    if (close < 0) return text; // unbalanced: leave the whole segment as written
+    const span = text.slice(i, close + 1);
+    out += quote === '"' && !/[$%!]/.test(span) ? '""' : span;
+    i = close;
+  }
+  return out;
+}
 // Codex round 13 (HIGH): the computed-text refusal above is scoped to segments
 // whose VERB the mutation list knows, and the fail-closed rule to segments that
 // NAME a protected file. A destination split across variables and written by a
@@ -710,7 +742,7 @@ export function computedSegmentWithUnrecognizedCommand(command, workdir = "") {
   // The lone resolve-review-thread call (#973) holds `(` only inside its quoted
   // GraphQL text; ghApiIsResolveReviewThreadOnly has already proved every word
   // literal (no `$`, backtick or subexpression can match it), so it is not computed.
-  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(segment) && !ghApiIsResolveReviewThreadOnly(segment);
+  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(literalDoubleQuotedTextBlanked(segment)) && !ghApiIsResolveReviewThreadOnly(segment);
   const commandComputed = segments.some(computed);
   for (const segment of segments) {
     if (!computed(segment) && !(commandComputed && segmentHeadIsExecutor(segment))) continue;
@@ -828,6 +860,14 @@ function usesDynamicProcessEval(command) {
     /(?:^|[|;&]\s*)node(?:\.exe)?["']?\s*(?:-|$)/i.test(text) ||
     /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:[^\s|]*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
 }
+
+// What a blocked harness change should do instead. (The old text pointed at a
+// maintenance script that was retired on 2026-09-05.)
+export const HARNESS_REPAIR_PATH =
+  "Codex cannot change these files, because they are how the review and merge gates are enforced. " +
+  "To repair one, hand the change to a Claude session: it edits the file on a feature branch and ships it " +
+  "through the normal reviewed pull request in .claude/commands/ship.md (Luna rounds, then a fresh Sol " +
+  "review of the exact head before merge).";
 
 function denied(reason) {
   return { blocked: true, reason };
@@ -1448,6 +1488,10 @@ export function pathIsInside(child, root) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function pathSegmentsInclude(value, segment) {
+  return path.resolve(value).split(/[\\/]/).some((part) => part.toLowerCase() === segment);
+}
+
 // The checkout this guard belongs to: the folder two levels above
 // `.codex/hooks/`. The hook command runs the copy inside the session's own
 // checkout (`$(git rev-parse --show-toplevel)/.codex/hooks/…`), so this is the
@@ -1455,6 +1499,30 @@ export function pathIsInside(child, root) {
 // directory, which would let a session started in an unrelated folder widen it.
 export function guardCheckoutRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+// Every working tree of the repository that checkout belongs to, itself first.
+// A session started in one worktree may legitimately edit another worktree of
+// the SAME repository (Codex reproduced the refusal 2026-10-27); the list comes
+// from `git worktree list`, never from the event, so an unrelated folder still
+// cannot widen it. If git cannot answer, only the checkout itself is allowed.
+export function repositoryWorktreeRoots(checkoutRoot, runGit = defaultRunGit) {
+  const own = path.resolve(checkoutRoot);
+  let listing;
+  try {
+    listing = runGit(["worktree", "list", "--porcelain"], own);
+  } catch {
+    return [own];
+  }
+  const roots = [own];
+  for (const block of String(listing).split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    const head = lines.find((line) => line.startsWith("worktree "));
+    if (!head || lines.includes("bare") || lines.some((line) => line.startsWith("prunable"))) continue;
+    const root = path.resolve(head.slice("worktree ".length));
+    if (existsSync(root) && !roots.some((known) => pathIsInside(root, known) && pathIsInside(known, root))) roots.push(root);
+  }
+  return roots;
 }
 
 // Where a patch destination really lands once symlinks and junctions on its
@@ -1501,6 +1569,9 @@ export function evaluateProductionAction({
   // The one folder a native patch may edit; main() passes the checkout this
   // guard file lives in. A direct caller that omits it gets `repoDir`.
   patchRoot = "",
+  // (root) => every folder a native patch may edit, given that root; main()
+  // passes repositoryWorktreeRoots. A direct caller gets the root alone.
+  patchWorktrees = (root) => [root],
   nowMs = Date.now(),
   runGit = defaultRunGit,
   runGh = defaultRunGh,
@@ -1567,12 +1638,12 @@ export function evaluateProductionAction({
     [...pathCandidates, ...patchDestinations].some((candidate) =>
       protectedHarnessPathMentioned(candidate) || protectedHarnessPathMentioned(joinedWithWorkdir(candidate, actionRepoDir)))
   )) {
-    return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+    return denied(`CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. ${HARNESS_REPAIR_PATH}`);
   }
   // The spelled path is not where the write lands when it passes through a
   // symlink or junction (`src/notes.ts` linked to a guard file). Only this
   // route follows links, because only this route's destinations are all known.
-  const patchRoots = nativePatch ? [patchRoot ? path.resolve(patchRoot) : baseRepoDir] : [];
+  const patchRoots = nativePatch ? patchWorktrees(patchRoot ? path.resolve(patchRoot) : baseRepoDir) : [];
   const patchRootsReal = patchRoots.map((root) => {
     try { return realpathSync.native(root); } catch { return root; }
   });
@@ -1582,7 +1653,13 @@ export function evaluateProductionAction({
     // refused before any filesystem lookup, so nothing outside is ever touched.
     const spelled = path.resolve(actionRepoDir, destination);
     if (!patchRoots.some((root) => pathIsInside(spelled, root))) {
-      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is outside the repository (${patchRoots[0] ?? "unknown"}), so it is refused. A native patch may only edit files in this repository.`);
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is outside the repository (${patchRoots[0] ?? "unknown"}) and its other worktrees, so it is refused. A native patch may only edit files in this repository's worktrees.`);
+    }
+    // Git's own folder holds the hooks and the config (core.hooksPath, aliases)
+    // that decide whether Husky runs at all. Widening the roots to every worktree
+    // puts the main checkout's `.git` inside one, so it is refused by name.
+    if (pathSegmentsInclude(spelled, ".git")) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is inside a .git folder, which holds git's hooks and configuration; it cannot be changed through a patch.`);
     }
     // The caps above bound the work; this is the backstop: a hook killed at its
     // time limit allows the action, so past the deadline the answer is no.
@@ -1593,7 +1670,10 @@ export function evaluateProductionAction({
     }
     // A link inside the repository that leads out of it moves the write outside too.
     if (!patchRootsReal.some((root) => pathIsInside(landed, root))) {
-      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} resolves through a link to ${landed}, outside the repository, so it is refused. A native patch may only edit files in this repository.`);
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} resolves through a link to ${landed}, outside the repository, so it is refused. A native patch may only edit files in this repository's worktrees.`);
+    }
+    if (pathSegmentsInclude(landed, ".git")) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} resolves through a link into a .git folder (${landed}), which holds git's hooks and configuration; it cannot be changed through a patch.`);
     }
     // The review state directory holds the proofs AND Mason's CodeRabbit waivers
     // (coderabbit-skip-*.json), whose filenames no basename list covers. A path
@@ -1608,7 +1688,7 @@ export function evaluateProductionAction({
     // at one is refused, spelled or reached through a link (Sol, PR #1083).
     const onEnforcementSurface = (value) => ENFORCEMENT_SURFACE_PATH_RE.test(`/${String(value).replace(/\\/g, "/")}`);
     if (onEnforcementSurface(path.resolve(actionRepoDir, destination)) || onEnforcementSurface(landed)) {
-      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is one of the files that decide whether the commit, push, CI and review gates run (.husky, .github/workflows, .claude/hooks, .codex/hooks, .coderabbit.yaml, the proof and validator scripts). It cannot be changed through a patch; use Edit/Write for a deliberate change.`);
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is one of the files that decide whether the commit, push, CI and review gates run (.husky, .github/workflows, .claude/hooks, .codex/hooks, .coderabbit.yaml, the proof and validator scripts). It cannot be changed through a patch. ${HARNESS_REPAIR_PATH}`);
     }
     if (reviewProofPathMentioned(landed) || protectedHarnessPathMentioned(landed)) {
       return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is a link to, or inside a link to, a protected harness or review-proof file (${landed}); it cannot be changed through a direct file-write tool.`);
@@ -1722,6 +1802,19 @@ export function evaluateProductionAction({
       "through, so it is refused instead. Split it into smaller commands, or move long text into a file."
     );
   }
+  // A plain search (`rg -n 'git push' AGENTS.md`) reads files and runs nothing,
+  // but the text checks below read its quoted pattern as the command it names
+  // (Codex reproduced three such refusals 2026-10-27). Recognised searches keep
+  // only the reading checks: review-proof files and the review state directory.
+  if (literalReadOnlySearch(command)) {
+    if (reviewProofPathMentioned(command)) {
+      return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
+    }
+    if (reviewStateDirectoryMentioned(actionRepoDir)) {
+      return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
+    }
+    return { blocked: false };
+  }
   // A command handed to another program as one argument — `bash -c "…"`,
   // `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand …`, `eval`,
   // `Invoke-Expression`, `Start-Process`, a `&{ … }` block — is one word to every
@@ -1808,7 +1901,7 @@ export function evaluateProductionAction({
   }
   const shellMutatesPath = SHELL_MUTATION_RE.test(command);
   if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
-    return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
+    return denied(`CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. ${HARNESS_REPAIR_PATH}`);
   }
   // The fragment match above compares raw text, so `.claude/hooks/../hooks/<f>`
   // reaches the same file without ever spelling the protected path (Codex HIGH,
@@ -1819,7 +1912,7 @@ export function evaluateProductionAction({
     return denied(
       "CODEX PRODUCTION GATE: an argument of this mutating command resolves to a protected harness file " +
       "once `.`/`..` segments, drive-relative prefixes and the working directory are canonicalized, even " +
-      "though it is not spelled that way. Use the reviewed maintenance workflow with Mason's approval."
+      `though it is not spelled that way. ${HARNESS_REPAIR_PATH}`
     );
   }
   // A directory change INSIDE the command moves the working directory out from
@@ -1877,7 +1970,7 @@ export function evaluateProductionAction({
       "The guard fails closed here: only known readers (cat/type/head/tail/grep/rg/Get-Content/Select-String/" +
       "Get-Item/Test-Path/diff/hash tools/ls, read-only git subcommands without --output/--ext-diff/--textconv/-c, " +
       "or `node <that protected script>`) may name these files from the shell; anything else is treated as a " +
-      "writer. Change one deliberately through the file tools, which are gated separately."
+      `writer. ${HARNESS_REPAIR_PATH}`
     );
   }
   // Fail closed on computed text (Codex round 13): a segment that builds text at
@@ -2156,6 +2249,7 @@ async function main() {
     eventCwd: payload.cwd ?? "",
     repoDir: process.env.CODEX_PROJECT_DIR || process.cwd(),
     patchRoot: guardCheckoutRoot(),
+    patchWorktrees: (root) => repositoryWorktreeRoots(root),
     hardGateDeadlineMs: hookDeadlineMs(CODEX_HOOK_TIMEOUT_MS, CODEX_HOOK_RESERVE_MS),
     findCodeRabbitSkip: (pullRequest, budget) => findCodeRabbitSkip({
       dirs: skipStateDirs([payload.cwd, process.env.CODEX_PROJECT_DIR, process.cwd()], undefined, budget),

@@ -1,11 +1,40 @@
 // Pure helpers for the stop/pause/scope "hold latch" (hold-latch-*.mjs).
 //
 // Safety model: the latch only affects tool calls between Mason saying "stop"
-// and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
+// and his NEXT message in that same session. Any non-hold prompt he types there
+// clears it (machine text and another session's messages never do), so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
+import { createHash } from "node:crypto";
+import path from "node:path";
 import { DENY_TOOLNAME_RE, DENY_BASH_RES } from "./autopilot-lib.mjs";
 import { findNonReadFunctionCall } from "./live-testdata-lib.mjs";
+
+// One hold per session (2026-10-27). Every session whose hooks run from the main
+// checkout used to share one hold.json, so a misfire in one session froze all of
+// them (2026-10-23). The prompt hook writes, and the guard reads, only the file
+// named for its own session; hold.json is the fallback when no session_id
+// arrives. A string id of 1-128 lowercase [a-z0-9_-] characters (a real one is a
+// lowercase UUID) names hold-<id>.json as-is. Any other id (longer, uppercase, which a case-insensitive
+// Windows disk would fold onto a lowercase twin, another type, or other
+// characters) is hashed with its type into hold.<hash>.json rather than stripped, so it cannot leave
+// the directory; the hashed name uses "." (never in a plain id), so two ids
+// cannot share a file short of a 128-bit hash collision (Luna review, PR #1152).
+export function holdStatePath(projectDir, sessionId) {
+  const dir = path.join(projectDir, ".claude", "session-state");
+  if (sessionId === undefined || sessionId === null || sessionId === "") return path.join(dir, "hold.json");
+  if (typeof sessionId === "string" && /^[a-z0-9_-]{1,128}$/.test(sessionId)) return path.join(dir, `hold-${sessionId}.json`);
+  // JSON.stringify escapes lone surrogates, which UTF-8 hashing would fold into
+  // one character. It prints -0 as "0" and both infinities as "null", so a
+  // number is spelled with String() and -0 by hand, at any depth: inside an
+  // array or object every string and number is tagged, so [-0], [0] and
+  // [Infinity] get different files (Luna review, PR #1152).
+  const num = (n) => (Object.is(n, -0) ? "-0" : String(n));
+  const tag = (_k, v) => (typeof v === "number" ? `n:${num(v)}` : typeof v === "string" ? `s:${v}` : v);
+  const spelled = typeof sessionId === "number" ? num(sessionId) : typeof sessionId === "object" ? JSON.stringify(sessionId, tag) : JSON.stringify(sessionId);
+  const typed = `${typeof sessionId}:${spelled}`;
+  return path.join(dir, `hold.${createHash("sha256").update(typed).digest("hex").slice(0, 32)}.json`);
+}
 
 // Mason wants to halt / pause / is only scoping a future session.
 //

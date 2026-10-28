@@ -20,7 +20,8 @@
   and Rep 2's attempt to edit the booking is still refused (`NOT_QUOTE_OWNER`). The other booking
   scenarios give the same results as main. Static test:
   `src/lib/anyRepConvertsBookingMigration.test.ts`.
-- Follow-up for the next live sweep: re-pin the `convert_quote_to_order` actor-forgery entry in
-  `scripts/db-invariant-sweeps/allowlist.json` (its pin predates #1105; `p_performed_by` handling is
+- Sweep fingerprint: the `convert_quote_to_order` actor-forgery pin in
+  `scripts/db-invariant-sweeps/allowlist.json` is already tracked as stale (KNOWN_ISSUES KI-85,
+  To-Do 11.12); re-pin it from the body this migration leaves (`p_performed_by` handling is
   unchanged).
 - Not verified: live body md5 (local replay only).

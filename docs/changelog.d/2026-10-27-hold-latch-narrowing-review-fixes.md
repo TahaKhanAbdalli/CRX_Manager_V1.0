@@ -1,0 +1,3 @@
+## 2026-10-27 - Hold-latch narrowing: review fixes before landing
+
+- From the first Luna review of PR #1152: a CI-monitor notice is machine text only when it is the whole message, so Mason's "stop" typed beside one still latches; an unusual session id is hashed into the hold file's name (`hold.<hash>.json`, a name no plain id can spell) instead of stripped, so two sessions do not share a file (short of a 128-bit hash collision), and only a missing, null or empty id (not `0`) uses the shared file; the bare hand-back frame check is exact; and a test pins the no-session fallback for the guard.

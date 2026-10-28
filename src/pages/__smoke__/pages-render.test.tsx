@@ -133,7 +133,7 @@ vi.mock('react-router', async (importOriginal) => {
 });
 
 vi.mock('../../lib/sentry', () => ({ Sentry: H.sentryStub }));
-vi.mock('../../lib/activityLogger', () => ({ logActivity: vi.fn() }));
+vi.mock('../../lib/activityLogger', () => ({ logActivity: vi.fn(), withSenderNames: async <T,>(rows: T) => rows }));
 vi.mock('../../hooks/usePageMeta', () => ({ usePageMeta: vi.fn() }));
 
 // Map + native deps that don't work under jsdom.

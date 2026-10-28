@@ -8,7 +8,8 @@ vi.mock('./db', () => ({
   supabase: { from: (...args: unknown[]) => mockFrom(...args) },
 }));
 
-import { logActivity, createNotification, notifyAdmins } from './activityLogger';
+import { logActivity, createNotification, notifyAdmins, withSenderNames } from './activityLogger';
+import type { Notification } from '../types';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -131,5 +132,29 @@ describe('notifyAdmins', () => {
       throw new Error('Network error');
     });
     await expect(notifyAdmins('Alert', 'msg', 'type')).resolves.toBeUndefined();
+  });
+});
+
+describe('withSenderNames', () => {
+  const note = (id: string, userId: string, createdBy: string | null): Notification => ({
+    id, user_id: userId, created_by: createdBy, title: 't', message: 'm', notification_type: 'x',
+    is_read: false, related_entity_type: null, related_entity_id: null, created_at: '2026-10-27T00:00:00Z',
+  });
+
+  it('names the sender only on notices another person sent (gap 4, 2026-10-27)', async () => {
+    const mockIn = vi.fn().mockResolvedValue({ data: [{ id: 'rep-1', full_name: 'Rita Rep' }], error: null });
+    mockFrom.mockReturnValueOnce({ select: () => ({ in: mockIn }) });
+
+    const rows = await withSenderNames([note('a', 'me', 'rep-1'), note('b', 'me', null), note('c', 'me', 'me'), note('d', 'me', 'gone')]);
+
+    expect(mockFrom).toHaveBeenCalledWith('profile_public_view');
+    expect(mockIn).toHaveBeenCalledWith('id', ['rep-1', 'gone']);
+    expect(rows.map((n) => n.sender_name)).toEqual(['Rita Rep', undefined, undefined, 'a team member']);
+  });
+
+  it('skips the lookup when every notice is a system notice or self-sent', async () => {
+    const rows = await withSenderNames([note('b', 'me', null), note('c', 'me', 'me')]);
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(rows.every((n) => n.sender_name === undefined)).toBe(true);
   });
 });
